@@ -19,6 +19,10 @@ ENV_RUNTIME_ROOT = "LHPC_RUNTIME_ROOT"
 _DEFAULT_RUNTIME_ROOT = "~/loraham-pi-control"
 
 
+class PathContainmentError(ValueError):
+    """A path would resolve outside its designated runtime root."""
+
+
 @dataclass(frozen=True)
 class Paths:
     runtime_root: Path
@@ -27,9 +31,64 @@ class Paths:
     def runtime_root_exists(self) -> bool:
         return self.runtime_root.is_dir()
 
+    def _lexical_under(self, rel: str) -> Path:
+        """Lexical containment only (reject absolute / `..`). Used for SOURCE dirs,
+        which may legitimately be SYMLINKS to an external checkout (adopt-by-link)."""
+        if os.path.isabs(rel):
+            raise PathContainmentError(f"absolute path not allowed: {rel!r}")
+        target = self.runtime_root / rel
+        base = Path(os.path.normpath(str(self.runtime_root)))
+        lex = Path(os.path.normpath(str(target)))
+        if lex != base and base not in lex.parents:
+            raise PathContainmentError(f"path escapes runtime root: {rel!r}")
+        return target
+
+    def under(self, *parts: str) -> Path:
+        """Resolve a MUTABLE runtime path (logs/config/state/wrappers/owned records),
+        proven to stay inside the runtime root both lexically AND against symlink
+        escapes — LHPC must never write through a symlink that leaves the root.
+        (Use `resolve_source` for observe-only source dirs, which may be links.)"""
+        rel = os.path.join(*parts) if parts else ""
+        target = self._lexical_under(rel)
+        base_real = Path(os.path.realpath(self.runtime_root))
+        real = Path(os.path.realpath(target))
+        if real != base_real and base_real not in real.parents:
+            raise PathContainmentError(f"path escapes runtime root via symlink: {rel!r}")
+        return target
+
+    def contains(self, path: Path) -> bool:
+        """True if `path` (an absolute runtime path) stays under the runtime root once
+        its PARENT's symlinks are resolved — without following a leaf symlink."""
+        base = Path(os.path.realpath(self.runtime_root))
+        real = Path(os.path.realpath(path.parent)) / path.name
+        return real == base or base in real.parents
+
+    def mutable_leaf(self, path: Path) -> Path:
+        """A runtime-owned mutable leaf: rejects a path that escapes the root (lexical
+        or via a symlinked parent) and refuses a pre-existing symlink leaf (no-follow)."""
+        if not self.contains(path):
+            raise PathContainmentError(f"path escapes runtime root: {path}")
+        if path.is_symlink():
+            raise PathContainmentError(f"refusing a symlink leaf: {path}")
+        return path
+
+    def safe_unlink(self, path: Path) -> None:
+        """Delete a runtime-owned leaf safely: contained, and never through a symlink
+        leaf. A missing file is a no-op; an escaping or symlinked target raises."""
+        if not self.contains(path):
+            raise PathContainmentError(f"refusing to unlink outside runtime root: {path}")
+        if path.is_symlink():
+            raise PathContainmentError(f"refusing to unlink a symlink leaf: {path}")
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
     def resolve_source(self, relative: str) -> Path:
-        """Resolve a manifest `source.path` (runtime-root-relative) to absolute."""
-        return self.runtime_root / relative
+        """Resolve a manifest `source.path` (runtime-root-relative) to absolute,
+        with lexical containment. A source may be a symlink (adopt-by-link); LHPC
+        only OBSERVES/reads it and never writes generated files into it."""
+        return self._lexical_under(relative)
 
 
 def resolve_paths(env: dict[str, str] | None = None) -> Paths:

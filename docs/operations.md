@@ -13,7 +13,7 @@ probes, source/pin state and resource ownership — never from a stale PID file.
 - Fast & bounded (no network, no build, no mutation, no RF): `status`, `explain`,
   `doctor`, `logs`, `web` page loads.
 - Explicit & gated (print a plan, need `--yes` or a confirmation): `install`,
-  `build`, `update`, `stack start/stop`, `test`, `rollback`, `repair`, `uninstall`.
+  `build`, `update`, `stack start/stop`, `test`, `uninstall`.
 
 ## TX safety
 
@@ -48,3 +48,13 @@ dispatched through the same service layer as the CLI: stack/component actions sh
 a dry-run plan first (TX-capable ones add an RF/dummy-load warning); daemon live
 settings apply only a whitelisted non-RF tuning (TX mode, CAD/LBT). Security
 headers (incl. `Content-Security-Policy: default-src 'self'`) on every response.
+
+## Safety
+
+`lhpc` only stops a process whose full identity still matches an LHPC ownership
+record (pid, start time, pgid, sid, executable, argv); a stale record, a manual or
+foreign process, or the controller's own group is never signalled — the operator
+gets a manual `kill` instead. A `start` reports failure unless required components
+verify ready. A failed update leaves the active source intact. Uninstall refuses
+while running and preserves shared checkouts and config/secrets. GET routes do no
+network. See `docs/hardening-0.1.md` (including what is still open).

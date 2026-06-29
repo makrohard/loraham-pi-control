@@ -13,7 +13,7 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 
-_MUTATING = {"start", "stop", "build", "update", "test", "rollback", "repair",
+_MUTATING = {"start", "stop", "build", "update", "test",
              "uninstall", "daemon_set"}
 
 
@@ -115,6 +115,48 @@ def test_page_load_is_read_only(tmp_path):
     assert client.get("/stacks/daemon").status_code == 200
 
 
+_NET_GIT = {"ls-remote", "fetch", "clone", "pull", "push", "remote"}
+_NET_CMD = {"curl", "wget", "nc", "ssh", "ping", "host", "dig", "nslookup"}
+
+
+def _is_network(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    exe = argv[0].rsplit("/", 1)[-1]
+    if exe in _NET_CMD:
+        return True
+    if exe == "git" and any(a in _NET_GIT for a in argv[1:]):
+        return True
+    return False
+
+
+def test_get_routes_make_no_network_calls(tmp_path):
+    """P0.6 — every GET route must run no network/git-remote command. A recording
+    runner captures every subprocess invocation during each GET; none may be a
+    network command (git ls-remote/fetch/clone/…, curl, ssh, DNS)."""
+    calls: list[list[str]] = []
+
+    def factory():
+        sys = FakeSystem().system
+        inner = sys.runner
+
+        class Rec:
+            def run(self, argv, timeout=None, *a, **k):
+                calls.append(list(argv))
+                return inner.run(argv, timeout, *a, **k)
+
+        sys.runner = Rec()
+        return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+
+    client = create_app(service_factory=factory).test_client()
+    for path in ("/", "/stacks", "/stacks/daemon", "/stacks/daemon/config", "/config",
+                 "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
+                 "/api/dash-signature", "/api/logs/loraham-daemon"):
+        client.get(path)
+    offenders = [c for c in calls if _is_network(c)]
+    assert not offenders, f"GET routes ran network commands: {offenders}"
+
+
 def test_dashboard_is_a_control_hub(tmp_path):
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     assert 'class="tiles"' in body              # overview tiles
@@ -194,11 +236,34 @@ def test_radio_set_requires_csrf(tmp_path):
     assert r.status_code == 400
 
 
-def test_radio_set_applies_with_csrf(tmp_path):
+def test_radio_set_is_two_step(tmp_path):
+    # P0.7: a live daemon setting needs plan + confirm, like every other mutation.
     c = _daemon_client(tmp_path)
     token = _csrf(c)
+    # First POST (no confirmed) -> shows the plan, does NOT apply (200, not 302).
     r = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE", "value": "DIRECT"})
-    assert r.status_code == 302  # applied live, redirect to daemon config
+    assert r.status_code == 200 and b"Confirm live daemon setting" in r.data
+    # Confirmed POST -> applies (redirect to the daemon config page).
+    r2 = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE",
+                                        "value": "DIRECT", "confirmed": "yes"})
+    assert r2.status_code == 302
+
+
+def test_config_path_cannot_escape_via_band_or_id(tmp_path):
+    import pytest as _pytest
+    from lhpc.core.config import _stack_config_path, save_stack_config
+    from lhpc.core.validators import ValidationError
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    stacks = (tmp_path / "config" / "stacks").resolve()
+    # A traversal band or id must be rejected, never resolve outside config/stacks/.
+    for sid, band in [("daemon", "../../etc"), ("../../evil", "433"), ("a/b", ""),
+                      ("daemon", "433/../../x")]:
+        with _pytest.raises(ValidationError):
+            _stack_config_path(paths, sid, band)
+    # A legitimate write stays inside config/stacks/.
+    p = save_stack_config(paths, "kiss", {"x": "1"}, "868")
+    assert stacks in p.resolve().parents
 
 
 def test_get_daemon_config_is_read_only(tmp_path):
@@ -352,3 +417,98 @@ def test_run_server_rejects_non_loopback(capsys):
 
 def test_loopback_set_is_exactly_localhost():
     assert _LOOPBACK_HOSTS == {"127.0.0.1", "::1"}
+
+
+# --- transient green start-note (meshcore-nodegui connect hint) ---------------
+
+def test_start_note_for_started_component():
+    from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    import tempfile, pathlib
+    svc = ControllerService(system=FakeSystem().system,
+                            paths=Paths(runtime_root=pathlib.Path(tempfile.mkdtemp())))
+    verified = ActionResult(True, "ok", results=(
+        CompResult(component="meshcore-nodegui", action="start", outcome=Outcome.VERIFIED),))
+    assert svc.start_notes(verified) == ["Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"]
+    # already-healthy also emits the note
+    healthy = ActionResult(True, "ok", results=(
+        CompResult(component="meshcore-nodegui", action="start", outcome=Outcome.ALREADY_HEALTHY),))
+    assert svc.start_notes(healthy) == ["Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"]
+    # blocked / unverified / failed -> NO note
+    for bad in (Outcome.BLOCKED, Outcome.UNVERIFIED, Outcome.FAILED):
+        res = ActionResult(True, "ok", results=(
+            CompResult(component="meshcore-nodegui", action="start", outcome=bad),))
+        assert svc.start_notes(res) == []
+
+
+def test_start_note_is_html_escaped(tmp_path):
+    # The dashboard renders flash notes with Jinja autoescaping ({{ msg }}), so a note
+    # containing markup is escaped — never injected as live HTML.
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+    app = create_app(service_factory=lambda: ControllerService(
+        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
+    with app.test_request_context():
+        from flask import render_template
+        out = render_template("base.html", version="t")  # no flashes -> just proves render
+    # the flash loop uses {{ msg }} (autoescaped), never |safe
+    base = Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web" / "templates" / "base.html"
+    src = base.read_text()
+    assert "{{ msg }}" in src and "msg|safe" not in src and "msg | safe" not in src
+    from markupsafe import escape
+    assert "&lt;script&gt;" in str(escape("<script>x</script>"))
+
+
+def test_wheel_includes_flash_js():
+    # flash.js must ship in the wheel (package-data), else the transient note can't hide.
+    import tomllib, pathlib
+    root = pathlib.Path(__file__).resolve().parents[1]
+    data = tomllib.loads((root / "pyproject.toml").read_text())
+    globs = data["tool"]["setuptools"]["package-data"]["lhpc.adapters.web"]
+    assert any(g == "static/*.js" for g in globs)
+    assert (root / "lhpc" / "adapters" / "web" / "static" / "flash.js").exists()
+
+
+def test_transient_flash_assets_present():
+    # the auto-hide ("show then hide") wiring exists
+    import pathlib
+    base = pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+    assert "flash.js" in (base / "templates" / "base.html").read_text()
+    js = (base / "static" / "flash.js").read_text()
+    assert ".flash.transient" in js and "remove()" in js
+    assert "flash-hide" in (base / "static" / "style.css").read_text()
+
+
+def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch):
+    # Stale-marker cleanup runs AFTER lifecycle work; a PermissionError (not just a
+    # containment error) from safe_unlink must NOT escape as an unhandled exception.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc.mark_interactive("chat", "433")             # a stale interactive marker exists
+    def boom(self, path):
+        raise PermissionError("EACCES")
+    monkeypatch.setattr(Paths, "safe_unlink", boom)
+    assert svc._safe_unlink(svc._interactive_marker("chat")) is False   # typed, not raised
+    svc.clear_stale_interactive(keep="daemon")      # must NOT raise
+    svc.dismiss_interactive("chat")                 # must NOT raise
+
+
+def test_daemon_start_stop_confirm_shows_band(tmp_path):
+    # The daemon START and STOP confirm dialog must include the band (e.g. "start daemon 433").
+    # Make the daemon installed+built so start reaches the confirm page (not the redirect guard).
+    bind = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+    bind.mkdir(parents=True)
+    (bind / "loraham_daemon").write_text("#!bin")
+    client = _real_app(tmp_path)
+    token = _csrf(client, "/stacks/daemon")
+    for op in ("start", "stop"):
+        r = client.post("/action", data={"_csrf": token, "op": op, "target": "daemon",
+                                         "band": "433"})   # no 'confirmed' -> stage-1 plan page
+        body = r.get_data(as_text=True)
+        assert r.status_code == 200, f"{op}: {r.status_code}"
+        assert f"Confirm: {op}" in body and "daemon 433" in body

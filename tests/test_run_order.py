@@ -19,18 +19,19 @@ def test_run_order_puts_daemon_before_app(tmp_path):
 
 def test_daemon_needs_band_and_tx_from_app(tmp_path):
     svc = _svc(tmp_path)
-    radio, tx = svc._daemon_needs(svc._run_order("kiss"), None)
-    assert radio == "433" and tx == "MANAGED"
-    radio, tx = svc._daemon_needs(svc._run_order("meshcom-bridge"), None)
-    assert radio == "433" and tx == "DIRECT"          # bridge requires DIRECT
+    radio, tx, cadidle = svc._daemon_needs(svc._run_order("kiss"), None)
+    assert radio == "433" and tx == "MANAGED" and cadidle is None    # kiss has no cadidle pref
+    radio, tx, cadidle = svc._daemon_needs(svc._run_order("meshcom-bridge"), None)
+    assert radio == "433" and tx == "MANAGED"         # bridge requires MANAGED
+    assert cadidle == "0"                             # ...and CADIDLE=0 (firmware single-CAD)
 
 
 def test_daemon_stack_uses_radio_param_override(tmp_path):
     svc = _svc(tmp_path)
     order = svc._run_order("daemon")
     assert [c.id for _, c in order] == ["loraham-daemon"]
-    radio, tx = svc._daemon_needs(order, {"radio": "868"})
-    assert radio == "868"                              # explicit override honoured
+    radio, tx, cadidle = svc._daemon_needs(order, {"radio": "868"})
+    assert radio == "868" and cadidle is None          # explicit override honoured
 
 
 def test_optional_component_soft_unless_autostart(tmp_path):

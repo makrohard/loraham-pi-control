@@ -113,12 +113,14 @@ class ResourceClaim:
     key: str                     # canonical id, e.g. "loraham.radio.868" / "tcp.port.7000"
     kind: ResourceKind
     mode: ResourceMode = ResourceMode.EXCLUSIVE
-    group: str = ""              # cooperative group id (defaults to `key` when empty)
+    group: str = ""              # cooperative group id (RESERVED: parsed + exposed via
+                                 # group_id, not yet consumed by conflict logic)
     requirement: str = ""        # for REQUIREMENT mode, the required value (e.g. "DIRECT")
     note: str = ""
 
     @property
     def group_id(self) -> str:
+        """Reserved cooperative-group identity (defaults to `key`); kept as schema."""
         return self.group or self.key
 
 
@@ -165,6 +167,8 @@ class EndpointSpec:
     address: str                 # "127.0.0.1:7000" | "/tmp/loraconf433.sock"
     role: str = "listener"       # "listener" (tcp) | "provider"/"data" (unix)
     readiness: str = "none"      # "none" | "daemon-status" (bounded GET STATUS probe)
+    ready: bool = False          # participates in start readiness + stop endpoint-cessation
+    external: bool = False       # an external endpoint (observe-only; never a ready gate)
     description: str = ""
     # A user-facing interface a client connects to (KISS TCP, a web UI, a serial
     # PTY) — shown on the dashboard. False for internal transport (daemon sockets).
@@ -196,21 +200,26 @@ class RunParam:
     # needs a rebuild). Drives the Config-page apply warnings.
     apply_mode: str = "restart"
     band_defaults: tuple = ()    # ((band, value), …) — per-band default overrides
+    validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
 
 
-def emit_param(p: "RunParam", value) -> str:
-    """Render a run parameter into its command-line fragment.
+def emit_param(p: "RunParam", value) -> list[str]:
+    """Render a run parameter into ZERO OR MORE argv TOKENS (never a joined string).
 
-    flag  -> `flag` when truthy, else "".
-    arg   -> `"{arg} {value}"` when value is non-empty, else "" (omit the option).
-    plain -> the bare value (back-compat for the daemon's positional substitutions).
+    flag      -> [flag] when truthy, else []  (the option is its own token).
+    arg       -> [arg, value] when value is non-empty, else []  (two separate tokens).
+    positional-> [value] when non-empty, else []  (exactly one token).
+
+    The value is always its own token, so a user value can never merge with an
+    option or alter argv boundaries.
     """
     if p.kind == "flag":
-        return p.flag if (value and str(value) not in ("0", "false", "off", "")) else ""
+        on = value and str(value) not in ("0", "false", "off", "")
+        return [p.flag] if (on and p.flag) else []
     v = str(value)
-    if p.arg:
-        return f"{p.arg} {v}" if v.strip() else ""
-    return v
+    if not v.strip():
+        return []
+    return [p.arg, v] if p.arg else [v]
 
 
 @dataclass(frozen=True)
@@ -234,6 +243,7 @@ class FileParam:
     max: int | None = None
     band_defaults: tuple = ()    # ((band, value), …) — per-band default overrides
     hidden: bool = False         # written to the file but not shown on the Config page
+    validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
 
 
 @dataclass(frozen=True)
@@ -290,6 +300,9 @@ class Component:
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None
     note: str = ""
+    # A short green confirmation shown (then auto-hidden) on the dashboard right after
+    # this component is started — e.g. how to connect a just-launched GUI to its node.
+    start_note: str = ""
     # Human-readable commands (relative to the component's source dir). Used to
     # generate readable start/ wrappers and, in later phases, build/test jobs.
     build_cmd: str = ""
@@ -297,11 +310,22 @@ class Component:
     test_cmd: str = ""
     pre_cmd: str = ""            # optional pre-start hook in the wrapper (e.g. mkdir a lock dir)
     post_start: str = ""         # optional command spawned (detached) after start (e.g. set region)
+    # --- structured command model (preferred; replaces the shell strings above) ---
+    run_argv: tuple[str, ...] = ()        # argv token template (literals + {param:…}/{operator:…})
+    run_cwd: str = ""                     # working dir ({runtime}/{source} substituted)
+    run_env: tuple[tuple[str, str], ...] = ()   # extra env (value may be @file:/@env:/path)
+    pre_steps: tuple[dict, ...] = ()      # typed controller pre-steps (mkdir/chmod/symlink)
+    post_steps: tuple[dict, ...] = ()     # typed post-start steps (delay/exec)
+    build_steps: tuple[dict, ...] = ()    # typed build steps ({argv, env, pkgconfig})
+    test_argv: tuple[str, ...] = ()       # structured host-test argv (no shell)
+    readiness: str = ""                   # process | endpoint | daemon-band | manual | external-systemd
     bin: str = ""                # built binary path (relative to source) for the 'is built' check
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters
     requires_daemon_tx: str = ""             # daemon TX mode this component needs (MANAGED/DIRECT)
+    requires_daemon_cadidle: str = ""        # daemon CADIDLE (ms) this component wants (tuning,
+                                             # non-gating); "" = leave the daemon's default
     interactive: bool = False    # must be run by the operator in a terminal (e.g. a TUI);
                                  # the controller tracks it but never starts it
     config_file: FileConfig | None = None   # a config FILE the controller writes

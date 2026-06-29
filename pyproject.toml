@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loraham-pi-control"
-version = "0.1.0"
+version = "0.1.1"
 description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "TBD" }
-authors = [{ name = "makrohard" }]
+license = { text = "MIT" }
+authors = [{ name = "Johannes Loose (DJ0CHE)", email = "410733@gmail.com" }]
 
 # The CLI and probe core use only the standard library (argparse, tomllib,
 # subprocess, socket). The local web console uses Flask with server-rendered
@@ -37,6 +37,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
+"lhpc" = ["data/*.toml"]
 "lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]

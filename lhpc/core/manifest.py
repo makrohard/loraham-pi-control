@@ -6,20 +6,22 @@ identity, probeable endpoints, resource compatibility modes, source pins and
 runtime dependencies) into the `model` dataclasses.
 
 Configuration layering (see docs/architecture.md):
-  1. tracked defaults        -> config/manifest.example.toml (this loader's default)
-  2. known-good profiles     -> config/profiles.example.toml
+  1. tracked defaults        -> lhpc/data/manifest.example.toml (shipped package data)
+  2. known-good profiles     -> lhpc/data/profiles.example.toml
   3. generated runtime state -> under the runtime root
-  4. user-local overrides    -> config/local.toml   (git-ignored)
-  5. secrets                 -> config/secrets.toml (git-ignored)
+  4. user-local overrides    -> <runtime>/config/local.toml   (git-ignored)
+  5. secrets                 -> <runtime>/config/secrets.toml (git-ignored)
 
 Uses the stdlib `tomllib` (Python 3.11+). Read-only: it never writes or fetches.
 """
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
+from .assets import asset_path
 from .model import (
     Component,
     ComponentKind,
@@ -52,14 +54,29 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             min=p.get("min"), max=p.get("max"),
             band_defaults=tuple((str(k), str(v)) for k, v in p.get("band_defaults", {}).items()),
             hidden=p.get("hidden", False),
+            validator=p.get("validator", ""),
         )
         for p in raw.get("param", [])
     )
-    return FileConfig(path=raw["path"], fmt=raw.get("fmt", "keyval"),
-                      base=raw.get("base", ""), apply_cmd=raw.get("apply_cmd", ""),
+    path = raw["path"]
+    base = raw.get("base", "")
+    # Static containment policy (P1): a generated-config path/base must be a `{runtime}/...`
+    # destination OR a RELATIVE path under the managed source — never an arbitrary absolute
+    # path, unknown `{placeholder}`, or a `..` traversal. Runtime-`Paths` checks happen at
+    # write time; this rejects malformed manifest destinations at load.
+    for label, value in (("config_file.path", path), ("config_file.base", base)):
+        if not value:
+            continue
+        if value == "{runtime}" or value.startswith("{runtime}/"):
+            continue
+        if value.startswith("/") or value.startswith("{") or ".." in value.split("/"):
+            raise ManifestError(
+                f"{label} must be '{{runtime}}/...' or a relative source path, got {value!r}")
+    return FileConfig(path=path, fmt=raw.get("fmt", "keyval"),
+                      base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
 
-_DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "config" / "manifest.example.toml"
+_DEFAULT_MANIFEST = asset_path("manifest.example.toml")   # package data (wheel-safe)
 
 
 def default_manifest_path() -> Path:
@@ -74,13 +91,177 @@ def load_manifest(path: Path | None = None) -> tuple[Stack, ...]:
     return parse_manifest(data)
 
 
+class ManifestError(Exception):
+    """A manifest declared an invalid or unsafe lifecycle spec (fail early)."""
+
+
+_READINESS = {"process", "endpoint", "daemon-band", "manual", "external-systemd"}
+_PRE_KINDS = {"mkdir", "chmod", "symlink"}
+_POST_KINDS = {"delay", "exec", "tcp_wait", "tcp_send"}
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _check_token(cid: str, tok: str, names: set) -> None:
+    """Validate one argv token's grammar: a whole placeholder must reference a known
+    param/operator/controller name; a literal may embed only {runtime}/{source}/{band}
+    and must contain no other stray braces."""
+    if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1:
+        inner = tok[1:-1]
+        kind, _, name = inner.partition(":")
+        if kind == "param":
+            if name not in names:
+                raise ManifestError(f"{cid}: unknown parameter placeholder {tok!r}")
+        elif kind == "operator":
+            if name not in ("callsign", "locator"):
+                raise ManifestError(f"{cid}: unknown operator placeholder {tok!r}")
+        elif inner not in ("band", "runtime", "source"):
+            raise ManifestError(f"{cid}: unknown placeholder {tok!r}")
+        return
+    stripped = tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
+    if "{" in stripped or "}" in stripped:
+        raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _validate_endpoint(cid: str, e) -> None:
+    """Validate one endpoint declaration. A `ready=true` endpoint that gates start/stop
+    must be LOCAL: a TCP readiness host must be loopback (never an arbitrary remote),
+    and a Unix readiness path must be a contained runtime path unless explicitly marked
+    `external=true` (external endpoints may be observed but never gate readiness)."""
+    if e.kind == "tcp":
+        # Use the ONE shared endpoint parser (also used by the runtime readiness probe).
+        from .probes.endpoints import parse_endpoint
+        try:
+            host, _port, _fam = parse_endpoint(e.address)
+        except ValueError:
+            raise ManifestError(f"{cid}: malformed tcp endpoint address {e.address!r}")
+        if e.ready and host not in _LOOPBACK_HOSTS:
+            raise ManifestError(f"{cid}: a ready=true tcp endpoint must be loopback "
+                                f"(got {host!r}) — readiness must not probe a remote host")
+    elif e.kind == "unix":
+        if not e.address:
+            raise ManifestError(f"{cid}: unix endpoint requires an address")
+        if e.ready and getattr(e, "external", False):
+            raise ManifestError(f"{cid}: an external endpoint cannot be a ready=true "
+                                "readiness/cessation gate")
+    elif e.kind == "path":
+        if not e.address:
+            raise ManifestError(f"{cid}: path endpoint requires an address")
+    else:
+        raise ManifestError(f"{cid}: unknown endpoint kind {e.kind!r}")
+
+
+def _validate_component(comp) -> None:
+    cid = comp.id
+    runnable = bool(comp.run_argv)
+    if comp.readiness and comp.readiness not in _READINESS:
+        raise ManifestError(f"{cid}: unknown readiness {comp.readiness!r} "
+                            f"(allowed: {', '.join(sorted(_READINESS))})")
+    if comp.interactive and comp.readiness != "manual":
+        raise ManifestError(f"{cid}: interactive component must declare readiness=\"manual\"")
+    if comp.units and not comp.run_argv and comp.readiness not in ("", "external-systemd"):
+        raise ManifestError(f"{cid}: systemd-only component must use readiness=\"external-systemd\"")
+    if runnable and not comp.readiness:
+        raise ManifestError(f"{cid}: runnable component must declare a readiness policy")
+    if comp.readiness == "endpoint" and not any(e.ready for e in comp.endpoints):
+        raise ManifestError(f"{cid}: readiness=\"endpoint\" requires at least one "
+                            f"endpoint marked ready = true")
+    for e in comp.endpoints:
+        _validate_endpoint(cid, e)
+    names = {p.name for p in comp.run_params}
+    for tok in comp.run_argv:
+        _check_token(cid, tok, names)
+    for tok in comp.test_argv:
+        _check_token(cid, tok, names)
+    for step in comp.build_steps:
+        for tok in step.get("argv", []):
+            tok = str(tok)
+            if tok.startswith("{pkgconfig:") and tok.endswith("}"):
+                continue            # build-only placeholder (resolved via pkg-config)
+            _check_token(cid, tok, names)
+    for step in comp.pre_steps:
+        if step.get("kind") not in _PRE_KINDS:
+            raise ManifestError(f"{cid}: invalid pre-step kind {step.get('kind')!r}")
+    for step in comp.post_steps:
+        if step.get("kind") not in _POST_KINDS:
+            raise ManifestError(f"{cid}: invalid post-step kind {step.get('kind')!r}")
+    for k, _v in comp.run_env:
+        if not _ENV_NAME.fullmatch(k):
+            raise ManifestError(f"{cid}: invalid environment variable name {k!r}")
+
+
+def _validate_graph(stacks: tuple[Stack, ...]) -> None:
+    """Whole-manifest integrity AFTER every stack/component parses: unique stack IDs,
+    globally-unique component IDs, each `main` in its OWN stack, every dependency
+    resolvable, no self-dependency or cycle (with cycle evidence), and valid declared
+    bands. A structurally-broken manifest fails here, never at launch time."""
+    from .daemon_control import ALLOWED_BANDS
+
+    seen_stacks: set[str] = set()
+    for s in stacks:
+        if s.id in seen_stacks:
+            raise ManifestError(f"duplicate stack id {s.id!r}")
+        seen_stacks.add(s.id)
+
+    comp_of: dict[str, object] = {}
+    comp_stack: dict[str, str] = {}
+    for s in stacks:
+        for c in s.components:
+            if c.id in comp_of:
+                raise ManifestError(f"duplicate component id {c.id!r} (in stacks "
+                                    f"{comp_stack[c.id]!r} and {s.id!r})")
+            comp_of[c.id] = c
+            comp_stack[c.id] = s.id
+
+    for s in stacks:                                   # main resolves to an OWN component
+        if s.main and s.main not in {c.id for c in s.components}:
+            raise ManifestError(f"stack {s.id!r} main {s.main!r} is not one of its "
+                                f"components {sorted(c.id for c in s.components)}")
+
+    for cid, c in comp_of.items():                     # dependencies resolvable, no self-dep
+        for dep in c.depends_on:
+            if dep == cid:
+                raise ManifestError(f"component {cid!r} depends on itself")
+            if dep not in comp_of:
+                raise ManifestError(f"component {cid!r} depends on unknown component {dep!r}")
+
+    WHITE, GRAY, BLACK = 0, 1, 2                        # cycle detection with evidence
+    color = {cid: WHITE for cid in comp_of}
+
+    def _visit(cid: str, path: list[str]) -> None:
+        color[cid] = GRAY
+        for dep in comp_of[cid].depends_on:
+            if color[dep] == GRAY:                     # dep is on the current stack -> cycle
+                i = path.index(dep)
+                raise ManifestError("dependency cycle: " + " -> ".join(path[i:] + [dep]))
+            if color[dep] == WHITE:
+                _visit(dep, path + [dep])
+        color[cid] = BLACK
+
+    for cid in comp_of:
+        if color[cid] == WHITE:
+            _visit(cid, [cid])
+
+    for cid, c in comp_of.items():                     # declared bands are real bands
+        for b in ([c.band] if c.band else []) + list(getattr(c, "bands", ()) or ()):
+            if b and b not in ALLOWED_BANDS:
+                raise ManifestError(f"component {cid!r} declares unknown band {b!r} "
+                                    f"(allowed: {', '.join(ALLOWED_BANDS)})")
+
+
 def parse_manifest(data: dict) -> tuple[Stack, ...]:
-    """Parse an already-loaded TOML mapping (kept separate for testing)."""
+    """Parse an already-loaded TOML mapping (kept separate for testing). Validates
+    each component's structured lifecycle spec AND the whole dependency graph — an
+    invalid manifest fails here rather than launching a misconfigured process."""
     stacks: list[Stack] = []
     for stack_raw in data.get("stack", []):
         components = tuple(
             _parse_component(c) for c in stack_raw.get("component", [])
         )
+        for comp in components:
+            _validate_component(comp)
         stacks.append(
             Stack(
                 id=stack_raw["id"],
@@ -90,10 +271,52 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
                 main=stack_raw.get("main", ""),
             )
         )
-    return tuple(stacks)
+    result = tuple(stacks)
+    _validate_graph(result)
+    return result
+
+
+_SHELL_OPS = ("&&", "||", "|", ";", "$(", "`", ">", "<", "${", "&")
+_SHELL_WORDS = {"cd", "env", "export", "exec", "sleep", "mkdir", "chmod", "ln", "rm", "set"}
+
+
+def _is_simple(cmd: str) -> bool:
+    """True if a manifest command is a plain `prog arg arg` line with no shell
+    syntax — safe to tokenize on whitespace into a structured argv at parse time.
+    Shell control WORDS (cd/env/…) are matched as whole tokens, not substrings, so
+    `meshtasticd` (which contains 'cd') is not misclassified."""
+    if not cmd or any(op in cmd for op in _SHELL_OPS):
+        return False
+    return not any(t in _SHELL_WORDS for t in cmd.split())
+
+
+def _tok(t: str) -> str:
+    """Map a legacy `{name}` placeholder to a structured token form."""
+    if t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t:
+        name = t[1:-1]
+        if name in ("callsign", "locator"):
+            return "{operator:" + name + "}"
+        if name in ("runtime", "source", "band"):
+            return t
+        return "{param:" + name + "}"
+    return t
+
+
+def _derive_structured(raw: dict) -> None:
+    """Fill structured run/build/test fields from simple legacy command strings, so
+    every shipped component executes shell-free. Commands with shell syntax must be
+    migrated to explicit run_argv/build_steps in the manifest (no shell fallback)."""
+    if not raw.get("run_argv") and _is_simple(raw.get("run", "")):
+        raw["run_argv"] = [_tok(t) for t in raw["run"].split()]
+        raw.setdefault("run_cwd", "{source}")
+    if not raw.get("build_steps") and _is_simple(raw.get("build", "")):
+        raw["build_steps"] = [{"argv": raw["build"].split()}]
+    if not raw.get("test_argv") and _is_simple(raw.get("test", "")):
+        raw["test_argv"] = raw["test"].split()
 
 
 def _parse_component(raw: dict) -> Component:
+    _derive_structured(raw)
     return Component(
         id=raw["id"],
         name=raw.get("name", raw["id"]),
@@ -110,11 +333,20 @@ def _parse_component(raw: dict) -> Component:
         log_paths=tuple(raw.get("log_paths", [])),
         start_order=raw.get("start_order"),
         note=raw.get("note", ""),
+        start_note=raw.get("start_note", ""),
         build_cmd=raw.get("build", ""),
         run_cmd=raw.get("run", ""),
         test_cmd=raw.get("test", ""),
         pre_cmd=raw.get("pre", ""),
         post_start=raw.get("post_start", ""),
+        run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
+        run_cwd=raw.get("run_cwd", ""),
+        run_env=tuple((str(k), str(v)) for k, v in raw.get("run_env", {}).items()),
+        pre_steps=tuple(dict(s) for s in raw.get("pre_steps", [])),
+        post_steps=tuple(dict(s) for s in raw.get("post_steps", [])),
+        build_steps=tuple(dict(s) for s in raw.get("build_steps", [])),
+        test_argv=tuple(str(t) for t in raw.get("test_argv", [])),
+        readiness=raw.get("readiness", ""),
         bin=raw.get("bin", ""),
         requires=tuple(
             Requirement(cmd=r.get("cmd", ""), install=r.get("install", ""),
@@ -133,10 +365,12 @@ def _parse_component(raw: dict) -> Component:
                 arg=p.get("arg", ""), apply_mode=p.get("apply_mode", "restart"),
                 band_defaults=tuple((str(k), str(v))
                                     for k, v in p.get("band_defaults", {}).items()),
+                validator=p.get("validator", ""),
             )
             for p in raw.get("param", [])
         ),
         requires_daemon_tx=raw.get("requires_daemon_tx", ""),
+        requires_daemon_cadidle=str(raw.get("requires_daemon_cadidle", "")),
         interactive=raw.get("interactive", False),
         bands=tuple(str(b) for b in raw.get("bands", [])),
         config_file=_parse_file_config(raw.get("config_file")),
@@ -174,6 +408,8 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         address=raw["address"],
         role=raw.get("role", "listener"),
         readiness=raw.get("readiness", "none"),
+        ready=raw.get("ready", False),
+        external=raw.get("external", False),
         description=raw.get("description", ""),
         client=raw.get("client", False),
         scheme=raw.get("scheme", ""),

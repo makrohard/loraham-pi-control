@@ -49,13 +49,16 @@ def test_provider_consumer_socket_roles():
     assert consumed and consumed[0].mode is ResourceMode.CONSUMER
 
 
-def test_meshcom_default_is_433_direct():
+def test_meshcom_default_is_433_managed():
+    # The bridge delegates channel access to the daemon and forces SET TXMODE=MANAGED on
+    # connect (the QEMU firmware has no real radio to run its own CAD), so it REQUIRES the
+    # daemon in MANAGED — both the field and the daemon-profile resource say so.
     comps = _index(load_manifest())
     bridge = comps["meshcom-bridge"]
     assert bridge.band == "433"
-    assert "loraham-daemon" in bridge.depends_on and bridge.requires_daemon_tx == "DIRECT"
+    assert "loraham-daemon" in bridge.depends_on and bridge.requires_daemon_tx == "MANAGED"
     profile = next(r for r in bridge.resources if r.key == "loraham.profile.433")
-    assert profile.mode is ResourceMode.REQUIREMENT and profile.requirement == "DIRECT"
+    assert profile.mode is ResourceMode.REQUIREMENT and profile.requirement == "MANAGED"
     # No 868 socket in the default MeshCom path.
     assert all("868" not in r.key for r in bridge.resources)
 

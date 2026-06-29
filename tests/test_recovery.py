@@ -1,4 +1,4 @@
-"""Tests for the non-destructive recovery commands (update/repair/rollback/uninstall)."""
+"""Tests for the source commands (install/update/uninstall)."""
 
 from __future__ import annotations
 
@@ -46,10 +46,10 @@ def _svc(tmp_path: Path):
                              paths=Paths(runtime_root=rt)), rt
 
 
-def test_repair_readopts_missing_source(tmp_path):
+def test_install_readopts_missing_source(tmp_path):
     svc, rt = _svc(tmp_path)
     assert not (rt / "src" / "comp").exists()
-    result = svc.repair("s", apply=True)
+    result = svc.install("s", apply=True)
     assert result.ok and (rt / "src" / "comp" / "f").exists()
 
 
@@ -61,7 +61,7 @@ def test_update_overview_lists_source(tmp_path):
 
 def test_uninstall_removes_source_but_keeps_config(tmp_path):
     svc, rt = _svc(tmp_path)
-    svc.repair("s", apply=True)
+    svc.install("s", apply=True)
     assert (rt / "src" / "comp").exists()
     svc.uninstall("s", apply=True)
     assert not (rt / "src" / "comp").exists()

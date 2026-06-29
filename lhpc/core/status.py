@@ -27,7 +27,7 @@ from .model import (
 from .paths import Paths
 from .probes import System
 from .probes.process import probe_process
-from .probes.net import probe_tcp_port
+from .probes.endpoints import tcp_endpoint_match
 from .probes.source import SourceProbe, probe_source
 
 _NA_SOURCE = SourceProbe(state=SourceState.NOT_APPLICABLE)
@@ -175,12 +175,16 @@ class StatusProber:
         for spec in comp.endpoints:
             obs = EndpointObservation(spec=spec)
             if spec.kind == "tcp":
-                host, _, port = spec.address.partition(":")
-                tcp = probe_tcp_port(self._system, int(port))
-                obs.present = tcp.listening
-                obs.owner_pid = tcp.owner_pid
-                obs.owner_incomplete = tcp.owner_incomplete
-                obs.detail = "listening" if tcp.listening else "not listening"
+                # Use the ONE host/family-aware matcher (not a port-only check): a listener
+                # on the wrong address family/host must NOT satisfy this endpoint, and the
+                # retained owner PID is that of the MATCHED listener. Keeps status in exact
+                # agreement with start readiness and stop cessation.
+                present, detail, owner_pid, owner_incomplete = tcp_endpoint_match(
+                    self._system, spec.address)
+                obs.present = present
+                obs.owner_pid = owner_pid
+                obs.owner_incomplete = owner_incomplete
+                obs.detail = detail
             elif spec.kind == "unix":
                 sock = probe_socket(self._system, spec.address)
                 obs.present = sock.is_socket

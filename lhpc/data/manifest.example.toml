@@ -28,7 +28,17 @@ main = "loraham-daemon"
   tx_capable = true
   start_order = 0
   build = "loraham_daemon/build.sh"
-  run = "loraham_daemon/loraham_daemon --radio {radio} {debug} --tx-mode-433 {tx_433} --tx-mode-868 {tx_868} --cad-monitor-433 {cadmon_433} --cad-monitor-868 {cadmon_868} --cad-rssi-433 {cadrssi_433} --cad-rssi-868 {cadrssi_868} -d"
+  # No `-d`: `-d` makes the daemon double-fork (setsid) and re-PID away from the
+  # process LHPC spawned, which breaks verified ownership. LHPC already detaches it
+  # (start_new_session + redirected stdio), so it runs as the LHPC-owned session
+  # leader and stop() can identity-verify it before signalling.
+  run = "loraham_daemon/loraham_daemon --radio {radio} {debug} --tx-mode-433 {tx_433} --tx-mode-868 {tx_868} --cad-monitor-433 {cadmon_433} --cad-monitor-868 {cadmon_868} --cad-rssi-433 {cadrssi_433} --cad-rssi-868 {cadrssi_868}"
+  # Structured (shell-free) execution — preferred over `run`/`pre` above.
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "{param:debug}", "--tx-mode-433", "{param:tx_433}", "--tx-mode-868", "{param:tx_868}", "--cad-monitor-433", "{param:cadmon_433}", "--cad-monitor-868", "{param:cadmon_868}", "--cad-rssi-433", "{param:cadrssi_433}", "--cad-rssi-868", "{param:cadrssi_868}"]
+  run_cwd = "{source}"
+  run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham" }
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/loraham", mode = "700" } ]
+  readiness = "daemon-band"
   bin = "loraham_daemon/loraham_daemon"
   test = "loraham_daemon/run_tests.sh"
   pre = 'export LORAHAM_RUNTIME_DIR="{runtime}/state/loraham"; mkdir -p "$LORAHAM_RUNTIME_DIR"; chmod 700 "$LORAHAM_RUNTIME_DIR"'
@@ -186,6 +196,9 @@ main = "loraham-chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
   run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat"'
+  run_argv = ["{source}/loraham_chat"]
+  run_cwd = "{runtime}/config/files"
+  readiness = "manual"
   note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. Do not run with iGate (both retune the radio)."
 
     [[stack.component.require]]
@@ -204,16 +217,19 @@ main = "loraham-chat"
     fmt = "env"
       [[stack.component.config_file.param]]
       name = "call"
+      validator = "callsign"
       key = "CALL"
       default = "{callsign}"
       label = "Callsign (CALL)"
       [[stack.component.config_file.param]]
       name = "tx_freq"
+      validator = "freq"
       key = "TX"
       default = "433.775"
       label = "TX frequency MHz"
       [[stack.component.config_file.param]]
       name = "rx_freq"
+      validator = "freq"
       key = "RX"
       default = "433.900"
       label = "RX frequency MHz"
@@ -242,6 +258,7 @@ main = "loraham-igate"
 
   [[stack.component]]
   id = "loraham-igate"
+  readiness = "process"
   name = "LoRaHAM APRS iGate"
   kind = "service"
   band = "433"
@@ -251,7 +268,9 @@ main = "loraham-igate"
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   build = "gcc -Wall -o loraham_igate loraham_iGate_106.c"
-  run = "./loraham_igate {call} {tx_freq} {rx_freq} {lat} {lon} {symbol} {digipeat} {is_interval} {rf_interval} {filter_lat} {filter_lon} {filter_radius} {relay} {repeater} -d"
+  # No `-d` (double-fork daemonize) — LHPC owns the foreground session leader; see
+  # the daemon note above.
+  run = "./loraham_igate {call} {tx_freq} {rx_freq} {lat} {lon} {symbol} {digipeat} {is_interval} {rf_interval} {filter_lat} {filter_lon} {filter_radius} {relay} {repeater}"
   note = "Binary 'loraham_igate' NOT present locally -> not-installed. Beacons APRS-IS + RF on start. Callsign/position from runtime config, never the repo. Radio params (SF12/BW125/CR5/POWER17) and the APRS-IS server are compile-time constants in the source."
 
     [stack.component.source]
@@ -267,18 +286,21 @@ main = "loraham-igate"
     # operator callsign but is usually overridden with the gate's own -SSID.
     [[stack.component.param]]
     name = "call"
+    validator = "callsign"
     kind = "str"
     arg = "-c"
     default = "{callsign}"
     label = "iGate callsign (with -SSID, e.g. N0CALL-10)"
     [[stack.component.param]]
     name = "tx_freq"
+    validator = "freq"
     kind = "str"
     arg = "-t"
     default = "433.900"
     label = "TX frequency (MHz)"
     [[stack.component.param]]
     name = "rx_freq"
+    validator = "freq"
     kind = "str"
     arg = "-r"
     default = "433.775"
@@ -378,13 +400,23 @@ main = "loraham-voice"
   purpose = "Codec2 voice over LoRa via the daemon (GTK desktop app; needs an audio device)."
   tx_capable = true
   depends_on = ["loraham-daemon"]
-  requires_daemon_tx = "MANAGED"
+  # Real-time Codec2 stream: the app paces its own TX by exact LoRa airtime (AIRTIME_MARGIN
+  # + TX_EXTRA_DELAY "Daemon-Puffer") and does NOT consume the daemon's CAD=0|1 indicator.
+  # The daemon's MANAGED per-frame CAD/LBT wait (<=1.5 s) would stall/gap live audio, so the
+  # daemon must transmit immediately: DIRECT (the app provides its own waitr behaviour).
+  requires_daemon_tx = "DIRECT"
   build = "gcc -o loraham_voice loraham_voice_v107.c `pkg-config --cflags --libs gtk+-3.0` -lcodec2 -lasound -lncurses -lpthread -lm"
   # voice reads loraham_voice.conf from dirname(argv0), NOT the CWD — so we run it
   # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
   # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
   pre = 'mkdir -p "{runtime}/config/files" && ln -sf "{source}/loraham_voice" "{runtime}/config/files/loraham_voice"'
   run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/loraham_voice"'
+  build_steps = [ { argv = ["gcc", "-o", "loraham_voice", "loraham_voice_v107.c", "{pkgconfig:gtk+-3.0}", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"] } ]
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice", dst = "{runtime}/config/files/loraham_voice" } ]
+  run_argv = ["{runtime}/config/files/loraham_voice"]
+  run_cwd = "{runtime}/config/files"
+  run_env = { DISPLAY = "@env:DISPLAY=:0" }
+  readiness = "process"
   note = "GTK desktop app (needs a display/X server + an audio capture/playback device). lhpc seeds loraham_voice.conf (callsign, audio devices, per-band radio params); the in-app config dialog still works and saves back to it."
 
     [[stack.component.require]]
@@ -426,6 +458,7 @@ main = "loraham-voice"
     fmt = "env"
       [[stack.component.config_file.param]]
       name = "callsign"
+      validator = "callsign"
       key = "callsign"
       default = "{callsign}"
       label = "Callsign"
@@ -547,6 +580,7 @@ main = "loraham-kiss-tnc"
 
   [[stack.component]]
   id = "loraham-kiss-tnc"
+  readiness = "endpoint"
   name = "LoRaHAM KISS/TCP TNC"
   kind = "service"
   band = "433"
@@ -576,6 +610,7 @@ main = "loraham-kiss-tnc"
     # TX 433.900). Per-band defaults are picked from the band the stack runs on.
     [[stack.component.param]]
     name = "rx_freq"
+    validator = "freq"
     kind = "str"
     arg = "--rx-freq"
     band_defaults = { "433" = "433.775", "868" = "869.525" }
@@ -583,6 +618,7 @@ main = "loraham-kiss-tnc"
     label = "RX frequency (MHz)"
     [[stack.component.param]]
     name = "tx_freq"
+    validator = "freq"
     kind = "str"
     arg = "--tx-freq"
     band_defaults = { "433" = "433.900", "868" = "869.525" }
@@ -598,6 +634,7 @@ main = "loraham-kiss-tnc"
     [[stack.component.param]]
     name = "data_socket"
     kind = "str"
+    validator = "path"
     arg = "--data-socket"
     band_defaults = { "433" = "/tmp/lora433f.sock", "868" = "/tmp/lora868f.sock" }
     default = "/tmp/lora433f.sock"
@@ -606,6 +643,7 @@ main = "loraham-kiss-tnc"
     [[stack.component.param]]
     name = "conf_socket"
     kind = "str"
+    validator = "path"
     arg = "--conf-socket"
     band_defaults = { "433" = "/tmp/loraconf433.sock", "868" = "/tmp/loraconf868.sock" }
     default = "/tmp/loraconf433.sock"
@@ -637,6 +675,7 @@ main = "loraham-kiss-tnc"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:8001"
+    ready = true
     role = "listener"
     description = "KISS over TCP"
     client = true
@@ -653,6 +692,7 @@ main = "loraham-kiss-tnc"
 
   [[stack.component]]
   id = "loraham-kiss-serial"
+  readiness = "process"
   name = "KISS serial (PTY)"
   kind = "service"
   band = "433"
@@ -714,6 +754,13 @@ main = "meshtastic"
   # disabled while region is UNSET). Idempotent; runs detached. Tries the local
   # meshtastic CLI then PATH.
   post_start = 'sleep 12; M="$HOME/.local/bin/meshtastic"; [ -x "$M" ] || M=meshtastic; "$M" --host 127.0.0.1 --set lora.region {region}; "$M" --host 127.0.0.1 --set-owner "{node_name}" --set-owner-short "{node_short}"'
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
+  readiness = "endpoint"
+  post_steps = [
+    { kind = "delay", seconds = 12 },
+    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/../.local/bin/meshtastic"], optional = true },
+    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], optional = true },
+  ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). You are already in the spi+gpio groups, so lhpc runs/stops it WITHOUT root. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
     [[stack.component.param]]
@@ -725,6 +772,7 @@ main = "meshtastic"
     label = "LoRa region (sets TX legality; required for TX)"
     [[stack.component.param]]
     name = "node_name"
+    validator = "node"
     kind = "str"
     default = "LoRaHAM Pi"
     label = "Node name (long)"
@@ -858,6 +906,7 @@ main = "meshtastic"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:4403"
+    ready = true
     role = "listener"
     description = "Meshtastic API"
     client = true
@@ -897,9 +946,23 @@ main = "meshcom-qemu"
   purpose = "TCP(7000) <-> daemon Unix-socket bridge (--backend loraham)."
   tx_capable = true
   depends_on = ["loraham-daemon"]
-  requires_daemon_tx = "DIRECT"
+  # The QEMU MeshCom firmware has NO real radio (EXTERNAL_RADIO): its own MAC/CAD cannot
+  # touch the channel, so channel access is delegated to the daemon. The bridge itself
+  # forces "SET TXMODE=MANAGED" on connect (loraham_backend.cpp), so the declared mode must
+  # match MANAGED — declaring DIRECT here only made lhpc set+verify DIRECT moments before
+  # the bridge flipped it back to MANAGED.
+  requires_daemon_tx = "MANAGED"
+  # Match the MeshCom firmware's channel-access timing: the firmware fires after a single
+  # ~28 ms CAD, whereas the daemon's default CADIDLE=250 ms requires a 250 ms confirmed-idle
+  # window before TX. Setting CADIDLE=0 makes the daemon's MANAGED LBT return free after a
+  # single clear CAD probe (≈ the firmware's behaviour) while keeping listen-before-talk.
+  # Non-gating: if the SET cannot be applied the start still proceeds (daemon keeps its
+  # current CADIDLE). Per-band global — also affects other MANAGED clients on this band.
+  requires_daemon_cadidle = "0"
   start_order = 1
   build = "cmake -S . -B build && cmake --build build"
+  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"] } ]
+  readiness = "endpoint"
   run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"
   bin = "build/meshcom-loraham-bridge"
 
@@ -915,6 +978,7 @@ main = "meshcom-qemu"
     label = "Control TCP port (= firmware XR_PORT)"
     [[stack.component.param]]
     name = "bind"
+    validator = "host"
     kind = "str"
     arg = "--bind"
     default = "127.0.0.1"
@@ -950,6 +1014,7 @@ main = "meshcom-qemu"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:7000"
+    ready = true
     role = "listener"
     description = "MeshCom firmware client port."
 
@@ -965,10 +1030,11 @@ main = "meshcom-qemu"
     key = "loraham.profile.433"
     kind = "daemon-profile"
     mode = "requirement"
-    requirement = "DIRECT"
+    requirement = "MANAGED"
 
   [[stack.component]]
   id = "meshcom-gps-relay"
+  readiness = "process"
   name = "MeshCom GPS relay"
   kind = "service"
   purpose = "Feeds NMEA into the QEMU node's virtual UART1 (fixture or host gpsd)."
@@ -1020,6 +1086,8 @@ main = "meshcom-qemu"
   # is empty and the build fails. 10.0.2.2 = QEMU user-net gateway -> host; 7000 =
   # the meshcom-bridge default port; password (if any) from /tmp/xr_pw.
   build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat /tmp/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
+  build_steps = [ { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file:/tmp/xr_pw" } } ]
+  readiness = "endpoint"
   run = "scripts/run.sh {env} {qemu}"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
@@ -1028,11 +1096,18 @@ main = "meshcom-qemu"
   # stored in flash/NVS (survives restarts). After the console comes up we send
   # `--setcall`; skipped if the callsign is unset/N0CALL.
   post_start = 'C="{mc_callsign}"; case "$C" in ""|N0CALL) exit 0;; esac; for i in $(seq 1 90); do nc -z 127.0.0.1 12323 2>/dev/null && break; sleep 2; done; sleep 3; printf -- "--setcall %s\n" "$C" | nc -w2 127.0.0.1 12323'
+  # Wait for the QEMU net-console, then push the callsign over it — no nc/shell.
+  post_steps = [
+    { kind = "tcp_wait", port = 12323, timeout = 180 },
+    { kind = "delay", seconds = 3 },
+    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n" },
+  ]
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
     # operator callsign. Applied via the net-console after boot (see post_start).
     [[stack.component.param]]
     name = "mc_callsign"
+    validator = "callsign"
     kind = "str"
     default = "{callsign}"
     label = "MeshCom callsign (with -SSID)"
@@ -1076,6 +1151,7 @@ main = "meshcom-qemu"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:12323"
+    ready = true
     role = "listener"
     description = "net-console."
 
@@ -1114,6 +1190,7 @@ main = "meshcore-pi"
 
   [[stack.component]]
   id = "meshcore-pi"
+  readiness = "endpoint"
   name = "MeshCore Pi (868)"
   kind = "service"
   band = "868"
@@ -1149,6 +1226,7 @@ main = "meshcore-pi"
       label = "Enable TX (off = RX-only)"
       [[stack.component.config_file.param]]
       name = "node_name"
+      validator = "node"
       key = "name"
       section = "device.companion"
       kind = "str"
@@ -1166,6 +1244,7 @@ main = "meshcore-pi"
       advanced = true
       [[stack.component.config_file.param]]
       name = "frequency"
+      validator = "freq"
       key = "frequency"
       section = "interface.loraham868"
       kind = "str"
@@ -1198,6 +1277,7 @@ main = "meshcore-pi"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:5000"
+    ready = true
     role = "listener"
     description = "MeshCore companion TCP"
     client = true
@@ -1228,7 +1308,12 @@ main = "meshcore-pi"
   # A GUI app (not a terminal TUI) — lhpc can Start/Stop it; it opens on the Pi's
   # display (DISPLAY inherited, else :0).
   run = 'env DISPLAY="${DISPLAY:-:0}" .venv/bin/python main.py'
+  run_argv = [".venv/bin/python", "main.py"]
+  run_cwd = "{source}"
+  run_env = { DISPLAY = "@env:DISPLAY=:0" }
+  readiness = "process"
   note = "Desktop GUI (needs a display/X server on the Pi)."
+  start_note = "Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"
 
     [stack.component.process]
     exec_name = "python"
@@ -1244,6 +1329,7 @@ main = "meshcore-pi"
 
   [[stack.component]]
   id = "meshcore-cli"
+  readiness = "manual"
   name = "MeshCore CLI"
   kind = "oneshot"
   purpose = "One-shot / REPL client over TCP 5000 (meshcli)."
@@ -1259,6 +1345,7 @@ main = "meshcore-pi"
     # meshcli connects to the meshcore-pi companion server (default port 5000).
     [[stack.component.param]]
     name = "host"
+    validator = "host"
     kind = "str"
     arg = "-t"
     default = "127.0.0.1"

@@ -8,8 +8,8 @@
       <div class="card radio-col" data-radio-band="{{ r.band }}">
         <header>
           <h2>{{ r.band }} MHz</h2>
-          <span class="badge badge-{{ 'running' if r.daemon.reachable else 'stopped' }}" id="rd-badge-{{ r.band }}">
-            {{ 'daemon live' if r.daemon.reachable else 'daemon offline' }}</span>
+          <span class="badge badge-{{ 'running' if r.daemon.usable else ('degraded' if r.daemon.occupied else 'stopped') }}" id="rd-badge-{{ r.band }}">
+            {% if r.daemon.usable %}daemon usable (READY){% elif r.daemon.occupied %}daemon occupied ({{ r.daemon.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
         </header>
         <div class="body">
 
@@ -67,6 +67,7 @@
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="start">
                 <input type="hidden" name="target" value="daemon">
+                <input type="hidden" name="band" value="{{ r.band }}">
                 <input type="hidden" name="p_radio" value="{{ r.band }}">
                 <input type="hidden" name="from" value="dash">
                 <button type="submit">Start daemon ({{ r.band }} only)</button>

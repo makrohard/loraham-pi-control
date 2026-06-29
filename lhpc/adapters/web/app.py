@@ -23,7 +23,6 @@ from flask import (
     Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for,
 )
 
-from lhpc.core import daemon_control
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
 from lhpc.version import __version__
@@ -198,7 +197,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             statuses=stack_status.components,
             installed=installed,
             has_source=has_source,
-            update_status=(service.update_status(main) if installed else "unknown"),
+            # GET pages do NO network: freshness ("update available?") is an explicit
+            # action (`lhpc update --check`), never a page-load git ls-remote.
+            update_status="unknown",
             conflicts=[c for c in snapshot.conflicts
                        if any(h in member_ids for h in c.holders)],
             system_deps=service.system_deps(stack_id),
@@ -230,24 +231,33 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if band not in ("433", "868"):
             abort(404)
         view = service.daemon_view(band)
-        return jsonify(band=band, reachable=view.reachable, status=view.status,
+        return jsonify(band=band, reachable=view.reachable, ready=view.ready,
+                       radio_state=view.radio_state, status=view.status,
                        stats=view.stats, channel=view.channel,
                        feed=service.daemon_feed(band, 40))
 
     @app.post("/radio/<band>/set")
     def radio_set(band: str):  # noqa: ANN202
-        # Apply a LIVE daemon setting (runtime) from the daemon config page.
+        # Apply a LIVE daemon setting (runtime) — same two-step plan + confirm as
+        # every other mutation (P0.7). First POST shows the plan; a confirmed POST
+        # applies. The key is whitelisted by the service; nothing transmits.
         if band not in ("433", "868"):
             abort(404)
         if not _csrf_ok():
             abort(400)
         key = request.form.get("key", "")
         value = request.form.get("value", "")
+        if request.form.get("confirmed") != "yes":
+            plan = service.daemon_set(band, key, value, apply=False)
+            return render_template("confirm_radio.html", version=__version__,
+                                   runtime_root=_runtime_root(), band=band,
+                                   key=key, value=value, plan=plan)
         result = service.daemon_set(band, key, value, apply=True)
-        if not result.ok:
-            flash(result.summary, "warn")
-        else:
-            flash(f"Applied {key}={value} on {band} MHz (live).", "ok")
+        # Truthful flash: the service summary already distinguishes "applied (confirmed)"
+        # from "SENT (unconfirmed)". Never claim "Applied" for a setting the daemon does
+        # not report back — an unconfirmed SET is flashed as a warning, not success.
+        confirmed = bool(result.data.get("confirmed")) if result.data else False
+        flash(result.summary, "ok" if (result.ok and confirmed) else "warn")
         return redirect(url_for("stack_config_view", stack_id="daemon"))
 
     def _redirect_for(target: str):
@@ -273,8 +283,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         stored = service.stack_config(target, band) if run_params else {}
         params = {p.name: request.form.get("p_" + p.name, stored.get(p.name, p.default))
                   for p in run_params}
-        # Source version selector (only meaningful for install/update).
-        source = request.form.get("source", "dev")
+        # Source version selector (only meaningful for install/update). A MISSING selector
+        # defaults to the production-safe 'pinned' — never 'dev'. An INVALID selector is
+        # rejected by run_action (never rewritten to dev).
+        source = request.form.get("source", "pinned")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
@@ -328,6 +340,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                     stop_owners=stop_owners, cascade=cascade, band=band)
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if result.ok else "warn")
+        # Transient green note(s) for a just-started component (e.g. how to connect a
+        # launched GUI to its node) — auto-hidden on the dashboard.
+        if op == "start":
+            for note in service.start_notes(result):
+                flash(note, "ok transient")
         return _redirect_for(target)
 
     def _safe_job(value):
@@ -387,18 +404,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for opt in view["optional"]:
             values[f"autostart_{opt['id']}"] = (
                 "on" if request.form.get("c_autostart_" + opt["id"]) else "")
-        # Per-component GitHub remote overrides (blank reverts to the default).
-        for src in view["sources"]:
-            field = request.form.get("remote_" + src["id"])
-            if field is not None and field.strip() != src["remote"]:
-                service.save_component_remote(src["id"],
-                                              "" if field.strip() == src["default"] else field)
-        # Pass operator only when the form actually carried it (None = leave as-is),
-        # so saving a stack that doesn't use a callsign never clobbers it.
-        result = service.save_config(
-            stack_id, values,
+        # Per-component GitHub remote overrides as a COMPLETE map (blank reverts to
+        # the default). The whole submission is validated and persisted as ONE
+        # all-or-recoverable transaction — no per-remote sequential writes.
+        remotes = None
+        if view["sources"]:
+            remotes = {}
+            for src in view["sources"]:
+                field = request.form.get("remote_" + src["id"], src["remote"])
+                remotes[src["id"]] = "" if field.strip() == src["default"] else field.strip()
+        result = service.save_config_bundle(
+            stack_id, values=values,
             callsign=request.form.get("op_callsign"),
-            locator=request.form.get("op_locator"), band=band)
+            locator=request.form.get("op_locator"), band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None))
@@ -428,6 +446,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _method_not_allowed(_err):  # noqa: ANN001, ANN202
         return render_template("error.html", code=405, message="Method not allowed"), 405
 
+    @app.errorhandler(Exception)
+    def _unexpected(err):  # noqa: ANN001, ANN202
+        # HTTP errors (404/405/400 …) keep their own status/handling.
+        from werkzeug.exceptions import HTTPException
+        if isinstance(err, HTTPException):
+            return err
+        # Last-resort boundary: an UNEXPECTED escape (e.g. a runtime-root FS/containment
+        # error not already typed at the service layer) renders a clean, typed message —
+        # never a traceback (debug/reloader are off). Expected failures are still typed
+        # ActionResults upstream; this only stops a stray exception leaking a stack trace.
+        app.logger.exception("unexpected error handling %s", request.path)
+        return render_template("error.html", code=500,
+                               message="Internal error — see the server log."), 500
+
     return app
 
 
@@ -444,6 +476,21 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
     app = create_app()
     print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
     print("     Loopback-only. Press Ctrl-C to stop.")
-    # threaded=True so live monitor polling and actions don't block each other.
-    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+    # Supported deployment uses a production-capable WSGI server (waitress): one process,
+    # multi-threaded, no debug, no reloader. The Flask dev server is a fallback for bare
+    # interactive use only (still loopback-only, no debug, no reloader). waitress is NOT a
+    # hard dependency — if it is absent we fall back and say so.
+    try:
+        from waitress import serve as _waitress_serve
+    except ImportError:
+        _waitress_serve = None
+    if _waitress_serve is not None:
+        # Single listening process; threads let live monitor polling + actions overlap.
+        _waitress_serve(app, host=host, port=port, threads=8, ident="lhpc")
+    else:
+        print("WARN waitress not installed — using the Flask dev server (OK for local "
+              "interactive use only).\n"
+              "     For the supported systemd deployment, install 'waitress' in the venv "
+              "(see docs/deployment.md).")
+        app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
     return 0

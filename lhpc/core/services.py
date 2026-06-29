@@ -10,15 +10,26 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 
 from __future__ import annotations
 
+import os
+import threading
 import time
+import contextlib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import daemon_control
 from . import manifest as manifest_mod
 from . import resources as resources_mod
+from . import validators
 from .config import (
     Config,
+    ConfigError,
+    apply_config_transaction,
+    render_local_tables,
+    render_stack_config,
+    _load_runtime_toml,
+    _stack_config_path,
     load_config,
     load_stack_config,
     render_keyval,
@@ -40,13 +51,31 @@ from .model import (
     TxState,
     emit_param,
 )
-from .paths import Paths, resolve_paths
+from . import procident
+from . import runtime_fs
+from .outcomes import CompResult, Outcome, applied_ok
+from .paths import Paths, PathContainmentError, resolve_paths
 from .probes import RealSystem, System
 from .probes import hardware
 from .status import Snapshot, StatusProber, rollup_states, summarize
 
 _SPI_DEV = "/dev/spidev0.0"
 _GPIO_DEV = "/dev/gpiochip0"
+
+
+class SourceTxnBlocked(Exception):
+    """Raised by the source-operation guard when an unresolved source-transaction journal
+    is present — every source-mutating op fails closed until an operator resolves it."""
+
+
+@dataclass(frozen=True)
+class ConfigWrite:
+    """Structured result of generating one component's config file."""
+
+    component: str
+    path: str
+    status: str            # "written" | "linked-readonly" | "no-base" | "failed"
+    detail: str = ""
 
 
 @dataclass
@@ -58,6 +87,9 @@ class ActionResult:
     details: list[str] = field(default_factory=list)
     next_commands: list[str] = field(default_factory=list)
     data: dict = field(default_factory=dict)
+    # Typed per-component lifecycle results (start/stop/restart). Adapters may render
+    # from these; `ok` for an applied lifecycle action is derived from them.
+    results: tuple = field(default_factory=tuple)
 
 
 class ControllerService:
@@ -77,16 +109,60 @@ class ControllerService:
         self._paths = paths or resolve_paths()
         self._stacks: tuple[Stack, ...] | None = None
         self._config: Config | None = None
+        # The config cache is shared by the (threaded) web app; guard it so a save on one
+        # thread is visible to the next read on any thread (no stale callsign/remote).
+        self._config_lock = threading.RLock()
+        # THREAD-LOCAL re-entrancy bookkeeping: this service is shared by the (possibly
+        # threaded) web app, so lock ownership is scoped to the CURRENT thread. Only
+        # nested calls in the SAME thread skip re-acquisition; an independent thread
+        # contends through `reslock`. Recursion COUNTS (not a flat set) so a nested
+        # lifecycle call cannot prematurely release an outer guard's lock.
+        self._lock_state = threading.local()
 
     # ---- config / installer ---------------------------------------------
 
     def config(self) -> Config:
-        if self._config is None:
-            self._config = load_config(self._paths)
-        return self._config
+        with self._config_lock:
+            if self._config is None:
+                self._config = load_config(self._paths)
+            return self._config
+
+    def _invalidate_config(self) -> None:
+        """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
+        after every successful config mutation so a saved callsign/locator/remote/param is
+        immediately visible to subsequent web AND CLI service actions (no stale cache)."""
+        with self._config_lock:
+            self._config = None
 
     def _installer(self) -> Installer:
         return Installer(self._paths, self.stacks(), self.config(), self._system)
+
+    @contextmanager
+    def _source_operation_guard(self, source_paths, op: str = "source-op"):
+        """ONE atomic source-operation boundary (P0.1) — no preflight/acquire gap:
+          1. acquire the source-transaction INDEX lock;
+          2. recover + validate journals;
+          3. block (raise `SourceTxnBlocked`) if ANY unresolved journal remains;
+          4. acquire ALL affected source-path locks (stable sorted) WHILE STILL HOLDING
+             the index lock — a handoff, so no journal can appear between the check and
+             the lock and the source is already locked before the index is released;
+          5. release the index lock and yield with the source locks held for the op.
+        Raises `reslock.ResourceBusy` if the index or a source lock is contended."""
+        from . import reslock
+        inst = self._installer()
+        keys = sorted({reslock.source_lock_key(sp) for sp in source_paths})
+        with contextlib.ExitStack() as src_stack:
+            # Index held across recovery + the source-lock handoff, then released.
+            with reslock.operation_lock(self._paths, inst._index_key(), op, ""):
+                inst._recover_scan()
+                if inst._pending_journals():
+                    raise SourceTxnBlocked(
+                        "an unresolved source-transaction journal is present — "
+                        "resolve it before any source operation")
+                for k in keys:
+                    src_stack.enter_context(reslock.operation_lock(self._paths, k, op, ""))
+            # Index released; source lock(s) remain held by src_stack for the operation.
+            yield
 
     # ---- manifest --------------------------------------------------------
 
@@ -274,7 +350,7 @@ class ControllerService:
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "dev") -> ActionResult:
+                source: str = "pinned") -> ActionResult:
         if stack_id and self.stack(stack_id) is None:
             return self._unknown_stack(stack_id)
         if not self._paths.runtime_root_exists:
@@ -302,6 +378,7 @@ class ControllerService:
                 for a in plan.actions:
                     if a.target == str(dest):
                         a.status, a.detail = result.status, result.detail
+                        a.provenance = result.provenance
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def _plan_result(self, plan: Plan, *, applied: bool, next_apply: str | None) -> ActionResult:
@@ -310,13 +387,16 @@ class ControllerService:
             for a in plan.actions
         ]
         failed = [a for a in plan.actions if a.status == "failed"]
+        # Expose the per-source provenance state in the result data (activated sources only).
+        provenance = {a.target: a.provenance for a in plan.actions if a.provenance}
         if applied:
             done = sum(1 for a in plan.actions if a.status == "done")
             summary = (f"{plan.title}: applied {done} action(s)."
                        if not failed else
                        f"{plan.title}: completed with {len(failed)} failure(s).")
             return ActionResult(ok=not failed, summary=summary, details=details,
-                                next_commands=["lhpc status", "lhpc doctor"])
+                                next_commands=["lhpc status", "lhpc doctor"],
+                                data={"provenance": provenance} if provenance else {})
         n = len(plan.changes)
         summary = f"{plan.title}: {n} change(s) planned (dry run)."
         return ActionResult(ok=True, summary=summary, details=details,
@@ -333,7 +413,7 @@ class ControllerService:
         expands to its runnable components in start order; a component id is one."""
         s = self.stack(target)
         if s is not None:
-            runnable = [c for c in s.components if c.run_cmd]
+            runnable = [c for c in s.components if c.run_argv]
             runnable.sort(key=lambda c: (c.start_order is None, c.start_order or 0))
             return [(s, c) for c in runnable], None
         for st in self.stacks():
@@ -386,6 +466,50 @@ class ControllerService:
     # answer before reporting success (the daemon inits the radio asynchronously).
     DAEMON_VERIFY_TIMEOUT_S = 4.0
     DAEMON_VERIFY_POLL_S = 0.5
+    # For readiness="endpoint": wait up to this long for every ready=true endpoint.
+    ENDPOINT_VERIFY_TIMEOUT_S = 6.0
+    ENDPOINT_VERIFY_POLL_S = 0.3
+
+    def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
+        """Probe a component's `ready = true` endpoints (bounded). Returns
+        (all_present, evidence-lines). Only endpoints explicitly marked ready
+        participate — reference/client/data endpoints never gate."""
+        from .probes.endpoints import tcp_endpoint_present
+        from .probes.unixsock import probe_socket
+        ready = [e for e in comp.endpoints if e.ready]
+        if not ready:
+            return True, []
+        def snapshot() -> tuple[bool, list[str]]:
+            ev, ok_all = [], True
+            for e in ready:
+                if e.kind == "tcp":
+                    # Host/family-aware: a wrong-family/host listener on the same port
+                    # does NOT satisfy readiness.
+                    present, line = tcp_endpoint_present(self._system, e.address)
+                    ev.append(line)
+                elif getattr(e, "external", False):
+                    # External endpoints are observe-only and NEVER gate readiness.
+                    continue
+                elif not self._paths.contains(Path(e.address)):
+                    # A ready Unix/path endpoint must be runtime-contained unless
+                    # explicitly external — an outside-root endpoint can never gate.
+                    present = False
+                    ev.append(f"{e.address}: rejected (ready endpoint not runtime-contained)")
+                else:
+                    if e.kind == "unix":
+                        present = probe_socket(self._system, e.address).is_socket
+                    else:
+                        present = self._system.fs.exists(e.address)
+                    ev.append(f"{e.address}: {'present' if present else 'absent'}")
+                ok_all = ok_all and present
+            return ok_all, ev
+        waited = 0.0
+        while True:
+            ok_all, ev = snapshot()
+            if ok_all or self.ENDPOINT_VERIFY_TIMEOUT_S <= 0 or waited >= self.ENDPOINT_VERIFY_TIMEOUT_S:
+                return ok_all, ev
+            time.sleep(self.ENDPOINT_VERIFY_POLL_S)
+            waited += self.ENDPOINT_VERIFY_POLL_S
 
     def _component_index(self):
         return {c.id: (s, c) for s in self.stacks() for c in s.components}
@@ -428,27 +552,153 @@ class ControllerService:
         return [idx[cid] for cid in order]
 
     def _daemon_needs(self, order, params, band: str = ""):
-        """The daemon's required radio band + TX mode for this run order. `band`
-        overrides the band for a band-switchable app stack."""
+        """The daemon's required radio band + TX mode (+ optional CADIDLE tuning) for
+        this run order. `band` overrides the band for a band-switchable app stack.
+        Returns (radio, tx, cadidle); tx/cadidle are None when no single value applies."""
         if not any(c.id == self.DAEMON_ID for _, c in order):
-            return None, None
+            return None, None, None
         if params and params.get("radio"):
-            return params["radio"], None          # explicit (daemon stack) override
+            return params["radio"], None, None    # explicit (daemon stack) override
         if band in ("433", "868"):
             bands = {band}
         else:
             bands = {c.band for _, c in order if self.DAEMON_ID in c.depends_on and c.band}
         txs = {c.requires_daemon_tx for _, c in order
                if self.DAEMON_ID in c.depends_on and c.requires_daemon_tx}
+        cads = {c.requires_daemon_cadidle for _, c in order
+                if self.DAEMON_ID in c.depends_on and c.requires_daemon_cadidle}
         radio = "both" if len(bands) != 1 else next(iter(bands))
         tx = next(iter(txs)) if len(txs) == 1 else None
-        return radio, tx
+        cadidle = next(iter(cads)) if len(cads) == 1 else None
+        return radio, tx, cadidle
 
     def _effective_band(self, stack_id: str, fallback: str = "") -> str:
         """The band a stack is actually running on (start marker, or for an
         interactive app the band it was launched on)."""
         return (self.running_band(stack_id, "") or self.interactive_band(stack_id)
                 or fallback)
+
+    def _operation_resource_keys(self, target: str, band: str = "") -> list[str]:
+        """Canonical resource keys an EXCLUSIVE/PROVIDER operation on `target` touches —
+        the basis for cross-stack operation locks so a start/stop/restart of one stack
+        serializes against another stack claiming the SAME radio/port/socket. Radio claims
+        are scoped to the band(s) the run actually uses. Mirrors `run_blockers` exactly so
+        the lock set equals the conflict set. CONSUMER/COOPERATIVE claims take no lock."""
+        order = self._run_order(target)
+        if not order:
+            return []
+        cfg_band = self._config_band(target, band)
+        needed_bands = {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
+        keys = set()
+        for _, c in order:
+            for r in c.resources:
+                if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
+                        and not r.key.startswith("loraham.radio.")):
+                    keys.add(r.key)
+        for b in needed_bands:
+            keys.add(f"loraham.radio.{b}")
+        return sorted(keys)
+
+    def _operation_source_paths(self, target: str) -> list[str]:
+        """Distinct managed source paths a start touches (generated config, command
+        expansion, launch, post-start prep all read from them) — locked for the start so
+        a concurrent update/uninstall cannot swap the tree mid-start. Sorted for a stable
+        acquisition order; shared checkouts collapse to one key."""
+        order = self._run_order(target)
+        return sorted({c.source.path for _, c in order if c.source})
+
+    def _lifecycle_lock_keys(self, op: str, target: str, band: str = "",
+                             stop_owners: bool = False, cascade: bool = False) -> list[str]:
+        """The COMPLETE lock bundle a lifecycle op must hold: the target's
+        `lifecycle.<stack>` + `claim.<resource>` keys (+ source-path keys for start/
+        restart), AND — for `stop_owners`/`cascade` — the owners'/dependents' keys too, so
+        a cross-target mutation never bypasses another target's coordination. Returned
+        de-duplicated; the caller acquires them in ONE stable sorted order."""
+        from . import reslock
+        keys: set[str] = set()
+
+        def add(t: str, with_source: bool, scoped_band: str) -> None:
+            sid = self.stack_of(t) or t
+            keys.add(f"lifecycle.{sid}")
+            for rk in self._operation_resource_keys(t, scoped_band):
+                keys.add(f"claim.{rk}")
+            if with_source:
+                for sp in self._operation_source_paths(t):
+                    keys.add(reslock.source_lock_key(sp))
+
+        add(target, op in ("start", "restart"), band)
+        if stop_owners and op in ("start", "restart"):
+            for b in self.run_blockers(target, band):
+                holder = b.get("holder_stack") or b.get("holder")
+                if holder:
+                    add(holder, False, "")
+        if cascade and op == "stop":
+            for dep in self._dependents_of(target):
+                add(dep, False, "")
+        return sorted(keys, key=reslock.canonical_key)
+
+    def _dependents_of(self, target: str) -> list[str]:
+        """Stack ids of RUNNING stacks that depend on `target` (for cascade stop)."""
+        order_ids = {c.id for _, c in (self._run_order(target) or [])}
+        out = set()
+        for s in self.stacks():
+            for c in s.components:
+                if any(d in order_ids for d in (c.depends_on or ())):
+                    out.add(s.id)
+        return sorted(out)
+
+    def _held_counts(self) -> dict:
+        """Per-THREAD map of lock key -> recursion depth currently held by THIS thread."""
+        st = self._lock_state
+        counts = getattr(st, "counts", None)
+        if counts is None:
+            counts = st.counts = {}
+        return counts
+
+    @contextmanager
+    def _lifecycle_guard(self, op: str, target: str, band: str = "",
+                         stop_owners: bool = False, cascade: bool = False):
+        """Acquire the lifecycle lock bundle. RE-ENTRANT per THREAD: a key already held by
+        an outer guard in THIS thread is not re-flocked (so restart→stop+start and
+        stop_owners→stop nest without self-contending), but an INDEPENDENT thread sharing
+        this service contends through `reslock` and gets `ResourceBusy`. Recursion counts
+        ensure a nested guard never releases an outer guard's flock."""
+        from . import reslock
+        keys = self._lifecycle_lock_keys(op, target, band, stop_owners, cascade)
+        counts = self._held_counts()
+        bumped: list[str] = []
+        # For a start/restart that acquires source locks FRESH (not nested inside an outer
+        # guard that already holds them), do the index→recover→block→source handoff: hold
+        # the INDEX lock across the journal check AND the source-lock acquisition, then
+        # release it — so a start cannot pass a journal check then race a retained journal.
+        fresh_source = any(k.startswith("source.") and counts.get(k, 0) == 0 for k in keys)
+        do_handoff = op in ("start", "restart") and fresh_source
+        try:
+            with contextlib.ExitStack() as stack:
+                idx_stack = contextlib.ExitStack()
+                try:
+                    if do_handoff:
+                        inst = self._installer()
+                        idx_stack.enter_context(
+                            reslock.operation_lock(self._paths, inst._index_key(), op, target))
+                        inst._recover_scan()
+                        if inst._pending_journals():
+                            raise SourceTxnBlocked(
+                                "an unresolved source-transaction journal is present — "
+                                "resolve it before starting")
+                    for k in keys:
+                        if counts.get(k, 0) == 0:   # not held by an outer guard in THIS thread
+                            stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                        counts[k] = counts.get(k, 0) + 1
+                        bumped.append(k)
+                finally:
+                    idx_stack.close()               # release index AFTER source held (or on error)
+                yield
+        finally:
+            for k in bumped:
+                counts[k] -= 1
+                if counts[k] <= 0:
+                    counts.pop(k, None)
 
     def run_blockers(self, target: str, band: str = "") -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
@@ -523,6 +773,25 @@ class ControllerService:
 
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "") -> ActionResult:
+        """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
+        when stop_owners) so a DIRECT call gets the same coordination as CLI/web."""
+        from . import reslock
+        if not apply:
+            return self._start_impl(target, apply=False, params=params,
+                                    stop_owners=stop_owners, band=band)
+        try:
+            with self._lifecycle_guard("start", target, band, stop_owners=stop_owners):
+                return self._start_impl(target, apply=True, params=params,
+                                        stop_owners=stop_owners, band=band)
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot start '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot start '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
+
+    def _start_impl(self, target: str, apply: bool = False, params: dict | None = None,
+                    stop_owners: bool = False, band: str = "") -> ActionResult:
         order = self._run_order(target)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
@@ -533,21 +802,22 @@ class ControllerService:
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         cfg_band = self._config_band(target, band)
         life = self._lifecycle()
-        radio, tx = self._daemon_needs(order, params, cfg_band)
+        radio, tx, cadidle = self._daemon_needs(order, params, cfg_band)
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
             for _, comp in order:
                 if comp.id == self.DAEMON_ID:
                     details.append(f"  [daemon] start/ensure --radio {radio or 'both'}"
-                                   + (f", TXMODE={tx}" if tx else ""))
+                                   + (f", TXMODE={tx}" if tx else "")
+                                   + (f", CADIDLE={cadidle}ms" if cadidle is not None else ""))
                 elif comp.interactive:
                     cmd = self.manual_start_command(comp)
                     details.append(f"  [manual] {comp.id} is interactive — the daemon is "
                                    "ensured, then run it yourself in a terminal:")
                     details.append(f"    {cmd}")
                     commands.append(cmd)
-                elif comp.units and not comp.run_cmd:
+                elif comp.units and not comp.run_argv:
                     cmd = f"sudo systemctl start {comp.units[0].name}"
                     details.append(f"  [manual] {comp.id} is a system service — start it with:")
                     details.append(f"    {cmd}")
@@ -578,9 +848,23 @@ class ControllerService:
                     details=details,
                     next_commands=[f"lhpc stack stop {o}" for o in owners])
             prelude = []
+            unstopped = []
             for o in owners:
-                self.stop(o, apply=True)
-                prelude.append(f"  [stopped] conflicting stack '{o}'")
+                ores = self.stop(o, apply=True)
+                if ores.ok:
+                    prelude.append(f"  [stopped] conflicting stack '{o}'")
+                else:
+                    unstopped.append(o)
+                    prelude.append(f"  [blocked] conflicting stack '{o}' did not stop "
+                                   f"(verified): {ores.summary}")
+            if unstopped:
+                # Do not launch the target while a conflicting owner is still up.
+                return ActionResult(
+                    False,
+                    f"Cannot run '{target}': conflicting stack(s) {', '.join(unstopped)} "
+                    "could not be verified stopped.",
+                    details=prelude,
+                    next_commands=[f"lhpc status {o}" for o in unstopped])
             time.sleep(1.0)  # let sockets/locks release
         else:
             prelude = []
@@ -589,71 +873,208 @@ class ControllerService:
         st_index = {c.id: ss.components[c.id]
                     for ss in snap.stacks for c in ss.stack.components}
         out = list(prelude)
+        results: list[CompResult] = []   # TYPED per-component outcomes (source of truth)
+        daemon_ok = True                # gate dependents on verified daemon readiness
+
+        def record(comp, stack, outcome, summary):
+            results.append(CompResult(component=comp.id, stack=stack.id, action="start",
+                                      outcome=outcome, summary=summary))
+            out.append(f"  [{outcome.value}] {comp.id}: {summary}")
+
         for stack, comp in order:
-            running = st_index[comp.id].run_state in (RunState.RUNNING, RunState.DEGRADED)
+            state = st_index[comp.id].run_state
+            running = state == RunState.RUNNING        # DEGRADED is NOT healthy
+            # A DEGRADED component (process up but a ready endpoint missing) must not
+            # be treated as healthy and must not trigger a duplicate launch.
+            if state == RunState.DEGRADED and comp.id != self.DAEMON_ID:
+                record(comp, stack, Outcome.BLOCKED, "running but DEGRADED (a ready "
+                       "endpoint is missing) — stop it (verified) and re-run")
+                continue
             if comp.id == self.DAEMON_ID:
-                out.extend(self._ensure_daemon(life, stack, comp, running, radio, tx, params))
+                dlines, dok = self._ensure_daemon(life, stack, comp, running, radio, tx,
+                                                  cadidle, params)
+                out.extend(dlines)
+                results.append(CompResult(component=comp.id, stack=stack.id, action="start",
+                    outcome=(Outcome.VERIFIED if dok else Outcome.FAILED),
+                    summary="daemon ready" if dok else "daemon readiness/TX gating failed"))
+                daemon_ok = dok
+                continue
+            # A dependent must NOT start when the daemon it needs failed readiness.
+            if not daemon_ok and self.DAEMON_ID in comp.depends_on:
+                record(comp, stack, Outcome.BLOCKED, "daemon not ready — not started")
                 continue
             if running:
-                out.append(f"  [ok] {comp.id}: already running")
+                record(comp, stack, Outcome.ALREADY_HEALTHY, "already running")
                 continue
             if comp.source and not life.source_dir(comp).exists():
-                out.append(f"  [skip] {comp.id}: not installed (lhpc install {stack.id})")
+                record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
                 continue
             if comp.interactive:
-                # Never auto-start an interactive TUI — the operator runs it in a
-                # terminal. ALWAYS mark it so the dash shows it in the interactive
-                # section; the dash shows either the launch command (when ready) or
-                # the install/build blocker (so it never vanishes after a start).
+                # Never auto-start an interactive TUI — the operator runs it in a terminal.
+                # But its required runtime config must be generated FIRST: if generation
+                # fails (failed/no-base/unsafe source) or the source is a read-only linked
+                # tree, DO NOT write the interactive marker and DO NOT present a manual
+                # command as ready-to-run — return a typed block/manual-required instead.
                 if comp.config_file:
-                    self.write_config_files(stack.id, cfg_band)
-                self.mark_interactive(stack.id, cfg_band)
+                    cw = self.write_config_files(stack.id, cfg_band)
+                    mine = [w for w in cw if w.component == comp.id]
+                    bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
+                    if bad:
+                        record(comp, stack, Outcome.BLOCKED,
+                               f"interactive start blocked — required config could not be "
+                               f"generated ({bad.path}: {bad.detail})")
+                        continue
+                    linked = next((w for w in mine if w.status == "linked-readonly"), None)
+                    if linked:
+                        record(comp, stack, Outcome.MANUAL_REQUIRED,
+                               f"linked source is read-only — generate {comp.id}'s config in "
+                               f"your own checkout before starting it ({linked.path})")
+                        continue
+                marked = self.mark_interactive(stack.id, cfg_band)
                 blocker = self.install_blocker(comp)
+                marker_note = ("" if marked else
+                               " (note: interactive marker could not be persisted — the "
+                               "dashboard may not show its command block)")
                 if blocker:
-                    out.append(f"  [manual] {comp.id} is interactive but {blocker}")
+                    record(comp, stack, Outcome.BLOCKED, f"interactive but {blocker}")
                 else:
-                    out.append(f"  [manual] {comp.id} is interactive — run it in a terminal:")
-                    out.append(f"    {self.manual_start_command(comp)}")
+                    # The start COMMAND is shown on the app's dashboard card (and the
+                    # interactive marker drives that) — don't duplicate it here.
+                    record(comp, stack, Outcome.MANUAL_REQUIRED,
+                           f"interactive — start it from its card on the dashboard{marker_note}")
                 continue
-            if comp.units and not comp.run_cmd:
+            if comp.units and not comp.run_argv:
                 # Externally supervised (systemd, root) — lhpc observes, never starts.
-                out.append(f"  [manual] {comp.id} is a system service — start it with: "
-                           f"sudo systemctl start {comp.units[0].name}")
+                record(comp, stack, Outcome.MANUAL_REQUIRED,
+                       f"system service — start with: sudo systemctl start {comp.units[0].name}")
                 continue
             miss = life.missing_requirements(comp)
             if miss:
-                out.append(f"  [BLOCKED] {comp.id}: missing "
-                           + "; ".join(f"{r.cmd} ({r.install})" for r in miss))
+                record(comp, stack, Outcome.BLOCKED, "missing "
+                       + "; ".join(f"{r.cmd} ({r.install})" for r in miss))
                 continue
             if self._running_conflicts(comp, cfg_band):
-                out.append(f"  [BLOCKED] {comp.id}: resource conflict")
+                record(comp, stack, Outcome.BLOCKED, "resource conflict")
                 continue
             if not self.is_built(comp):
-                # Don't spawn a doomed `exec <missing binary>` — it fails silently
-                # and the stack never appears. Point at the build instead.
-                out.append(f"  [BLOCKED] {comp.id}: not built — build it first "
-                           f"(lhpc build {stack.id})")
+                record(comp, stack, Outcome.BLOCKED,
+                       f"not built — build it first (lhpc build {stack.id})")
                 continue
-            # Regenerate any config file this component reads (per the chosen band),
-            # then apply the stack's saved configuration to the app component.
+            # Regenerate any config file this component reads (per the chosen band). A
+            # generation FAILURE for this component blocks the launch — never start with
+            # stale or absent configuration.
             if comp.config_file:
-                self.write_config_files(stack.id, cfg_band)
+                cw = self.write_config_files(stack.id, cfg_band)
+                mine = [w for w in cw if w.component == comp.id]
+                bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
+                if bad:
+                    record(comp, stack, Outcome.BLOCKED,
+                           f"config generation failed ({bad.path}: {bad.detail})")
+                    continue
+                # A linked external source is read-only to lhpc: it cannot generate the
+                # required config, so the operator must provide it in their own checkout.
+                # This is MANUAL_REQUIRED, never a silent start with absent config.
+                linked = next((w for w in mine if w.status == "linked-readonly"), None)
+                if linked:
+                    record(comp, stack, Outcome.MANUAL_REQUIRED,
+                           f"linked source is read-only — generate {comp.id}'s config in "
+                           f"your own checkout ({linked.path})")
+                    continue
             comp_cfg = self.stack_config(stack.id, cfg_band)
-            res = life.start(stack, comp, comp_cfg)
-            out.append(f"  [{'ok' if res.ok else 'fail'}] start {comp.id} (log {res.log_path})")
-            # Optional detached post-start hook (e.g. set the Meshtastic region once up).
-            if res.ok and comp.post_start:
-                life.spawn_post_start(stack, comp, comp_cfg)
-                out.append(f"  [post] {comp.id}: scheduled post-start setup")
-            # Remember which band a band-switchable stack was started on (for the dash).
+            res = life.start(stack, comp, comp_cfg, band=cfg_band)
+            if not res.ok:
+                # A launch that couldn't be owned AND couldn't be proven ceased is a
+                # typed UNVERIFIED (residual process), not a clean FAILED.
+                record(comp, stack,
+                       Outcome.UNVERIFIED if res.unverified else Outcome.FAILED,
+                       f"start failed: {res.detail} (log {res.log_path})")
+                continue
+            # readiness="endpoint": VERIFIED only once every ready=true endpoint is up;
+            # otherwise SIGTERM the just-launched owned session (verified cleanup) and
+            # report UNVERIFIED — no post-start work runs.
+            if comp.readiness == "endpoint":
+                ready_ok, ev = self._ready_endpoints_present(comp)
+                if not ready_ok:
+                    cleanup = life.stop(comp, band=cfg_band)
+                    record(comp, stack, Outcome.UNVERIFIED,
+                           f"ready endpoint(s) never came up ({'; '.join(ev)}); cleanup: "
+                           + ("stopped" if cleanup.outcome == Outcome.STOPPED
+                              else "cessation NOT verified — ownership retained"))
+                    continue
+                summary = f"started; ready endpoint(s) up ({'; '.join(ev)})"
+            else:
+                summary = f"started (log {res.log_path})"
+            # Required post-start must complete before VERIFIED; optional is scheduled.
+            # `required_ok` is True (required passed), False (required failed), or None
+            # (no required post-start) — explicit, no enum-attribute confusion.
+            required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band)
+            if required_ok is False:
+                cleanup = life.stop(comp, band=cfg_band)
+                record(comp, stack, Outcome.UNVERIFIED,
+                       f"required post-start failed: {post_summary}; cleanup: "
+                       + ("stopped" if cleanup.outcome == Outcome.STOPPED
+                          else "cessation NOT verified — ownership retained"))
+                continue
+            if post_summary:
+                summary += f"; {post_summary}"
+            # Persist the running-band marker BEFORE declaring VERIFIED: it drives
+            # multi-band decisions + dashboard state, so a write failure must surface in
+            # the typed result (UNVERIFIED), not hide behind a clean VERIFIED.
+            band_ok = True
             if cfg_band and self.stack_bands(stack.id):
-                self._set_running_band(stack.id, cfg_band)
-        # Starting a stack clears any prior interactive apps that were marked but
-        # aren't actually running, so the dash doesn't keep showing their command.
+                band_ok = self._set_running_band(stack.id, cfg_band)
+            if band_ok:
+                record(comp, stack, Outcome.VERIFIED, summary)
+            else:
+                record(comp, stack, Outcome.UNVERIFIED,
+                       summary + "; running-band marker could not be persisted — "
+                       "operational state may be inconsistent")
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
-        return ActionResult(True, f"Run applied for '{target}'.", details=out,
+        # ok derives ENTIRELY from typed outcomes. A MANUAL_REQUIRED for an OPTIONAL
+        # component does not block; every other non-success outcome does.
+        optional_ids = {c.id for _, c in order if c.optional}
+        def blocks(r):
+            if r.outcome == Outcome.MANUAL_REQUIRED and r.component in optional_ids:
+                return False
+            return not r.ok
+        blocking = [r for r in results if blocks(r)]
+        required_manual = [r.component for r in blocking if r.outcome == Outcome.MANUAL_REQUIRED]
+        failed = [r.component for r in blocking if r.outcome != Outcome.MANUAL_REQUIRED]
+        ok = not blocking
+        if failed:
+            summary = f"Run FAILED for '{target}': {', '.join(failed)} did not start/verify."
+        elif required_manual:
+            summary = (f"Run for '{target}': manual start required for "
+                       f"{', '.join(required_manual)} — see the dashboard.")
+        else:
+            summary = f"Run applied for '{target}'."
+        return ActionResult(ok, summary, details=out, results=tuple(results),
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
+
+    def _run_post_start(self, life, stack, comp, comp_cfg, band) -> tuple[bool | None, str]:
+        """Run post-start steps. Returns (required_ok, summary):
+          * (None, "")               — no post-start;
+          * (None, "…scheduled")     — OPTIONAL steps scheduled detached (never gates);
+          * (True,  "…completed")    — REQUIRED steps ran synchronously and PASSED;
+          * (False, "…failed (rc N)")— REQUIRED steps FAILED → caller blocks VERIFIED
+                                        and invokes verified cleanup.
+        `required_ok is False` is the only blocking case (an explicit bool, not an
+        enum attribute)."""
+        if not comp.post_steps:
+            return None, ""
+        if life.has_required_post_start(comp):
+            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band)
+            if jr.ok:
+                return True, "required post-start completed"
+            return False, f"required post-start failed (rc {jr.returncode})"
+        # OPTIONAL: scheduling never gates the start, but its typed result makes any
+        # scheduling failure VISIBLE in the details (it is no longer swallowed by
+        # `spawn_post_start`, so no blanket catch is needed here).
+        sched = life.spawn_post_start(stack, comp, comp_cfg, band=band)
+        if sched.ok:
+            return None, "optional post-start scheduled"
+        return None, f"optional post-start could NOT be scheduled: {sched.detail}"
 
     def _daemon_pids_for_band(self, band: str) -> list[int]:
         """PIDs of daemon instances that serve `band` — those launched with
@@ -674,7 +1095,7 @@ class ControllerService:
                 out.append(pid)
         return out
 
-    def _ensure_daemon(self, life, stack, comp, running, radio, tx, params):
+    def _ensure_daemon(self, life, stack, comp, running, radio, tx, cadidle, params):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
 
         "Running" means the band's CONF socket is reachable, not merely that a
@@ -685,22 +1106,38 @@ class ControllerService:
           * not serving the band   -> start a daemon instance with --radio <band>
             (works alongside an instance already serving the other band).
         """
-        band = radio if radio in ("433", "868") else None
-        view = daemon_control.read_view(self._system, band) if band else None
-        serving = view.reachable if band else running
-        if serving:
-            # TX mode can be changed live on a running daemon (SET TXMODE, applied
-            # silently). Only set it when it differs, so we don't disturb the band.
-            cur = (view.status.get("TXMODE", "") if view else "").upper()
-            if tx and band and cur != tx.upper():
-                ok, detail = daemon_control.apply_set(self._system, band, "TXMODE", tx)
-                return [f"  [{'ok' if ok else 'warn'}] daemon serving {band}; "
-                        f"SET TXMODE={tx}: {detail if not ok else 'applied'}"]
-            return [f"  [ok] daemon already serving {band}" + (f" (TXMODE={cur})" if cur else "")]
+        # Bands this start must make ready. --radio both must verify BOTH 433 and 868.
+        needed = ["433", "868"] if (radio or "both") == "both" else [radio]
+        views = {b: daemon_control.read_view(self._system, b) for b in needed}
+        if all(v.reachable for v in views.values()):
+            lines, ok_all = [], True
+            for b in needed:
+                if not views[b].ready:
+                    # Reachable but the radio is NOT usable (RADIO=FAILED/UNINITIALIZED):
+                    # never treat it as serving the band, and never permit the dependent
+                    # to launch against a non-READY radio (no second instance is started
+                    # — a live daemon already holds the band's SPI).
+                    ok_all = False
+                    lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
+                                 f"{views[b].radio_state or 'unknown'} (not READY) — "
+                                 "dependent launch blocked")
+                    continue
+                if tx:
+                    tok, detail = self._apply_tx_mode(b, tx)
+                    ok_all = ok_all and tok
+                    lines.append(f"  [{'ok' if tok else 'fail'}] daemon already serving {b}; {detail}")
+                else:
+                    cur = views[b].status.get("TXMODE", "").upper()
+                    lines.append(f"  [ok] daemon already serving {b}"
+                                 + (f" (TXMODE={cur})" if cur else ""))
+                if cadidle is not None:                 # tuning: non-gating (see _apply_cadidle)
+                    cok, cdetail = self._apply_cadidle(b, cadidle)
+                    lines.append(f"  [{'ok' if cok else 'warn'}] {b}: {cdetail}")
+            return lines, ok_all
         if comp.source and not life.source_dir(comp).exists():
-            return ["  [skip] daemon: not installed (lhpc install daemon)"]
+            return ["  [skip] daemon: not installed (lhpc install daemon)"], False
         if not self.is_built(comp):
-            return ["  [BLOCKED] daemon: not built — build it first (lhpc build daemon)"]
+            return ["  [BLOCKED] daemon: not built — build it first (lhpc build daemon)"], False
         # Start with the saved daemon config (its normal/default TX mode). The needed
         # TX mode is applied LIVE once the socket is up (SET TXMODE) — the documented
         # MeshCom path; a --tx-mode-<band> direct START flag could fail to init.
@@ -708,56 +1145,166 @@ class ControllerService:
         dparams["radio"] = radio or "both"
         if params and params.get("debug"):
             dparams["debug"] = "1"
-        res = life.start(stack, comp, dparams)
+        res = life.start(stack, comp, dparams, band=dparams["radio"])
         base = f"start daemon --radio {dparams['radio']}"
         if not res.ok:
-            return [f"  [fail] {base}"]
-        # The daemon inits the radio + opens its CONF socket asynchronously. VERIFY it
-        # actually came up so we don't report a false [ok] (and so dependent
-        # components — and the live TX-mode SET — act on a real socket).
-        if band and self.DAEMON_VERIFY_TIMEOUT_S > 0:
-            waited = 0.0
-            while waited < self.DAEMON_VERIFY_TIMEOUT_S:
-                time.sleep(self.DAEMON_VERIFY_POLL_S)
-                waited += self.DAEMON_VERIFY_POLL_S
-                if daemon_control.read_view(self._system, band).reachable:
-                    out = [f"  [ok] {base}"]
-                    if tx:
-                        ok, _ = daemon_control.apply_set(self._system, band, "TXMODE", tx)
-                        out.append(f"  [{'ok' if ok else 'warn'}] SET TXMODE={tx} on {band}")
-                    return out
-            return [f"  [warn] {base} — but the {band} CONF socket isn't answering; it "
-                    f"likely failed to init (radio/SPI busy or a stale lock). "
-                    f"Check the daemon log."]
-        return [f"  [ok] {base}"]
+            return [f"  [fail] {base}: {res.detail}"], False
+        # The daemon inits the radio + opens its CONF socket asynchronously. VERIFY
+        # EACH needed band actually came up — a launch that never exposes its CONF
+        # socket is a FAILURE, not a warning-success.
+        lines, ok_all = [f"  [ok] {base}"], True
+        for b in needed:
+            if self._verify_band_up(b):
+                if tx:
+                    tok, detail = self._apply_tx_mode(b, tx)
+                    ok_all = ok_all and tok
+                    lines.append(f"  [{'ok' if tok else 'fail'}] {b}: {detail}")
+                if cadidle is not None:                 # tuning: non-gating (see _apply_cadidle)
+                    cok, cdetail = self._apply_cadidle(b, cadidle)
+                    lines.append(f"  [{'ok' if cok else 'warn'}] {b}: {cdetail}")
+            else:
+                ok_all = False
+                lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
+                             f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
+        return lines, ok_all
 
-    def stop_dependents(self, target: str) -> list[str]:
-        """Running stacks that would be orphaned if `target` stops (they depend on
-        one of its components) — e.g. stopping the daemon orphans kiss/igate/…"""
+    def _apply_tx_mode(self, band: str, tx: str) -> tuple[bool, str]:
+        """Apply a REQUIRED daemon TX mode and verify it by READBACK. Returns
+        (ok, detail). A failed SET, or a readback that is absent/mismatched/
+        malformed/timed-out, is a failure that gates every dependent — never a
+        warning-success. Skips the SET only when the mode already matches."""
+        want = tx.upper()
+        view = daemon_control.read_view(self._system, band)
+        if not view.ready:
+            state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
+            return False, f"{band} radio not READY for TX-mode set (RADIO={state})"
+        if view.status.get("TXMODE", "").upper() == want:
+            return True, f"TXMODE already {want}"
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, "TXMODE", tx)
+        if not ok:
+            return False, f"SET TXMODE={want} rejected: {detail}"
+        waited = 0.0
+        while True:                              # bounded read-only readback
+            v = daemon_control.read_view(self._system, band)
+            got = v.status.get("TXMODE", "").upper() if v.reachable else ""
+            if got == want:
+                return True, f"SET TXMODE={want} confirmed by readback"
+            if self.DAEMON_VERIFY_TIMEOUT_S <= 0 or waited >= self.DAEMON_VERIFY_TIMEOUT_S:
+                return False, f"TXMODE readback {got or 'absent'} != {want} (not applied)"
+            time.sleep(self.DAEMON_VERIFY_POLL_S)
+            waited += self.DAEMON_VERIFY_POLL_S
+
+    @staticmethod
+    def _cadidle_eq(got, want) -> bool:
+        """Numeric equality of two CADIDLE values (daemon reports `CADIDLE=<ms>`); a
+        missing/non-numeric reading never matches."""
+        try:
+            return got is not None and int(got) == int(want)
+        except (TypeError, ValueError):
+            return False
+
+    def _apply_cadidle(self, band: str, cadidle: str) -> tuple[bool, str]:
+        """Apply a requested daemon CADIDLE (channel stable-idle window, ms) and verify
+        by READBACK. Returns (ok, detail). This is NON-GATING tuning: it lowers TX
+        latency toward the source firmware's single-CAD timing, but a failure is only
+        reported (never blocks the dependent) because the daemon still does LBT at its
+        current CADIDLE. Skips the SET when the value already matches."""
+        want = str(cadidle).strip()
+        view = daemon_control.read_view(self._system, band)
+        if not view.ready:
+            state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
+            return False, f"{band} radio not READY for CADIDLE set (RADIO={state})"
+        if self._cadidle_eq(view.status.get("CADIDLE"), want):
+            return True, f"CADIDLE already {want}ms"
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, "CADIDLE", want)
+        if not ok:
+            return False, f"SET CADIDLE={want} rejected: {detail}"
+        waited = 0.0
+        while True:                              # bounded read-only readback
+            v = daemon_control.read_view(self._system, band)
+            got = v.status.get("CADIDLE") if v.reachable else None
+            if self._cadidle_eq(got, want):
+                return True, f"SET CADIDLE={want}ms confirmed by readback"
+            if self.DAEMON_VERIFY_TIMEOUT_S <= 0 or waited >= self.DAEMON_VERIFY_TIMEOUT_S:
+                return False, f"CADIDLE readback {got or 'absent'} != {want} (not applied)"
+            time.sleep(self.DAEMON_VERIFY_POLL_S)
+            waited += self.DAEMON_VERIFY_POLL_S
+
+    def _verify_band_up(self, band: str) -> bool:
+        """Poll a band's CONF socket until the daemon reports RADIO=READY, up to the
+        verify timeout. A reachable daemon that is still UNINITIALIZED or FAILED is NOT
+        up: the radio inits asynchronously, so we wait for readiness (not mere socket
+        reachability). With the timeout disabled (tests) it is a single bounded check."""
+        if self.DAEMON_VERIFY_TIMEOUT_S <= 0:
+            return daemon_control.read_view(self._system, band).ready
+        waited = 0.0
+        while waited < self.DAEMON_VERIFY_TIMEOUT_S:
+            time.sleep(self.DAEMON_VERIFY_POLL_S)
+            waited += self.DAEMON_VERIFY_POLL_S
+            if daemon_control.read_view(self._system, band).ready:
+                return True
+        return False
+
+    def _running_bands_of(self, ss, run_comps) -> set:
+        """Radio band(s) the RUNNING components of a snapshot stack actually use: the
+        effective band for a band-switchable stack, else the components' declared bands."""
+        if self.stack_bands(ss.stack.id):                  # band-switchable -> running band
+            eb = self._effective_band(ss.stack.id)
+            return {eb} if eb else set()
+        return {c.band for c in run_comps if c.band}
+
+    def stop_dependents(self, target: str, bands=None) -> list[str]:
+        """Running stacks that would be orphaned if `target` stops (they depend on one of
+        its components) — e.g. stopping the daemon orphans kiss/igate/…
+
+        When `bands` is given (the radio band(s) actually being stopped), a dependent is
+        included ONLY if it is running on one of those bands: stopping the daemon's 433
+        instance does NOT orphan an 868 dependent."""
         tstack = self.stack(target)
         if tstack is None:
             return []
         member_ids = {c.id for c in tstack.components}
         up = (RunState.RUNNING, RunState.DEGRADED)
+        want = set(bands) if bands else None
         out = []
         for ss in self.build_snapshot().stacks:
             if ss.stack.id == tstack.id:
                 continue
-            running = any(ss.components[c.id].run_state in up for c in ss.stack.components)
-            depends = any(d in member_ids for c in ss.stack.components for d in c.depends_on)
-            if running and depends:
-                out.append(ss.stack.id)
+            run_comps = [c for c in ss.stack.components
+                         if ss.components[c.id].run_state in up]
+            if not run_comps:
+                continue
+            if not any(d in member_ids for c in ss.stack.components for d in c.depends_on):
+                continue
+            if want is not None:
+                dep_bands = self._running_bands_of(ss, run_comps)
+                if dep_bands and not (dep_bands & want):
+                    continue                               # different band -> not orphaned
+            out.append(ss.stack.id)
         return out
 
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "") -> ActionResult:
+        """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
+        cascade) so a DIRECT call gets the same coordination as CLI/web."""
+        from . import reslock
+        if not apply:
+            return self._stop_impl(target, apply=False, cascade=cascade, band=band)
+        try:
+            with self._lifecycle_guard("stop", target, band, cascade=cascade):
+                return self._stop_impl(target, apply=True, cascade=cascade, band=band)
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot stop '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
+
+    def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
+                   band: str = "") -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         life = self._lifecycle()
         # Stop in reverse start order.
         items = list(reversed(items))
-        dependents = self.stop_dependents(target)
         # Per-band daemon stop signals only the requested band's instance(s). The
         # other band is collateral ONLY when it is served by the SAME process — i.e.
         # a --radio both instance (so every PID serving the other band is also in
@@ -765,15 +1312,20 @@ class ControllerService:
         other_bands = []
         _sid = self.stack_of(target)
         _stk = self.stack(_sid) if _sid else None
-        if _stk and _stk.main == self.DAEMON_ID and band in ("433", "868"):
+        _daemon_band_stop = bool(_stk and _stk.main == self.DAEMON_ID and band in ("433", "868"))
+        if _daemon_band_stop:
             other = "868" if band == "433" else "433"
             stop_pids = set(self._daemon_pids_for_band(band))
             other_pids = set(self._daemon_pids_for_band(other))
             if other_pids and other_pids <= stop_pids and self.daemon_view(other).reachable:
                 other_bands = [other]
+        # Orphaned dependents are scoped to the band(s) actually being stopped: a daemon
+        # 433 stop orphans only 433 dependents (plus 868's if the SAME process serves it).
+        stopped_bands = ({band} | set(other_bands)) if _daemon_band_stop else None
+        dependents = self.stop_dependents(target, bands=stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
-                for _, c in items if c.units and not c.run_cmd]
+                for _, c in items if c.units and not c.run_argv]
         if not apply:
             details = [f"  [stop] {comp.id}" for _, comp in items]
             for cmd in sysd:
@@ -784,40 +1336,79 @@ class ControllerService:
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
-        # Cascade: stop dependent stacks first so they aren't orphaned — but NEVER
-        # auto-terminate an interactive app the operator started by hand; just note it.
+        results: list[CompResult] = []
+        # Cascade: stop dependent stacks first so they aren't orphaned. An interactive
+        # app the operator started by hand is MANUAL_REQUIRED (it blocks a verified
+        # parent stop), never silently "kept".
         if cascade:
             for dep in dependents:
                 dstk = self.stack(dep)
                 dmain = dstk.main_component if dstk else None
                 if dmain is not None and dmain.interactive:
-                    details.append(f"  [kept] interactive app '{dep}' left running — stop it yourself")
+                    results.append(CompResult(component=dep, stack=dep, action="stop",
+                        outcome=Outcome.MANUAL_REQUIRED,
+                        summary="interactive dependent — stop it yourself before this stack"))
+                    details.append(f"  [manual_required] dependent '{dep}' is interactive — "
+                                   "stop it yourself")
                     continue
-                self.stop(dep, apply=True)
-                details.append(f"  [stopped dependent] {dep}")
+                dep_res = self.stop(dep, apply=True)
+                results.append(CompResult(component=dep, stack=dep, action="stop",
+                    outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
+                    summary=dep_res.summary))
+                details.append(f"  [{'stopped' if dep_res.ok else 'unverified'} dependent] {dep}")
         for _, comp in items:
-            if comp.units and not comp.run_cmd:
-                details.append(f"  [manual] {comp.id}: stop it as root: "
+            if comp.units and not comp.run_argv:
+                # Externally supervised: LHPC cannot verify the stop -> MANUAL_REQUIRED.
+                results.append(CompResult(component=comp.id, stack=target, action="stop",
+                    outcome=Outcome.MANUAL_REQUIRED,
+                    summary=f"system service — stop as root: sudo systemctl stop {comp.units[0].name}"))
+                details.append(f"  [manual_required] {comp.id}: stop it as root: "
                                f"sudo systemctl stop {comp.units[0].name}")
                 continue
             # The daemon is multi-instance (one process per band). A per-band stop
-            # must signal ONLY the instance serving that band, not every daemon.
+            # signals ONLY the owned instance(s) serving that band. Record-driven +
+            # identity-verified inside Lifecycle.stop, which returns a typed result.
             if comp.id == self.DAEMON_ID and band in ("433", "868"):
-                pids = self._daemon_pids_for_band(band)
-                killed, note = life.stop_pids(pids)
-                note = f"{note} (band {band})"
+                cr = life.stop(comp, band=band)
             else:
-                killed, note = life.stop(comp)
-            details.append(f"  {comp.id}: {note}" + (f" (pids {killed})" if killed else ""))
+                cr = life.stop(comp)
+            results.append(cr)
+            details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"
+                           + (f" (pid {cr.pid})" if cr.pid else ""))
+        # ok only when every result is a successful, verified stop.
+        ok = applied_ok(results) if results else True
+        # Clear band/interactive markers ONLY after a fully verified stop — never
+        # after a failed/unverified/manual/endpoint-lingering result.
         sid = self.stack_of(target)
-        if sid:
-            self._band_marker(sid).unlink(missing_ok=True)
+        if sid and ok:
+            self._safe_unlink(self._band_marker(sid))
             self.dismiss_interactive(sid)
-        return ActionResult(True, f"Stop applied for '{target}'.", details=details,
+        summary = (f"Stop applied for '{target}'." if ok else
+                   f"Stop for '{target}' is NOT fully verified — see details.")
+        return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
     def restart(self, target: str, apply: bool = False, params: dict | None = None,
                 stop_owners: bool = False, band: str = "") -> ActionResult:
+        """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
+        DIRECT call gets the same coordination as CLI/web."""
+        from . import reslock
+        if not apply:
+            return self._restart_impl(target, apply=False, params=params,
+                                      stop_owners=stop_owners, band=band)
+        try:
+            with self._lifecycle_guard("restart", target, band, stop_owners=stop_owners):
+                return self._restart_impl(target, apply=True, params=params,
+                                          stop_owners=stop_owners, band=band)
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot restart '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
+
+    def _restart_impl(self, target: str, apply: bool = False, params: dict | None = None,
+                      stop_owners: bool = False, band: str = "") -> ActionResult:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
         restart doesn't move a band-switchable stack back to its default band)."""
@@ -828,32 +1419,62 @@ class ControllerService:
             return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                                 details=res.details, data=res.data,
                                 next_commands=[f"lhpc stack restart {target} --yes"])
-        self.stop(target, apply=True, band=band)
+        stopped = self.stop(target, apply=True, band=band)
+        if not stopped.ok:
+            # Strict transition: never start after an unverified/failed stop. Preserve
+            # the failed-stop typed results as the restart evidence.
+            return ActionResult(False,
+                                f"Restart aborted for '{target}': stop was not verified.",
+                                details=list(stopped.details) + ["  [aborted] not starting "
+                                "after an unverified stop — resolve the stop first"],
+                                results=tuple(stopped.results),
+                                next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, params=params, stop_owners=stop_owners, band=band)
+        # Restart's typed results are the stop results followed by the start results.
         return ActionResult(res.ok, f"Restarted '{target}'. {res.summary}",
-                            details=res.details, next_commands=res.next_commands)
+                            details=res.details,
+                            results=tuple(stopped.results) + tuple(res.results),
+                            next_commands=res.next_commands)
 
     def build(self, target: str, apply: bool = False) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         life = self._lifecycle()
-        buildable = [(s, c) for s, c in items if c.build_cmd]
+        buildable = [(s, c) for s, c in items if c.build_steps]
         if not apply:
-            details = [f"  [build] {c.id}: {c.build_cmd}" for _, c in buildable]
+            details = [f"  [build] {c.id}: "
+                       + " ; ".join(" ".join(str(t) for t in st.get("argv", []))
+                                    for st in c.build_steps) for _, c in buildable]
             return ActionResult(True, f"Build plan for '{target}': {len(buildable)} component(s).",
                                 details=details,
                                 next_commands=[f"lhpc build {target} --yes"] if buildable else [],
                                 data={"changes": len(buildable)})
-        details = []
-        ok = True
-        for _, comp in buildable:
-            res = life.build(comp)
-            ok = ok and res.ok
-            details.append(f"  [{res.state.value}] build {comp.id} (rc {res.returncode}, log {res.log_path})")
-            if not res.ok:
-                details.extend(f"      {ln}" for ln in res.tail[-6:])
+        # P0.1: ONE atomic guard — index lock, recover, block on any unresolved journal,
+        # then the source-path lock(s) (handoff) held for the whole build. No
+        # preflight/acquire race: a journal that appears after a failed transaction is
+        # caught under the index lock before the source locks are taken.
+        from . import reslock
+        src_paths = sorted({c.source.path for _, c in buildable if c.source})
+        try:
+            with self._source_operation_guard(src_paths, op="build"):
+                details = []
+                ok = True
+                for _, comp in buildable:
+                    res = life.build(comp)
+                    ok = ok and res.ok
+                    details.append(f"  [{res.state.value}] build {comp.id} "
+                                   f"(rc {res.returncode}, log {res.log_path})")
+                    if not res.ok:
+                        details.extend(f"      {ln}" for ln in res.tail[-6:])
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Build blocked for '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Build blocked for '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
+        self.prune_logs()
         return ActionResult(ok, f"Build {'succeeded' if ok else 'FAILED'} for '{target}'.",
                             details=details, next_commands=["lhpc status " + target])
 
@@ -863,11 +1484,27 @@ class ControllerService:
         With `job` (a logs/<name>.log filename) it tails that specific job log
         (e.g. a build/test run); otherwise it tails the component's process log.
         """
-        from pathlib import Path
         from .jobs import tail_log
         if job:
-            p = self._paths.runtime_root / "logs" / job
-            return str(p), tail_log(p, lines)
+            # A web-supplied job selector may name ONLY an approved logs/<name>.log
+            # file: a single path component, .log suffix, contained under logs/, and
+            # never a symlink leaf. Anything else returns empty (no traversal/leak).
+            try:
+                name = validators.path_component(job, field="job log")
+            except validators.ValidationError:
+                return "", []
+            if not name.endswith(".log"):
+                return "", []
+            try:
+                p = self._paths.under("logs", name)
+            except PathContainmentError:
+                return "", []
+            # Don't surface a symlinked/non-regular log path to the UI (the READ itself is
+            # already O_NOFOLLOW-safe via runtime_fs.tail; this just refuses the display).
+            if p.is_symlink() or not p.is_file():
+                return "", []
+            from . import runtime_fs
+            return str(p), runtime_fs.tail(self._paths, p, lines)
         s = self.stack(target)
         if s is not None and s.main_component:
             comp = s.main_component
@@ -878,7 +1515,7 @@ class ControllerService:
             comp = idx[target][1]
         return self._lifecycle().logs(comp, lines)
 
-    def spawn_web_job(self, op: str, target: str, source: str = "dev"):
+    def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
         """Spawn detached build/test/install job(s) for `target`; return
         (job_log_name, error). The web redirects to a live view of the log."""
         life = self._lifecycle()
@@ -886,71 +1523,217 @@ class ControllerService:
         # live and when it finishes (the dash redirects to this log).
         if op == "install":
             import sys
-            cmd = (f"{sys.executable} -m lhpc install {target} --yes "
-                   f"--source {source if source in self.SOURCE_CHOICES else 'dev'}")
-            ln, pid = life.spawn_job(f"install-{target}", cmd, str(self._paths.runtime_root))
+            # Reject an invalid source selector — never silently fall back to 'dev'.
+            if source not in self.SOURCE_CHOICES:
+                return None, (f"invalid source '{source}' (choose "
+                              f"{', '.join(self.SOURCE_CHOICES)})")
+            argv = [sys.executable, "-m", "lhpc", "install", target, "--yes",
+                    "--source", source]
+            ln, pid = life.spawn_job(f"install-{target}", argv, str(self._paths.runtime_root))
             if not ln or not pid:
                 return None, f"could not start install for '{target}'"
-            self._write_job_marker(ln, pid, target, "install")
+            err = self._track_or_terminate(life, ln, pid, target, "install")
+            if err:
+                return None, err            # spawned-but-untracked: reported, not silent
             return ln, None
         items, err = self._resolve(target)
         if err:
             return None, err
+        # Build a shell-free launcher per component (resolves pkg-config + env, runs
+        # the structured steps). A stack may build several components.
+        from . import commands, reslock, runtime_fs
+        inst_index_key = self._installer()._index_key()
+        runtime = str(self._paths.runtime_root)
+        runtime_fs.ensure_dir(self._paths, self._paths.under("state", "locks"))
         jobs = []
         for _, c in items:
-            if op == "build" and c.build_cmd:
-                jobs.append((c, c.build_cmd, f"build-{c.id}"))
-            elif op == "test" and c.test_cmd:
-                jobs.append((c, c.test_cmd, f"test-{c.id}"))
+            if op == "build" and c.build_steps:
+                jobs.append((c, list(c.build_steps), f"build-{c.id}"))
+            elif op == "test" and c.test_argv:
+                jobs.append((c, [{"argv": list(c.test_argv)}], f"test-{c.id}"))
         if not jobs:
             return None, f"nothing to {op} for '{target}'"
-        # A stack may build several components (e.g. meshcom = bridge + qemu firmware).
-        # Redirect to the MAIN component's log when it's among them, so the operator
-        # sees the outcome of the thing they're trying to run — not whichever job
-        # happened to spawn first.
         s = self.stack(target)
         main_id = s.main if s else None
         first = main_log = None
-        for c, cmd, name in jobs:
-            ln, pid = life.spawn_job(name, cmd, str(life.source_dir(c)))
-            if ln and pid:
-                self._write_job_marker(ln, pid, c.id, op)
+        errors: list[str] = []
+        post_dir = self._paths.under("state", "jobs")   # containment-checked
+        runtime_fs.ensure_dir(self._paths, post_dir)
+        import sys, os, time as _time
+        for c, steps, name in jobs:
+            src = str(life.source_dir(c))
+            # The launcher holds the canonical SOURCE-PATH lock for its whole lifetime,
+            # so an update/uninstall of the same checkout cannot race a running job.
+            lock_paths = ([str(reslock.lock_file_path(self._paths,
+                          reslock.source_lock_key(c.source.path)))] if c.source else [])
+            # P0.3: index-to-source handoff — the launcher holds the source-transaction
+            # INDEX lock and verifies NO unresolved journal before acquiring the source
+            # lock(s), so a detached job cannot race past a retained journal.
+            index_lock = str(reslock.lock_file_path(self._paths, inst_index_key))
+            txn_dir = str(self._paths.under("state", "source-txn"))
+            # Fail-closed: a missing/empty @file secret, bad env, or unresolved token
+            # blocks the build cleanly (no silent empty value, no shell).
+            try:
+                script = commands.render_build_launcher(steps, runtime, src, lock_paths,
+                                                        index_lock=index_lock, txn_dir=txn_dir)
+            except commands.CommandError as exc:
+                return None, f"cannot {op} '{c.id}': {exc}"
+            # Unique runtime-owned launcher name so concurrent jobs never overwrite
+            # each other's spec; written atomically THROUGH the safe runtime FS.
+            uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
+            launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
+            ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
+            if not ln or not pid:
+                # Never silently continue when a component job cannot spawn.
+                errors.append(f"could not start {op} for '{c.id}'")
+                continue
+            terr = self._track_or_terminate(life, ln, pid, c.id, op)
+            if terr:
+                errors.append(terr)
+                continue
             if first is None:
                 first = ln
             if c.id == main_id:
                 main_log = ln
+        self.prune_logs()
+        if errors and (main_log or first) is None:
+            return None, "; ".join(errors)             # nothing usable started
+        if errors:
+            return (main_log or first), "; ".join(errors)   # partial: surface the failures
         return (main_log or first), None
+
+    # Bounded log retention (no background supervisor — runs at operation boundaries).
+    LOG_RETENTION = 200          # keep at most this many *.log files
+    LOG_RETENTION_BYTES = 64 * 1024 * 1024   # …and at most this many bytes total
+
+    def prune_logs(self) -> int:
+        """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
+        touching a log that belongs to an active job (so live evidence is preserved)
+        and never following a symlink. Returns the number removed. Called at operation
+        boundaries; there is no background cleaner."""
+        from .paths import PathContainmentError
+        d = self._paths.under("logs")
+        protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
+        protected = {f"{n}.log" for n in protected} | {n for n in protected}
+        # Descriptor-safe enumeration (no `is_dir()`/`glob`/`is_symlink`): a symlinked/
+        # escaping logs dir fails closed; a symlinked log leaf is skipped (never followed,
+        # never pruned so an outside target can't be deleted).
+        try:
+            entries = runtime_fs.scandir_nofollow(self._paths, d)
+        except PathContainmentError:
+            return 0
+        logs = []
+        for name, is_link in entries:
+            if is_link or not name.endswith(".log"):
+                continue
+            f = d / name
+            try:
+                mtime = os.stat(f, follow_symlinks=False).st_mtime
+            except OSError:
+                continue
+            logs.append((mtime, name, f))
+        logs.sort(reverse=True)                                    # newest first
+        removed, kept, total = 0, 0, 0
+        for _mtime, name, f in logs:
+            if name in protected:
+                continue
+            try:
+                size = os.stat(f, follow_symlinks=False).st_size
+            except OSError:
+                continue
+            kept += 1
+            total += size
+            if kept > self.LOG_RETENTION or total > self.LOG_RETENTION_BYTES:
+                runtime_fs.unlink(self._paths, f)      # descriptor-safe, refuses a symlink
+                removed += 1
+        return removed
 
     def _jobs_dir(self):
         return self._paths.runtime_root / "state" / "jobs"
 
-    def _write_job_marker(self, log_name: str, pid: int, target: str, op: str) -> None:
-        d = self._jobs_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        (d / (log_name + ".job")).write_text(
-            f'pid = {pid}\ntarget = "{target}"\nop = "{op}"\nlog = "{log_name}"\n',
-            encoding="utf-8")
+    def _write_job_marker(self, log_name: str, pid: int, target: str, op: str,
+                          ident: dict | None = None) -> bool:
+        """Record a build/test job with a COMPLETE, PID-reuse-resistant identity. Returns
+        True only when a complete identity was captured AND the marker was durably
+        persisted; False means the just-spawned process is UNTRACKED and the caller must
+        terminate it (no silent orphan). `ident`, when given, is the identity captured
+        immediately after spawn — used as-is (never re-read a possibly-reused pid)."""
+        try:
+            slug = validators.path_component(log_name, field="job log")
+            path = self._paths.under("state", "jobs", slug + ".job")
+        except (validators.ValidationError, PathContainmentError):
+            return False
+        if ident is None:
+            ident = procident.proc_identity(pid) or {}
+        # Refuse an incomplete identity via the ONE shared predicate — a marker is never
+        # written with sentinel (-1)/blank fields; the caller then terminates the spawn.
+        if not (isinstance(pid, int) and pid > 0 and procident.identity_complete(ident)):
+            return False
+        body = (f'launch_id = "{slug}"\npid = {pid}\n'
+                f'starttime = {int(ident["starttime"])}\n'
+                f'pgid = {int(ident["pgid"])}\nsid = {int(ident["sid"])}\n'
+                f'exec = "{ident["exec"]}"\nargv_fp = "{ident["argv_fp"]}"\n'
+                f'argv_len = {int(ident["argv_len"])}\n'
+                f'target = "{target}"\nop = "{op}"\nlog = "{slug}"\n')
+        try:
+            runtime_fs.write_marker(self._paths, path, body)
+            return True
+        except (OSError, PathContainmentError, validators.ValidationError):
+            return False
+
+    def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str) -> str:
+        """Persist a job marker; if it cannot be persisted, terminate the (identity-
+        verified) spawned session so it never leaks as an untracked orphan. Returns ""
+        on success, else a visible error describing the outcome."""
+        # Capture the identity IMMEDIATELY after spawn and use exactly that for both the
+        # marker and any cleanup — never re-read a possibly-reused pid as the original job.
+        ident = procident.proc_identity(pid)
+        if self._write_job_marker(log_name, pid, cid, op, ident=ident):
+            return ""
+        killed = life._terminate_unobserved(pid, ident)
+        if killed:
+            return (f"{op} '{cid}' spawned but its job marker could not be persisted; "
+                    "the process was terminated (not left orphaned).")
+        return (f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
+                "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
 
     def active_jobs(self) -> list[dict]:
-        """Build/test jobs whose process is still alive. Stale markers are pruned."""
+        """Build/test jobs whose ORIGINAL process is still alive (identity-verified).
+        A reused PID, a malformed marker, or a symlinked marker is never treated as a
+        live job; proven-finished markers are cleaned through the safe API."""
         import tomllib
+        from .paths import PathContainmentError
         d = self._jobs_dir()
-        if not d.is_dir():
+        # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping jobs dir
+        # fails closed (no trusted jobs); a symlinked marker LEAF is diagnostic evidence,
+        # never treated as a live job.
+        try:
+            entries = runtime_fs.scandir_nofollow(self._paths, d)
+        except PathContainmentError:
             return []
         out = []
-        for f in sorted(d.glob("*.job")):
+        for name, is_link in sorted(entries):
+            if is_link or not name.endswith(".job"):
+                continue
+            f = d / name
             try:
-                with f.open("rb") as fh:
-                    raw = tomllib.load(fh)
+                # No-follow read at the OPEN (no check-then-open): a swapped/symlinked marker
+                # raises OSError here and is skipped, never followed.
+                raw = tomllib.loads(runtime_fs.read_text(self._paths, f))
                 pid = int(raw["pid"])
             except (OSError, KeyError, ValueError, tomllib.TOMLDecodeError):
-                f.unlink(missing_ok=True)
-                continue
-            if _pid_running(pid):
+                continue                        # malformed -> retain for diagnosis
+            if procident.identity_matches(raw, pid):
                 out.append({"log": raw.get("log"), "target": raw.get("target"),
                             "op": raw.get("op"), "stack": self.stack_of(raw.get("target", ""))})
             else:
-                f.unlink(missing_ok=True)   # finished -> clear the marker
+                # Finished/reused -> clear the marker. If it RACED into a symlink between
+                # the no-follow read and now, the safe unlink refuses it: retain it as
+                # evidence rather than letting this public read path throw.
+                try:
+                    runtime_fs.unlink(self._paths, f)
+                except PathContainmentError:
+                    pass
         return out
 
     def logs(self, target: str, lines: int = 200) -> ActionResult:
@@ -969,8 +1752,9 @@ class ControllerService:
         return ActionResult(True, f"Logs for '{target}' (bounded tail).", details=details,
                             next_commands=[f"lhpc status {target}"])
 
-    def test(self, target: str, tx: bool = False, live: bool = False,
+    def test(self, target: str, tx: bool = False,
              apply: bool = False) -> ActionResult:
+        """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`)."""
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -978,20 +1762,37 @@ class ControllerService:
         if not tx:
             # RX-safe host tests.
             if not apply:
-                details = [f"  [host-test] {c.id}: {c.test_cmd or '(no host test)'}" for _, c in items]
+                details = [f"  [host-test] {c.id}: "
+                           + (" ".join(str(t) for t in c.test_argv) or "(no host test)")
+                           for _, c in items]
                 return ActionResult(True, f"Host-test plan for '{target}' (TX-safe).",
                                     details=details,
                                     next_commands=[f"lhpc test {target} --yes"],
-                                    data={"changes": sum(1 for _, c in items if c.test_cmd)})
+                                    data={"changes": sum(1 for _, c in items if c.test_argv)})
+            # P0.1: ONE atomic guard (index→recover→block→source-lock handoff) held for
+            # the whole host-test run — a host test depends on the source's build
+            # artifacts, so a concurrent update can't swap the tree mid-test, and a
+            # retained journal blocks it with no preflight race.
+            from . import reslock
             details = []
             ok = True
-            for _, comp in items:
-                res = life.host_test(comp)
-                if res is None:
-                    details.append(f"  [skip] {comp.id}: no host test")
-                    continue
-                ok = ok and res.ok
-                details.append(f"  [{res.state.value}] {comp.id} (rc {res.returncode}, log {res.log_path})")
+            src_paths = sorted({c.source.path for _, c in items if c.source and c.test_argv})
+            try:
+                with self._source_operation_guard(src_paths, op="host-test"):
+                    for _, comp in items:
+                        res = life.host_test(comp)
+                        if res is None:
+                            details.append(f"  [skip] {comp.id}: no host test")
+                            continue
+                        ok = ok and res.ok
+                        details.append(f"  [{res.state.value}] {comp.id} "
+                                       f"(rc {res.returncode}, log {res.log_path})")
+            except SourceTxnBlocked as blocked:
+                return ActionResult(False, f"Host test blocked for '{target}': {blocked}",
+                                    next_commands=[f"lhpc status {target}"])
+            except reslock.ResourceBusy as busy:
+                return ActionResult(False, f"Host test blocked for '{target}': {busy}",
+                                    next_commands=[f"lhpc status {target}"])
             return ActionResult(ok, f"Host test {'passed' if ok else 'FAILED'} for '{target}'.",
                                 details=details, next_commands=[f"lhpc status {target}"])
 
@@ -1005,11 +1806,13 @@ class ControllerService:
                     wanted.append(b)
         if not wanted:
             wanted = list(self.RADIO_BANDS)
-        bands = [b for b in wanted if self.daemon_view(b).reachable]
+        # A TX test drives real RF, so it requires the radio to be READY (not merely a
+        # reachable CONF socket): a FAILED/UNINITIALIZED radio must never be TX-tested.
+        bands = [b for b in wanted if self.daemon_view(b).ready]
         if not bands:
             return ActionResult(
-                False, f"Cannot TX-test '{target}': the daemon isn't serving "
-                f"{' or '.join(wanted)} MHz — start the daemon on that band first.",
+                False, f"Cannot TX-test '{target}': the daemon isn't serving a READY radio on "
+                f"{' or '.join(wanted)} MHz — start the daemon and wait for RADIO=READY first.",
                 next_commands=[f"lhpc status {target}"])
         op = self.config().operator
         payload = f"LHPC TX TEST{(' DE ' + op.callsign) if op.configured else ''}"
@@ -1036,17 +1839,11 @@ class ControllerService:
         return ActionResult(ok, f"TX test {'PASSED' if ok else 'did not confirm'} for '{target}'.",
                             details=details, next_commands=[f"lhpc status {target}", f"lhpc logs {target}"])
 
-    def _owner(self, comp):
-        for s in self.stacks():
-            if s.component(comp.id):
-                return s
-        return self.stacks()[0]
-
     # ---- unified action dispatch (used by the web control interface) -----
 
     # Web-exposed actions -> the same gated service methods the CLI calls.
     WEB_ACTIONS = ("install", "update", "uninstall", "start", "stop", "restart",
-                   "build", "repair", "rollback", "test", "test-tx")
+                   "build", "test", "test-tx")
 
     def run_params_for(self, target: str):
         """Run parameters offered for `target` (from its main/own components)."""
@@ -1058,28 +1855,51 @@ class ControllerService:
             params.extend(c.run_params)
         return params
 
-    def _interactive_marker(self, stack_id: str):
-        return self._paths.runtime_root / "state" / "interactive" / f"{stack_id}.show"
-
-    def mark_interactive(self, stack_id: str, band: str = "") -> None:
-        """Remember that the operator asked to run an interactive app (so the dash
-        shows its terminal-command block); stores the chosen band."""
-        m = self._interactive_marker(stack_id)
+    def _safe_unlink(self, path) -> bool:
+        """Best-effort delete of a runtime-owned marker/leaf (contained, no symlink-
+        follow). NON-THROWING: `Paths.safe_unlink` can raise ordinary FS errors
+        (PermissionError, etc.) as well as a containment error — stale-marker cleanup runs
+        AFTER lifecycle work, so it must never convert a completed start into an unhandled
+        exception. Returns False if the leaf could not be removed."""
         try:
-            m.parent.mkdir(parents=True, exist_ok=True)
-            m.write_text(band, encoding="ascii")
-        except OSError:
-            pass
+            self._paths.safe_unlink(path)
+            return True
+        except (OSError, PathContainmentError):
+            return False
+
+    def _safe_marker_write(self, path, text: str) -> bool:
+        """Write a small runtime-owned marker atomically THROUGH the safe runtime FS
+        (containment + no-follow leaf + fsync). Returns False if it could NOT be persisted
+        (a symlink-leaf/escaping path or an I/O error) so a caller whose operational truth
+        depends on the marker can reflect the failure in its typed result."""
+        from . import runtime_fs
+        from .paths import PathContainmentError as _PCE
+        try:
+            runtime_fs.write_marker(self._paths, path, text)
+            return True
+        except (OSError, _PCE):
+            return False
+
+    def _interactive_marker(self, stack_id: str):
+        sid = validators.path_component(stack_id, field="stack id")
+        return self._paths.under("state", "interactive", f"{sid}.show")
+
+    def mark_interactive(self, stack_id: str, band: str = "") -> bool:
+        """Remember that the operator asked to run an interactive app (so the dash
+        shows its terminal-command block); stores the chosen band. Returns False if the
+        marker could not be persisted."""
+        return self._safe_marker_write(self._interactive_marker(stack_id), band)
 
     def interactive_band(self, stack_id: str) -> str | None:
         """The band an interactive app was started on, or None if not active."""
+        from . import runtime_fs
         try:
-            return self._interactive_marker(stack_id).read_text(encoding="ascii").strip()
-        except OSError:
+            return runtime_fs.read_text(self._paths, self._interactive_marker(stack_id)).strip()
+        except (OSError, ValueError):       # missing/unreadable/symlinked -> not active
             return None
 
     def dismiss_interactive(self, stack_id: str) -> None:
-        self._interactive_marker(stack_id).unlink(missing_ok=True)
+        self._safe_unlink(self._interactive_marker(stack_id))
 
     def clear_stale_interactive(self, keep: str = "") -> list[str]:
         """Drop interactive markers for apps that aren't actually running — they
@@ -1105,20 +1925,19 @@ class ControllerService:
         return cleared
 
     def _band_marker(self, stack_id: str):
-        return self._paths.runtime_root / "state" / "running" / f"{stack_id}.band"
+        sid = validators.path_component(stack_id, field="stack id")
+        return self._paths.under("state", "running", f"{sid}.band")
 
-    def _set_running_band(self, stack_id: str, band: str) -> None:
-        m = self._band_marker(stack_id)
-        try:
-            m.parent.mkdir(parents=True, exist_ok=True)
-            m.write_text(band, encoding="ascii")
-        except OSError:
-            pass
+    def _set_running_band(self, stack_id: str, band: str) -> bool:
+        """Persist the running band (drives multi-band decisions + dashboard). Returns
+        False if it could not be written."""
+        return self._safe_marker_write(self._band_marker(stack_id), band)
 
     def running_band(self, stack_id: str, default: str = "") -> str:
+        from . import runtime_fs
         try:
-            return self._band_marker(stack_id).read_text(encoding="ascii").strip() or default
-        except OSError:
+            return runtime_fs.read_text(self._paths, self._band_marker(stack_id)).strip() or default
+        except (OSError, ValueError):
             return default
 
     def stack_bands(self, target: str) -> tuple:
@@ -1147,13 +1966,27 @@ class ControllerService:
 
     def stack_config(self, target: str, band: str = "") -> dict:
         """Effective config for `target` (and band, for band-switchable stacks):
-        the stored value, else the per-band default, else the manifest default."""
+        the stored value, else the per-band default, else the manifest default.
+
+        Run-param DEFAULTS (not saved values) have operator `{callsign}`/`{locator}`
+        tokens substituted from the configured operator identity, so the Config and Start
+        pages show the SAME default and the Start page reflects the operator callsign set
+        on the Config page (a saved value is used verbatim — never re-substituted)."""
         cfg_band = self._config_band(target, band)
         stored = load_stack_config(self._paths, target, cfg_band)
+        op = self.config().operator
+
+        def _op_subst(v: str) -> str:
+            return (str(v).replace("{callsign}", op.callsign or "")
+                          .replace("{locator}", op.locator or ""))
+
         out = {}
         for p in self.run_params_for(target):
-            bd = dict(p.band_defaults).get(cfg_band or band, p.default)
-            out[p.name] = stored.get(p.name, bd)
+            if p.name in stored:
+                out[p.name] = stored[p.name]                  # saved value, verbatim
+            else:
+                bd = dict(p.band_defaults).get(cfg_band or band, p.default)
+                out[p.name] = _op_subst(bd)                   # default with operator tokens
         return out
 
     def missing_system_deps(self, target: str) -> list[dict]:
@@ -1206,6 +2039,15 @@ class ControllerService:
         if not src.is_dir():
             return "unknown"
         remote = self.config().remotes.get(comp.id) or comp.source.remote
+        # Revalidate the (possibly hand-edited) remote IMMEDIATELY before git — an invalid
+        # runtime override must never reach `git ls-remote`; treat it as unknown, not a check.
+        from . import validators
+        try:
+            remote = validators.remote_url(remote or "", field="remote")
+        except validators.ValidationError:
+            return "unknown"
+        if not remote:
+            return "unknown"
         ref = comp.source.branch or "HEAD"
         run = self._system.runner.run
         rem = run(["git", "ls-remote", remote, ref], timeout=12.0)
@@ -1241,16 +2083,28 @@ class ControllerService:
         up = (RunState.RUNNING, RunState.DEGRADED)
         running = sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
                          if st.run_state in up)
-        served = [b for b in self.RADIO_BANDS if self.daemon_view(b).reachable]
+        # D: = bands with a USABLE radio (RADIO=READY), NOT merely reachable — a FAILED or
+        # UNINITIALIZED daemon must never appear "served".
+        usable = [b for b in self.RADIO_BANDS if self.daemon_view(b).ready]
+        from . import runtime_fs
+        from .paths import PathContainmentError
         idir = self._paths.runtime_root / "state" / "interactive"
         marks = []
-        if idir.exists():
-            for f in sorted(idir.glob("*.show")):
-                try:
-                    marks.append(f"{f.stem}={f.read_text().strip()}")
-                except OSError:
-                    marks.append(f.stem)
-        return "R:" + ",".join(running) + ";D:" + ",".join(served) + ";I:" + ",".join(marks)
+        # Descriptor-safe enumeration (no Path.exists()/glob): a symlinked/escaping marker
+        # dir or a symlinked marker leaf is skipped, never followed.
+        try:
+            entries = runtime_fs.scandir_nofollow(self._paths, idir)
+        except PathContainmentError:
+            entries = []
+        for name, is_link in sorted(entries):
+            if is_link or not name.endswith(".show"):
+                continue
+            stem = name[:-len(".show")]
+            try:
+                marks.append(f"{stem}={runtime_fs.read_text(self._paths, idir / name).strip()}")
+            except (OSError, ValueError):
+                marks.append(stem)
+        return "R:" + ",".join(running) + ";D:" + ",".join(usable) + ";I:" + ",".join(marks)
 
     def _build_artifact(self, comp):
         """Relative path of the built binary (explicit `bin`, else the process
@@ -1286,25 +2140,23 @@ class ControllerService:
         return ""
 
     def manual_start_command(self, comp) -> str:
-        """The shell command the operator runs in a terminal to start an
-        interactive component (the controller never starts these itself), with
-        its run parameters and operator identity substituted in."""
-        run = comp.run_cmd or "(no run command)"
-        stack_id = self.stack_of(comp.id) or ""
-        vals = self.stack_config(stack_id) if stack_id else {}
+        """The command the operator runs in a terminal to start an interactive
+        component (the controller never starts these itself). Rendered from the
+        SAME structured command spec, shell-quoted — values are individual argv
+        tokens, never interpolated into shell syntax."""
+        import shlex
+        from . import commands
+        if not comp.run_argv:
+            return "(no run command)"
         op = self.config().operator
-        src = self._paths.resolve_source(comp.source.path) if comp.source else ""
-        for p in comp.run_params:
-            run = run.replace("{" + p.name + "}", emit_param(p, vals.get(p.name, p.default)))
-        run = (run.replace("{callsign}", op.callsign or "N0CALL")
-                  .replace("{locator}", op.locator or "")
-                  .replace("{runtime}", str(self._paths.runtime_root))
-                  .replace("{source}", str(src)))
-        run = " ".join(run.split())
-        # A run that cd's itself (e.g. into the runtime config dir) needs no prefix.
-        if comp.source is not None and not run.startswith("cd "):
-            return f"cd {src} && {run}"
-        return run
+        runtime = str(self._paths.runtime_root)
+        src = str(self._paths.resolve_source(comp.source.path)) if comp.source else runtime
+        cmd = commands.display_command(comp, op, runtime, src)
+        if not cmd:
+            return "(no run command)"
+        cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "")
+               if comp.run_cwd else src)
+        return f"cd {shlex.quote(cwd)} && {cmd}"
 
     @staticmethod
     def _client_interfaces(status) -> list[dict]:
@@ -1335,11 +2187,15 @@ class ControllerService:
         daemon_installed = bool(dstat and dstat.source_state.value
                                 in ("match", "dirty", "differs", "unknown", "not-a-repo"))
         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
-        served = [b for b, v in dvs.items() if v.reachable]
+        # OCCUPIED = reachable (may physically hold SPI, used for conflict reasoning);
+        # USABLE = RADIO=READY (a working radio service). User-facing "served" summaries are
+        # USABLE — a FAILED/UNINITIALIZED band is never presented as served.
+        occupied_bands = [b for b, v in dvs.items() if v.reachable]
+        usable_bands = [b for b, v in dvs.items() if v.ready]
         out = []
         for band in self.RADIO_BANDS:
             dv = dvs[band]
-            other_served = [b for b in served if b != band]
+            other_served = [b for b in usable_bands if b != band]
             running, startable, interactive = [], [], []
             for s in self.stacks():
                 if s.id == self.DAEMON_ID:
@@ -1363,7 +2219,7 @@ class ControllerService:
                           # Has tunables -> a config link; lhpc captures a start log
                           # (non-interactive run) or it declares its own -> a log link.
                           "configurable": bool(c.run_params or c.config_file),
-                          "writes_log": bool(c.log_paths) or bool(c.run_cmd and not c.interactive),
+                          "writes_log": bool(c.log_paths) or bool(c.run_argv and not c.interactive),
                           "state": (live[c.id].run_state.value if c.id in live else "unknown"),
                           "interfaces": self._client_interfaces(live.get(c.id))}
                          for c in s.components]
@@ -1405,12 +2261,24 @@ class ControllerService:
             out.append({
                 "band": band,
                 "daemon": {
-                    "reachable": dv.reachable,
+                    "reachable": dv.reachable,     # CONF socket answered (daemon live)
+                    # OCCUPIED: reachable — the daemon may physically hold the radio/SPI even
+                    # if RADIO != READY (used for resource-conflict reasoning).
+                    "occupied": dv.reachable,
+                    "ready": dv.ready,             # ...AND RADIO=READY (serves a usable band)
+                    # USABLE: only a READY radio is a usable service for dependents/TX.
+                    "usable": dv.ready,
+                    "radio_state": dv.radio_state or None,   # READY/FAILED/UNINITIALIZED
+                    # A truthful one-word state for the UI: offline / occupied / usable.
+                    "state_label": ("usable" if dv.ready else
+                                    "occupied" if dv.reachable else "offline"),
                     "process": daemon_proc,        # process run-state (band-independent)
                     "process_up": daemon_up,
                     "installed": daemon_installed,
-                    "other_served": other_served,  # other band(s) the daemon serves
-                    "served": served,
+                    "other_served": other_served,  # other USABLE band(s) (RADIO=READY)
+                    "served": usable_bands,        # usable bands (READY) — never FAILED/UNINIT
+                    "occupied_bands": occupied_bands,   # reachable (may hold SPI) — conflicts
+                    "usable_bands": usable_bands,       # RADIO=READY — dependent-start/TX
                     "radio": dv.status.get("RADIO") if dv.reachable else None,
                     "txmode": dv.status.get("TXMODE") if dv.reachable else None,
                     "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
@@ -1437,8 +2305,11 @@ class ControllerService:
             import tomllib
             f = self._jobs_dir() / (job + ".job")
             try:
-                with f.open("rb") as fh:
-                    return _pid_running(int(tomllib.load(fh)["pid"]))
+                # No-follow read (no check-then-open): a symlinked marker -> OSError -> False.
+                raw = tomllib.loads(runtime_fs.read_text(self._paths, f))
+                # FULL identity match (PID-reuse-safe), never bare PID liveness: a recycled
+                # pid running an unrelated process is not this job.
+                return procident.identity_matches(raw, int(raw["pid"]))
             except (OSError, KeyError, ValueError, tomllib.TOMLDecodeError):
                 return False
         s = self.stack(target)
@@ -1520,14 +2391,120 @@ class ControllerService:
     def save_config(self, target: str, values: dict,
                     callsign: str | None = None, locator: str | None = None,
                     band: str = "") -> ActionResult:
-        """Save operator identity (if supplied) and the stack's run parameters."""
+        """Save operator identity (if supplied) and the stack's run parameters.
+        Callsign/locator are validated before persistence."""
         if callsign is not None or locator is not None:
-            save_operator_config(self._paths, (callsign or "").strip().upper(),
-                                 (locator or "").strip())
+            try:
+                cs = validators.callsign(callsign or "", field="callsign")
+                loc = validators.locator(locator or "", field="locator")
+            except validators.ValidationError as exc:
+                return ActionResult(False, f"Config not saved for '{target}'.",
+                                    details=[str(exc)])
+            try:
+                save_operator_config(self._paths, cs.upper(), loc)
+            except ConfigError as exc:
+                return ActionResult(
+                    False, f"Config not saved for '{target}'.",
+                    details=[f"existing local.toml is malformed and was preserved (not "
+                             f"overwritten) — fix or remove it: {exc}"])
         return self.save_stack_config(target, values, band=band)
 
+    def save_config_bundle(self, target: str, *, values: dict | None = None,
+                           callsign: str | None = None, locator: str | None = None,
+                           band: str = "", remotes: dict | None = None) -> ActionResult:
+        """Validate the WHOLE Config-page submission, then persist it as ONE
+        all-or-recoverable transaction (local.toml + the per-stack config file).
+        Nothing is written unless every value validates; unknown fields are
+        rejected; a malformed local.toml is preserved. (P0: replaces the previous
+        per-remote sequential writes.)"""
+        s = self.stack(target)
+        if s is None:
+            return self._unknown_stack(target)
+        errors: list[str] = []
+        run_by = {p.name: p for p in self.run_params_for(target)}
+        file_by = {p.name: p for c in self._file_config_components(target)
+                   for p in c.config_file.params}
+        optional_ids = {c.id for c in s.components if c.optional}
+        clean: dict = {}
+        for key, value in (values or {}).items():
+            if key in run_by:
+                p, v = run_by[key], str(value)
+                if p.kind == "int" and v.strip() == "":
+                    clean[key] = v
+                    continue
+                try:
+                    clean[key] = validators.validate_param(p, v)
+                except validators.ValidationError as exc:
+                    errors.append(str(exc))
+            elif key.startswith("file_") and key[len("file_"):] in file_by:
+                try:
+                    clean[key] = validators.validate_param(file_by[key[len("file_"):]], value)
+                except validators.ValidationError as exc:
+                    errors.append(str(exc))
+            elif key.startswith("autostart_") and key[len("autostart_"):] in optional_ids:
+                clean[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
+            else:
+                errors.append(f"unknown config field: {key!r}")
+        op_change = callsign is not None or locator is not None
+        cs = loc = None
+        if op_change:
+            try:
+                cs = validators.callsign(callsign or "", field="callsign").upper()
+                loc = validators.locator(locator or "", field="locator")
+            except validators.ValidationError as exc:
+                errors.append(str(exc))
+        clean_remotes: dict = {}
+        if remotes is not None:
+            for cid, url in remotes.items():
+                try:
+                    vid = validators.path_component(cid, field="component id")
+                    vurl = validators.remote_url(url or "", field="remote")
+                    if vurl:
+                        clean_remotes[vid] = vurl
+                except validators.ValidationError as exc:
+                    errors.append(str(exc))
+        if errors:                                  # reject the whole bundle — zero mutation
+            return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
+
+        targets: list = []
+        local_path = self._paths.runtime_root / "config" / "local.toml"
+        if op_change or remotes is not None:
+            try:
+                # Descriptor-anchored no-follow read (a symlinked/escaping runtime
+                # local.toml is refused here, never followed out of the runtime root).
+                existing = _load_runtime_toml(self._paths, local_path)
+            except ConfigError as exc:
+                return ActionResult(False, f"Config not saved for '{target}'.",
+                                    details=[f"local.toml malformed and preserved: {exc}"])
+            tables = {k: dict(v) for k, v in existing.items() if isinstance(v, dict)}
+            if op_change:
+                tables["operator"] = {"callsign": cs, "locator": loc}
+            if remotes is not None:
+                tables["remotes"] = clean_remotes
+            targets.append(("local", local_path, render_local_tables(tables), 0o600))
+        cfg_band = self._config_band(target, band)
+        targets.append(("stack", _stack_config_path(self._paths, target, cfg_band),
+                        render_stack_config(target, clean), 0o644))
+        # Compute changed apply-modes against the PRE-SAVE effective config — BEFORE the
+        # transaction writes the new values and BEFORE the cache is invalidated. Reading
+        # `before` afterwards would compare new-vs-new and lose every restart/build hint.
+        params_by_name = {p.name: p for p in self.run_params_for(target)}
+        before = self.stack_config(target, band)
+        modes = {params_by_name[k].apply_mode for k, v in clean.items()
+                 if k in params_by_name and str(before.get(k, "")) != str(v)}
+        try:
+            apply_config_transaction(self._paths, targets)
+        except ConfigError as exc:
+            return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)])
+        self._invalidate_config()               # saved operator/remotes visible immediately
+        return ActionResult(True, f"Config saved for '{target}'.",
+                            details=self._apply_hints(target, modes),
+                            next_commands=[f"lhpc stack start {target}"])
+
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
-        """Validate and persist a stack/band's configuration (used on the next Run)."""
+        """Validate and persist a stack/band's configuration (used on the next Run).
+        Run-params AND file-config fields are validated by type before persistence;
+        an invalid value is rejected (never written, never reaches a command)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
         clean, errors = {}, []
@@ -1535,25 +2512,27 @@ class ControllerService:
             if p.name not in values:
                 continue
             v = str(values[p.name])
-            if p.kind == "enum" and p.choices and v not in p.choices:
-                errors.append(f"{p.name}: must be one of {', '.join(p.choices)}")
+            if p.kind == "int" and v.strip() == "":    # empty = unset (optional option)
+                clean[p.name] = v
                 continue
-            if p.kind == "int" and v.strip() != "":   # empty = unset (optional option)
-                try:
-                    n = int(v)
-                except ValueError:
-                    errors.append(f"{p.name}: not an integer")
-                    continue
-                if (p.min is not None and n < p.min) or (p.max is not None and n > p.max):
-                    errors.append(f"{p.name}: out of range [{p.min}, {p.max}]")
-                    continue
-            clean[p.name] = v
-        # Pass-through autostart toggles + file-config values (no run-param validation).
+            try:
+                clean[p.name] = validators.validate_param(p, v)
+            except validators.ValidationError as exc:
+                errors.append(str(exc))
+        # File-config fields are validated against their FileParam too.
+        file_params = {p.name: p for c in self._file_config_components(target)
+                       for p in c.config_file.params}
         for key, value in values.items():
             if key.startswith("autostart_"):
                 clean[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
             elif key.startswith("file_"):
-                clean[key] = str(value)
+                fp = file_params.get(key[len("file_"):])
+                if fp is None:
+                    continue                            # unknown field -> ignore
+                try:
+                    clean[key] = validators.validate_param(fp, value)
+                except validators.ValidationError as exc:
+                    errors.append(str(exc))
         if errors:
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors,
                                 next_commands=[])
@@ -1564,6 +2543,7 @@ class ControllerService:
                          for k, v in clean.items()
                          if k in params_by_name and str(before.get(k, "")) != str(v)}
         save_stack_config(self._paths, target, clean, self._config_band(target, band))
+        self._invalidate_config()               # subsequent reads see the new params
         hints = self._apply_hints(target, changed_modes)
         return ActionResult(True, f"Config saved for '{target}'.", details=hints,
                             next_commands=[f"lhpc stack start {target}"])
@@ -1581,9 +2561,19 @@ class ControllerService:
             hints.append("Runtime change — applied live.")
         return hints
 
-    def save_component_remote(self, component_id: str, url: str) -> None:
-        """Override (or clear, if url is blank) a component's GitHub remote."""
-        save_component_remote(self._paths, component_id, url)
+    def save_component_remote(self, component_id: str, url: str) -> ActionResult:
+        """Override (or clear, if url is blank) a component's GitHub remote. The URL
+        is validated to a safe remote policy before any file change."""
+        try:
+            save_component_remote(self._paths, component_id, url)
+        except validators.ValidationError as exc:
+            return ActionResult(False, "Remote override rejected.", details=[str(exc)])
+        except ConfigError as exc:
+            return ActionResult(False, "Remote override not saved.",
+                                details=[f"local.toml is malformed and was preserved: {exc}"])
+        self._invalidate_config()               # new remote visible to the next read
+        return ActionResult(True, "Remote override saved." if url.strip()
+                            else "Remote override cleared.")
 
     # ---- file-based component config (writes the app's own config file) -----
 
@@ -1603,34 +2593,64 @@ class ControllerService:
                 out[p.name] = stored.get(f"file_{p.name}", bd)
         return out
 
-    def write_config_files(self, target: str, band: str = "") -> list[str]:
+    def write_config_files(self, target: str, band: str = "") -> list["ConfigWrite"]:
         """(Re)generate every file-config component's config file from the stored
-        (per-band) values. Returns the paths written."""
+        (per-band) values. Returns a STRUCTURED result per component (written /
+        linked-readonly / no-base / failed) so an auto-start can block on a generation
+        failure rather than silently launching with stale or absent configuration."""
         from pathlib import Path
         op = self.config().operator
         runtime = str(self._paths.runtime_root)
         cfg_band = self._config_band(target, band)
+        # Validate operator identity; fall back to safe placeholders if invalid so a
+        # corrupted local.toml can never inject into a generated config file.
+        try:
+            call = validators.callsign(op.callsign or "N0CALL") or "N0CALL"
+        except validators.ValidationError:
+            call = "N0CALL"
+        try:
+            loc = validators.locator(op.locator or "")
+        except validators.ValidationError:
+            loc = ""
 
         def subst(text: str) -> str:
-            return (text.replace("{callsign}", op.callsign or "N0CALL")
-                        .replace("{locator}", op.locator or "")
+            return (text.replace("{callsign}", call)
+                        .replace("{locator}", loc)
                         .replace("{runtime}", runtime)
                         .replace("{band}", cfg_band))    # for per-band config keys
 
-        values = self.file_config_values(target, band)
-        written = []
+        stored = self.file_config_values(target, band)
+        written: list[ConfigWrite] = []
         for c in self._file_config_components(target):
             fc = c.config_file
-            src_dir = (self._paths.resolve_source(c.source.path) if c.source
-                       else self._paths.runtime_root)
-            out = fc.path.replace("{runtime}", runtime)
-            out_path = Path(out) if out.startswith("/") else src_dir / out
-            if fc.fmt in ("toml-update", "yaml-update"):
-                base = Path(fc.base) if fc.base.startswith("/") else src_dir / fc.base
+            # Validate every stored value against its FileParam; an invalid value
+            # (e.g. hand-edited TOML) reverts to the manifest default — never written
+            # raw into the app's config file.
+            values = {}
+            for p in fc.params:
+                raw = stored.get(p.name, p.default)
                 try:
-                    base_text = base.read_text(encoding="utf-8")
-                except OSError:
-                    continue   # base config not present — skip
+                    values[p.name] = validators.validate_param(p, raw)
+                except validators.ValidationError:
+                    values[p.name] = p.default
+            # THREE explicit destination policies (P1 generated-config containment):
+            dest = self._resolve_config_dest(c, fc.path)
+            if dest.status != "ok":
+                written.append(ConfigWrite(c.id, dest.detail_path, dest.status, dest.detail))
+                continue
+            out_path = dest.path
+            if fc.fmt in ("toml-update", "yaml-update"):
+                base = self._resolve_config_dest(c, fc.base, for_base=True)
+                if base.status != "ok":
+                    written.append(ConfigWrite(c.id, base.detail_path,
+                                   "failed" if base.status != "linked-readonly" else base.status,
+                                   base.detail))
+                    continue
+                try:
+                    base_text = self._read_contained(c, base)
+                except (OSError, PathContainmentError) as exc:
+                    written.append(ConfigWrite(c.id, str(base.path), "no-base", str(exc)))
+                    continue
                 updater = update_toml if fc.fmt == "toml-update" else update_yaml
                 text = updater(base_text, fc.params, values, subst)
             elif fc.fmt == "env":
@@ -1639,38 +2659,191 @@ class ControllerService:
             else:
                 text = render_keyval(fc.params, values, subst)
             try:
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(text, encoding="utf-8")
-                written.append(str(out_path))
-            except OSError:
-                pass
+                if dest.policy == "runtime":
+                    runtime_fs.atomic_write(self._paths, out_path, text, 0o644)
+                else:
+                    # Pass the RELATIVE path so containment is proven component-by-
+                    # component before any directory is created (P1.1).
+                    self._write_source_config(c, dest.detail_path, text)
+                written.append(ConfigWrite(c.id, str(out_path), "written"))
+            except (OSError, PathContainmentError) as exc:
+                # NEVER silently continue — a config we could not write must be visible
+                # so an auto-start can block rather than launch with stale/absent config.
+                written.append(ConfigWrite(c.id, str(out_path), "failed", str(exc)))
         return written
+
+    def _resolve_config_dest(self, c, raw: str, for_base: bool = False):
+        """Resolve a FileConfig path/base into one of three policies:
+          * runtime  — `{runtime}/...` only, resolved through `Paths.under` (containment);
+          * source   — a RELATIVE path under the managed source root (rejects linked);
+          * (reject) — an arbitrary absolute path, unknown placeholder, or traversal.
+        Returns a small result with `.status` ("ok"/"failed"/"linked-readonly"),
+        `.policy`, `.path`, `.detail`, `.detail_path`."""
+        from types import SimpleNamespace
+        runtime = str(self._paths.runtime_root)
+        if raw == "{runtime}" or raw.startswith("{runtime}/"):
+            rel = raw[len("{runtime}"):].lstrip("/")
+            parts = [p for p in rel.split("/") if p]
+            try:
+                p = self._paths.under(*parts) if parts else self._paths.runtime_root
+            except PathContainmentError as exc:
+                return SimpleNamespace(status="failed", policy="runtime", path=None,
+                                       detail=f"runtime path escapes root: {exc}", detail_path=raw)
+            return SimpleNamespace(status="ok", policy="runtime", path=p, detail="", detail_path=raw)
+        if raw.startswith("/") or raw.startswith("{") or ".." in raw.split("/"):
+            return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
+                                   detail="config path must be {runtime}/... or a relative source path")
+        # relative -> managed source destination
+        if not c.source:
+            return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
+                                   detail="a relative config path requires a managed source")
+        if not for_base and self._lifecycle().is_linked_source(c):
+            return SimpleNamespace(status="linked-readonly", policy="source", path=None,
+                                   detail="linked source is read-only — generate config in your checkout",
+                                   detail_path=raw)
+        src_dir = self._paths.resolve_source(c.source.path)
+        return SimpleNamespace(status="ok", policy="source", path=src_dir / raw,
+                               detail="", detail_path=raw)
+
+    def _read_contained(self, c, dest) -> str:
+        """Read a config base safely: a runtime base via runtime_fs (no-follow); a managed
+        source base via the SAME descriptor-anchored, O_NOFOLLOW traversal as the writer
+        (no check-then-open — a base file or parent swapped to a symlink after a check
+        cannot be followed)."""
+        if dest.policy == "runtime":
+            from . import runtime_fs
+            return runtime_fs.read_text(self._paths, dest.path)
+        return self._read_source_base(c, dest.detail_path)
+
+    @contextmanager
+    def _open_source_parent(self, c, rel_path: str, *, create: bool):
+        """Descriptor-anchored descent under the managed source root, immune to a symlink-
+        swap race: each path component is opened RELATIVE TO ITS PARENT fd with
+        `O_DIRECTORY|O_NOFOLLOW` (a component that is — or was just swapped to — a symlink
+        or non-directory is refused at the syscall). With `create=True` intermediate dirs
+        are created one component at a time. Yields (parent_fd, leaf_name)."""
+        root = self._paths.resolve_source(c.source.path)
+        parts = [p for p in Path(rel_path).parts if p not in ("", ".")]
+        if not parts or any(p in ("..", "/") for p in parts):
+            raise PathContainmentError(f"unsafe source config path: {rel_path!r}")
+        fds = [os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)]
+        try:
+            for comp in parts[:-1]:
+                if create:
+                    try:
+                        os.mkdir(comp, 0o755, dir_fd=fds[-1])
+                    except FileExistsError:
+                        pass
+                try:
+                    fds.append(os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                       dir_fd=fds[-1]))
+                except OSError as exc:
+                    raise PathContainmentError(
+                        f"source config path component {comp!r} is a symlink or not a "
+                        f"directory: {exc}") from exc
+            yield fds[-1], parts[-1]
+        finally:
+            for fd in reversed(fds):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    def _read_source_base(self, c, rel_path: str) -> str:
+        """Read a managed-source base file with O_NOFOLLOW at the leaf, anchored to its
+        parent directory fd — no check-then-open."""
+        with self._open_source_parent(c, rel_path, create=False) as (parent_fd, leaf):
+            fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            with os.fdopen(fd, "rb") as fh:
+                return fh.read().decode("utf-8")
+
+    def _write_source_config(self, c, rel_path: str, text: str) -> None:
+        """Atomically write a generated config into the managed SOURCE tree using a
+        DESCRIPTOR-ANCHORED walk that is immune to a symlink-swap race (P1.1): each path
+        component is created and opened RELATIVE TO ITS PARENT directory fd with
+        `O_DIRECTORY|O_NOFOLLOW`, so replacing an already-checked directory with a symlink
+        before the next step is refused AT THE syscall (a `source/conf -> outside` link can
+        never get `outside/newdir` created). The leaf is written `O_NOFOLLOW` (no symlink
+        clobber) and renamed in place. Linked external sources are rejected before here."""
+        import stat as _stat
+        with self._open_source_parent(c, rel_path, create=True) as (parent_fd, leaf):
+            try:                                              # refuse an existing symlink leaf
+                st = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+                if _stat.S_ISLNK(st.st_mode):
+                    raise OSError(f"refusing a symlink-leaf source config: {leaf}")
+            except FileNotFoundError:
+                pass
+            tmp = f".{leaf}.tmp-{os.getpid()}"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644,
+                         dir_fd=parent_fd)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(text)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.rename(tmp, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=parent_fd)
+                except OSError:
+                    pass
+                raise
 
     def reset_config(self, target: str, band: str = "") -> ActionResult:
         """Delete a stack/band's saved config so it reverts to the running defaults."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
         cfg_band = self._config_band(target, band)
-        name = f"{target}@{cfg_band}.toml" if cfg_band else f"{target}.toml"
-        path = self._paths.runtime_root / "config" / "stacks" / name
-        existed = path.exists()
-        if existed:
-            path.unlink()
+        # Use the SAME containment-checked helper as save/load (never hand-built).
+        from .config import _stack_config_path
+        from . import runtime_fs, validators
+        from .paths import PathContainmentError
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
+        # Descriptor-safe existence check (no `Path.exists()` follow-then-mutate): enumerate
+        # the parent no-follow and look for the leaf. An unsafe/symlinked config leaf or dir
+        # is a TYPED failure — never a web 500. `_stack_config_path` itself refuses a symlink
+        # -escaping leaf (ValidationError), so that is caught here too.
+        try:
+            path = _stack_config_path(self._paths, target, cfg_band)
+            names = dict(runtime_fs.scandir_nofollow(self._paths, path.parent))
+            existed = path.name in names
+            if existed:
+                runtime_fs.unlink(self._paths, path)     # contained, no-follow safe unlink
+                self._invalidate_config()                # reset visible to the next read
+        except (PathContainmentError, validators.ValidationError, OSError) as exc:
+            return ActionResult(False, f"Config reset blocked for {label}: unsafe config "
+                                f"path (refused, not modified): {exc}")
         return ActionResult(True,
                             f"Config reset to defaults for {label}." if existed
                             else f"{label} already at defaults.",
                             next_commands=[f"lhpc stack start {target}"])
 
-    SOURCE_CHOICES = ("dev", "stable", "pinned")
+    SOURCE_CHOICES = ("pinned", "dev", "stable")   # pinned = production-safe default
+
+    def start_notes(self, result: "ActionResult") -> list[str]:
+        """Per-component `start_note` strings for components that actually started
+        (verified / already-healthy) in this result — e.g. how to connect a just-
+        launched GUI to its node. Shown as a transient green dashboard note."""
+        started = {r.component for r in result.results
+                   if getattr(r, "outcome", None) is not None
+                   and r.outcome.value in ("verified", "started", "already_healthy")}
+        out = []
+        for s in self.stacks():
+            for c in s.components:
+                if c.id in started and c.start_note:
+                    out.append(c.start_note)
+        return out
 
     def run_action(self, op: str, target: str, apply: bool = False,
-                   params: dict | None = None, source: str = "dev",
+                   params: dict | None = None, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
                    band: str = "") -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
-        if source not in self.SOURCE_CHOICES:
-            source = "dev"
+        # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
+        if op in ("install", "update") and source not in self.SOURCE_CHOICES:
+            return ActionResult(False, f"Invalid source '{source}' (choose "
+                                f"{', '.join(self.SOURCE_CHOICES)}).",
+                                next_commands=[f"lhpc {op} {target} --source pinned"])
         ops = {
             "install": lambda: self.install(target, apply=apply, source=source),
             "update": lambda: self.update(target, apply=apply, source=source),
@@ -1681,8 +2854,6 @@ class ControllerService:
             "restart": lambda: self.restart(target, apply=apply, params=params,
                                             stop_owners=stop_owners, band=band),
             "build": lambda: self.build(target, apply=apply),
-            "repair": lambda: self.repair(target, apply=apply),
-            "rollback": lambda: self.rollback(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
             "test-tx": lambda: self.test(target, tx=True, apply=apply),
         }
@@ -1690,6 +2861,10 @@ class ControllerService:
         if fn is None:
             return ActionResult(False, f"Unknown action '{op}'.",
                                 next_commands=["lhpc help"])
+        # Lifecycle coordination now lives in the PUBLIC start/stop/restart methods (the
+        # authoritative locked entry points), so a DIRECT service call is guarded
+        # identically to a CLI/web call. install/build/update/uninstall lock internally on
+        # their source paths. run_action simply dispatches.
         return fn()
 
     def stack_of(self, target: str) -> str | None:
@@ -1717,21 +2892,39 @@ class ControllerService:
         return out[-lines:]
 
     def daemon_set(self, band: str, key: str, value: str, apply: bool = False) -> ActionResult:
+        # Validate the band at the service boundary too (not only in web routes): a
+        # direct CLI/service caller must never reach a constructed arbitrary socket path.
+        if not daemon_control.is_valid_band(band):
+            return ActionResult(False, f"Invalid band '{band}' (allowed: "
+                                f"{', '.join(daemon_control.ALLOWED_BANDS)}).")
         err = daemon_control.validate_set(key, value)
         if err:
             return ActionResult(False, f"Invalid setting: {err}",
                                 next_commands=[f"lhpc daemon {band}"])
+        confirmable = daemon_control.is_confirmable(key)
         if not apply:
+            note = ("This changes live daemon behaviour (non-RF tuning)."
+                    if confirmable else
+                    "This is a radio param the daemon does NOT report back — it can be "
+                    "SENT but NOT confirmed over the socket.")
             return ActionResult(
                 True,
                 f"Will apply SET {key.upper()}={value.upper()} to the {band} daemon (live).",
-                details=["This changes live daemon behaviour (non-RF tuning).",
-                         "It does not transmit by itself."],
+                details=[note, "It does not transmit by itself."],
                 next_commands=[f"lhpc daemon {band} --set {key}={value} --yes"],
-                data={"changes": 1})
-        ok, detail = daemon_control.apply_set(self._system, band, key, value)
-        return ActionResult(ok, f"SET {key.upper()}={value.upper()}: {'applied' if ok else 'FAILED'}.",
-                            details=[detail], next_commands=[f"lhpc daemon {band}"])
+                data={"changes": 1, "confirmable": confirmable})
+        ok, confirmed, detail = daemon_control.apply_set(self._system, band, key, value)
+        # Truthful outcome: only a read-back-confirmed SET is "applied"; an unconfirmable
+        # radio param that was accepted is "SENT (unconfirmed)", never "applied".
+        if not ok:
+            verb = "FAILED"
+        elif confirmed:
+            verb = "applied (confirmed)"
+        else:
+            verb = "SENT (unconfirmed)"
+        return ActionResult(ok, f"SET {key.upper()}={value.upper()}: {verb}.",
+                            details=[detail], next_commands=[f"lhpc daemon {band}"],
+                            data={"confirmed": confirmed})
 
 
     def _with_source(self, target: str):
@@ -1749,7 +2942,7 @@ class ControllerService:
         return out
 
     def update(self, target: str = "", apply: bool = False,
-               source: str = "dev") -> ActionResult:
+               source: str = "pinned") -> ActionResult:
         """Refresh the managed source(s) from GitHub (version per `source`:
         dev/stable/pinned), falling back to the local checkout on failure. Skips
         optional libs/firmware unless one is targeted directly.
@@ -1762,8 +2955,14 @@ class ControllerService:
         is_component = target != "" and self.stack(target) is None
         items = all_items if is_component else [(s, c) for s, c in all_items if not c.optional]
         if not apply:
-            details = [f"  {c.id}: fetch newest from {c.source.remote or 'local checkout'}"
-                       for _, c in items]
+            # The dry-run is the explicit freshness check (`lhpc update --check`):
+            # it is the ONLY place that contacts the remote (git ls-remote). GET web
+            # routes never do this — they show "unknown" until this is run.
+            details = []
+            for _, c in items:
+                fresh = self.update_status(c)
+                details.append(f"  {c.id}: {fresh} — fetch newest from "
+                               f"{c.source.remote or 'local checkout'}")
             return ActionResult(
                 True, f"Update plan for '{target or 'all'}': refresh {len(items)} source(s) "
                 "from GitHub (local fallback).",
@@ -1771,112 +2970,95 @@ class ControllerService:
                 next_commands=[f"lhpc update {target} --yes"] if items else [],
                 data={"changes": len(items)})
         inst = self._installer()
-        out = []
+        out, ok = [], True
         for _, c in items:
             r = inst.adopt_source(c, force=True, source=source)
             out.append(f"  [{r.status}] {c.id}: {r.detail}")
-        return ActionResult(True, f"Update applied for '{target or 'all'}'.",
-                            details=out, next_commands=["lhpc status --versions"])
-
-    def repair(self, target: str, apply: bool = False) -> ActionResult:
-        """Re-verify sources; re-adopt missing ones. Never resets a dirty tree."""
-        items = self._with_source(target)
-        if not items:
-            return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
-        inst = self._installer()
-        details, changes = [], 0
-        for _, c in items:
-            dest = self._paths.resolve_source(c.source.path)
-            if not dest.exists():
-                details.append(f"  [re-adopt] {c.id}: missing")
-                changes += 1
-            else:
-                from .probes.source import probe_source
-                state = probe_source(self._system, c.source, str(dest)).state.value
-                verb = "ok" if state == "match" else f"report ({state})"
-                details.append(f"  [{verb}] {c.id}")
-        if not apply:
-            return ActionResult(True, f"Repair plan for '{target or 'all'}': {changes} re-adopt(s).",
-                                details=details,
-                                next_commands=[f"lhpc repair {target} --yes"] if changes else [],
-                                data={"changes": changes})
-        out = []
-        for _, c in items:
-            if not self._paths.resolve_source(c.source.path).exists():
-                r = inst.adopt_source(c)
-                out.append(f"  [{r.status}] re-adopt {c.id}: {r.detail}")
-        return ActionResult(True, f"Repair applied for '{target or 'all'}'.",
-                            details=out or ["nothing to re-adopt"],
-                            next_commands=["lhpc status " + (target or "")])
-
-    def rollback(self, target: str, apply: bool = False) -> ActionResult:
-        """Restore a managed copy to its confirmed-working profile commit via a
-        non-destructive `git checkout` (never reset --hard). Linked/dirty trees
-        are reported, not forced."""
-        items = self._with_source(target)
-        profiles = profiles_mod.load_profiles(self._paths)
-        actions = []
-        for _, c in items:
-            prof = profiles.get(c.id)
-            if not prof or not prof.commit:
-                continue
-            dest = self._paths.resolve_source(c.source.path)
-            if dest.is_symlink():
-                actions.append((c, dest, "report", "linked to working tree — roll back there manually"))
-            elif not dest.exists():
-                actions.append((c, dest, "report", "not installed — run lhpc install"))
-            else:
-                actions.append((c, dest, "checkout", prof.commit))
-        if not actions:
-            return ActionResult(False, f"No confirmed-working profile to roll back to for '{target}'.",
-                                next_commands=["lhpc status --versions"])
-        details = [f"  [{a[2]}] {a[0].id}: {a[3][:40]}" for a in actions]
-        changes = sum(1 for a in actions if a[2] == "checkout")
-        if not apply:
-            return ActionResult(True, f"Rollback plan for '{target}': {changes} checkout(s).",
-                                details=details,
-                                next_commands=[f"lhpc rollback {target} --yes"] if changes else [],
-                                data={"changes": changes})
-        out = []
-        for c, dest, kind, arg in actions:
-            if kind != "checkout":
-                out.append(f"  [skip] {c.id}: {arg}")
-                continue
-            res = self._system.runner.run(["git", "-C", str(dest), "checkout", arg], 10.0)
-            ok = res.returncode == 0
-            out.append(f"  [{'ok' if ok else 'fail'}] {c.id} -> {arg[:12]}"
-                       + ("" if ok else f" ({(res.stderr or '').strip()[:60]})"))
-        return ActionResult(True, f"Rollback applied for '{target}'.", details=out,
+            if r.status == "failed":
+                ok = False
+        return ActionResult(ok, f"Update {'applied' if ok else 'INCOMPLETE'} for "
+                            f"'{target or 'all'}'.", details=out,
                             next_commands=["lhpc status --versions"])
 
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
-        """Remove managed runtime sources for `target`. Preserves config, secrets
-        and profiles by default."""
+        """Remove managed runtime sources for `target`. Refuses if a target
+        component is running; never removes a source still referenced by another
+        component (shared checkout); never touches config, secrets or profiles."""
         items = self._with_source(target)
         if not items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
-        present = [(s, c) for s, c in items
-                   if self._paths.resolve_source(c.source.path).exists()]
-        details = [f"  [remove] src/{c.source.path.split('/')[-1]} ({c.id})" for _, c in present]
+        target_ids = {c.id for _, c in items}
+
+        # 1) Refuse while any target component is running.
+        snap = self.build_snapshot()
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        running = sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
+                         if cid in target_ids and st.run_state in up)
+        if running:
+            return ActionResult(
+                False, f"Refusing to uninstall '{target or 'all'}': component(s) running.",
+                details=[f"  running: {', '.join(running)} — stop them first"],
+                next_commands=[f"lhpc stack stop {target} --yes"])
+
+        # 2) Every component (manifest-wide) that references each source path.
+        consumers: dict[str, set[str]] = {}
+        for s in self.stacks():
+            for c in s.components:
+                if c.source:
+                    consumers.setdefault(c.source.path, set()).add(c.id)
+
+        # 3) Decide remove vs keep-shared, deduped by source path.
+        to_remove: dict[str, Component] = {}     # path -> a representative component
+        kept: list[tuple[str, list[str]]] = []   # (path, remaining consumers)
+        for _, c in items:
+            path = c.source.path
+            if not self._paths.resolve_source(path).exists():
+                continue
+            remaining = sorted(consumers.get(path, set()) - target_ids)
+            if remaining:
+                if path not in {p for p, _ in kept}:
+                    kept.append((path, remaining))
+            else:
+                to_remove.setdefault(path, c)
+
+        details = [f"  [remove] src/{p.split('/')[-1]} ({c.id})" for p, c in to_remove.items()]
+        details += [f"  [keep — shared] src/{p.split('/')[-1]} still used by {', '.join(r)}"
+                    for p, r in kept]
         details.append("  (config, secrets and profiles are preserved)")
         if not apply:
-            return ActionResult(True, f"Uninstall plan for '{target or 'all'}': {len(present)} source(s).",
-                                details=details,
-                                next_commands=[f"lhpc uninstall {target} --yes"] if present else [],
-                                data={"changes": len(present)})
+            return ActionResult(
+                True, f"Uninstall plan for '{target or 'all'}': remove {len(to_remove)}, "
+                f"keep {len(kept)} shared.", details=details,
+                next_commands=[f"lhpc uninstall {target} --yes"] if to_remove else [],
+                data={"changes": len(to_remove)})
+
         import shutil
-        out = []
-        for _, c in present:
-            dest = self._paths.resolve_source(c.source.path)
-            try:
-                if dest.is_symlink():
-                    dest.unlink()
-                else:
-                    shutil.rmtree(dest)
-                out.append(f"  [removed] {c.id}")
-            except OSError as exc:
-                out.append(f"  [fail] {c.id}: {exc}")
-        return ActionResult(True, f"Uninstall applied for '{target or 'all'}' (config preserved).",
+        from . import reslock
+        out, ok = [], True
+        # P0.1: ONE atomic guard for the whole uninstall — index→recover→block→source-lock
+        # handoff, holding ALL affected source-path locks (sorted) for the removals. A
+        # linked source is only UNLINKED — its external target is never removed.
+        src_paths = sorted(to_remove.keys())
+        try:
+            with self._source_operation_guard(src_paths, op="uninstall"):
+                for path, c in to_remove.items():
+                    dest = self._paths.resolve_source(path)
+                    try:
+                        dest.unlink() if dest.is_symlink() else shutil.rmtree(dest)
+                        out.append(f"  [removed] src/{path.split('/')[-1]}")
+                    except OSError as exc:
+                        out.append(f"  [fail] {path}: {exc}")
+                        ok = False
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {blocked}",
+                                next_commands=["lhpc status"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {busy}",
+                                next_commands=["lhpc status"])
+        out += [f"  [kept — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"
+                for p, r in kept]
+        return ActionResult(ok, f"Uninstall {'applied' if ok else 'incomplete'} for "
+                            f"'{target or 'all'}' (config preserved).",
                             details=out, next_commands=["lhpc status"])
 
     # ---- helpers ---------------------------------------------------------
@@ -1889,18 +3071,6 @@ class ControllerService:
             details=[f"Known stacks: {known}"],
             next_commands=["lhpc list"],
         )
-
-
-def _pid_running(pid: int) -> bool:
-    """True if pid exists and is not a zombie/dead (Linux /proc-based)."""
-    try:
-        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as fh:
-            data = fh.read()
-    except OSError:
-        return False
-    rparen = data.rfind(")")        # state char follows "(comm) "
-    state = data[rparen + 2: rparen + 3] if rparen != -1 else ""
-    return state not in ("Z", "X", "x")
 
 
 def _render_component(comp, status) -> list[str]:

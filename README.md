@@ -62,7 +62,7 @@ lhpc daemon <433|868>                       # monitor RSSI / stats / CAD
 lhpc daemon 433 --set TXMODE=DIRECT --yes   # apply a whitelisted live setting
 lhpc test <stack> --tx --yes                # one bounded TX frame per band (real RF — dummy load)
 
-lhpc update | repair | rollback | uninstall <stack>
+lhpc update | uninstall <stack>
 ```
 
 Mutating commands print a plan and require `--yes` (or a confirmation) before they
@@ -76,8 +76,8 @@ lhpc web                     # http://127.0.0.1:8770/  (loopback only)
 
 - **Dashboard** — per band: the daemon monitor (live RSSI/stats), the stacks
   running on that band, and a control to start another.
-- **Stack pages** — Install / Build / Start / Stop / Test / Repair / Rollback /
-  Uninstall, each with a plan and confirmation. Interactive (TUI) apps show the
+- **Stack pages** — Install / Build / Start / Stop / Test / Update / Uninstall,
+  each with a plan and confirmation. Interactive (TUI) apps show the
   command to run yourself; GUI/headless apps start and stop directly.
 - **Config pages** — per-stack settings (callsign, frequencies, presets …)
   written into each app's own config file.

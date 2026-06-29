@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import action_btn, stack_actions, stack_actions_more, cmdbox %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox %}
 {% block title %}{{ stack.id }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   <p><a href="{{ url_for('dashboard') }}">&larr; dashboard</a></p>
@@ -26,7 +26,6 @@
       {% endif %}
       <h4>Stack actions</h4>
       {{ stack_actions(stack.id, installed, has_source) }}
-      {{ stack_actions_more(stack.id) }}
       <p class="links"><a href="{{ url_for('stack_config_view', stack_id=stack.id) }}">Config &rarr;</a></p>
 
       <h4>System dependencies</h4>

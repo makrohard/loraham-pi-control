@@ -50,9 +50,9 @@ def test_read_view_unreachable_on_error():
 
 def test_apply_set_validates_before_sending():
     sys = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS SF=12\n"}).system
-    ok, _ = dc.apply_set(sys, "433", "SF", "12")
+    ok, _c, _ = dc.apply_set(sys, "433", "SF", "12")
     assert ok
-    ok, detail = dc.apply_set(sys, "433", "SF", "99")
+    ok, _c, detail = dc.apply_set(sys, "433", "SF", "99")
     assert not ok and "[7, 12]" in detail
 
 
@@ -60,29 +60,30 @@ def test_apply_set_confirms_via_readback():
     # The daemon never acks a SET — apply_set sends it, then GETs the field back and
     # confirms the hardware took the value before reporting success.
     fake = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=DIRECT CADWAIT=1500\n"})
-    ok, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
-    assert ok and "confirmed" in detail
+    ok, confirmed, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
+    assert ok and confirmed and "confirmed" in detail
     assert any(p == b"SET TXMODE=DIRECT\n" for _, p in fake.sent)   # the SET was sent
 
 
 def test_apply_set_readback_mismatch_is_failure():
     # Daemon reports a different value than we set -> NOT applied (no green banner).
     fake = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=MANAGED\n"})
-    ok, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
-    assert not ok and "NOT applied" in detail and "MANAGED" in detail
+    ok, confirmed, detail = dc.apply_set(fake.system, "433", "TXMODE", "DIRECT")
+    assert not ok and not confirmed and "NOT applied" in detail and "MANAGED" in detail
 
 
 def test_apply_set_radio_param_cannot_be_confirmed():
-    # FREQ/SF/etc are applied to the chip but not reported by any GET -> sent, unconfirmed.
+    # FREQ/SF/etc are applied to the chip but not reported by any GET -> sent, UNCONFIRMED
+    # (ok=True but confirmed=False; the caller must never present this as "applied").
     fake = FakeSystem(unix_replies={dc.conf_socket("433"): b"STATUS TXMODE=MANAGED\n"})
-    ok, detail = dc.apply_set(fake.system, "433", "SF", "12")
-    assert ok and "cannot be confirmed" in detail
+    ok, confirmed, detail = dc.apply_set(fake.system, "433", "SF", "12")
+    assert ok and not confirmed and "UNCONFIRMED" in detail
 
 
 def test_apply_set_unreachable_socket():
     err = FakeSystem(unix_errors={dc.conf_socket("868"): "no socket"}).system
-    ok, detail = dc.apply_set(err, "868", "TXMODE", "DIRECT")
-    assert not ok and "unreachable" in detail
+    ok, confirmed, detail = dc.apply_set(err, "868", "TXMODE", "DIRECT")
+    assert not ok and not confirmed and "unreachable" in detail
 
 
 def test_full_status_stats_channel(monkeypatch):

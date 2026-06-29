@@ -111,7 +111,8 @@ pre.next { background: #0f1b2a; color: #d7e3f2; padding: .6rem .8rem; border-rad
 .endpoint-bad { color: var(--idle); }
 
 /* Flash messages + daemon monitor ------------------------------------- */
-.flash { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; }
+.flash { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; transition: opacity .6s ease; }
+.flash-hide { opacity: 0; }
 .flash-ok { background: #e7f6ec; border: 1px solid #b7e3c4; color: #1a7f37; }
 .flash-warn { background: #fff8e1; border: 1px solid #ffe0a3; color: #7a5200; }
 .flash-bad { background: #fdecea; border: 1px solid #f1a9a0; color: #a01b10; }

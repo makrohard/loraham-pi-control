@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}confirm live setting — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('stack_config_view', stack_id='daemon') }}">&larr; back</a></p>
+  <div class="card">
+    <header><h2>Confirm live daemon setting <span class="pill">{{ band }} MHz</span></h2></header>
+    <div class="body">
+      <p>{{ plan.summary }}</p>
+      {% if plan.details %}
+        <pre class="next">{% for line in plan.details %}{{ line }}
+{% endfor %}</pre>
+      {% endif %}
+      {% if plan.ok %}
+        <form method="post" action="{{ url_for('radio_set', band=band) }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="key" value="{{ key }}">
+          <input type="hidden" name="value" value="{{ value }}">
+          <input type="hidden" name="confirmed" value="yes">
+          <button type="submit">Apply {{ key }}={{ value }} (live, non-RF)</button>
+        </form>
+      {% else %}
+        <p class="flash flash-warn">This setting cannot be applied (see above).</p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

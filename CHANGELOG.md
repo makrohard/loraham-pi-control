@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — hardening
+
+Hardening (see `docs/hardening-0.1.md`):
+
+- Descriptor-anchored source transactions, fail-closed session tokens, thin launcher runtime, owned journals; dead-code/docs cleanup; MIT license.
+
+
 ## 0.1.0 — initial version
 
 Terminal CLI and local web console to install, configure and run the LoRaHAM Pi

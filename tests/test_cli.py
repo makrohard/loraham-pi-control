@@ -37,13 +37,21 @@ def test_update_shows_plan(capsys):
     assert "Update plan" in out and "refresh" in out
 
 
-def test_repair_plan_is_dry_run(tmp_path, monkeypatch, capsys):
+def test_install_plan_is_dry_run(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     main(["bootstrap", "--yes"])
     capsys.readouterr()
-    # Nothing installed -> repair plans re-adoptions but does not act without --yes.
-    assert main(["repair", "daemon"]) == 0
-    assert "Repair plan" in capsys.readouterr().out
+    # Nothing installed -> install plans adoptions but does not act without --yes.
+    assert main(["install", "daemon", "--check"]) == 0
+    assert "Install" in capsys.readouterr().out
+
+
+def test_repair_and_rollback_are_not_commands(monkeypatch):
+    # These verbs were removed (reinstall/update instead) -> argparse rejects them.
+    import pytest
+    for verb in ("repair", "rollback"):
+        with pytest.raises(SystemExit):
+            main([verb, "daemon"])
 
 
 def test_start_plan_is_dry_run_without_yes(tmp_path, monkeypatch, capsys):

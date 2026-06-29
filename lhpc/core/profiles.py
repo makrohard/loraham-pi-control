@@ -2,8 +2,8 @@
 
 A confirmed-working profile pins the last KNOWN-GOOD state of a component
 (commit, daemon version + TX profile, tests passed, live-test status/date,
-limitations) under `<runtime>/profiles/<component>.toml`. It is the safe
-fallback for rollback/repair. A component is only reported
+limitations) under `<runtime>/profiles/<component>.toml`. It is the reference for
+the `confirmed-working` status badge. A component is only reported
 `confirmed-working` when a profile exists AND the local source is clean and at
 exactly the profile's commit — a dirty or diverged tree is never confirmed.
 """
@@ -26,16 +26,19 @@ def profiles_dir(paths: Paths) -> Path:
 
 
 def load_profiles(paths: Paths) -> dict[str, ConfirmedProfile]:
+    from . import runtime_fs
+    from .paths import PathContainmentError
     out: dict[str, ConfirmedProfile] = {}
     d = profiles_dir(paths)
-    if not d.is_dir():
-        return out
-    for f in sorted(d.glob("*.toml")):
-        try:
-            with f.open("rb") as fh:
-                raw = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError):
+    # Descriptor-anchored, no-follow directory listing + per-file no-follow read: a
+    # symlinked profiles dir or a symlinked/escaping profile leaf contributes no data.
+    for name in runtime_fs.listdir(paths, d):
+        if not name.endswith(".toml"):
             continue
+        try:
+            raw = tomllib.loads(runtime_fs.read_bytes(paths, d / name).decode("utf-8"))
+        except (OSError, ValueError, PathContainmentError):
+            continue                            # missing/symlinked/malformed -> skip
         if "component_id" not in raw:
             continue
         out[raw["component_id"]] = ConfirmedProfile(
@@ -54,10 +57,10 @@ def load_profiles(paths: Paths) -> dict[str, ConfirmedProfile]:
 
 
 def save_profile(paths: Paths, profile: ConfirmedProfile) -> Path:
-    d = profiles_dir(paths)
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / f"{profile.component_id}.toml"
-    path.write_text(_serialize(profile), encoding="utf-8")
+    from . import runtime_fs
+    path = profiles_dir(paths) / f"{profile.component_id}.toml"
+    # Atomic, contained, no-follow leaf — runtime-owned profile state via the safe API.
+    runtime_fs.atomic_write(paths, path, _serialize(profile))
     return path
 
 

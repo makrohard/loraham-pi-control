@@ -35,7 +35,7 @@ _TOPICS = {
         "Confirmed-working profiles: the controller tracks the last known-good\n"
         "state per stack (commits, daemon version/TX profile, config schema,\n"
         "tests, live-test date). A failed candidate never overwrites a confirmed\n"
-        "profile; rollback/repair restore explicitly and auditably."
+        "profile; reinstall or update to change a managed source."
     ),
 }
 
@@ -69,7 +69,12 @@ def _render_daemon(view) -> int:
         print(f"\nNext:\n  lhpc stack start loraham-daemon-{view.band}")
         return 1
     s, st, ch = view.status, view.stats, view.channel
-    print(f"OK    daemon {view.band} monitor.")
+    if view.ready:
+        print(f"OK    daemon {view.band} monitor.")
+    else:
+        # Reachable but the radio is not usable: never present it as a serving band.
+        print(f"WARN  daemon {view.band} live but RADIO={view.radio_state or 'unknown'} "
+              "(NOT READY) — no usable radio; dependents cannot start.")
     print(f"Radio: {s.get('RADIO','?')}   TX mode: {s.get('TXMODE','?')}   "
           f"TX active: {s.get('TX','?')}")
     print(f"RSSI:  live {ch.get('LIVERSSI','?')} dBm   packet {ch.get('PACKETRSSI','?')} dBm   "
@@ -126,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("stack", nargs="?", help="Limit to one stack")
     p_install.add_argument("--check", action="store_true", help="Dry run (plan only)")
     p_install.add_argument("--yes", action="store_true", help="Apply without confirmation")
-    p_install.add_argument("--source", choices=("dev", "stable", "pinned"), default="dev",
+    p_install.add_argument("--source", choices=("pinned", "dev", "stable"), default="pinned",
                            help="Version to clone: latest dev / latest stable / pinned")
 
     p_help = sub.add_parser("help", help="Detailed help on a topic")
@@ -155,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_daemon.add_argument("--feed", action="store_true", help="Show recent RX/TX activity")
     p_daemon.add_argument("--yes", action="store_true", help="Apply --set without confirmation")
 
-    for name in ("update", "rollback", "repair", "uninstall"):
+    for name in ("update", "uninstall"):
         sp = sub.add_parser(name, help=f"{name.capitalize()} a stack/component")
         sp.add_argument("target", nargs="?", default="", help="Stack/component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
@@ -163,7 +168,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_test = sub.add_parser("test", help="Run host tests, or a bounded TX test with --tx")
     p_test.add_argument("target", help="Stack/component id")
     p_test.add_argument("--tx", action="store_true", help="TX-capable test (real RF, dummy loads)")
-    p_test.add_argument("--live", action="store_true", help="Run a live test")
     p_test.add_argument("--yes", action="store_true", help="Non-interactive confirm")
 
     p_web = sub.add_parser("web", help="Start the local operator web console")
@@ -214,9 +218,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "stack":
         if args.stack_action == "start":
-            return _apply_flow(lambda a: svc.start(args.stack, apply=a), yes=args.yes)
+            return _apply_flow(lambda a: svc.run_action("start", args.stack, apply=a),
+                               yes=args.yes)
         if args.stack_action == "stop":
-            return _apply_flow(lambda a: svc.stop(args.stack, apply=a), yes=args.yes)
+            return _apply_flow(lambda a: svc.run_action("stop", args.stack, apply=a),
+                               yes=args.yes)
         parser.parse_args(["stack", "--help"])
         return 1
     if args.command == "build":
@@ -235,15 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         return _render_daemon(svc.daemon_view(args.band))
     if args.command == "update":
         return _apply_flow(lambda a: svc.update(args.target, apply=a), yes=args.yes)
-    if args.command == "repair":
-        return _apply_flow(lambda a: svc.repair(args.target, apply=a), yes=args.yes)
-    if args.command == "rollback":
-        return _apply_flow(lambda a: svc.rollback(args.target, apply=a), yes=args.yes)
     if args.command == "uninstall":
         return _apply_flow(lambda a: svc.uninstall(args.target, apply=a), yes=args.yes)
     if args.command == "test":
         return _apply_flow(
-            lambda a: svc.test(args.target, tx=args.tx, live=args.live, apply=a),
+            lambda a: svc.test(args.target, tx=args.tx, apply=a),
             yes=args.yes)
     if args.command == "web":
         from lhpc.adapters.web.app import run_server

@@ -21,10 +21,6 @@ from collections import defaultdict
 from .model import Component, ResourceClaim, ResourceConflict, ResourceMode
 
 
-def declared_claims(component: Component) -> list[ResourceClaim]:
-    return list(component.resources)
-
-
 def _conflicting(a: ResourceMode, b: ResourceMode) -> bool:
     blocking = {ResourceMode.EXCLUSIVE, ResourceMode.COOPERATIVE, ResourceMode.PROVIDER}
     if a not in blocking or b not in blocking:

@@ -48,7 +48,7 @@ def test_run_job_writes_log_and_reports_success(tmp_path):
     argv = ["echo", "hi"]
     fake = FakeSystem(commands={tuple(argv): CommandResult(0, "hi\n", "")})
     res = run_job(fake.system.runner, name="t", argv=argv, cwd=None,
-                  logs_dir=tmp_path / "logs")
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path))
     assert res.ok and res.tail == ["hi"]
     assert (tmp_path / "logs" / "t.log").read_text() == "hi\n"
 
@@ -57,21 +57,22 @@ def test_run_job_failure_state(tmp_path):
     argv = ["false"]
     fake = FakeSystem(commands={tuple(argv): CommandResult(1, "", "boom")})
     res = run_job(fake.system.runner, name="t", argv=argv, cwd=None,
-                  logs_dir=tmp_path / "logs")
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path))
     assert not res.ok and res.returncode == 1
 
 
 def test_stop_without_process_identity(tmp_path):
+    # No ownership record and no process identity -> nothing owned to stop.
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE)
-    killed, note = _life(FakeSystem().system, tmp_path).stop(comp)
-    assert killed == [] and "no process" in note
+    res = _life(FakeSystem().system, tmp_path).stop(comp)
+    assert res.outcome.value == "already_stopped" and res.ok
 
 
 def test_stop_no_matching_process(tmp_path):
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
                      process=ProcessSpec(exec_name="nope"))
-    killed, note = _life(FakeSystem().system, tmp_path).stop(comp)
-    assert killed == [] and "no matching process" in note
+    res = _life(FakeSystem().system, tmp_path).stop(comp)
+    assert res.outcome.value == "already_stopped" and res.ok
 
 
 def test_logs_tails_component_log(tmp_path):

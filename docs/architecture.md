@@ -35,11 +35,11 @@ render the returned `ActionResult`. The web adapter calls the service directly
 
 ## Manifest and config layers
 
-- **Manifest** (`config/manifest.example.toml`): stacks → components. Each component
-  declares its `kind`, build/run/test commands, source (remote/branch/pin), resource
-  claims, run params and config-file params.
+- **Manifest** (`lhpc/data/manifest.example.toml`, shipped as package data): stacks →
+  components. Each component declares its `kind`, build/run/test commands, source
+  (remote/branch/pin), resource claims, run params and config-file params.
 - **Config**, merged in order:
-  1. tracked defaults (`config/defaults.toml`) + the manifest;
+  1. tracked defaults (`lhpc/data/defaults.toml`) + the manifest;
   2. operator overrides — `~/loraham-pi-control/config/local.toml` (callsign, remotes);
   3. secrets — `config/secrets.toml`, mode `0600` (never tracked, never in output);
   4. per-stack settings — `config/stacks/<id>[@band].toml`, written from the Config page.
@@ -77,3 +77,22 @@ CSRF token; page loads call only bounded read-only service methods. Every respon
 `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
 no-referrer`, `Content-Security-Policy: default-src 'self'`; Jinja autoescaping is on.
 Exposing it to a network would need explicit auth + HTTPS.
+
+## Safety hardening
+
+All normal lifecycle execution is **structured argv with `shell=False`** (`core/commands.py`
+builds argv from a manifest token template; typed pre/post steps run in Python or a
+generated launcher — no shell). User values are validated by type (`core/validators.py`)
+and become individual argv tokens; they cannot inject. Each launch is recorded with
+full process identity (`state/owned/`); `stop` is record-driven and identity-verified,
+signalling only an LHPC-owned session leader whose pid/start-time/pgid/sid/exec/argv
+still match (the daemon/iGate run foreground, no `-d`). `resolve_source` confines source
+dirs lexically (links allowed, observe-only, never built/tested into); `under` adds
+symlink-escape rejection for mutable runtime paths, and atomic writes / log opens refuse
+a pre-existing symlink leaf (`O_NOFOLLOW`). The Config page is one validate-first,
+all-or-recoverable bundle transaction; its journal uses logical target kinds + an
+allowlist and blocks fail-closed on any malformed/malicious journal. Lifecycle stop is
+typed (`core/outcomes.py`): a verified stop requires process cessation AND ready-endpoint
+disappearance, markers clear only on a verified stop, and restart/owner-stop/cascade
+propagate typed failures. End-to-end `CompResult` aggregation through the start loop and a
+wrapper execution-time revalidation helper remain open — see `docs/hardening-0.1.md`.

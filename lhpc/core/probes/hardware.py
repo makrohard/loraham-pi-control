@@ -30,10 +30,6 @@ def check_char_device(system: System, path: str) -> Check:
     return Check(path, False, "present but not a character device")
 
 
-def check_path(system: System, path: str, label: str) -> Check:
-    return Check(label, system.fs.exists(path), "present" if system.fs.exists(path) else "absent")
-
-
 def check_systemctl(system: System, user: bool) -> Check:
     argv = ["systemctl"]
     if user:

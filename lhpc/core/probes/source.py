@@ -60,7 +60,11 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
         ["git", "-C", abs_path, "status", "--porcelain", "--untracked-files=no"],
         timeout=_TIMEOUT_S,
     )
-    dirty = bool(status_res.returncode == 0 and status_res.stdout.strip())
+    if status_res.timed_out or status_res.returncode != 0:
+        # Can't determine cleanliness -> report UNKNOWN rather than assuming clean.
+        ev["error"] = (status_res.stderr or "git status failed").strip()[:120]
+        return SourceProbe(SourceState.UNKNOWN, evidence=ev)
+    dirty = bool(status_res.stdout.strip())
     if dirty:
         ev["dirty"] = "yes"
         return SourceProbe(SourceState.DIRTY, head=head, version=version, evidence=ev)

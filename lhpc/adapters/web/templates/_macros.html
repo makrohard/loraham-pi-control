@@ -45,14 +45,6 @@
 {% endif %}
 {% endmacro %}
 
-{# Recovery actions (detail page). #}
-{% macro stack_actions_more(stack_id) %}
-<div class="actbar">
-  {{ action_btn('repair', stack_id, 'Repair') }}
-  {{ action_btn('rollback', stack_id, 'Rollback') }}
-</div>
-{% endmacro %}
-
 {# A copyable command box (needs copy.js, loaded globally). #}
 {% macro cmdbox(id, text) %}
 <div class="cmdbox">

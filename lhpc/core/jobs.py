@@ -13,6 +13,7 @@ TX safety is enforced by the lifecycle layer before a TX-capable job is built.
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -50,22 +51,48 @@ def run_job(
     argv: list[str],
     cwd: str | None,
     logs_dir: Path,
+    paths,
     timeout: float = DEFAULT_TIMEOUT_S,
+    env: dict | None = None,
 ) -> JobResult:
-    """Run one bounded command, persist its output, return a compact result."""
-    # cwd is encoded into the command so a single CommandRunner.run call suffices
-    # and stays fakeable (no separate chdir state).
-    full = (["/bin/sh", "-c", f'cd {_shquote(cwd)} && exec "$@"', "lhpc-job", *argv]
-            if cwd else argv)
-    result = runner.run(full, timeout=timeout)
+    """Run one bounded command (structured argv, shell=False), persist its output,
+    return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
 
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    log_path = logs_dir / f"{name}.log"
-    output = (result.stdout or "") + (result.stderr or "")
+    Log setup goes through the authoritative `runtime_fs` (contained, O_NOFOLLOW
+    create/truncate) and happens BEFORE execution: a symlinked or inaccessible log leaf is
+    a TYPED `FAILED` result and the command is NOT run. A failure to persist the output is
+    likewise typed — never a silently-successful job with a missing log."""
+    from . import runtime_fs
+    from .paths import PathContainmentError
+    # A job name is controller-derived, but guard the leaf so a planted symlinked log
+    # can't redirect output elsewhere.
+    safe_name = name if ("/" not in name and ".." not in name and "\x00" not in name) else "job"
+    log_path = logs_dir / f"{safe_name}.log"
     try:
-        log_path.write_text(output, encoding="utf-8")
-    except OSError:
-        pass
+        runtime_fs.ensure_dir(paths, logs_dir)
+        log_fh = runtime_fs.open_log_truncate(paths, log_path)
+    except (OSError, PathContainmentError) as exc:
+        # A symlinked/non-directory logs parent (PathContainmentError) is a TYPED failure;
+        # the runner is NOT invoked when log setup failed.
+        return JobResult(name=name, state=JobState.FAILED, returncode=126, log_path="",
+                         tail=[f"job log could not be created safely: {exc}"])
+
+    try:
+        result = runner.run(argv, timeout=timeout, cwd=cwd, env=env)
+        output = (result.stdout or "") + (result.stderr or "")
+        try:
+            log_fh.write(output)
+            log_fh.flush()
+            os.fsync(log_fh.fileno())
+        except OSError as exc:
+            return JobResult(name=name, state=JobState.FAILED, returncode=126,
+                             log_path=str(log_path),
+                             tail=[f"job output could not be persisted: {exc}"])
+    finally:
+        try:
+            log_fh.close()
+        except OSError:
+            pass
 
     if result.timed_out:
         state = JobState.TIMEOUT
@@ -80,18 +107,20 @@ def run_job(
 
 
 def tail_log(log_path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> list[str]:
-    """Bounded read of the TAIL of a job/service log — reads at most the last
-    `max_bytes` (logs can grow large), then returns the last `lines` lines."""
+    """Bounded TAIL read of a log, opened with O_NOFOLLOW so a swapped-in symlink leaf is
+    refused (never followed). Reads at most the last `max_bytes`, returns the last
+    `lines` lines. Used for EXTERNAL logs (e.g. the daemon's /tmp log); runtime-owned logs
+    tail through `runtime_fs.tail` (containment-checked)."""
     try:
-        size = log_path.stat().st_size
-        with log_path.open("rb") as fh:
+        fd = os.open(str(log_path), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return []
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            size = os.fstat(fh.fileno()).st_size
             if size > max_bytes:
                 fh.seek(size - max_bytes)
             data = fh.read()
     except OSError:
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
-
-
-def _shquote(value: str) -> str:
-    return "'" + value.replace("'", "'\\''") + "'"

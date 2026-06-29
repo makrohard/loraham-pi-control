@@ -14,6 +14,7 @@ Verified against daemon 111a (config_status.h / daemon_stats.cpp).
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -21,6 +22,10 @@ from .probes import System
 
 _READ_TIMEOUT = 1.0
 _MAX = 4096
+_MAX_LINE = 1024        # max bytes in the parsed first status line
+_MAX_TOKENS = 64        # max KEY=VALUE tokens parsed from a status line
+_MAX_TOKEN_LEN = 128    # max bytes in a single KEY=VALUE token
+_KEY_RE = re.compile(r"[A-Za-z0-9_]+")        # daemon CONF key grammar
 
 # Live SET keys the daemon (hardening build) accepts on the CONF socket, verified
 # against config_dispatch.h (TX/CAD monitoring) + config_validate.cpp/config_apply.cpp
@@ -52,8 +57,6 @@ _ALLOWED_SET_INT: dict[str, tuple[int, int]] = {
     "CR": (5, 8),
     "PREAMBLE": (6, 65535),
 }
-# Free-form keys with a custom validator (frequency MHz, sync word hex/dec).
-_ALLOWED_SET_FREE = ("FREQ", "SYNC")
 
 
 @dataclass
@@ -65,27 +68,93 @@ class DaemonView:
     channel: dict[str, str] = field(default_factory=dict)
     error: str = ""
 
+    @property
+    def radio_state(self) -> str:
+        """The daemon-reported RADIO state (READY/FAILED/UNINITIALIZED), upper-cased;
+        "" when unreachable or the daemon did not report RADIO."""
+        return self.status.get("RADIO", "").upper() if self.reachable else ""
+
+    @property
+    def ready(self) -> bool:
+        """True ONLY when the band is reachable AND the daemon reports RADIO=READY.
+        A reachable daemon reporting RADIO=FAILED or RADIO=UNINITIALIZED is NOT ready:
+        it never serves a usable radio band and never permits a dependent launch.
+        (A valid CONF response alone is `reachable`, not `ready`.)"""
+        return self.reachable and self.radio_state == "READY"
+
+
+# The daemon serves exactly these bands; only they have a CONF socket. Validated at
+# every public boundary so a caller can never make us build an arbitrary socket path.
+ALLOWED_BANDS = ("433", "868")
+
+
+def is_valid_band(band) -> bool:
+    return isinstance(band, str) and band in ALLOWED_BANDS
+
+
+class InvalidBand(ValueError):
+    """Raised when a band is not one the daemon serves (never build a path from it)."""
+
 
 def conf_socket(band: str) -> str:
+    """The daemon CONF socket path for a VALIDATED band. Refuses any band that is not
+    433/868 so a direct caller can never construct `/tmp/loraconf<arbitrary>.sock`."""
+    if not is_valid_band(band):
+        raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(ALLOWED_BANDS)})")
     return f"/tmp/loraconf{band}.sock"
 
 
+# The daemon's frequency validation is `parse_float_exact() && f > 0` and it delegates
+# the MHz range to `radio.setFrequency()`, i.e. the SX126x hardware domain that RadioLib
+# enforces (150–960 MHz). We mirror BOTH: a strict finite positive decimal (no exponent,
+# NaN, inf, or embedded whitespace) inside that hardware domain.
+_FREQ_MIN_MHZ = 150.0
+_FREQ_MAX_MHZ = 960.0
+_FREQ_RE = re.compile(r"\d+(?:\.\d+)?")   # plain decimal MHz only — no sign/exponent/space
+
+
 def _query(system: System, band: str, command: bytes, prefix: str) -> dict[str, str]:
+    """Read one bounded status line from the daemon CONF socket and parse `KEY=VALUE`
+    tokens. Fail-closed (return {}) on an oversized, over-long, over-tokenized, or
+    malformed response — a hostile/garbled daemon socket can never make us parse an
+    unbounded reply or hang."""
     raw = system.unix.request(conf_socket(band), command, _READ_TIMEOUT, _MAX)
-    line = raw.split(b"\n", 1)[0].decode("ascii", "replace").strip()
-    if not line.startswith(prefix):
+    if len(raw) >= _MAX:                    # hit the read cap -> oversized, untrusted
+        return {}
+    first = raw.split(b"\n", 1)[0]
+    if len(first) > _MAX_LINE:              # first line implausibly long -> reject
+        return {}
+    line = re.sub(r"\x1b\[[0-9;]*m", "", first.decode("ascii", "replace")).strip()
+    parts = line.split()
+    # STRICT: the FIRST token must EQUAL the expected prefix exactly (a "STATUSX"
+    # prefix or any other framing is rejected — never a startswith() match).
+    if not parts or parts[0] != prefix:
+        return {}
+    toks = parts[1:]
+    if len(toks) > _MAX_TOKENS:             # too many tokens -> reject
         return {}
     out: dict[str, str] = {}
-    for tok in line.split()[1:]:
+    for tok in toks:
+        if len(tok) > _MAX_TOKEN_LEN:       # a single token implausibly long -> reject all
+            return {}
         k, sep, v = tok.partition("=")
-        if sep:
-            out[k] = v
+        # STRICT: every remaining token must be a well-formed, non-empty KEY=VALUE —
+        # a bare/malformed token, an empty key/value, an illegal key, or a control
+        # character in the value makes the WHOLE response invalid (fail closed). A
+        # duplicate key is rejected (a well-formed daemon never repeats a key).
+        if (not sep or not _KEY_RE.fullmatch(k) or not v
+                or any(ord(c) < 32 for c in v) or k in out):
+            return {}
+        out[k] = v
     return out
 
 
 def read_view(system: System, band: str) -> DaemonView:
     """Read STATUS + STATS + CHANNEL for a band (read-only, bounded)."""
     view = DaemonView(band=band, reachable=False)
+    if not is_valid_band(band):
+        view.error = f"invalid band {band!r}"
+        return view
     try:
         view.status = _query(system, band, b"GET STATUS\n", "STATUS")
         if not view.status:
@@ -117,11 +186,17 @@ def validate_set(key: str, value: str) -> str | None:
             return f"{key} must be in [{lo}, {hi}]"
         return None
     if key == "FREQ":
-        try:
-            if float(value) <= 0:
-                raise ValueError
-        except ValueError:
-            return "FREQ must be a positive frequency in MHz"
+        # Mirror the daemon's config_value_parse_float_exact + f>0 + setFrequency domain,
+        # but STRICTLY: only a plain finite positive decimal (no exponent, NaN, inf, sign,
+        # or surrounding/embedded whitespace) inside the SX126x MHz domain is accepted.
+        if not _FREQ_RE.fullmatch(value):
+            return "FREQ must be a plain decimal MHz value (no exponent, NaN, inf, sign, or whitespace)"
+        f = float(value)                         # regex guarantees a finite decimal
+        if not math.isfinite(f) or f <= 0.0:
+            return "FREQ must be a finite positive MHz value"
+        if not (_FREQ_MIN_MHZ <= f <= _FREQ_MAX_MHZ):
+            return (f"FREQ {f:g} MHz is outside the SX126x radio domain "
+                    f"[{_FREQ_MIN_MHZ:g}, {_FREQ_MAX_MHZ:g}] MHz")
         return None
     if key == "SYNC":
         try:
@@ -153,14 +228,6 @@ _VERIFY: dict[str, tuple[bytes, str]] = {
 }
 
 
-def _status_field(text: str, field: str) -> str | None:
-    for tok in text.split():
-        k, sep, v = tok.partition("=")
-        if sep and k == field:
-            return v
-    return None
-
-
 def _norm(val: str) -> str:
     """Canonicalise for comparison: integers numerically, else upper-cased."""
     v = val.strip().upper()
@@ -170,41 +237,52 @@ def _norm(val: str) -> str:
         return v
 
 
-def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, str]:
+def is_confirmable(key: str) -> bool:
+    """True if the daemon reports this key back over a GET, so a SET can be CONFIRMED.
+    Radio params (FREQ/SF/BW/…) are applied to the chip but never echoed, so a SET of
+    them can only be reported as SENT-but-unconfirmed, never 'applied'."""
+    return key.upper() in _VERIFY
+
+
+def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bool, str]:
     """Apply one validated SET to the CONF socket and CONFIRM via read-back.
 
     The daemon applies a SET SILENTLY (no socket ack; only GET replies). So: send the
     SET, then GET the field that reports it back and check the hardware actually took
-    the value before reporting success. Returns (ok, detail):
-      * confirmed (read-back matches)         -> (True,  "… confirmed")
-      * read-back mismatch                    -> (False, "NOT applied — daemon reports …")
-      * key the daemon never reports back     -> (True,  "… sent (cannot confirm over socket)")
-      * socket unreachable                    -> (False, "CONF socket unreachable …")
-    """
+    the value before reporting success. Returns (ok, confirmed, detail):
+      * read-back matches                     -> (True,  True,  "… confirmed")
+      * key the daemon never reports back     -> (True,  False, "… SENT but UNCONFIRMED …")
+      * read-back mismatch / not reported     -> (False, False, "NOT applied — daemon reports …")
+      * invalid band / rejected / unreachable -> (False, False, …)
+    A caller must NEVER present a (True, False, …) result as 'applied' — only 'sent'."""
     err = validate_set(key, value)
     if err:
-        return False, err
+        return False, False, err
+    if not is_valid_band(band):
+        return False, False, f"invalid band {band!r}"
     key, value = key.upper(), value.upper()
-    sock = conf_socket(band)
+    sock = conf_socket(band)                     # band already validated above
     try:
         system.unix.send(sock, f"SET {key}={value}\n".encode(), _READ_TIMEOUT)
     except OSError as exc:
-        return False, f"CONF socket unreachable: {exc}"
+        return False, False, f"CONF socket unreachable: {exc}"
     if key not in _VERIFY:
-        return True, f"{key}={value} sent (radio param — the daemon does not report it " \
-                     f"back, so it cannot be confirmed over the socket; check the daemon log)"
+        return True, False, (f"{key}={value} SENT but UNCONFIRMED — a radio param the daemon "
+                             "does not report back, so it cannot be verified over the socket "
+                             "(check the daemon log)")
     cmd, field = _VERIFY[key]
+    prefix = cmd.split()[1].decode("ascii")     # b"GET STATUS\n" -> "STATUS"
     try:
-        raw = system.unix.request(sock, cmd, _READ_TIMEOUT, _MAX)
-        text = re.sub(r"\x1b\[[0-9;]*m", "", raw.decode("ascii", "replace"))
+        parsed = _query(system, band, cmd, prefix)   # bounded, fail-closed parser
     except OSError as exc:
-        return False, f"sent, but read-back failed: {exc}"
-    got = _status_field(text, field)
+        return False, False, f"sent, but read-back failed: {exc}"
+    got = parsed.get(field)
     if got is None:
-        return False, f"sent, but the daemon did not report {field} back"
+        return False, False, (f"sent, but the daemon did not report {field} back "
+                              "(or the read-back was oversized/malformed)")
     if _norm(got) == _norm(value):
-        return True, f"{key}={value} confirmed by the daemon ({field}={got})"
-    return False, f"NOT applied — daemon reports {field}={got} (expected {value})"
+        return True, True, f"{key}={value} confirmed by the daemon ({field}={got})"
+    return False, False, f"NOT applied — daemon reports {field}={got} (expected {value})"
 
 
 def allowed_settings() -> dict:

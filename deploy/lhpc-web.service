@@ -1,0 +1,63 @@
+# LoRaHAM Pi Control — web console: user-level systemd unit TEMPLATE.
+#
+# This file is a TEMPLATE. lhpc NEVER installs, enables, or starts it for you.
+# Install it MANUALLY as a *user* service (runs as your normal user, no root):
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp ~/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
+#   # (adjust ExecStart/paths/port below if your layout differs)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lhpc-web.service
+#   loginctl enable-linger "$USER"          # keep it running after logout (optional)
+#
+# Logs:      journalctl --user -u lhpc-web -f
+# Stop:      systemctl --user stop lhpc-web
+# Disable:   systemctl --user disable --now lhpc-web
+# Recovery:  systemctl --user reset-failed lhpc-web && systemctl --user restart lhpc-web
+#
+# SECURITY BOUNDARY: this binds LOOPBACK ONLY (127.0.0.1). run_server refuses any other
+# bind. Remote access is deliberately NOT provided here — it requires a separate, explicit
+# authenticated HTTPS / reverse-proxy design (future work), never a public bind.
+
+[Unit]
+Description=LoRaHAM Pi Control web console (loopback-only)
+Documentation=file:///home/%u/src/loraham-pi-control/docs/deployment.md
+After=network-online.target
+Wants=network-online.target
+# Bounded restart: if it flaps (5 starts within 60 s) systemd gives up instead of looping.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Loopback-only bind is a HARD invariant (run_server refuses anything else). Uses the
+# supported WSGI server (waitress) when installed, else the dev-server fallback.
+ExecStart=%h/src/loraham-pi-control/.venv/bin/lhpc web --host 127.0.0.1 --port 8770
+Restart=on-failure
+RestartSec=3
+
+# journald captures all output.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-web
+
+# --- conservative hardening (compatible with the runtime root + /tmp daemon sockets) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The console reads AND writes its runtime root:
+ReadWritePaths=%h/loraham-pi-control
+# It must SEE the daemon's shared Unix sockets in /tmp (/tmp/loraconf*.sock, /tmp/lora*.sock),
+# so a PRIVATE /tmp would break it — keep the shared /tmp visible:
+PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target

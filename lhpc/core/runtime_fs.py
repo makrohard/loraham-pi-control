@@ -1,0 +1,520 @@
+"""One authoritative runtime-owned filesystem API (Workstream §6).
+
+Every mutation of a controller-owned runtime path (config, state, logs, markers,
+launchers, wrappers, locks) goes through this module so containment and no-follow
+guarantees are enforced in ONE place rather than re-implemented per site.
+
+Guarantees (Linux):
+  * DESCRIPTOR-ANCHORED traversal: the runtime root is opened as a directory and each
+    parent component is opened relative to its parent's fd with `O_DIRECTORY|O_NOFOLLOW`
+    (created one component at a time when requested). A parent swapped to a symlink — or
+    to a non-directory — between validation and use is refused AT THE SYSCALL, so there is
+    no check-then-open / check-then-mutate race;
+  * a pre-existing symlink LEAF is refused (we never write/open/delete through a link);
+  * logs and locks are opened with `O_NOFOLLOW` relative to the held parent fd;
+  * `atomic_write` writes a temp leaf via the parent fd, fsyncs the file, sets mode,
+    renames via src/dst dir-fds, then fsyncs the held parent directory fd (durable);
+  * deletions are containment- and no-follow-checked, relative to the held parent fd.
+
+This is for RUNTIME STATE only. Source-tree reads/writes are a separate policy and must
+not be routed here (a linked external source is never a runtime-state target).
+"""
+
+from __future__ import annotations
+
+import os
+import stat as _stat
+from contextlib import contextmanager
+from pathlib import Path
+
+from .paths import Paths, PathContainmentError
+
+__all__ = [
+    "PathContainmentError", "resolve", "mkdir", "ensure_dir", "leaf", "atomic_write",
+    "write_marker", "write_launcher", "open_marker_excl", "open_existing_marker", "OwnedMarker", "open_log_append", "open_log_truncate", "open_lock",
+    "unlink", "chmod", "replace_symlink", "read_bytes", "read_text", "tail", "listdir",
+    "scandir_nofollow", "fsync_dir",
+]
+
+
+def _rel_parts(paths: Paths, path: Path) -> tuple[str, ...]:
+    """Decompose an absolute runtime path into safe parts relative to the runtime root.
+    Rejects an empty path or a `..` traversal before any descriptor is opened."""
+    rel = os.path.relpath(str(path), str(paths.runtime_root))
+    parts = tuple(p for p in rel.split(os.sep) if p and p != ".")
+    if not parts or ".." in parts:
+        raise PathContainmentError(f"path escapes the runtime root: {path}")
+    return parts
+
+
+@contextmanager
+def _walk_parent(paths: Paths, path: Path, *, create: bool):
+    """Descriptor-anchored descent to `path`'s PARENT under the runtime root. Yields
+    (parent_fd, leaf_name). The runtime root is opened `O_DIRECTORY|O_NOFOLLOW`; each
+    intermediate component is opened relative to its parent fd with the same flags (a
+    symlink or non-directory component raises `PathContainmentError`). With `create=True`,
+    intermediate directories are created one component at a time relative to the held
+    parent fd. Every descriptor is closed on exit."""
+    parts = _rel_parts(paths, path)
+    root = str(paths.runtime_root)
+    if create:
+        os.makedirs(root, exist_ok=True)             # the root (and its external parents)
+    # The runtime ROOT is the trusted anchor — it may itself legitimately be a symlink in
+    # the operator's setup, so it is NOT opened O_NOFOLLOW; every component UNDER it is.
+    fds = [os.open(root, os.O_RDONLY | os.O_DIRECTORY)]
+    try:
+        for comp in parts[:-1]:
+            if create:
+                try:
+                    os.mkdir(comp, 0o755, dir_fd=fds[-1])
+                except FileExistsError:
+                    pass
+            try:
+                fds.append(os.open(comp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=fds[-1]))
+            except FileNotFoundError:
+                raise                                 # missing intermediate -> leaf absent
+            except OSError as exc:                    # ELOOP (symlink) / ENOTDIR (non-dir)
+                raise PathContainmentError(
+                    f"runtime path component {comp!r} is a symlink or not a "
+                    f"directory: {exc}") from exc
+        yield fds[-1], parts[-1]
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _is_symlink_leaf(parent_fd: int, leaf: str) -> bool:
+    try:
+        st = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return _stat.S_ISLNK(st.st_mode)
+
+
+def resolve(paths: Paths, *parts: str) -> Path:
+    """A containment-checked runtime path (lexical + symlink-parent). Raises on escape."""
+    return paths.under(*parts)
+
+
+def leaf(paths: Paths, *parts: str) -> Path:
+    """A mutable runtime leaf path: contained and not a pre-existing symlink leaf."""
+    return paths.mutable_leaf(paths.under(*parts))
+
+
+def fsync_dir(directory: Path) -> None:
+    """Best-effort fsync of a directory so a create/rename/delete is durable (used for an
+    EXTERNAL directory; runtime-owned operations fsync the held parent fd directly)."""
+    try:
+        dfd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
+def ensure_dir(paths: Paths, path: Path) -> Path:
+    """Create a contained runtime directory (parents included) via descriptor-anchored
+    traversal — each component made/opened `O_DIRECTORY|O_NOFOLLOW` relative to its parent
+    fd, so a symlinked component can never redirect the creation outside the root."""
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        try:
+            os.mkdir(name, 0o755, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _stat.S_ISDIR(st.st_mode):
+            raise PathContainmentError(f"runtime dir leaf is not a directory: {path}")
+    return path
+
+
+def mkdir(paths: Paths, *parts: str) -> Path:
+    """Create (parents=True) a contained runtime directory and return it."""
+    p = paths.runtime_root.joinpath(*parts)
+    ensure_dir(paths, p)
+    return p
+
+
+def atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None:
+    """Atomically write `text` to a contained runtime leaf, descriptor-anchored: a temp
+    leaf is created via the held parent fd, fsynced, mode-set, renamed over the target via
+    src/dst dir-fds, then the parent directory fd is fsynced. Refuses a symlink leaf or an
+    escaping/symlinked-parent path."""
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        if _is_symlink_leaf(parent_fd, name):
+            raise PathContainmentError(f"refusing to write through a symlink leaf: {path}")
+        # COLLISION-SAFE temp leaf: a unique random nonce + O_CREAT|O_EXCL|O_NOFOLLOW, so we
+        # never TRUNCATE/consume an existing temp (e.g. another same-process write to the
+        # same leaf). Bounded retry on the astronomically-unlikely FileExistsError.
+        tmp, fd = None, None
+        for _ in range(64):
+            cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             mode, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError(f"could not create a unique temp file for {path}")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, mode, dir_fd=parent_fd)
+            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)                       # durable rename (parent dir entry)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+
+
+def write_marker(paths: Paths, path: Path, text: str, mode: int = 0o600) -> None:
+    """Write a small runtime state marker atomically (containment + no-follow)."""
+    atomic_write(paths, path, text, mode)
+
+
+def write_launcher(paths: Paths, path: Path, text: str) -> Path:
+    """Write a generated launcher/spec to a contained runtime leaf (no-follow)."""
+    atomic_write(paths, path, text, 0o600)
+    return paths.runtime_root.joinpath(*_rel_parts(paths, path))
+
+
+class OwnedMarker:
+    """A retained-descriptor handle for a transaction-owned marker (e.g. the source-txn
+    journal): the journal PARENT dir fd, the journal FILE fd, the leaf name, and the original
+    `st_dev`/`st_ino`. Every update/removal verifies the VISIBLE leaf (via the held parent fd,
+    no-follow) still matches that identity BEFORE and AFTER writing through the retained file
+    fd — so a replacement leaf injected after creation is never written, trusted, or removed.
+    Close releases both fds (idempotent)."""
+
+    def __init__(self, name: str, parent_fd: int, file_fd: int, st_dev: int, st_ino: int):
+        self.name = name
+        self.parent_fd = parent_fd
+        self.file_fd = file_fd
+        self.st_dev = st_dev
+        self.st_ino = st_ino
+
+    def _visible_matches(self) -> bool:
+        try:
+            st = os.stat(self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+        except OSError:
+            return False
+        return (_stat.S_ISREG(st.st_mode) and st.st_dev == self.st_dev
+                and st.st_ino == self.st_ino)
+
+    def _write_all(self, data: bytes) -> None:
+        """Write the COMPLETE payload — `os.write` may consume fewer bytes than given, so
+        loop until every byte is written."""
+        mv = memoryview(data)
+        while mv:
+            n = os.write(self.file_fd, mv)
+            if n <= 0:
+                raise OSError("short write to owned marker")
+            mv = mv[n:]
+
+    def read(self) -> bytes:
+        """Read the FULL journal payload through the RETAINED file fd, ONLY while the visible
+        leaf is still our inode. Raises OSError on a mismatch/read error (the caller treats it
+        as an unreadable/replaced journal)."""
+        if not self._visible_matches():
+            raise OSError("owned marker identity lost before read")
+        os.lseek(self.file_fd, 0, os.SEEK_SET)
+        chunks = []
+        while True:
+            b = os.read(self.file_fd, 65536)
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks)
+
+    def rewrite(self, text: str) -> bool:
+        """Rewrite the journal to `text` through the RETAINED file fd, but only while the
+        VISIBLE leaf is still our inode. Verifies visible identity before AND after the write
+        (a replacement swapped in during the write is detected), fsyncs the file. Returns
+        False on any mismatch — the caller then rolls back and retains evidence."""
+        if not self._visible_matches():
+            return False
+        try:
+            os.ftruncate(self.file_fd, 0)
+            os.lseek(self.file_fd, 0, os.SEEK_SET)
+            self._write_all(text.encode("utf-8"))       # COMPLETE write (no partial-write bug)
+            os.fsync(self.file_fd)
+        except OSError:
+            return False
+        return self._visible_matches()          # re-verify: a mid-write swap is caught here
+
+    def remove(self) -> bool:
+        """Unlink the journal ONLY if the visible leaf is still our inode, then fsync the
+        held journal parent (AFTER the unlink). Returns False (leaving any replacement leaf
+        untouched) if identity no longer matches. A tiny window between the final identity
+        observation and the `unlink` syscall is an unavoidable same-account namespace race."""
+        if not self._visible_matches():
+            return False
+        try:
+            os.unlink(self.name, dir_fd=self.parent_fd)
+        except OSError:
+            return False
+        try:
+            os.fsync(self.parent_fd)            # durable removal (parent fsync AFTER unlink)
+        except OSError:
+            pass
+        return True
+
+    def close(self) -> None:
+        for attr in ("file_fd", "parent_fd"):
+            fd = getattr(self, attr)
+            if fd is not None and fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                setattr(self, attr, -1)
+
+
+def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> "OwnedMarker":
+    """Create a NEW marker EXCLUSIVELY (`O_CREAT|O_EXCL|O_NOFOLLOW`) under a descriptor-walked
+    parent, RETAINING both the journal file fd and a dup of the parent dir fd. Raises
+    `FileExistsError` if ANY leaf already exists (regular/symlink/special/stale) — never
+    overwritten. fsyncs the file AND the parent dir (durable creation). Returns an
+    `OwnedMarker`; the caller MUST `close()` it."""
+    data = text.encode("utf-8")
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        file_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode,
+                          dir_fd=parent_fd)
+        try:
+            marker = OwnedMarker(name, os.dup(parent_fd), file_fd, 0, 0)
+            marker._write_all(data)             # COMPLETE write (loops over partial writes)
+            os.fsync(file_fd)
+            st = os.fstat(file_fd)
+            marker.st_dev, marker.st_ino = st.st_dev, st.st_ino
+        except BaseException:
+            os.close(file_fd)
+            raise
+        try:
+            os.fsync(parent_fd)                 # the new dir entry is durable
+        except OSError:
+            pass
+    return marker
+
+
+def open_existing_marker(paths: Paths, path: Path) -> "OwnedMarker":
+    """Open an EXISTING regular marker for owned handling: walk the parent no-follow, open the
+    leaf `O_RDWR|O_NOFOLLOW`, RETAIN the file fd + a dup of the parent fd, and capture its
+    device/inode. Raises OSError if the leaf is absent, a symlink, or non-regular. Used by
+    recovery so a journal it validated cannot be replaced-then-removed: every later
+    read/rewrite/remove re-verifies the visible leaf is still this exact inode. Caller MUST
+    `close()`."""
+    with _walk_parent(paths, path, create=False) as (parent_fd, name):
+        file_fd = os.open(name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            st = os.fstat(file_fd)
+            if not _stat.S_ISREG(st.st_mode):
+                raise OSError(f"marker {path} is not a regular file")
+            pfd = os.dup(parent_fd)
+        except BaseException:
+            os.close(file_fd)
+            raise
+    return OwnedMarker(name, pfd, file_fd, st.st_dev, st.st_ino)
+
+
+def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool):
+    """Open a runtime leaf relative to its descriptor-anchored parent fd. Returns the open
+    fd (the parent fds are closed; the leaf fd stays open)."""
+    with _walk_parent(paths, path, create=create_dirs) as (parent_fd, name):
+        return os.open(name, flags, mode, dir_fd=parent_fd)
+
+
+def open_log_append(paths: Paths, path: Path):
+    """Open a runtime log for append with O_NOFOLLOW, anchored to its parent fd."""
+    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                    0o644, create_dirs=True)
+    return os.fdopen(fd, "ab")
+
+
+def open_log_truncate(paths: Paths, path: Path):
+    """Create/TRUNCATE a runtime log with O_NOFOLLOW (anchored), returning a text handle."""
+    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                    0o644, create_dirs=True)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def open_lock(paths: Paths, path: Path):
+    """Open a runtime lock file for exclusive flock with O_NOFOLLOW (anchored). Caller flocks."""
+    fd = _open_leaf(paths, path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
+                    create_dirs=True)
+    return os.fdopen(fd, "w")
+
+
+def read_bytes(paths: Paths, path: Path) -> bytes:
+    """Read a contained runtime leaf as bytes, descriptor-anchored: the leaf is opened
+    `O_RDONLY|O_NOFOLLOW` relative to its parent fd, so a symlink leaf (or a parent swapped
+    to a symlink) is refused AT THE OPEN. Raises PathContainmentError on escape, OSError if
+    missing/symlinked."""
+    with _walk_parent(paths, path, create=False) as (parent_fd, name):
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        with os.fdopen(fd, "rb") as fh:
+            return fh.read()
+
+
+def read_text(paths: Paths, path: Path) -> str:
+    """No-follow text read (see `read_bytes`)."""
+    return read_bytes(paths, path).decode("utf-8")
+
+
+def tail(paths: Paths, path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> list[str]:
+    """Bounded NO-FOLLOW, descriptor-anchored tail read of a contained runtime log. A
+    missing leaf, a symlinked leaf/parent, or an escape returns []."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            with os.fdopen(fd, "rb") as fh:
+                size = os.fstat(fh.fileno()).st_size
+                if size > max_bytes:
+                    fh.seek(size - max_bytes)
+                data = fh.read()
+    except (OSError, PathContainmentError):
+        return []
+    return data.decode("utf-8", errors="replace").splitlines()[-lines:]
+
+
+def listdir(paths: Paths, path: Path) -> list[str]:
+    """List the entry NAMES of a contained runtime directory through a descriptor-anchored,
+    no-follow directory fd (the dir is opened `O_DIRECTORY|O_NOFOLLOW` relative to its
+    parent fd). A missing or symlinked/non-directory target returns []. Callers must still
+    open each entry no-follow via `read_bytes`/etc."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                return sorted(os.listdir(dfd))
+            finally:
+                os.close(dfd)
+    except (OSError, PathContainmentError):
+        return []
+
+
+def scandir_nofollow(paths: Paths, path: Path) -> list[tuple[str, bool]]:
+    """Enumerate a runtime directory through a descriptor-anchored, no-follow dir fd,
+    returning a sorted list of (entry_name, is_symlink). Unlike `listdir`, this makes the
+    security-relevant distinction a caller needs BEFORE mutating:
+      * a MISSING directory (or missing intermediate) returns [];
+      * a directory that is itself a SYMLINK, escaping, or a non-directory raises
+        PathContainmentError — an unsafe container is NEVER reported as empty.
+    Each entry's is_symlink flag comes from a no-follow lstat relative to the held dir fd,
+    so a caller can BLOCK on a symlinked entry rather than skip it."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            try:
+                dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                              dir_fd=parent_fd)
+            except FileNotFoundError:
+                return []
+            except OSError as exc:                    # ELOOP (symlink) / ENOTDIR (non-dir)
+                raise PathContainmentError(
+                    f"runtime dir {path} is a symlink or not a directory: {exc}") from exc
+            try:
+                out: list[tuple[str, bool]] = []
+                for entry in sorted(os.listdir(dfd)):
+                    try:
+                        st = os.stat(entry, dir_fd=dfd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    out.append((entry, _stat.S_ISLNK(st.st_mode)))
+                return out
+            finally:
+                os.close(dfd)
+    except FileNotFoundError:
+        return []                                      # a missing intermediate -> absent
+
+
+def unlink(paths: Paths, path: Path) -> None:
+    """Delete a contained runtime leaf safely, descriptor-anchored: never through a symlink
+    leaf (refused), never following a swapped parent. A missing leaf is a no-op."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            if _is_symlink_leaf(parent_fd, name):
+                raise PathContainmentError(f"refusing to unlink a symlink leaf: {path}")
+            try:
+                os.unlink(name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+    except FileNotFoundError:
+        pass
+
+
+def chmod(paths: Paths, path: Path, mode: int, *, create_dir: bool = False) -> None:
+    """chmod a contained runtime leaf, descriptor-anchored. Refuses to chmod THROUGH a
+    symlink leaf (never touches the link target). With `create_dir=True` the leaf is
+    created as a directory first (the mkdir-with-mode pre-step). The parent dir is fsynced.
+    A swapped/symlinked runtime parent fails closed with PathContainmentError."""
+    with _walk_parent(paths, path, create=create_dir) as (parent_fd, name):
+        if create_dir:
+            try:
+                os.mkdir(name, 0o755, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            # A `mkdir` pre-step MUST guarantee a DIRECTORY leaf: an existing regular file,
+            # special file, or symlink at the leaf is refused (never chmod'd), so a planted
+            # file can't absorb the requested mode. lstat (no-follow) relative to the fd.
+            st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if not _stat.S_ISDIR(st.st_mode):
+                raise PathContainmentError(
+                    f"mkdir pre-step leaf exists and is not a directory: {path}")
+        if _is_symlink_leaf(parent_fd, name):
+            raise PathContainmentError(f"refusing to chmod through a symlink leaf: {path}")
+        # follow_symlinks=False: even if the leaf is (racily) a symlink, never chmod its
+        # target; on a regular file/dir this sets the leaf's own mode.
+        os.chmod(name, mode, dir_fd=parent_fd, follow_symlinks=False)
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+
+
+def replace_symlink(paths: Paths, path: Path, target: str) -> None:
+    """Atomically make `path` a symlink to `target`, descriptor-anchored. May REMOVE an
+    existing symlink or regular-file leaf, but REFUSES a real directory (never rmtree). The
+    swap is done via a unique temp symlink + rename over the leaf, so a concurrent reader
+    never sees a missing link; the parent dir fd is fsynced for durability. A swapped or
+    symlinked runtime PARENT fails closed with PathContainmentError."""
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        try:
+            st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if _stat.S_ISDIR(st.st_mode):
+                raise PathContainmentError(
+                    f"refusing to replace a real directory with a symlink: {path}")
+        except FileNotFoundError:
+            pass
+        tmp = None
+        for _ in range(64):
+            cand = f".{name}.lnk-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                os.symlink(target, cand, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError(f"could not create a unique temp symlink for {path}")
+        try:
+            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise

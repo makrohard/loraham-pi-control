@@ -131,10 +131,12 @@ def test_remaining_stacks_expose_real_cli_options(tmp_path):
     svc.save_config("meshcom", {"port": "7001", "backend": "fake"})
     c = svc.stack("meshcom").component("meshcom-bridge")
     vals = svc.stack_config("meshcom")
-    cmd = c.run_cmd
+    # emit_param now returns argv TOKENS (option and value are separate entries).
+    tokens = []
     for p in c.run_params:
-        cmd = cmd.replace("{" + p.name + "}", emit_param(p, vals[p.name]))
-    assert "--port 7001" in cmd and "--backend fake" in cmd
+        tokens += emit_param(p, vals[p.name])
+    assert tokens[tokens.index("--port") + 1] == "7001"
+    assert tokens[tokens.index("--backend") + 1] == "fake"
 
 
 def test_update_toml_uncomments_sets_and_skips_blank():
@@ -179,3 +181,61 @@ def test_secrets_loaded_separately(tmp_path):
     # Secrets never leak into the effective config.
     cfg = load_config(_paths(tmp_path))
     assert "meshcom" not in cfg.values
+
+
+def test_run_param_default_uses_operator_callsign(tmp_path):
+    # The Start-page default for an operator-token run-param (igate 'call' = '{callsign}')
+    # must resolve to the configured operator callsign — matching the Config page — not
+    # show the literal placeholder. A SAVED value is used verbatim.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.config import save_operator_config, save_stack_config
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    save_operator_config(svc._paths, "DL1ABC", "JO31"); svc._config = None
+    assert svc.stack_config("igate")["call"] == "DL1ABC"      # default substituted, not '{callsign}'
+    # an explicitly saved value is NOT re-substituted
+    save_stack_config(svc._paths, "igate", {"call": "DK0XYZ"})
+    assert svc.stack_config("igate")["call"] == "DK0XYZ"
+
+
+def test_run_param_default_empty_when_operator_unset(tmp_path):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.stack_config("igate")["call"] == ""           # no '{callsign}' literal leaks
+
+
+def test_load_config_ignores_symlinked_local_toml(tmp_path):
+    # A symlinked runtime local.toml must never contribute data from outside the root.
+    import os
+    from lhpc.core.config import load_config
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir()
+    outside = tmp_path / "evil.toml"; outside.write_text('[operator]\ncallsign = "EVIL"\n')
+    os.symlink(outside, tmp_path / "config" / "local.toml")
+    cfg = load_config(Paths(runtime_root=tmp_path))
+    assert cfg.operator.callsign != "EVIL"          # symlinked-out data never contributes
+    assert cfg.diagnostics                          # surfaced as a diagnostic, not a crash
+
+
+def test_load_profiles_skips_symlinked_profile(tmp_path):
+    import os
+    from lhpc.core.profiles import load_profiles, profiles_dir
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    d = profiles_dir(paths); d.mkdir(parents=True)
+    outside = tmp_path / "evil.toml"; outside.write_text('component_id = "x"\n')
+    os.symlink(outside, d / "x.toml")               # symlinked profile leaf
+    assert load_profiles(paths) == {}               # contributes nothing
+
+
+def test_load_profiles_symlinked_dir_is_empty(tmp_path):
+    import os
+    from lhpc.core.profiles import load_profiles
+    from lhpc.core.paths import Paths
+    rt = tmp_path / "rt"; rt.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir(); (outside / "p.toml").write_text('component_id="y"\n')
+    os.symlink(outside, rt / "profiles")            # profiles/ -> outside
+    assert load_profiles(Paths(runtime_root=rt)) == {}

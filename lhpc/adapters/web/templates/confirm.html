@@ -4,7 +4,7 @@
 {% block content %}
   <p><a href="{{ url_for('stack_detail', stack_id=target) if target else url_for('dashboard') }}">&larr; back</a></p>
   <div class="card">
-    <header><h2>Confirm: {{ op }} <span class="pill">{{ target }}</span></h2></header>
+    <header><h2>Confirm: {{ op }} <span class="pill">{{ target }}{% if band %} {{ band }}{% endif %}</span></h2></header>
     <div class="body">
       {% if tx %}
         <p class="flash flash-warn"><strong>TX-capable action — transmits real RF.</strong>

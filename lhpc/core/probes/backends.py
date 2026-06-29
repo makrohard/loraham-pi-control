@@ -31,6 +31,18 @@ class CommandResult:
     stderr: str
     timed_out: bool = False
     not_found: bool = False     # the executable itself was not found
+    # On a timeout, the typed proctree.Termination outcome value ("terminated" /
+    # "already-ceased" / "unverified" / "incomplete"); "" when the run did not time out.
+    termination: str = ""
+
+    @property
+    def may_still_be_running(self) -> bool:
+        """True when the timed-out run's ORIGINAL verified session could not be proven empty
+        (`unverified`/`incomplete`) — a process may remain alive; surface it rather than assume
+        it's gone. NOTE: even a `False` here (the session was emptied) does NOT certify that a
+        descendant which escaped via `setsid()` died — that is outside the proven session and
+        is not claimed either way."""
+        return self.termination in ("unverified", "incomplete")
 
 
 @dataclass(frozen=True)
@@ -47,7 +59,8 @@ class Listener:
 
 
 class CommandRunner(Protocol):
-    def run(self, argv: list[str], timeout: float) -> CommandResult: ...
+    def run(self, argv: list[str], timeout: float,
+            cwd: str | None = None, env: dict | None = None) -> CommandResult: ...
 
 
 class ProcFs(Protocol):
@@ -125,28 +138,78 @@ for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRE
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 
+# Per-stream in-memory capture cap: keep only the last N bytes (the useful TAIL) of a
+# command's stdout/stderr, so a runaway build/test can never exhaust controller memory.
+_MAX_CAPTURE_BYTES = 128 * 1024
+
+
+def _bounded_drain(stream, sink: bytearray) -> None:
+    """Read a subprocess pipe to EOF, retaining only the last _MAX_CAPTURE_BYTES in `sink`."""
+    try:
+        for chunk in iter(lambda: stream.read(8192), b""):
+            sink.extend(chunk)
+            if len(sink) > _MAX_CAPTURE_BYTES:
+                del sink[:len(sink) - _MAX_CAPTURE_BYTES]
+    except (OSError, ValueError):
+        pass
+
 
 class RealCommandRunner:
-    def run(self, argv: list[str], timeout: float) -> CommandResult:
+    def run(self, argv: list[str], timeout: float,
+            cwd: str | None = None, env: dict | None = None) -> CommandResult:
+        import os
+        import threading
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 argv,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=_FIXED_ENV,
-                shell=False,
-                check=False,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
+                # Own session/group so a timeout can terminate the whole child TREE, not
+                # just the direct child (which would orphan a build's sub-processes).
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired:
-            return CommandResult(returncode=124, stdout="", stderr="", timed_out=True)
         except FileNotFoundError:
             return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
         except OSError as exc:  # permission, etc.
             return CommandResult(returncode=126, stdout="", stderr=str(exc))
-        return CommandResult(
-            returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
-        )
+        from .. import proctree
+        # Capture the FULL session-ownership token IMMEDIATELY after spawn (before the pid can
+        # be reused), so a later timeout only signals a session we can still prove is ours.
+        _leader_token = proctree.capture_session_token(proc.pid)
+        # BOUNDED capture: two drain threads keep only the last _MAX_CAPTURE_BYTES per stream
+        # (the useful TAIL), so a runaway build/test can never exhaust memory. Draining
+        # continuously also prevents a full-pipe write deadlock.
+        out, err = bytearray(), bytearray()
+        threads = [threading.Thread(target=_bounded_drain, args=(s, buf), daemon=True)
+                   for s, buf in ((proc.stdout, out), (proc.stderr, err))]
+        for t in threads:
+            t.start()
+        timed_out = False
+        termination = ""
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            # Terminate the WHOLE owned session (a TERM-ignoring child can outlive its
+            # parent) via the ONE shared process-tree helper — drain threads keep running.
+            # The typed outcome is surfaced on the result so a caller can see that a process
+            # may still be alive (UNVERIFIED/INCOMPLETE) rather than assume it was killed.
+            termination = proctree.terminate_session(_leader_token, os.getpid()).value
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        for t in threads:
+            t.join(timeout=2)
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
+        return CommandResult(returncode=rc, stdout=out.decode("utf-8", "replace"),
+                             stderr=err.decode("utf-8", "replace"), timed_out=timed_out,
+                             termination=termination)
 
 
 class RealProcFs:
@@ -301,7 +364,8 @@ class FakeSystem:
     calls: list[list[str]] = field(default_factory=list)
 
     # CommandRunner
-    def run(self, argv: list[str], timeout: float) -> CommandResult:
+    def run(self, argv: list[str], timeout: float,
+            cwd: str | None = None, env: dict | None = None) -> CommandResult:
         self.calls.append(list(argv))
         return self.commands.get(
             tuple(argv),
