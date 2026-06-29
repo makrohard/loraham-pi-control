@@ -1,0 +1,350 @@
+"""Injectable system-access backends.
+
+Production code depends on the small `System` facade (a command runner, a /proc
+reader, a filesystem checker and a Unix-socket client). The real implementation
+talks to the OS read-only; the fake implementation is driven entirely by data so
+tests need no hardware, no services and no subprocesses.
+
+Design rules honoured here:
+  * subprocesses run with `shell=False`, a fixed minimal environment and a hard
+    timeout — never a shell string;
+  * /proc traversal is isolated here, not mixed with rendering;
+  * every failure is captured (timeout, missing binary, permission) and returned
+    as data, never raised to callers.
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+import stat
+import subprocess
+import time
+from dataclasses import dataclass, field
+from typing import Protocol
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    not_found: bool = False     # the executable itself was not found
+
+
+@dataclass(frozen=True)
+class Listener:
+    """A local TCP socket in the LISTEN state."""
+
+    family: str                 # "ipv4" | "ipv6"
+    ip: str
+    port: int
+    inode: int
+
+
+# --- backend protocols ----------------------------------------------------
+
+
+class CommandRunner(Protocol):
+    def run(self, argv: list[str], timeout: float) -> CommandResult: ...
+
+
+class ProcFs(Protocol):
+    def cmdlines(self) -> dict[int, list[str]]: ...
+    def tcp_listeners(self) -> list[Listener]: ...
+    def owner_pid(self, inode: int, budget_s: float) -> tuple[int | None, bool]: ...
+
+
+class FileSystem(Protocol):
+    def exists(self, path: str) -> bool: ...
+    def is_socket(self, path: str) -> bool: ...
+    def is_char_device(self, path: str) -> bool: ...
+
+
+class UnixClient(Protocol):
+    def request(
+        self, path: str, payload: bytes, timeout: float, max_bytes: int
+    ) -> bytes: ...
+
+    def send(self, path: str, payload: bytes, timeout: float) -> None: ...
+
+
+# --- parsing helpers (pure; unit-tested directly) -------------------------
+
+_TCP_LISTEN = "0A"  # st field value for LISTEN
+
+
+def parse_proc_net_tcp(text: str, family: str) -> list[Listener]:
+    """Parse a /proc/net/tcp or tcp6 table, returning LISTEN sockets only."""
+    listeners: list[Listener] = []
+    for line in text.splitlines()[1:]:  # skip header
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        local, st, inode = parts[1], parts[3], parts[9]
+        if st != _TCP_LISTEN:
+            continue
+        ip_hex, _, port_hex = local.partition(":")
+        try:
+            port = int(port_hex, 16)
+            inode_i = int(inode)
+        except ValueError:
+            continue
+        listeners.append(
+            Listener(family=family, ip=_decode_hex_ip(ip_hex), port=port, inode=inode_i)
+        )
+    return listeners
+
+
+def _decode_hex_ip(ip_hex: str) -> str:
+    """Best-effort decode of the kernel's little-endian hex IP (display only)."""
+    try:
+        if len(ip_hex) == 8:  # IPv4
+            b = bytes.fromhex(ip_hex)
+            return ".".join(str(x) for x in reversed(b))
+        if len(ip_hex) == 32:  # IPv6
+            return ip_hex.lower()
+    except ValueError:
+        pass
+    return ip_hex
+
+
+# --- real implementation --------------------------------------------------
+
+# A bounded, stable environment for read-only subprocesses. HOME and the XDG vars
+# are passed through so git honours the user's config + global gitignore (otherwise
+# globally-ignored files like .claude/ show as untracked -> false "dirty") and so
+# `systemctl --user` can find its bus.
+_FIXED_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS"):
+    if os.environ.get(_k):
+        _FIXED_ENV[_k] = os.environ[_k]
+
+
+class RealCommandRunner:
+    def run(self, argv: list[str], timeout: float) -> CommandResult:
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_FIXED_ENV,
+                shell=False,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return CommandResult(returncode=124, stdout="", stderr="", timed_out=True)
+        except FileNotFoundError:
+            return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
+        except OSError as exc:  # permission, etc.
+            return CommandResult(returncode=126, stdout="", stderr=str(exc))
+        return CommandResult(
+            returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr
+        )
+
+
+class RealProcFs:
+    def cmdlines(self) -> dict[int, list[str]]:
+        result: dict[int, list[str]] = {}
+        try:
+            entries = os.listdir("/proc")
+        except OSError:
+            return result
+        for entry in entries:
+            if not entry.isdigit():
+                continue
+            pid = int(entry)
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    raw = fh.read()
+            except OSError:
+                continue
+            if not raw:
+                continue
+            argv = [a for a in raw.split(b"\x00") if a]
+            result[pid] = [a.decode("utf-8", "replace") for a in argv]
+        return result
+
+    def tcp_listeners(self) -> list[Listener]:
+        out: list[Listener] = []
+        for path, fam in (("/proc/net/tcp", "ipv4"), ("/proc/net/tcp6", "ipv6")):
+            try:
+                with open(path, encoding="ascii", errors="replace") as fh:
+                    out.extend(parse_proc_net_tcp(fh.read(), fam))
+            except OSError:
+                continue
+        return out
+
+    def owner_pid(self, inode: int, budget_s: float) -> tuple[int | None, bool]:
+        """Resolve the PID owning a socket inode, within a strict time budget.
+
+        Returns (pid_or_None, incomplete). `incomplete` is True if the budget was
+        exhausted before a definitive answer — callers must not treat that as
+        "no owner".
+        """
+        target = f"socket:[{inode}]"
+        deadline = time.monotonic() + budget_s
+        try:
+            pids = [e for e in os.listdir("/proc") if e.isdigit()]
+        except OSError:
+            return None, True
+        for entry in pids:
+            if time.monotonic() > deadline:
+                return None, True
+            fd_dir = f"/proc/{entry}/fd"
+            try:
+                fds = os.listdir(fd_dir)
+            except OSError:
+                continue
+            for fd in fds:
+                try:
+                    if os.readlink(f"{fd_dir}/{fd}") == target:
+                        return int(entry), False
+                except OSError:
+                    continue
+        return None, False
+
+
+class RealFileSystem:
+    def exists(self, path: str) -> bool:
+        return os.path.exists(path)
+
+    def is_socket(self, path: str) -> bool:
+        try:
+            return stat.S_ISSOCK(os.stat(path).st_mode)
+        except OSError:
+            return False
+
+    def is_char_device(self, path: str) -> bool:
+        try:
+            return stat.S_ISCHR(os.stat(path).st_mode)
+        except OSError:
+            return False
+
+
+class RealUnixClient:
+    def request(
+        self, path: str, payload: bytes, timeout: float, max_bytes: int
+    ) -> bytes:
+        """Connect to a Unix stream socket, send `payload`, read one bounded reply.
+
+        Stops at the first newline or `max_bytes`, whichever comes first. Raises
+        OSError on any transport problem; callers convert that to evidence.
+        """
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(path)
+            sock.sendall(payload)
+            chunks: list[bytes] = []
+            total = 0
+            while total < max_bytes:
+                chunk = sock.recv(min(512, max_bytes - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if b"\n" in chunk:
+                    break
+            return b"".join(chunks)
+
+    def send(self, path: str, payload: bytes, timeout: float) -> None:
+        """Fire-and-forget: connect, send, close. No reply is read (used for the
+        daemon's raw DATA socket, which transmits but does not answer)."""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(timeout)
+            sock.connect(path)
+            sock.sendall(payload)
+
+
+@dataclass
+class System:
+    """Facade bundling the four backends used by the probes."""
+
+    runner: CommandRunner
+    procfs: ProcFs
+    fs: FileSystem
+    unix: UnixClient
+
+
+def RealSystem() -> System:  # noqa: N802 (factory reads as a constructor)
+    return System(
+        runner=RealCommandRunner(),
+        procfs=RealProcFs(),
+        fs=RealFileSystem(),
+        unix=RealUnixClient(),
+    )
+
+
+# --- fake implementation (for tests) --------------------------------------
+
+
+@dataclass
+class FakeSystem:
+    """A fully data-driven System for tests. Build it, then read `.system`."""
+
+    commands: dict[tuple[str, ...], CommandResult] = field(default_factory=dict)
+    cmdlines_data: dict[int, list[str]] = field(default_factory=dict)
+    listeners: list[Listener] = field(default_factory=list)
+    owners: dict[int, int] = field(default_factory=dict)
+    owner_incomplete: set[int] = field(default_factory=set)
+    paths: set[str] = field(default_factory=set)
+    sockets: set[str] = field(default_factory=set)
+    char_devices: set[str] = field(default_factory=set)
+    unix_replies: dict[str, bytes] = field(default_factory=dict)
+    unix_errors: dict[str, str] = field(default_factory=dict)
+    calls: list[list[str]] = field(default_factory=list)
+
+    # CommandRunner
+    def run(self, argv: list[str], timeout: float) -> CommandResult:
+        self.calls.append(list(argv))
+        return self.commands.get(
+            tuple(argv),
+            CommandResult(returncode=127, stdout="", stderr="no fake", not_found=True),
+        )
+
+    # ProcFs
+    def cmdlines(self) -> dict[int, list[str]]:
+        return dict(self.cmdlines_data)
+
+    def tcp_listeners(self) -> list[Listener]:
+        return list(self.listeners)
+
+    def owner_pid(self, inode: int, budget_s: float) -> tuple[int | None, bool]:
+        if inode in self.owner_incomplete:
+            return None, True
+        return self.owners.get(inode), False
+
+    # FileSystem
+    def exists(self, path: str) -> bool:
+        return path in self.paths or path in self.sockets or path in self.char_devices
+
+    def is_socket(self, path: str) -> bool:
+        return path in self.sockets
+
+    def is_char_device(self, path: str) -> bool:
+        return path in self.char_devices
+
+    # UnixClient
+    sent: list[tuple[str, bytes]] = field(default_factory=list)
+
+    def request(
+        self, path: str, payload: bytes, timeout: float, max_bytes: int
+    ) -> bytes:
+        if path in self.unix_errors:
+            raise OSError(self.unix_errors[path])
+        return self.unix_replies.get(path, b"")[:max_bytes]
+
+    def send(self, path: str, payload: bytes, timeout: float) -> None:
+        if path in self.unix_errors:
+            raise OSError(self.unix_errors[path])
+        self.sent.append((path, payload))
+
+    @property
+    def system(self) -> System:
+        return System(runner=self, procfs=self, fs=self, unix=self)

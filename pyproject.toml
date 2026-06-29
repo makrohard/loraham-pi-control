@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loraham-pi-control"
+version = "0.1.0"
+description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "TBD" }
+authors = [{ name = "makrohard" }]
+
+# The CLI and probe core use only the standard library (argparse, tomllib,
+# subprocess, socket). The local web console uses Flask with server-rendered
+# Jinja templates — a small, dependency-light foundation (no SPA, no Node).
+dependencies = [
+    "flask>=3,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+lhpc = "lhpc.adapters.cli.main:main"
+
+[tool.setuptools]
+packages = [
+    "lhpc",
+    "lhpc.core",
+    "lhpc.core.probes",
+    "lhpc.adapters",
+    "lhpc.adapters.cli",
+    "lhpc.adapters.web",
+]
+
+[tool.setuptools.package-data]
+"lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,354 @@
+"""Tests for the Flask web console: rendering, escaping, 404/405, security
+headers, loopback binding, and proof that page loads are read-only."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from lhpc.adapters.web.app import _LOOPBACK_HOSTS, create_app, run_server
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.services import ControllerService
+
+
+_MUTATING = {"start", "stop", "build", "update", "test", "rollback", "repair",
+             "uninstall", "daemon_set"}
+
+
+def _real_app(tmp_path, manifest=None):
+    """App backed by a fake-system ControllerService (daemon unreachable)."""
+    def factory():
+        return ControllerService(manifest_path=manifest, system=FakeSystem().system,
+                                 paths=Paths(runtime_root=tmp_path))
+    return create_app(service_factory=factory).test_client()
+
+
+def _csrf(client, path="/stacks/daemon/config"):
+    import re
+    body = client.get(path).get_data(as_text=True)
+    m = re.search(r'name="_csrf" value="([^"]+)"', body)
+    return m.group(1) if m else ""
+
+
+class ReadOnlyGuard:
+    """Delegates read-only calls; fails the test if a mutating method is used."""
+
+    def __init__(self, service: ControllerService) -> None:
+        self._service = service
+
+    def __getattr__(self, name: str):
+        if name in _MUTATING:
+            raise AssertionError(f"web invoked mutating method '{name}'")
+        return getattr(self._service, name)
+
+
+def _client(tmp_path: Path, manifest: Path | None = None):
+    def factory():
+        svc = ControllerService(
+            manifest_path=manifest,
+            system=FakeSystem().system,
+            paths=Paths(runtime_root=tmp_path),
+        )
+        return ReadOnlyGuard(svc)
+
+    return create_app(service_factory=factory).test_client()
+
+
+def test_dashboard_ok_and_headers(tmp_path):
+    resp = _client(tmp_path).get("/")
+    assert resp.status_code == 200
+    assert resp.headers["Cache-Control"] == "no-store"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    csp = resp.headers["Content-Security-Policy"]
+    assert "default-src 'self'" in csp and "script-src 'self'" in csp
+    assert "connect-src 'self'" in csp   # allows the live-monitor fetch polling
+    assert b"LoRaHAM Pi Control" in resp.data
+
+
+def test_stack_detail_ok(tmp_path):
+    resp = _client(tmp_path).get("/stacks/meshcom")
+    assert resp.status_code == 200
+    assert b"DIRECT" in resp.data  # the corrected 433 DIRECT requirement is shown
+
+
+def test_unknown_stack_404(tmp_path):
+    assert _client(tmp_path).get("/stacks/nope").status_code == 404
+
+
+def test_non_get_405(tmp_path):
+    assert _client(tmp_path).post("/").status_code == 405
+    assert _client(tmp_path).post("/stacks/meshcom").status_code == 405
+
+
+def test_healthz(tmp_path):
+    resp = _client(tmp_path).get("/healthz")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "ok"
+
+
+def test_html_escaping(tmp_path):
+    manifest = tmp_path / "m.toml"
+    manifest.write_text(
+        '[[stack]]\n'
+        'id = "x"\n'
+        'name = "<script>alert(1)</script>"\n'
+        'summary = "s"\n'
+        '[[stack.component]]\n'
+        'id = "c"\n'
+        'name = "c"\n'
+        'kind = "service"\n'
+    )
+    resp = _client(tmp_path, manifest=manifest).get("/stacks")
+    assert resp.status_code == 200
+    assert b"<script>alert(1)</script>" not in resp.data
+    assert b"&lt;script&gt;" in resp.data
+
+
+def test_page_load_is_read_only(tmp_path):
+    # If any page handler called a mutating service method, ReadOnlyGuard would
+    # raise and these requests would 500. 200 proves the load was read-only.
+    client = _client(tmp_path)
+    assert client.get("/").status_code == 200
+    assert client.get("/stacks/daemon").status_code == 200
+
+
+def test_dashboard_is_a_control_hub(tmp_path):
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert 'class="tiles"' in body              # overview tiles
+    assert "badge badge-" in body               # status badges
+    assert 'action="/action"' in body           # stack action buttons on the stacks page
+    assert ">Run<" in body and ">Install<" in body
+    assert 'class="stackrow"' in body            # collapsed per-stack list rows
+    assert "Dependency component" in body        # deps table inside the expanded row
+
+
+def test_radio_dashboard_has_two_band_columns(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="radiogrid"' in body
+    assert 'data-radio-band="433"' in body and 'data-radio-band="868"' in body
+    assert "433 MHz" in body and "868 MHz" in body
+    # per-band: a start-stack control and a radio-config link
+    assert 'name="op" value="start"' in body
+    assert "Radio config" in body or "daemon offline" in body
+
+
+def test_menu_has_dash_apps_config(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="topnav"' in body
+    assert ">Dash<" in body and ">Apps<" in body and ">Config<" in body
+    assert ">Monitor<" not in body          # Monitor page deleted
+
+
+def test_stack_detail_has_panels_and_evidence(tmp_path):
+    body = _client(tmp_path).get("/stacks/daemon").get_data(as_text=True)
+    assert "Declared resources" in body
+    assert "Endpoints" in body
+    assert "<details>" in body              # expandable evidence, no JS needed
+
+
+def test_no_inline_style_or_script_on_pages(tmp_path):
+    # CSP is default-src 'self'; inline styles/scripts would be blocked. External
+    # same-origin <script src> is CSP-compliant, but inline scripts/styles are not.
+    import re
+    for path in ("/", "/stacks", "/stacks/meshcom"):
+        body = _client(tmp_path).get(path).get_data(as_text=True)
+        assert "style=" not in body.lower()
+        for tag in re.findall(r"<script[^>]*>", body.lower()):
+            assert "src=" in tag                 # no inline <script> blocks
+
+
+def _daemon_client(tmp_path, guard=False):
+    reply = b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+
+    def factory():
+        svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+        return ReadOnlyGuard(svc) if guard else svc
+
+    return create_app(service_factory=factory).test_client()
+
+
+def test_daemon_config_page_has_live_settings(tmp_path):
+    # Live daemon settings now live on the daemon's config page (Monitor page deleted).
+    body = _daemon_client(tmp_path).get("/stacks/daemon/config").get_data(as_text=True)
+    assert "Live radio settings" in body and 'name="_csrf"' in body
+    assert "<select name=\"value\">" in body          # enum -> dropdown
+    assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
+
+
+def test_old_monitor_page_is_gone(tmp_path):
+    assert _daemon_client(tmp_path).get("/daemon/433").status_code == 404
+
+
+def test_daemon_api_json(tmp_path):
+    j = _daemon_client(tmp_path).get("/api/daemon/433").get_json()
+    assert j["reachable"] and j["status"]["TXMODE"] == "MANAGED"
+
+
+def test_radio_set_requires_csrf(tmp_path):
+    c = _daemon_client(tmp_path)
+    r = c.post("/radio/433/set", data={"key": "TXMODE", "value": "DIRECT"})
+    assert r.status_code == 400
+
+
+def test_radio_set_applies_with_csrf(tmp_path):
+    c = _daemon_client(tmp_path)
+    token = _csrf(c)
+    r = c.post("/radio/433/set", data={"_csrf": token, "key": "TXMODE", "value": "DIRECT"})
+    assert r.status_code == 302  # applied live, redirect to daemon config
+
+
+def test_get_daemon_config_is_read_only(tmp_path):
+    # daemon_set is in _MUTATING; a GET of the config page must never call it.
+    assert _daemon_client(tmp_path, guard=True).get("/stacks/daemon/config").status_code == 200
+
+
+def test_multi_band_config_stored_per_band(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/kiss/config?band=868")     # kiss stays multi-band
+    c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
+                                        "c_tx_freq": "869.525"})
+    assert "869.525" in c.get("/stacks/kiss/config?band=868").get_data(as_text=True)
+    assert "433.900" in c.get("/stacks/kiss/config?band=433").get_data(as_text=True)  # 433 untouched
+
+
+def test_config_index_lists_stacks(tmp_path):
+    body = _client(tmp_path).get("/config").get_data(as_text=True)
+    assert "Configuration" in body and ">Configure" in body
+    assert "daemon" in body and "igate" in body
+
+
+def test_stack_page_has_action_controls(tmp_path):
+    body = _real_app(tmp_path).get("/stacks/daemon").get_data(as_text=True)
+    assert "Stack actions" in body and 'action="/action"' in body
+
+
+def test_actions_grouped_and_install_state_aware(tmp_path):
+    # fresh runtime: sources missing -> not installed -> Install shown, Build hidden
+    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "grouplabel" in body and ">Install<" in body
+    assert ">Build<" not in body
+
+
+def test_install_confirm_offers_source_versions(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "daemon"}).get_data(as_text=True)
+    assert 'name="source"' in cf and "pinned known-good" in cf and "latest dev" in cf
+
+
+def test_apps_page_shows_interactive_command_with_copy(tmp_path):
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert 'id="appcmd-chat"' in body and 'data-copy="appcmd-chat"' in body
+    assert "loraham_chat" in body and "copy.js" in body   # copyable line + handler
+
+
+def test_action_requires_csrf(tmp_path):
+    c = _real_app(tmp_path)
+    assert c.post("/action", data={"op": "start", "target": "daemon"}).status_code == 400
+
+
+def test_action_unknown_op_rejected(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    assert c.post("/action", data={"_csrf": token, "op": "evil", "target": "daemon"}).status_code == 400
+
+
+def test_start_confirm_shows_daemon_run_params(tmp_path):
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)            # daemon installed
+    binp.write_text("#!/bin/sh\n")             # and built
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "daemon"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200
+    assert 'name="p_radio"' in body and 'name="p_debug"' in body   # radio + debug inputs
+
+
+def test_start_daemon_only_on_a_band(tmp_path):
+    # The dash "Start daemon (868 only)" posts op=start target=daemon p_radio=868.
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)            # installed
+    binp.write_text("#!/bin/sh\n")             # and built
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "daemon",
+                                "p_radio": "868"})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Confirm: start" in body
+    assert 'value="868" selected' in body            # band preselected to 868
+
+
+def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
+    # Fresh runtime: igate source absent -> starting it refuses and forwards to the
+    # app page (which has the Install button) with a warning.
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "igate"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/stacks/igate")
+
+
+def test_install_confirm_shows_missing_system_deps(tmp_path):
+    # FakeSystem fs reports the ncurses header absent -> chat install warns with apt cmd.
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/chat")
+    cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "chat"}).get_data(as_text=True)
+    assert "Missing system dependencies" in cf and "libncurses-dev" in cf
+
+
+def test_install_runs_as_live_logged_job(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": token, "op": "install",
+                                "target": "igate", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert "job=" in r.headers["Location"]
+
+
+def test_action_plan_then_confirm(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    # Stage 1: no ack -> confirm page (200, not applied)
+    r1 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon"})
+    assert r1.status_code == 200 and b"Confirm: stop" in r1.data
+    # Stage 2: ack -> applies, redirect
+    r2 = c.post("/action", data={"_csrf": token, "op": "stop", "target": "daemon", "confirmed": "yes"})
+    assert r2.status_code == 302
+
+
+def test_logs_view(tmp_path):
+    assert _real_app(tmp_path).get("/logs/loraham-daemon").status_code == 200
+    assert _real_app(tmp_path).get("/logs/bogus").status_code == 404
+
+
+def test_log_api_returns_lines(tmp_path):
+    j = _real_app(tmp_path).get("/api/logs/loraham-daemon").get_json()
+    assert "lines" in j and isinstance(j["lines"], list)
+
+
+def test_build_action_redirects_to_live_log(tmp_path):
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/kiss")
+    r = c.post("/action", data={"_csrf": token, "op": "build",
+                                "target": "loraham-kiss-tnc", "confirmed": "yes"})
+    assert r.status_code == 302 and "/logs/" in r.headers["Location"]
+    assert "job=" in r.headers["Location"]
+
+
+def test_log_api_rejects_path_traversal_job(tmp_path):
+    # ?job is restricted to a bare filename.
+    j = _real_app(tmp_path).get("/api/logs/loraham-daemon?job=../../etc/passwd").get_json()
+    assert "etc/passwd" not in (j["path"] or "")
+
+
+def test_run_server_rejects_non_loopback(capsys):
+    assert run_server(host="0.0.0.0", port=8770) == 1
+    assert "loopback-only" in capsys.readouterr().out
+
+
+def test_loopback_set_is_exactly_localhost():
+    assert _LOOPBACK_HOSTS == {"127.0.0.1", "::1"}

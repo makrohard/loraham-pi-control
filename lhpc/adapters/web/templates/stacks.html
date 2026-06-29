@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "_macros.html" import stack_actions, stack_summary, cmdbox %}
+{% block title %}stacks — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+
+  <section class="tiles">
+    <div class="tile"><div class="n">{{ summary.stacks }}</div><div class="l">Stacks</div></div>
+    <div class="tile"><div class="n">{{ summary.states.get('running', 0) }}</div><div class="l">Running</div></div>
+    <div class="tile"><div class="n">{{ summary.states.get('degraded', 0) + summary.states.get('failed', 0) }}</div><div class="l">Degraded / failed</div></div>
+    <div class="tile"><div class="n">{{ observed_conflicts|length }}</div><div class="l">Active conflicts</div></div>
+  </section>
+
+  {% if not snapshot.runtime_root_exists %}
+    <p class="banner">Runtime root not installed — run this first:</p>
+    {{ cmdbox('bootstrap', 'lhpc bootstrap') }}
+  {% endif %}
+  {% if observed_conflicts %}
+    <div class="card"><header><h2>Observed resource conflicts</h2></header>
+      <div class="body">{% for c in observed_conflicts %}<p class="conflict">{{ c.message }}</p>{% endfor %}</div></div>
+  {% endif %}
+
+  <div class="card">
+    <div class="body stacklist">
+      {% for g in groups %}
+        <details class="stackrow"{% if g.jobs %} open{% endif %}>
+          <summary>
+            {{ stack_summary(g) }}
+            {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}">logs</a>{% endif %}
+            {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
+          </summary>
+          <div class="stackrow-body">
+            <p class="summary">{{ g.stack.summary }}</p>
+
+            {% for job in g.jobs %}
+              <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
+                <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
+            {% endfor %}
+
+            {{ stack_actions(g.stack.id, g.installed, g.has_source) }}
+
+            {% if g.interactive %}
+              {{ cmdbox('appcmd-' ~ g.stack.id, g.command) }}
+              <p class="muted">{% if g.running %}<span class="badge badge-running">&#10003; running</span>{% else %}
+                Interactive — click <strong>Run</strong> to ensure the daemon, then run this in a terminal.{% endif %}</p>
+            {% endif %}
+
+            {% if g.deps %}
+              <table class="deps">
+                <thead><tr><th>Dependency component</th><th>Run</th><th>Install</th><th>Version</th><th>Logs</th></tr></thead>
+                <tbody>
+                  {% for comp, st in g.deps %}
+                    <tr>
+                      <td>{{ comp.id }}{% if comp.optional %} <span class="pill">optional</span>{% endif %}</td>
+                      <td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td>
+                      <td>{{ st.source_state.value }}</td>
+                      <td class="mono">{{ st.source_version or '—' }}</td>
+                      <td><a href="{{ url_for('logs_view', target=comp.id) }}">log</a></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+
+            <p class="links">
+              <a href="{{ url_for('stack_detail', stack_id=g.stack.id) }}">Open details &rarr;</a>
+              · <a href="{{ url_for('stack_config_view', stack_id=g.stack.id) }}">config</a>
+              {% if g.bands %} · <a href="{{ url_for('stack_config_view', stack_id='daemon') }}">radio cfg</a>{% endif %}
+            </p>
+          </div>
+        </details>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}

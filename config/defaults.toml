@@ -1,0 +1,23 @@
+# LoRaHAM Pi Control — tracked default settings.
+#
+# Operator identity and secrets are NOT here — they live only in the runtime-local
+# layer (config/local.toml, config/secrets.toml under the runtime root). This file
+# is safe to commit.
+
+[web]
+host = "127.0.0.1"     # loopback only; non-loopback is rejected by the server
+port = 8770
+
+[install]
+# How `lhpc install` obtains a component's source into the runtime root:
+#   "adopt" — copy the operator's locally verified checkout (default here, since
+#             the stacks are present and tested locally), then verify the pin.
+#   "clone" — git clone the component's remote and check out its pinned commit.
+source_strategy = "adopt"
+# Where "adopt" looks for existing local checkouts (operator-overridable).
+adopt_search_root = "~/src"
+
+[operator]
+# Filled in only in the runtime-local config/local.toml (never here):
+#   callsign = "YOURCALL"
+#   locator  = "JO00aa"

@@ -1,0 +1,106 @@
+{% macro action_btn(op, target, label) %}
+<form method="post" action="{{ url_for('action') }}" class="act">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="op" value="{{ op }}">
+  <input type="hidden" name="target" value="{{ target }}">
+  <button type="submit">{{ label }}</button>
+</form>
+{% endmacro %}
+
+{# Grouped lifecycle actions for a stack — one group per line. #}
+{% macro stack_actions(stack_id, installed, has_source) %}
+{% if has_source %}
+  <div class="actline">
+    <span class="grouplabel">Source</span>
+    {% if not installed %}{{ action_btn('install', stack_id, 'Install') }}{% endif %}
+    {% if installed %}{{ action_btn('update', stack_id, 'Update') }}{{ action_btn('uninstall', stack_id, 'Uninstall') }}{% endif %}
+  </div>
+{% endif %}
+{% if installed %}
+  <div class="actline">
+    <span class="grouplabel">Setup</span>
+    <span class="act"><a href="{{ url_for('stack_config_view', stack_id=stack_id) }}"><button type="button">Configure</button></a></span>
+    {{ action_btn('build', stack_id, 'Build') }}
+    {{ action_btn('test', stack_id, 'Test') }}
+  </div>
+{% endif %}
+<div class="actline">
+  <span class="grouplabel">Run</span>
+  {{ action_btn('start', stack_id, 'Run') }}
+  {{ action_btn('stop', stack_id, 'Stop') }}
+</div>
+{% endmacro %}
+
+{# Compact one-line stack summary used on the Stacks and Config lists. #}
+{% macro stack_summary(g) %}
+<span class="ss-name">{{ g.stack.name }}</span>
+<span class="pill">{{ g.stack.id }}</span>
+{% if g.main %}{% set comp, st = g.main %}
+  <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+  <span class="pill">src: {{ st.source_state.value }}</span>
+  {% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}
+  <span class="ss-main muted">{{ comp.id }}</span>
+{% else %}
+  <span class="badge badge-{{ g.state }}">{{ g.state }}</span>
+{% endif %}
+{% endmacro %}
+
+{# Recovery actions (detail page). #}
+{% macro stack_actions_more(stack_id) %}
+<div class="actbar">
+  {{ action_btn('repair', stack_id, 'Repair') }}
+  {{ action_btn('rollback', stack_id, 'Rollback') }}
+</div>
+{% endmacro %}
+
+{# A copyable command box (needs copy.js, loaded globally). #}
+{% macro cmdbox(id, text) %}
+<div class="cmdbox">
+  <button type="button" class="copybtn" data-copy="{{ id }}" title="Copy command">⧉ copy</button>
+  <pre class="next" id="{{ id }}">{{ text }}</pre>
+</div>
+{% endmacro %}
+
+{# One run-parameter control. #}
+{% macro param_input(p, value, name) %}
+  {% if p.kind == 'flag' %}
+    <input type="checkbox" name="{{ name }}" value="1" {% if value %}checked{% endif %}>
+  {% elif p.kind == 'int' %}
+    <input type="number" name="{{ name }}" value="{{ value }}"
+           {% if p.min is not none %}min="{{ p.min }}"{% endif %}
+           {% if p.max is not none %}max="{{ p.max }}"{% endif %}>
+  {% elif p.kind == 'str' %}
+    <input type="text" name="{{ name }}" value="{{ value }}" autocomplete="off">
+  {% else %}
+    <select name="{{ name }}">
+      {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ ch }}</option>{% endfor %}
+    </select>
+  {% endif %}
+{% endmacro %}
+
+{# Grid of run parameters: globals one per row; per-band ones as band columns. #}
+{% macro param_grid(layout, values, prefix) %}
+<table class="paramgrid">
+  {% for p in layout.globals %}
+    <tr><th>{{ p.label or p.name }}</th>
+        <td{% if layout.bands %} colspan="{{ layout.bands|length }}"{% endif %}>{{ param_input(p, values.get(p.name), prefix + p.name) }}</td></tr>
+  {% endfor %}
+  {% if layout.groups %}
+    <tr><th></th>{% for b in layout.bands %}<th class="bandhead" data-band="{{ b }}">{{ b }}</th>{% endfor %}</tr>
+    {% for g in layout.groups %}
+      <tr><th>{{ g.label }}</th>
+        {% for b in layout.bands %}
+          <td data-band="{{ b }}">{% if g.byband.get(b) %}{{ param_input(g.byband[b], values.get(g.byband[b].name), prefix + g.byband[b].name) }}{% endif %}</td>
+        {% endfor %}
+      </tr>
+    {% endfor %}
+  {% endif %}
+</table>
+{% endmacro %}
+
+{# Dual status: running state + install/source state + version. #}
+{% macro dual_status(status) %}
+<span class="badge badge-{{ status.run_state.value }}">{{ status.run_state.value }}</span>
+<span class="pill">src: {{ status.source_state.value }}</span>
+{% if status.source_version %}<span class="pill mono">{{ status.source_version }}</span>{% endif %}
+{% endmacro %}

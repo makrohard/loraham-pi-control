@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% from "_macros.html" import cmdbox %}
+{% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
+       data-dash-sig="{{ dash_sig }}">
+    {% for r in radios %}
+      <div class="card radio-col" data-radio-band="{{ r.band }}">
+        <header>
+          <h2>{{ r.band }} MHz</h2>
+          <span class="badge badge-{{ 'running' if r.daemon.reachable else 'stopped' }}" id="rd-badge-{{ r.band }}">
+            {{ 'daemon live' if r.daemon.reachable else 'daemon offline' }}</span>
+        </header>
+        <div class="body">
+
+          {% if r.conflict %}
+            <p class="flash flash-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
+              {{ r.conflict|join(', ') }} are running together and will fight over the
+              radio tuning. Run only one at a time on this band.</p>
+          {% endif %}
+
+          {# --- radio config (only when the daemon serves this band) --- #}
+          {% if r.daemon.reachable %}
+            <h4>Radio config
+              <form method="post" action="{{ url_for('action') }}" class="act">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="op" value="stop">
+                <input type="hidden" name="target" value="daemon">
+                <input type="hidden" name="band" value="{{ r.band }}">
+                <input type="hidden" name="from" value="dash">
+                <button type="submit">Stop daemon ({{ r.band }})</button>
+              </form>
+            </h4>
+            <details class="monitor" open>
+              <summary>Monitor</summary>
+              <table class="monrssi">
+                <tr><th>Live RSSI</th>
+                  <td><meter id="rd-rssi-{{ r.band }}" min="-130" max="0" low="-110" high="-90" optimum="-30"
+                             value="{{ r.daemon.liverssi or '-130' }}"></meter>
+                      <span class="mono" id="rd-rssiv-{{ r.band }}">{{ r.daemon.liverssi or '?' }}</span> dBm</td></tr>
+              </table>
+              <table>
+                <tr><th>Radio</th><td class="mono" id="rd-radio-{{ r.band }}">{{ r.daemon.radio or '?' }}</td>
+                    <th>TX mode</th><td class="mono" id="rd-txmode-{{ r.band }}">{{ r.daemon.txmode or '?' }}</td></tr>
+                <tr><th>CAD state</th><td class="mono" id="rd-cad-{{ r.band }}">?</td>
+                    <th>TX active</th><td class="mono" id="rd-tx-{{ r.band }}">?</td></tr>
+                <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ r.band }}">?</td>
+                    <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ r.band }}">{{ r.daemon.cadrssi or '?' }}</td></tr>
+                <tr><th>CAD wait</th><td class="mono" id="rd-cadwait-{{ r.band }}">{{ r.daemon.cadwait or '?' }}</td>
+                    <th>Uptime</th><td class="mono" id="rd-uptime-{{ r.band }}">?</td></tr>
+                <tr><th>RX pkts</th><td class="mono" id="rd-rx-{{ r.band }}">?</td>
+                    <th>TX ok / err</th><td class="mono"><span id="rd-txok-{{ r.band }}">?</span> /
+                      <span id="rd-txerr-{{ r.band }}">?</span></td></tr>
+              </table>
+              <pre class="next feed" id="rd-feed-{{ r.band }}">(loading RX/TX activity…)</pre>
+            </details>
+          {% else %}
+            {# This column is about THIS band only — the daemon runs as an
+               independent instance per band, so don't reference the other band. #}
+            {% if not r.daemon.installed %}
+              <p class="muted">Daemon not installed. Install &amp; build the
+                <a href="{{ url_for('stack_detail', stack_id='daemon') }}">daemon stack</a> first.</p>
+            {% else %}
+              <p class="muted">Daemon not running on {{ r.band }} MHz. Start a stack below
+                (it auto-starts the daemon for this band), or start the daemon alone:</p>
+              <form method="post" action="{{ url_for('action') }}" class="act">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="op" value="start">
+                <input type="hidden" name="target" value="daemon">
+                <input type="hidden" name="p_radio" value="{{ r.band }}">
+                <input type="hidden" name="from" value="dash">
+                <button type="submit">Start daemon ({{ r.band }} only)</button>
+              </form>
+            {% endif %}
+          {% endif %}
+
+          {# --- running stack(s) on this band --- #}
+          <h4>Running on {{ r.band }}</h4>
+          {% if r.running %}
+            {% for s in r.running %}
+              <div class="runstack">
+                <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                  <span class="pill">{{ s.id }}</span></p>
+                <ul class="complist">
+                  {% for c in s.components %}
+                    <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
+                      {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
+                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stack_config_view', stack_id=s.id) }}#cfg-{{ c.id }}">config</a>{% endif %}
+                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}">log</a>{% endif %}
+                      {% for itf in c.interfaces %}
+                        {% if itf.link %}
+                          <a class="iface" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                        {% else %}
+                          <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
+                        {% endif %}
+                      {% endfor %}
+                      {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
+                        <form method="post" action="{{ url_for('action') }}" class="act">
+                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                          <input type="hidden" name="op" value="stop">
+                          <input type="hidden" name="target" value="{{ c.id }}">
+                          <input type="hidden" name="from" value="dash">
+                          <button type="submit">Stop</button>
+                        </form>
+                      {% elif c.interactive %}
+                        {% if c.blocker %}
+                          <div class="flash flash-warn">{{ c.blocker }}</div>
+                        {% else %}
+                          <div class="muted">Interactive — run it yourself:</div>
+                          {{ cmdbox('runc-' ~ c.id, c.command) }}
+                        {% endif %}
+                      {% elif c.optional and c.runnable %}
+                        <form method="post" action="{{ url_for('action') }}" class="act">
+                          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                          <input type="hidden" name="op" value="start">
+                          <input type="hidden" name="target" value="{{ c.id }}">
+                          <input type="hidden" name="from" value="dash">
+                          <button type="submit">Run</button>
+                        </form>
+                      {% endif %}</li>
+                  {% endfor %}
+                </ul>
+                <p class="actrow">
+                  <form method="post" action="{{ url_for('action') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="op" value="stop">
+                    <input type="hidden" name="target" value="{{ s.id }}">
+                    <input type="hidden" name="from" value="dash">
+                    <button type="submit">Stop</button>
+                  </form>
+                </p>
+              </div>
+            {% endfor %}
+          {% else %}
+            <p class="muted">No stack running on this radio.</p>
+          {% endif %}
+
+          {# --- interactive apps: tracked, but the operator starts them in a terminal --- #}
+          {% if r.interactive %}
+            <h4>Interactive apps</h4>
+            {% for s in r.interactive %}
+              <div class="runstack">
+                {% if s.running %}
+                  <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                    <span class="badge badge-running">&#10003; running</span>
+                    <form method="post" action="{{ url_for('action') }}" class="act">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="op" value="stop">
+                      <input type="hidden" name="target" value="{{ s.id }}">
+                      <input type="hidden" name="from" value="dash">
+                      <button type="submit">Stop</button>
+                    </form></p>
+                {% else %}
+                  <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                    <span class="badge badge-stopped">not running</span>
+                    <form method="post" action="{{ url_for('interactive_dismiss', stack_id=s.id) }}" class="act dismiss" title="Dismiss">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <button type="submit">&times;</button>
+                    </form></p>
+                  {% if s.blocker %}
+                    <p class="flash flash-warn">{{ s.name }} is <strong>{{ s.blocker }}</strong></p>
+                  {% else %}
+                    <p class="muted">Run it yourself in a terminal (daemon is ensured):</p>
+                    {{ cmdbox('cmd-' ~ s.id, s.command) }}
+                  {% endif %}
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {# --- start another stack on this band --- #}
+          {% if r.startable %}
+            <h4>Start a stack on {{ r.band }}</h4>
+            <form method="post" action="{{ url_for('action') }}" class="startform">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="op" value="start">
+              <input type="hidden" name="band" value="{{ r.band }}">
+              <input type="hidden" name="from" value="dash">
+              <select name="target">
+                {% for s in r.startable %}<option value="{{ s.id }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
+              </select>
+              <button type="submit">Start</button>
+            </form>
+          {% endif %}
+
+          <p class="links">
+            <a href="{{ url_for('stack_config_view', stack_id='daemon') }}">Radio config &amp; live tuning &rarr;</a>
+            {% if r.daemon.reachable or r.daemon.process_up %}
+              · <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
+            {% endif %}
+          </p>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='dash.js') }}" defer></script>
+{% endblock %}

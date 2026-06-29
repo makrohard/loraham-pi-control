@@ -1,0 +1,1307 @@
+# LoRaHAM Pi Control — tracked default manifest (EXAMPLE).
+#
+# A STACK is a runnable application with its dependency components (some optional)
+# in a start order. Each stack names a `main` component (the app itself); the
+# other components are its dependencies. The single `loraham-daemon` component is
+# the foundation: it is the `daemon` stack's main component and a dependency of the
+# daemon-backed app stacks (resolved across stacks via `depends_on`).
+#
+# Path model: `source.path` is RUNTIME-ROOT-relative (resolved under the runtime
+# root, default ~/loraham-pi-control). Secrets NEVER go here (config/secrets.toml).
+#
+# Resource modes: exclusive | cooperative | provider | consumer | requirement.
+
+# =====================================================================
+# Stack: daemon — the LoRaHAM daemon (radio chosen at run time)
+# =====================================================================
+[[stack]]
+id = "daemon"
+name = "LoRaHAM daemon"
+summary = "The LoRaHAM daemon. Owns the radios and exposes the sockets the app stacks use. Run with --radio 433, 868 or both."
+main = "loraham-daemon"
+
+  [[stack.component]]
+  id = "loraham-daemon"
+  name = "LoRaHAM Daemon 111a"
+  kind = "service"
+  purpose = "Device driver for the LoRa radios; provides raw/framed/CONF sockets per band."
+  tx_capable = true
+  start_order = 0
+  build = "loraham_daemon/build.sh"
+  run = "loraham_daemon/loraham_daemon --radio {radio} {debug} --tx-mode-433 {tx_433} --tx-mode-868 {tx_868} --cad-monitor-433 {cadmon_433} --cad-monitor-868 {cadmon_868} --cad-rssi-433 {cadrssi_433} --cad-rssi-868 {cadrssi_868} -d"
+  bin = "loraham_daemon/loraham_daemon"
+  test = "loraham_daemon/run_tests.sh"
+  pre = 'export LORAHAM_RUNTIME_DIR="{runtime}/state/loraham"; mkdir -p "$LORAHAM_RUNTIME_DIR"; chmod 700 "$LORAHAM_RUNTIME_DIR"'
+  log_paths = ["/tmp/lora_daemon.log"]
+
+    [[stack.component.param]]
+    name = "radio"
+    kind = "enum"
+    choices = ["both", "433", "868"]
+    default = "both"
+    label = "Radio band"
+    [[stack.component.param]]
+    name = "debug"
+    kind = "flag"
+    flag = "--debug"
+    label = "Debug logging (whole daemon, both bands)"
+    [[stack.component.param]]
+    name = "tx_433"
+    kind = "enum"
+    choices = ["managed", "direct"]
+    default = "managed"
+    label = "TX mode 433"
+    advanced = true
+    [[stack.component.param]]
+    name = "tx_868"
+    kind = "enum"
+    choices = ["managed", "direct"]
+    default = "managed"
+    label = "TX mode 868"
+    advanced = true
+    [[stack.component.param]]
+    name = "cadmon_433"
+    kind = "enum"
+    choices = ["off", "on"]
+    default = "off"
+    label = "CAD monitor 433"
+    advanced = true
+    [[stack.component.param]]
+    name = "cadmon_868"
+    kind = "enum"
+    choices = ["off", "on"]
+    default = "off"
+    label = "CAD monitor 868"
+    advanced = true
+    [[stack.component.param]]
+    name = "cadrssi_433"
+    kind = "int"
+    default = "-90"
+    min = -130
+    max = 0
+    label = "CAD RSSI 433 (dBm)"
+    advanced = true
+    [[stack.component.param]]
+    name = "cadrssi_868"
+    kind = "int"
+    default = "-90"
+    min = -130
+    max = 0
+    label = "CAD RSSI 868 (dBm)"
+    advanced = true
+
+    [stack.component.source]
+    path = "src/loraham-daemon"
+    pin_commit = "6de866ec4ba1ef305b2ebbcbee6c34d01f12ba5a"
+    pin_tag = "v111a"
+    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    branch = "hardening/daemon-tests"
+    local_dir = "loraham-daemon-hardening"
+
+    [stack.component.process]
+    exec_name = "loraham_daemon"
+
+    [[stack.component.unit]]
+    name = "loraham-daemon@433.service"
+    scope = "system"
+    [[stack.component.unit]]
+    name = "loraham-daemon@868.service"
+    scope = "system"
+
+    # Sockets are shown for reference (role=data, not run-state gating, since which
+    # bands are live depends on the chosen --radio). Readiness is used by the monitor.
+    [[stack.component.endpoint]]
+    kind = "unix"
+    address = "/tmp/loraconf433.sock"
+    role = "data"
+    readiness = "daemon-status"
+    description = "433 CONF/status socket."
+    [[stack.component.endpoint]]
+    kind = "unix"
+    address = "/tmp/loraconf868.sock"
+    role = "data"
+    readiness = "daemon-status"
+    description = "868 CONF/status socket."
+
+    [[stack.component.resource]]
+    key = "spi.bus.0"
+    kind = "spi-bus"
+    mode = "cooperative"
+    group = "spi.bus.0"
+    note = "Shared SPI bus; serialized via /run/lock/loraham. Different modules use different CS."
+    [[stack.component.resource]]
+    key = "loraham.radio.433"
+    kind = "radio-band"
+    mode = "provider"
+    [[stack.component.resource]]
+    key = "loraham.radio.868"
+    kind = "radio-band"
+    mode = "provider"
+    note = "Only claimed when --radio is 868 or both; conflicts with meshtasticd on 868."
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.433"
+    kind = "daemon-socket"
+    mode = "provider"
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.868"
+    kind = "daemon-socket"
+    mode = "provider"
+
+  [[stack.component]]
+  id = "radiolib"
+  name = "RadioLib"
+  kind = "library"
+  purpose = "C++ radio library; build-time dependency of the daemon."
+  tx_capable = false
+  optional = true
+
+    [stack.component.source]
+    path = "src/RadioLib"
+    pin_commit = "13b7c7cf84b191006da20f82bdb386f2efc96334"
+    pin_tag = "7.6.0+"
+    remote = "https://github.com/jgromes/RadioLib"
+    branch = "master"
+
+# =====================================================================
+# Stack: chat — daemon-backed APRS/chat client
+# =====================================================================
+[[stack]]
+id = "chat"
+name = "LoRaHAM Chat"
+summary = "Interactive daemon-backed APRS/chat client (loraham_chat) on 433."
+main = "loraham-chat"
+
+  [[stack.component]]
+  id = "loraham-chat"
+  name = "LoRaHAM Chat"
+  kind = "service"
+  band = "433"
+  # 433-only: the source hard-codes /tmp/lora433.sock + /tmp/loraconf433.sock.
+  purpose = "Interactive APRS/chat TUI using the daemon (manual-first)."
+  tx_capable = true
+  interactive = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  build = "gcc lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
+  # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
+  # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
+  run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat"'
+  note = "Interactive ncurses TUI (needs a real TTY; no headless mode). lhpc seeds lorachat.conf (callsign + TX/RX freq + APRS dest/path) from the Config page; the in-app Ctrl-K menu still works and saves back to it. Do not run with iGate (both retune the radio)."
+
+    [[stack.component.require]]
+    check_file = "/usr/include/ncurses.h"
+    install = "sudo apt install -y libncurses-dev"
+    note = "ncurses development headers (needed to build the chat TUI)"
+
+    [stack.component.source]
+    path = "src/LoRaHAM_Daemon"
+    remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+    local_dir = "LoRaHAM_Daemon"
+
+    # Seeded into {runtime}/config/files/lorachat.conf (KEY=VALUE, split on '=').
+    [stack.component.config_file]
+    path = "{runtime}/config/files/lorachat.conf"
+    fmt = "env"
+      [[stack.component.config_file.param]]
+      name = "call"
+      key = "CALL"
+      default = "{callsign}"
+      label = "Callsign (CALL)"
+      [[stack.component.config_file.param]]
+      name = "tx_freq"
+      key = "TX"
+      default = "433.775"
+      label = "TX frequency MHz"
+      [[stack.component.config_file.param]]
+      name = "rx_freq"
+      key = "RX"
+      default = "433.900"
+      label = "RX frequency MHz"
+      [[stack.component.config_file.param]]
+      name = "dest"
+      key = "DEST"
+      default = "ALL"
+      label = "APRS destination"
+      [[stack.component.config_file.param]]
+      name = "aprs_path"
+      key = "PATH"
+      default = "APRS,WIDE1-1"
+      label = "APRS path"
+
+    [stack.component.process]
+    exec_name = "loraham_chat"
+
+# =====================================================================
+# Stack: igate — daemon-backed APRS iGate
+# =====================================================================
+[[stack]]
+id = "igate"
+name = "LoRaHAM iGate"
+summary = "APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
+main = "loraham-igate"
+
+  [[stack.component]]
+  id = "loraham-igate"
+  name = "LoRaHAM APRS iGate"
+  kind = "service"
+  band = "433"
+  # 433-only: the source hard-codes /tmp/lora433.sock + /tmp/loraconf433.sock.
+  purpose = "APRS iGate via the daemon; beacons RF on start."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  build = "gcc -Wall -o loraham_igate loraham_iGate_106.c"
+  run = "./loraham_igate {call} {tx_freq} {rx_freq} {lat} {lon} {symbol} {digipeat} {is_interval} {rf_interval} {filter_lat} {filter_lon} {filter_radius} {relay} {repeater} -d"
+  note = "Binary 'loraham_igate' NOT present locally -> not-installed. Beacons APRS-IS + RF on start. Callsign/position from runtime config, never the repo. Radio params (SF12/BW125/CR5/POWER17) and the APRS-IS server are compile-time constants in the source."
+
+    [stack.component.source]
+    path = "src/LoRaHAM_Daemon"
+    remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+    local_dir = "LoRaHAM_Daemon"
+
+    [stack.component.process]
+    exec_name = "loraham_igate"
+
+    # iGate CLI config (all are start-time options -> apply_mode defaults to "restart").
+    # The iGate REQUIRES a callsign WITH an APRS SSID (e.g. N0CALL-10); defaults to the
+    # operator callsign but is usually overridden with the gate's own -SSID.
+    [[stack.component.param]]
+    name = "call"
+    kind = "str"
+    arg = "-c"
+    default = "{callsign}"
+    label = "iGate callsign (with -SSID, e.g. N0CALL-10)"
+    [[stack.component.param]]
+    name = "tx_freq"
+    kind = "str"
+    arg = "-t"
+    default = "433.900"
+    label = "TX frequency (MHz)"
+    [[stack.component.param]]
+    name = "rx_freq"
+    kind = "str"
+    arg = "-r"
+    default = "433.775"
+    label = "RX frequency (MHz)"
+    [[stack.component.param]]
+    name = "lat"
+    kind = "str"
+    arg = "-L"
+    default = ""
+    label = "Beacon latitude (DDMM.mmN)"
+    [[stack.component.param]]
+    name = "lon"
+    kind = "str"
+    arg = "-O"
+    default = ""
+    label = "Beacon longitude (DDDMM.mmE)"
+    [[stack.component.param]]
+    name = "symbol"
+    kind = "str"
+    arg = "-S"
+    default = ""
+    label = "APRS symbol char"
+    [[stack.component.param]]
+    name = "digipeat"
+    kind = "enum"
+    choices = ["0", "1", "2"]
+    arg = "-D"
+    default = "1"
+    label = "Digipeat (0=off,1=WIDE1-1,2=WIDE1+2)"
+    [[stack.component.param]]
+    name = "is_interval"
+    kind = "int"
+    arg = "-i"
+    default = "600"
+    min = 0
+    max = 86400
+    label = "APRS-IS beacon interval (s)"
+    advanced = true
+    [[stack.component.param]]
+    name = "rf_interval"
+    kind = "int"
+    arg = "-f"
+    default = "600"
+    min = 0
+    max = 86400
+    label = "RF beacon interval (s)"
+    advanced = true
+    [[stack.component.param]]
+    name = "filter_lat"
+    kind = "str"
+    arg = "-x"
+    default = ""
+    label = "APRS-IS filter centre lat (deg)"
+    advanced = true
+    [[stack.component.param]]
+    name = "filter_lon"
+    kind = "str"
+    arg = "-y"
+    default = ""
+    label = "APRS-IS filter centre lon (deg)"
+    advanced = true
+    [[stack.component.param]]
+    name = "filter_radius"
+    kind = "str"
+    arg = "-R"
+    default = ""
+    label = "APRS-IS filter radius (km)"
+    advanced = true
+    [[stack.component.param]]
+    name = "relay"
+    kind = "flag"
+    flag = "-m"
+    label = "Relay APRS-IS → RF (transmits!)"
+    advanced = true
+    [[stack.component.param]]
+    name = "repeater"
+    kind = "flag"
+    flag = "-p"
+    label = "Repeater-only (no APRS-IS)"
+    advanced = true
+
+# =====================================================================
+# Stack: voice — daemon-backed voice (not present locally)
+# =====================================================================
+[[stack]]
+id = "voice"
+name = "LoRaHAM Voice"
+summary = "Daemon-backed Codec2 voice over LoRa (GTK app). Configurable callsign, audio devices and per-band radio params."
+main = "loraham-voice"
+
+  [[stack.component]]
+  id = "loraham-voice"
+  name = "LoRaHAM Voice"
+  kind = "service"
+  band = "433"
+  bands = ["433", "868"]
+  purpose = "Codec2 voice over LoRa via the daemon (GTK desktop app; needs an audio device)."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  build = "gcc -o loraham_voice loraham_voice_v107.c `pkg-config --cflags --libs gtk+-3.0` -lcodec2 -lasound -lncurses -lpthread -lm"
+  # voice reads loraham_voice.conf from dirname(argv0), NOT the CWD — so we run it
+  # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
+  # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
+  pre = 'mkdir -p "{runtime}/config/files" && ln -sf "{source}/loraham_voice" "{runtime}/config/files/loraham_voice"'
+  run = 'env DISPLAY="${DISPLAY:-:0}" "{runtime}/config/files/loraham_voice"'
+  note = "GTK desktop app (needs a display/X server + an audio capture/playback device). lhpc seeds loraham_voice.conf (callsign, audio devices, per-band radio params); the in-app config dialog still works and saves back to it."
+
+    [[stack.component.require]]
+    check_file = "/usr/include/codec2/codec2.h"
+    install = "sudo apt install -y libcodec2-dev"
+    note = "Codec2 development headers"
+    [[stack.component.require]]
+    check_file = "/usr/include/gtk-3.0/gtk/gtk.h"
+    install = "sudo apt install -y libgtk-3-dev"
+    note = "GTK 3 development headers"
+    [[stack.component.require]]
+    check_file = "/usr/include/alsa/asoundlib.h"
+    install = "sudo apt install -y libasound2-dev"
+    note = "ALSA development headers"
+    [[stack.component.require]]
+    check_file = "/usr/include/ncurses.h"
+    install = "sudo apt install -y libncurses-dev"
+    note = "ncurses development headers"
+
+    [stack.component.source]
+    path = "src/LoRaHAM_Voice"
+    remote = "https://github.com/LoRaHAM/LoRaHAM_Voice.git"
+    local_dir = "LoRaHAM_Voice"
+
+    [stack.component.process]
+    exec_name = "loraham_voice"
+
+    [[stack.component.resource]]
+    key = "audio.default"
+    kind = "audio"
+    mode = "exclusive"
+    note = "Audio capture/playback device."
+
+    # Seeded into {runtime}/config/files/loraham_voice.conf (KEY=VALUE, split on '=').
+    # The app keeps both bands' params in one file; active_band selects which is used
+    # (0=433, 1=868), defaulted from the band column the app was launched on.
+    [stack.component.config_file]
+    path = "{runtime}/config/files/loraham_voice.conf"
+    fmt = "env"
+      [[stack.component.config_file.param]]
+      name = "callsign"
+      key = "callsign"
+      default = "{callsign}"
+      label = "Callsign"
+      # active_band (0=433, 1=868) is written automatically from the band the stack
+      # is started on — not shown on the Config page.
+      [[stack.component.config_file.param]]
+      name = "active_band"
+      key = "active_band"
+      default = "0"
+      band_defaults = { "433" = "0", "868" = "1" }
+      hidden = true
+      [[stack.component.config_file.param]]
+      name = "audio_capture"
+      key = "audio_capture"
+      default = "default"
+      label = "Audio capture device (ALSA)"
+      [[stack.component.config_file.param]]
+      name = "audio_playback"
+      key = "audio_playback"
+      default = "default"
+      label = "Audio playback device (ALSA)"
+      [[stack.component.config_file.param]]
+      name = "codec_mode"
+      key = "codec_mode"
+      kind = "int"
+      default = "0"
+      min = 0
+      max = 7
+      label = "Codec2 mode index"
+      advanced = true
+      # Per-band LoRa radio params: the file key carries {band}, so editing the 433
+      # config writes lora433_* and the 868 config writes lora868_* (one file holds
+      # both bands; active_band selects which is used). Defaults match the app struct.
+      [[stack.component.config_file.param]]
+      name = "freq"
+      key = "{band}_freq"
+      band_defaults = { "433" = "434.700", "868" = "869.525" }
+      default = "434.700"
+      label = "Frequency MHz"
+      [[stack.component.config_file.param]]
+      name = "sf"
+      key = "{band}_sf"
+      kind = "int"
+      band_defaults = { "433" = "7", "868" = "11" }
+      default = "7"
+      min = 7
+      max = 12
+      label = "Spreading factor (SF)"
+      [[stack.component.config_file.param]]
+      name = "bw"
+      key = "{band}_bw"
+      kind = "enum"
+      choices = ["7.8", "10.4", "15.6", "20.8", "31.25", "41.7", "62.5", "125.0", "250.0", "500.0"]
+      band_defaults = { "433" = "125.0", "868" = "250.0" }
+      default = "125.0"
+      label = "Bandwidth kHz"
+      [[stack.component.config_file.param]]
+      name = "cr"
+      key = "{band}_cr"
+      kind = "int"
+      band_defaults = { "433" = "5", "868" = "5" }
+      default = "5"
+      min = 5
+      max = 8
+      label = "Coding rate (4/CR)"
+      [[stack.component.config_file.param]]
+      name = "power"
+      key = "{band}_power"
+      kind = "int"
+      band_defaults = { "433" = "17", "868" = "10" }
+      default = "17"
+      min = 0
+      max = 20
+      label = "TX power dBm"
+      [[stack.component.config_file.param]]
+      name = "crc"
+      key = "{band}_crc"
+      kind = "enum"
+      choices = ["0", "1"]
+      band_defaults = { "433" = "1", "868" = "1" }
+      default = "1"
+      label = "CRC (0/1)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "preamble"
+      key = "{band}_preamble"
+      kind = "int"
+      band_defaults = { "433" = "8", "868" = "16" }
+      default = "8"
+      min = 6
+      max = 65535
+      label = "Preamble length"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "sync"
+      key = "{band}_sync"
+      band_defaults = { "433" = "0x12", "868" = "0x2B" }
+      default = "0x12"
+      label = "Sync word (hex)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "ldro"
+      key = "{band}_ldro"
+      kind = "enum"
+      choices = ["0", "1", "2"]
+      band_defaults = { "433" = "2", "868" = "2" }
+      default = "2"
+      label = "LDRO (0=off, 1=on, 2=auto)"
+      advanced = true
+
+# =====================================================================
+# Stack: kiss — KISS/TCP TNC (+ optional serial PTY)
+# =====================================================================
+[[stack]]
+id = "kiss"
+name = "LoRaHAM KISS TNC"
+summary = "Daemon-backed KISS/TCP TNC (port 8001) for APRS clients, with an optional serial PTY."
+main = "loraham-kiss-tnc"
+
+  [[stack.component]]
+  id = "loraham-kiss-tnc"
+  name = "LoRaHAM KISS/TCP TNC"
+  kind = "service"
+  band = "433"
+  bands = ["433", "868"]
+  purpose = "AX.25/KISS-over-TCP bridge for APRS clients; consumes the daemon sockets for the chosen band (433 or 868)."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  start_order = 1
+  build = "loraham_kiss_tnc/build.sh"
+  run = "loraham_kiss_tnc/loraham_kiss_tnc --config loraham_kiss_tnc/loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose}"
+  bin = "loraham_kiss_tnc/loraham_kiss_tnc"
+  test = "loraham_kiss_tnc/run_tests.sh"
+
+    # CLI overrides of the .conf file (all start-time). Band 868 uses its own
+    # per-band config: set 868 frequencies + the lora868f/loraconf868 sockets there.
+    [[stack.component.param]]
+    name = "kiss_port"
+    kind = "int"
+    arg = "--kiss-port"
+    default = "8001"
+    min = 1
+    max = 65535
+    label = "KISS TCP port"
+    # 868 LoRa-APRS uses the 869.4–869.65 MHz sub-band (g3: 10% duty / 500 mW) for
+    # automated stations -> 869.525 MHz. 433 keeps the LoRa-APRS split (RX 433.775 /
+    # TX 433.900). Per-band defaults are picked from the band the stack runs on.
+    [[stack.component.param]]
+    name = "rx_freq"
+    kind = "str"
+    arg = "--rx-freq"
+    band_defaults = { "433" = "433.775", "868" = "869.525" }
+    default = "433.775"
+    label = "RX frequency (MHz)"
+    [[stack.component.param]]
+    name = "tx_freq"
+    kind = "str"
+    arg = "--tx-freq"
+    band_defaults = { "433" = "433.900", "868" = "869.525" }
+    default = "433.900"
+    label = "TX frequency (MHz)"
+    [[stack.component.param]]
+    name = "kiss_host"
+    kind = "str"
+    arg = "--kiss-host"
+    default = "127.0.0.1"
+    label = "KISS bind host"
+    advanced = true
+    [[stack.component.param]]
+    name = "data_socket"
+    kind = "str"
+    arg = "--data-socket"
+    band_defaults = { "433" = "/tmp/lora433f.sock", "868" = "/tmp/lora868f.sock" }
+    default = "/tmp/lora433f.sock"
+    label = "Daemon data socket"
+    advanced = true
+    [[stack.component.param]]
+    name = "conf_socket"
+    kind = "str"
+    arg = "--conf-socket"
+    band_defaults = { "433" = "/tmp/loraconf433.sock", "868" = "/tmp/loraconf868.sock" }
+    default = "/tmp/loraconf433.sock"
+    label = "Daemon config socket"
+    advanced = true
+    [[stack.component.param]]
+    name = "rx_only"
+    kind = "flag"
+    flag = "--rx-only"
+    label = "RX only (no TX)"
+    advanced = true
+    [[stack.component.param]]
+    name = "verbose"
+    kind = "flag"
+    flag = "--verbose"
+    label = "Verbose logging"
+    advanced = true
+
+    [stack.component.source]
+    path = "src/loraham-kiss-tnc"
+    pin_commit = "fdaf5f0bd31c767ace112706c74987651d770d83"
+    pin_tag = "v0.4.0"
+    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    branch = "feature/loraham-kiss-tnc"
+
+    [stack.component.process]
+    exec_name = "loraham_kiss_tnc"
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:8001"
+    role = "listener"
+    description = "KISS over TCP"
+    client = true
+    scheme = "kiss"
+
+    [[stack.component.resource]]
+    key = "tcp.port.8001"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.433"
+    kind = "daemon-socket"
+    mode = "consumer"
+
+  [[stack.component]]
+  id = "loraham-kiss-serial"
+  name = "KISS serial (PTY)"
+  kind = "service"
+  band = "433"
+  purpose = "Optional socat PTY <-> KISS/TCP(8001) bridge for serial-KISS clients."
+  tx_capable = true
+  optional = true
+  depends_on = ["loraham-kiss-tnc"]
+  start_order = 2
+  run = "loraham_kiss_tnc/start-serial-kiss.sh"
+  note = "Optional. Exposes PTY /tmp/loraham_kiss; needs socat."
+
+    [stack.component.source]
+    path = "src/loraham-kiss-tnc"
+    pin_commit = "fdaf5f0bd31c767ace112706c74987651d770d83"
+    pin_tag = "v0.4.0"
+    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    branch = "feature/loraham-kiss-tnc"
+
+    [stack.component.process]
+    exec_name = "socat"
+
+    [[stack.component.require]]
+    cmd = "socat"
+    install = "sudo apt install socat"
+
+    [[stack.component.endpoint]]
+    kind = "path"
+    address = "/tmp/loraham_kiss"
+    role = "provider"
+    description = "Serial KISS PTY (socat)"
+    client = true
+    scheme = "serial"
+
+    [[stack.component.resource]]
+    key = "serial.loraham-kiss"
+    kind = "serial"
+    mode = "exclusive"
+
+# =====================================================================
+# Stack: meshtastic — native meshtasticd on 868 (direct SPI)
+# =====================================================================
+[[stack]]
+id = "meshtastic"
+name = "Meshtastic"
+summary = "Native meshtasticd on the RF95 (433 or 868). Run ROOTLESS by lhpc as a user process. Direct SPI — conflicts with the LoRaHAM daemon."
+main = "meshtastic"
+
+  [[stack.component]]
+  id = "meshtastic"
+  name = "Meshtastic (meshtasticd)"
+  kind = "service"
+  band = "868"
+  bands = ["433", "868"]
+  purpose = "meshtasticd driving the RF95 directly; lhpc starts/stops it rootless with a runtime config."
+  tx_capable = true
+  pre = 'mkdir -p "{runtime}/state/meshtasticd/ssl"'
+  run = "/usr/bin/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
+  # After meshtasticd is listening on the API, set the LoRa region (TX stays
+  # disabled while region is UNSET). Idempotent; runs detached. Tries the local
+  # meshtastic CLI then PATH.
+  post_start = 'sleep 12; M="$HOME/.local/bin/meshtastic"; [ -x "$M" ] || M=meshtastic; "$M" --host 127.0.0.1 --set lora.region {region}; "$M" --host 127.0.0.1 --set-owner "{node_name}" --set-owner-short "{node_short}"'
+  note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). You are already in the spi+gpio groups, so lhpc runs/stops it WITHOUT root. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
+
+    [[stack.component.param]]
+    name = "region"
+    kind = "enum"
+    choices = ["EU_868", "EU_433", "US", "ANZ", "CN", "JP", "KR", "IN", "RU", "UA_868", "UNSET"]
+    default = "EU_868"
+    band_defaults = { "433" = "EU_433", "868" = "EU_868" }
+    label = "LoRa region (sets TX legality; required for TX)"
+    [[stack.component.param]]
+    name = "node_name"
+    kind = "str"
+    default = "LoRaHAM Pi"
+    label = "Node name (long)"
+    [[stack.component.param]]
+    name = "node_short"
+    kind = "str"
+    default = "LHPi"
+    label = "Node name (short, ~4 chars)"
+
+    [stack.component.source]
+    path = "src/LoRaHAM_Pi"
+    remote = "https://github.com/LoRaHAM/LoRaHAM_Pi.git"
+    local_dir = "LoRaHAM_Pi"
+    branch = "main"
+
+    [stack.component.process]
+    exec_name = "meshtasticd"
+
+    [[stack.component.require]]
+    check_file = "/usr/bin/meshtasticd"
+    install = "sudo apt install -y meshtasticd"
+    note = "meshtasticd binary (Meshtastic apt repository)"
+    [[stack.component.require]]
+    check_file = "/dev/spidev0.0"
+    install = "Enable SPI: add 'dtparam=spi=on' and 'dtoverlay=spi0-0cs' to /boot/firmware/config.txt, then reboot"
+    note = "SPI device (RF95 on SPI0)"
+
+    # meshtasticd YAML config generated from the LoRaHAM base, per band (the Lora
+    # pins differ between the 433 and 868 boards). Written to the runtime root so no
+    # root is needed; run uses -c on it. Web port forced >1024 for rootless.
+    # Node identity (owner long/short) is a DEVICE setting saved in the node's
+    # prefs, not the YAML — so it is set via the API after start (see post_start),
+    # not here. This file holds the hardware/web/log config only.
+    [stack.component.config_file]
+    path = "{runtime}/config/files/meshtasticd.yaml"
+    fmt = "yaml-update"
+    base = "meshtastic/config.yaml"
+      [[stack.component.config_file.param]]
+      name = "web_port"
+      key = "Port"
+      section = "Webserver"
+      kind = "int"
+      default = "9443"
+      min = 1025
+      max = 65535
+      label = "Web UI port (>1024 for rootless)"
+      [[stack.component.config_file.param]]
+      name = "ssl_key"
+      key = "SSLKey"
+      section = "Webserver"
+      kind = "str"
+      default = "{runtime}/state/meshtasticd/ssl/private_key.pem"
+      label = "SSL key path (writable, for rootless web)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "ssl_cert"
+      key = "SSLCert"
+      section = "Webserver"
+      kind = "str"
+      default = "{runtime}/state/meshtasticd/ssl/certificate.pem"
+      label = "SSL cert path (writable, for rootless web)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "loglevel"
+      key = "LogLevel"
+      section = "Logging"
+      kind = "enum"
+      choices = ["debug", "info", "warn", "error"]
+      default = "info"
+      label = "Log level"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "max_nodes"
+      key = "MaxNodes"
+      section = "General"
+      kind = "int"
+      default = "200"
+      label = "Max nodes"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "ble"
+      key = "BLE"
+      section = "Interfaces"
+      kind = "flag"
+      label = "Bluetooth interface"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "mqtt"
+      key = "MQTT"
+      section = "Interfaces"
+      kind = "flag"
+      label = "MQTT interface"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "cs"
+      key = "CS"
+      section = "Lora"
+      kind = "int"
+      default = "7"
+      band_defaults = { "433" = "8", "868" = "7" }
+      label = "Lora CS pin"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "irq"
+      key = "IRQ"
+      section = "Lora"
+      kind = "int"
+      default = "16"
+      band_defaults = { "433" = "25", "868" = "16" }
+      label = "Lora IRQ pin (DIO0)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "reset"
+      key = "Reset"
+      section = "Lora"
+      kind = "int"
+      default = "6"
+      band_defaults = { "433" = "5", "868" = "6" }
+      label = "Lora Reset pin"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "busy"
+      key = "Busy"
+      section = "Lora"
+      kind = "int"
+      default = "12"
+      band_defaults = { "433" = "24", "868" = "12" }
+      label = "Lora Busy pin (DIO1)"
+      advanced = true
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:4403"
+    role = "listener"
+    description = "Meshtastic API"
+    client = true
+    scheme = "tcp"
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:9443"
+    role = "listener"
+    description = "Meshtastic web GUI"
+    client = true
+    scheme = "https"
+
+    [[stack.component.resource]]
+    key = "loraham.radio.868"
+    kind = "radio-band"
+    mode = "exclusive"
+    note = "Owns the RF95 -> conflicts with the LoRaHAM daemon (shared SPI radio)."
+    [[stack.component.resource]]
+    key = "loraham.radio.433"
+    kind = "radio-band"
+    mode = "exclusive"
+
+# =====================================================================
+# Stack: meshcom — MeshCom firmware in QEMU (433 DIRECT)
+# =====================================================================
+[[stack]]
+id = "meshcom"
+name = "MeshCom (QEMU)"
+summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon DIRECT. Order: daemon -> bridge -> GPS -> QEMU."
+main = "meshcom-qemu"
+
+  [[stack.component]]
+  id = "meshcom-bridge"
+  name = "MeshCom <-> LoRaHAM bridge"
+  kind = "service"
+  band = "433"
+  purpose = "TCP(7000) <-> daemon Unix-socket bridge (--backend loraham)."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "DIRECT"
+  start_order = 1
+  build = "cmake -S . -B build && cmake --build build"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"
+  bin = "build/meshcom-loraham-bridge"
+
+    # Bridge CLI (start-time). RF params are NOT CLI — they arrive from the firmware
+    # over the XR protocol. The port must match the firmware's EXTERNAL_RADIO_PORT.
+    [[stack.component.param]]
+    name = "port"
+    kind = "int"
+    arg = "--port"
+    default = "7000"
+    min = 0
+    max = 65535
+    label = "Control TCP port (= firmware XR_PORT)"
+    [[stack.component.param]]
+    name = "bind"
+    kind = "str"
+    arg = "--bind"
+    default = "127.0.0.1"
+    label = "Bind address (loopback recommended)"
+    advanced = true
+    [[stack.component.param]]
+    name = "backend"
+    kind = "enum"
+    choices = ["loraham", "fake"]
+    arg = "--backend"
+    default = "loraham"
+    label = "Radio backend (fake = no RF)"
+    advanced = true
+    [[stack.component.param]]
+    name = "password_file"
+    kind = "str"
+    arg = "--password-file"
+    default = ""
+    label = "HMAC password file (blank = open auth)"
+    advanced = true
+
+    [stack.component.source]
+    path = "src/meshcom-loraham-bridge"
+    pin_commit = "fe85c7900f7c095b2e28011ce5fec6125f5fe02a"
+    pin_tag = "fe85c79"
+    remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
+    branch = "main"
+    strategy = "link"
+
+    [stack.component.process]
+    exec_name = "meshcom-loraham-bridge"
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:7000"
+    role = "listener"
+    description = "MeshCom firmware client port."
+
+    [[stack.component.resource]]
+    key = "tcp.port.7000"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.433"
+    kind = "daemon-socket"
+    mode = "consumer"
+    [[stack.component.resource]]
+    key = "loraham.profile.433"
+    kind = "daemon-profile"
+    mode = "requirement"
+    requirement = "DIRECT"
+
+  [[stack.component]]
+  id = "meshcom-gps-relay"
+  name = "MeshCom GPS relay"
+  kind = "service"
+  purpose = "Feeds NMEA into the QEMU node's virtual UART1 (fixture or host gpsd)."
+  tx_capable = false
+  optional = true
+  start_order = 2
+  run = "python3 scripts/gps-relay.py --mode fixture --fixture fixtures/gps/valid_fix.nmea --uart .run/gps-uart1.sock {rate} {loop}"
+
+    # Fixture-replay knobs (start-time). mode/fixture/uart stay fixed (gpsd mode
+    # would need --fixture removed — switch it by editing the run line).
+    [[stack.component.param]]
+    name = "rate"
+    kind = "str"
+    arg = "--rate"
+    default = "5"
+    label = "Fixture sentences/sec"
+    [[stack.component.param]]
+    name = "loop"
+    kind = "flag"
+    flag = "--loop"
+    default = "on"
+    label = "Replay continuously"
+  note = "Optional. Start before the node: GPS init is one-shot."
+
+    [stack.component.source]
+    path = "src/meshcom-qemu-raspi"
+    pin_commit = "f16a4568e5a402b336620022ec6b25958a014634"
+    pin_tag = "f16a456"
+    remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
+    branch = "main"
+    strategy = "link"
+
+    [stack.component.process]
+    exec_name = "python3"
+    all_args = ["gps-relay.py"]
+
+  [[stack.component]]
+  id = "meshcom-qemu"
+  name = "MeshCom QEMU node"
+  kind = "service"
+  band = "433"
+  purpose = "Runs MeshCom firmware headless under QEMU (web 18083, net-console 12323)."
+  tx_capable = true
+  depends_on = ["meshcom-bridge", "meshcom-gps-relay"]
+  start_order = 3
+  # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
+  # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
+  # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
+  # is empty and the build fails. 10.0.2.2 = QEMU user-net gateway -> host; 7000 =
+  # the meshcom-bridge default port; password (if any) from /tmp/xr_pw.
+  build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat /tmp/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
+  run = "scripts/run.sh {env} {qemu}"
+  # The build artifact is the merged firmware flash image for the chosen env, NOT
+  # qemu-system-xtensa (the system emulator that run.sh locates separately).
+  bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
+  # MeshCom's callsign is a NODE setting applied over the net-console (12323) and
+  # stored in flash/NVS (survives restarts). After the console comes up we send
+  # `--setcall`; skipped if the callsign is unset/N0CALL.
+  post_start = 'C="{mc_callsign}"; case "$C" in ""|N0CALL) exit 0;; esac; for i in $(seq 1 90); do nc -z 127.0.0.1 12323 2>/dev/null && break; sleep 2; done; sleep 3; printf -- "--setcall %s\n" "$C" | nc -w2 127.0.0.1 12323'
+
+    # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
+    # operator callsign. Applied via the net-console after boot (see post_start).
+    [[stack.component.param]]
+    name = "mc_callsign"
+    kind = "str"
+    default = "{callsign}"
+    label = "MeshCom callsign (with -SSID)"
+    # Which firmware image to boot. Switching env needs that image built first
+    # (apply_mode=build): rebuild with scripts/build.sh --env <env>.
+    [[stack.component.param]]
+    name = "env"
+    kind = "enum"
+    choices = ["qemu-headless", "qemu-headless-extradio", "qemu-headless-gpsd", "qemu-headless-extradio-gpsd"]
+    arg = "--env"
+    default = "qemu-headless-extradio-gpsd"
+    label = "Firmware env (needs matching build)"
+    apply_mode = "build"
+    [[stack.component.param]]
+    name = "qemu"
+    kind = "str"
+    arg = "--qemu"
+    default = ""
+    label = "qemu-system-xtensa path (auto if blank)"
+    advanced = true
+  test = "scripts/test.sh"
+
+    [stack.component.source]
+    path = "src/meshcom-qemu-raspi"
+    pin_commit = "f16a4568e5a402b336620022ec6b25958a014634"
+    pin_tag = "f16a456"
+    remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
+    branch = "main"
+    strategy = "link"
+
+    [stack.component.process]
+    exec_name = "qemu-system-xtensa"
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:18083"
+    role = "listener"
+    description = "MeshCom web UI"
+    client = true
+    scheme = "http"
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:12323"
+    role = "listener"
+    description = "net-console."
+
+    [[stack.component.resource]]
+    key = "tcp.port.18083"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "tcp.port.12323"
+    kind = "tcp-port"
+    mode = "exclusive"
+
+  [[stack.component]]
+  id = "meshcom-firmware"
+  name = "MeshCom firmware"
+  kind = "firmware"
+  purpose = "PlatformIO firmware image consumed by the QEMU node."
+  tx_capable = true
+  optional = true
+
+    [stack.component.source]
+    path = "src/MeshCom-Firmware"
+    pin_commit = "302e3aaff46cbefa29ac651640559b920dd3b713"
+    pin_tag = "v4.35p.06.24-17-g302e3aa"
+    remote = "https://github.com/makrohard/MeshCom-Firmware.git"
+    branch = "feature/external-radio-tcp-draft"
+
+# =====================================================================
+# Stack: meshcore — MeshCore Pi node (daemon-backed, 868)
+# =====================================================================
+[[stack]]
+id = "meshcore"
+name = "MeshCore Pi (868)"
+summary = "MeshCore Python node, daemon-backed on 868 (auto-starts the daemon). Optional Node Manager GUI and CLI."
+main = "meshcore-pi"
+
+  [[stack.component]]
+  id = "meshcore-pi"
+  name = "MeshCore Pi (868)"
+  kind = "service"
+  band = "868"
+  purpose = "Async MeshCore node using the daemon on 868 (lorahaminterface)."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  start_order = 1
+  run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
+  test = ".venv/bin/python -m pytest tests/"
+
+    # meshcore-pi has no CLI flags — all settings live in the TOML. The controller
+    # generates the runtime config from the in-repo config-loraham868.toml base,
+    # updating just these keys (blank = keep the base/preset default).
+    [stack.component.config_file]
+    path = "{runtime}/config/files/meshcore-pi.toml"
+    fmt = "toml-update"
+    base = "config-loraham868.toml"
+      [[stack.component.config_file.param]]
+      name = "preset"
+      key = "preset"
+      section = "interface.loraham868"
+      kind = "enum"
+      choices = ["eu_uk_long", "eu_uk_medium", "eu_uk_narrow"]
+      default = "eu_uk_narrow"
+      label = "RF preset"
+      [[stack.component.config_file.param]]
+      name = "enable_tx"
+      key = "enable_tx"
+      section = "interface.loraham868"
+      kind = "flag"
+      default = "on"
+      label = "Enable TX (off = RX-only)"
+      [[stack.component.config_file.param]]
+      name = "node_name"
+      key = "name"
+      section = "device.companion"
+      kind = "str"
+      default = "{callsign}"
+      label = "Node name (defaults to your callsign)"
+      [[stack.component.config_file.param]]
+      name = "txpower"
+      key = "txpower"
+      section = "interface.loraham868"
+      kind = "int"
+      default = ""
+      min = 0
+      max = 20
+      label = "TX power dBm (blank = preset)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "frequency"
+      key = "frequency"
+      section = "interface.loraham868"
+      kind = "str"
+      default = ""
+      label = "Frequency Hz (blank = preset)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      name = "airtime"
+      key = "airtime"
+      section = "interface.loraham868"
+      kind = "int"
+      default = "10"
+      min = 0
+      max = 100
+      label = "Duty-cycle limit %"
+      advanced = true
+
+    [stack.component.source]
+    path = "src/meshcore-pi"
+    pin_commit = "ec31446ede4528dece45bd6f8254bc7a01478f62"
+    pin_tag = "ec31446"
+    remote = "git@github.com:makrohard/meshcore-pi.git"
+    branch = "loraham-daemon-interface"
+    strategy = "link"
+
+    [stack.component.process]
+    exec_name = "python"
+    all_args = ["meshcore.py"]
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:5000"
+    role = "listener"
+    description = "MeshCore companion TCP"
+    client = true
+    scheme = "tcp"
+
+    [[stack.component.resource]]
+    key = "tcp.port.5000"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "loraham.daemon-socket.868"
+    kind = "daemon-socket"
+    mode = "consumer"
+    [[stack.component.resource]]
+    key = "loraham.profile.868"
+    kind = "daemon-profile"
+    mode = "requirement"
+    requirement = "MANAGED"
+
+  [[stack.component]]
+  id = "meshcore-nodegui"
+  name = "MeshCore Node Manager (GUI)"
+  kind = "service"
+  purpose = "Tkinter desktop GUI (main.py); connects to the companion TCP 5000."
+  tx_capable = false
+  optional = true
+  depends_on = ["meshcore-pi"]
+  # A GUI app (not a terminal TUI) — lhpc can Start/Stop it; it opens on the Pi's
+  # display (DISPLAY inherited, else :0).
+  run = 'env DISPLAY="${DISPLAY:-:0}" .venv/bin/python main.py'
+  note = "Desktop GUI (needs a display/X server on the Pi)."
+
+    [stack.component.process]
+    exec_name = "python"
+    all_args = ["main.py"]
+
+    [stack.component.source]
+    path = "src/meshcore-node-manager"
+    pin_commit = "ddafd42ca9d46f85756c7e37f0607059f1eb546f"
+    pin_tag = "v1.2.0-13-gddafd42"
+    remote = "git@github.com:makrohard/meshcore-node-manager.git"
+    branch = "meshcore-api-compat"
+    strategy = "link"
+
+  [[stack.component]]
+  id = "meshcore-cli"
+  name = "MeshCore CLI"
+  kind = "oneshot"
+  purpose = "One-shot / REPL client over TCP 5000 (meshcli)."
+  tx_capable = true
+  optional = true
+  interactive = true
+  depends_on = ["meshcore-pi"]
+  run = ".venv/bin/meshcli {host} {port} {json} {debug}"
+
+    [stack.component.process]
+    exec_name = "meshcli"
+
+    # meshcli connects to the meshcore-pi companion server (default port 5000).
+    [[stack.component.param]]
+    name = "host"
+    kind = "str"
+    arg = "-t"
+    default = "127.0.0.1"
+    label = "Companion host"
+    [[stack.component.param]]
+    name = "port"
+    kind = "int"
+    arg = "-p"
+    default = "5000"
+    min = 1
+    max = 65535
+    label = "Companion TCP port"
+    [[stack.component.param]]
+    name = "json"
+    kind = "flag"
+    flag = "-j"
+    label = "JSON output"
+    advanced = true
+    [[stack.component.param]]
+    name = "debug"
+    kind = "flag"
+    flag = "-D"
+    label = "Debug logging"
+    advanced = true
+
+    [stack.component.source]
+    path = "src/meshcore-cli"
+    pin_commit = "e4228354cb77f273c54f0ebef21c5ac25272694e"
+    pin_tag = "v1.5.0-14-ge422835"
+    remote = "https://github.com/meshcore-dev/meshcore-cli.git"
+    strategy = "link"
+
+  [[stack.component]]
+  id = "meshcore-firmware"
+  name = "MeshCore firmware"
+  kind = "firmware"
+  purpose = "Device firmware (flashed to nodes); not run on the Pi."
+  tx_capable = true
+  optional = true
+
+    [stack.component.source]
+    path = "src/meshcore"
+    pin_commit = "c940ea5f305df87c4ea215d74e522b64c22c66e9"
+    pin_tag = "room-server-v1.15.0-14-gc940ea5f"
+    remote = "https://github.com/meshcore-dev/MeshCore.git"
+    branch = "main"

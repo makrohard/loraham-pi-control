@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% from "_macros.html" import action_btn, stack_actions, stack_actions_more, cmdbox %}
+{% block title %}{{ stack.id }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('dashboard') }}">&larr; dashboard</a></p>
+  <div class="card">
+    <header><h2>{{ stack.name }} <span class="pill">{{ stack.id }}</span></h2></header>
+    <p class="summary">{{ stack.summary }}</p>
+    <div class="body">
+      {% if installed and has_source %}
+        <p>Installed version:
+          {% if update_status == 'up-to-date' %}
+            <span class="badge badge-running">up to date</span>
+          {% elif update_status == 'update-available' %}
+            <span class="badge badge-degraded">update available</span> — use <strong>Update</strong> below.
+          {% else %}
+            <span class="pill">remote status unknown</span>
+          {% endif %}
+        </p>
+      {% endif %}
+      {% if needs_build %}
+        <p class="flash flash-warn"><strong>Build needed:</strong>
+          {{ needs_build|join(', ') }} {{ 'is' if needs_build|length == 1 else 'are' }}
+          installed but the compiled binary is missing (a fresh clone drops it).
+          Run <strong>Build</strong> before starting.</p>
+      {% endif %}
+      <h4>Stack actions</h4>
+      {{ stack_actions(stack.id, installed, has_source) }}
+      {{ stack_actions_more(stack.id) }}
+      <p class="links"><a href="{{ url_for('stack_config_view', stack_id=stack.id) }}">Config &rarr;</a></p>
+
+      <h4>System dependencies</h4>
+      {% if system_deps %}
+        <ul class="clean">
+          {% for d in system_deps %}
+            <li>
+              <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">
+                {{ 'satisfied' if d.satisfied else 'not found' }}</span>
+              {{ d.what }}
+              {% if not d.satisfied and d.install %}
+                <div class="muted">install it:</div>
+                {{ cmdbox('dep-' ~ loop.index0, d.install) }}
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">None required for this stack.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {% for comp in stack.components %}
+    {% set st = statuses[comp.id] %}
+    <div class="card">
+      <header>
+        <h3>{{ comp.id }}
+          <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span></h3>
+        <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+      </header>
+      <div class="body">
+        <p>{{ comp.purpose }}</p>
+        <table>
+          <tbody>
+            <tr><th>Run state</th><td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td></tr>
+            <tr><th>Source / profile</th><td>{{ st.source_state.value }} / {{ st.profile_state.value }}</td></tr>
+            <tr><th>TX</th><td class="tx-{{ st.tx_state.value }}">{{ st.tx_state.value }}{% if comp.tx_capable %} <span class="muted">(TX-capable)</span>{% endif %}</td></tr>
+            {% if st.pids %}<tr><th>PIDs</th><td class="mono">{{ st.pids|join(', ') }}</td></tr>{% endif %}
+          </tbody>
+        </table>
+
+        {% if comp.resources %}
+          <div class="panel">
+            <h4>Declared resources</h4>
+            <ul class="clean">{% for r in comp.resources %}
+              <li><span class="mono">{{ r.key }}</span>
+                <span class="pill">{{ r.mode.value }}{% if r.requirement %} = {{ r.requirement }}{% endif %}</span>
+                {% if r.note %}<span class="muted">— {{ r.note }}</span>{% endif %}</li>
+            {% endfor %}</ul>
+          </div>
+        {% endif %}
+
+        {% if st.dependencies %}
+          <div class="panel">
+            <h4>Runtime dependencies</h4>
+            <ul class="clean">{% for d in st.dependencies %}
+              <li>{{ d.component_id }}: <span class="badge badge-{{ d.run_state.value }}">{{ d.run_state.value }}</span>{% if d.band %} <span class="muted">({{ d.band }} MHz)</span>{% endif %}</li>
+            {% endfor %}</ul>
+          </div>
+        {% endif %}
+
+        {% if st.endpoints %}
+          <div class="panel">
+            <h4>Endpoints</h4>
+            <ul class="clean">{% for e in st.endpoints %}
+              <li><span class="mono">{{ e.spec.address }}</span> <span class="muted">({{ e.spec.kind }})</span> —
+                <span class="{{ 'endpoint-ok' if e.present else 'endpoint-bad' }}">{{ e.detail }}</span></li>
+            {% endfor %}</ul>
+          </div>
+        {% endif %}
+
+        {% if st.evidence %}
+          <details>
+            <summary>Evidence ({{ st.evidence|length }})</summary>
+            <ul class="clean mono">{% for k, v in st.evidence.items() %}<li>{{ k }} = {{ v }}</li>{% endfor %}</ul>
+          </details>
+        {% endif %}
+
+        {% if comp.note %}<p class="muted">{{ comp.note }}</p>{% endif %}
+
+        <h4>Actions</h4>
+        <div class="actbar">
+          {% if comp.kind.value == 'service' %}
+            {{ action_btn('start', comp.id, 'Start') }}
+            {{ action_btn('stop', comp.id, 'Stop') }}
+          {% endif %}
+          {% if comp.build_cmd %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
+          {% if comp.test_cmd %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
+          {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
+          {% if comp.band %}<a class="act" href="{{ url_for('stack_config_view', stack_id='daemon') }}"><button type="button">Radio config</button></a>{% endif %}
+          <a class="act" href="{{ url_for('logs_view', target=comp.id) }}"><button type="button">Logs</button></a>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+
+  {% if conflicts %}
+    <div class="card">
+      <header><h3>Resource conflicts</h3></header>
+      <div class="body">
+        <ul class="clean">{% for c in conflicts %}
+          <li{% if c.observed %} class="conflict"{% endif %}>{{ c.message }}{% if c.observed %} <strong>[OBSERVED]</strong>{% endif %}</li>
+        {% endfor %}</ul>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}

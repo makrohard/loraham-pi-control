@@ -1,0 +1,45 @@
+# LoRaHAM Pi Control — confirmed-working profile catalogue (EXAMPLE).
+#
+# A confirmed-working profile pins the last KNOWN-GOOD state of a component so the
+# controller can roll back/repair to it. A failed candidate build/test must NEVER
+# overwrite a confirmed profile. Restoration is explicit and auditable — never a
+# destructive source reset.
+#
+# These example entries are placeholders to fix the schema. Real values are
+# recorded by the controller after a validated build/test.
+
+[[profile]]
+component_id = "loraham-daemon"
+commit = "6de866e"                 # tag v111a
+daemon_version = "111a"
+daemon_tx_profile = "managed-or-direct@{433,868}"
+config_schema_version = "unknown"
+artifact_id = "build/loraham_daemon@v111a"
+tests_passed = ["run_tests.sh (host)"]   # to be confirmed
+live_test_status = "not recorded"
+compatibility = "Raspberry Pi 3/4/5, Raspberry Pi OS; liblgpio; SPI enabled."
+limitations = "Live-RF validation date not yet captured."
+
+[[profile]]
+component_id = "meshcom-bridge"
+commit = "fe85c79"
+daemon_version = "111+"             # requires daemon v111 local Unix socket protocol
+daemon_tx_profile = "managed@868"
+config_schema_version = "unknown"
+artifact_id = "build/meshcom-loraham-bridge@fe85c79"
+tests_passed = []
+live_test_status = "native external-radio validation documented (see repo)"
+compatibility = "Pairs with meshcom-qemu external-radio profile."
+limitations = "Placeholder; confirm test evidence."
+
+[[profile]]
+component_id = "meshcore-pi"
+commit = "ec31446"
+daemon_version = "111-candidate+"
+daemon_tx_profile = "managed@868"
+config_schema_version = "config-loraham868.toml"
+artifact_id = "src/meshcore-pi@ec31446"
+tests_passed = ["pytest (fake-daemon)"]   # tests/fake_loraham_daemon.py present
+live_test_status = "not recorded"
+compatibility = "Python 3.11+; daemon-bridged 868 MHz."
+limitations = "Direct-SX1262 mode conflicts with loraham-daemon on SPI."

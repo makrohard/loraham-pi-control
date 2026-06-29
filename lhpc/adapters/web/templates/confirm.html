@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from "_macros.html" import param_grid, cmdbox %}
+{% block title %}confirm {{ op }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('stack_detail', stack_id=target) if target else url_for('dashboard') }}">&larr; back</a></p>
+  <div class="card">
+    <header><h2>Confirm: {{ op }} <span class="pill">{{ target }}</span></h2></header>
+    <div class="body">
+      {% if tx %}
+        <p class="flash flash-warn"><strong>TX-capable action — transmits real RF.</strong>
+          Ensure the antennas are on the connected dummy loads.</p>
+      {% endif %}
+      {% if missing_deps %}
+        <div class="flash flash-bad">
+          <strong>Missing system dependencies</strong> — this {{ op }} cannot proceed until
+          they are installed. Run each in a terminal, then start the {{ op }} again:
+          {% for d in missing_deps %}
+            <div>{{ d.what }}:</div>
+            {{ cmdbox('dep-' ~ loop.index0, d.install) }}
+          {% endfor %}
+        </div>
+      {% endif %}
+      <p>{{ plan.summary }}</p>
+      {% if plan.details %}
+        <pre class="next">{% for line in plan.details %}{{ line }}
+{% endfor %}</pre>
+      {% endif %}
+
+      {% if plan.ok and missing_deps %}
+        <p class="muted">Install the dependencies above, then start the {{ op }} again.</p>
+      {% elif plan.ok %}
+        <form method="post" action="{{ url_for('action') }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="op" value="{{ op }}">
+          <input type="hidden" name="target" value="{{ target }}">
+          <input type="hidden" name="confirmed" value="yes">
+          {% if band %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
+          {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
+          {% if stop_deps %}
+            <p class="flash flash-warn"><strong>Other running stacks depend on this:</strong>
+              {{ stop_deps|join(', ') }}. They will be <strong>stopped too</strong>.</p>
+            <input type="hidden" name="cascade" value="yes">
+          {% endif %}
+          {% if other_bands %}
+            <p class="flash flash-warn">The daemon is <strong>one process</strong> also serving
+              <strong>{{ other_bands|join(', ') }} MHz</strong> — stopping it stops those bands too.</p>
+          {% endif %}
+          {% if blockers %}
+            <p class="flash flash-warn"><strong>Radio/resource owned by another running stack:</strong>
+              {% for b in blockers %}<br>{{ b.resource }} — held by <strong>{{ b.holder_stack }}</strong>{% endfor %}
+              <br>Stopping {{ blockers|map(attribute='holder_stack')|unique|join(', ') }} is required to run this stack.</p>
+            <input type="hidden" name="stop_owners" value="yes">
+          {% endif %}
+          {% if source_choices %}
+            <h4>Version to install</h4>
+            <label>source
+              <select name="source">
+                {% for ch in source_choices %}
+                  <option value="{{ ch }}" {% if source==ch %}selected{% endif %}>
+                    {{ {'dev':'latest dev','stable':'latest stable','pinned':'pinned known-good'}[ch] }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <br>
+          {% endif %}
+          {% if run_params %}
+            <h4>Parameters</h4>
+            {{ param_grid(param_layout(run_params), params, 'p_') }}
+          {% endif %}
+          <button type="submit">{% if blockers %}Stop owner(s) &amp; Run{% elif stop_deps %}Stop dependents &amp; {{ target }}{% else %}Apply {{ op }}{% endif %}</button>
+        </form>
+        {% if commands %}
+          <div class="flash flash-warn">
+            <strong>Then run these yourself in a terminal</strong> (the controller never starts them):
+            {% for cmd in commands %}{{ cmdbox('runcmd-' ~ loop.index0, cmd) }}{% endfor %}
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="flash flash-warn">This action cannot proceed (see above).</p>
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

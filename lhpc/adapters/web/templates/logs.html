@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('stack_detail', stack_id=stack_id) if stack_id else url_for('dashboard') }}">&larr; back</a></p>
+  <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}">
+    <header>
+      <h2>Logs <span class="pill">{{ target }}</span></h2>
+      <span class="badge badge-{{ 'running' if running else 'stopped' }}" id="log-status">
+        {{ 'process running' if running else 'process ended' }}</span>
+    </header>
+    <div class="body">
+      <p class="muted">{{ path or '(no log file yet)' }}</p>
+      <pre id="logbox" class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='logs.js') }}" defer></script>
+{% endblock %}

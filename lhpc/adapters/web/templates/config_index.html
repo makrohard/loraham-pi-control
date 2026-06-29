@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% from "_macros.html" import stack_summary %}
+{% block title %}config — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <div class="card">
+    <header><h2>Configuration</h2></header>
+    <div class="body stacklist">
+      <p class="muted">Per-stack configuration. The daemon's page also carries the live
+        per-band radio settings.</p>
+      {% for g in groups %}
+        <a class="stackrow-link" href="{{ url_for('stack_config_view', stack_id=g.stack.id) }}">
+          <span class="ss-row">{{ stack_summary(g) }}</span>
+          <span class="links">Configure &rarr;</span>
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}

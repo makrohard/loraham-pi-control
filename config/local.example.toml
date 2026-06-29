@@ -1,0 +1,21 @@
+# LoRaHAM Pi Control — local operator overrides (EXAMPLE).
+#
+# Copy to the RUNTIME root as <runtime>/config/local.toml (git-ignored) and edit.
+# This is where operator identity and machine-specific overrides live. NEVER put
+# real operator data into the tracked dev repo.
+
+[operator]
+callsign = "N0CALL"        # <- your callsign (runtime-local only)
+locator  = "JO00aa"        # <- optional Maidenhead locator
+
+[web]
+# host = "127.0.0.1"       # loopback only
+# port = 8770
+
+[install]
+# source_strategy = "adopt"     # or "clone"
+# adopt_search_root = "~/src"
+
+# Per-component source overrides, e.g. pin a different local path or branch:
+# [sources.loraham-daemon-433]
+# path = "src/loraham-daemon"

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Local operator state and secrets — NEVER commit these.
+# (Tracked defaults live in config/*.example.toml; real local config does not.)
+config/local.toml
+config/secrets.toml
+config/*.local.toml
+secrets/
+*.secret
+*.key
+*.pem
+
+# Generated runtime state (the dev checkout should never carry runtime artifacts)
+run/
+.run/
+state/
+logs/
+*.log
+
+# Editor
+.idea/
+.vscode/
+*.swp
