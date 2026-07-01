@@ -19,19 +19,21 @@ def test_run_order_puts_daemon_before_app(tmp_path):
 
 def test_daemon_needs_band_and_tx_from_app(tmp_path):
     svc = _svc(tmp_path)
-    radio, tx, cadidle = svc._daemon_needs(svc._run_order("kiss"), None)
-    assert radio == "433" and tx == "MANAGED" and cadidle is None    # kiss has no cadidle pref
-    radio, tx, cadidle = svc._daemon_needs(svc._run_order("meshcom-bridge"), None)
+    radio, tx = svc._daemon_needs(svc._run_order("kiss"), None)
+    assert radio == "433" and tx == "MANAGED"
+    radio, tx = svc._daemon_needs(svc._run_order("meshcom-bridge"), None)
     assert radio == "433" and tx == "MANAGED"         # bridge requires MANAGED
-    assert cadidle == "0"                             # ...and CADIDLE=0 (firmware single-CAD)
+    # CADIDLE is no longer forced via requires_daemon_cadidle — it is a configurable per-stack
+    # daemon param (default 28 for meshcom) applied at start:
+    assert svc._daemon_param_applies("meshcom", "433").get("CADIDLE") == "28"
 
 
 def test_daemon_stack_uses_radio_param_override(tmp_path):
     svc = _svc(tmp_path)
     order = svc._run_order("daemon")
     assert [c.id for _, c in order] == ["loraham-daemon"]
-    radio, tx, cadidle = svc._daemon_needs(order, {"radio": "868"})
-    assert radio == "868" and cadidle is None          # explicit override honoured
+    radio, tx = svc._daemon_needs(order, {"radio": "868"})
+    assert radio == "868"                              # explicit override honoured
 
 
 def test_optional_component_soft_unless_autostart(tmp_path):
@@ -162,6 +164,34 @@ def test_run_plan_lists_daemon_then_app(tmp_path):
     assert any("loraham-kiss-tnc" in d for d in res.details)
 
 
+def test_start_log_omits_unconfirmed_boilerplate(tmp_path):
+    # Radio params aren't echoed by the daemon; the start log stays concise (no verbose
+    # "SENT but UNCONFIRMED — a radio param the daemon does not report back …").
+    reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    (tmp_path / "x").mkdir()
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    text = "\n".join(svc.start("meshcom", apply=True).details)
+    assert "UNCONFIRMED" not in text and "does not report back" not in text
+    assert "SF=10 sent" in text                          # concise radio-param line instead
+
+
+def test_cli_start_same_sequence_as_web(tmp_path):
+    # CLI (`lhpc start` -> run_action "start") and web (op=start -> run_action "start") share the
+    # SAME _start_impl, so both perform the identical sequence: ensure the daemon (READY) -> apply
+    # this stack's radio params -> start the stack's own components.
+    reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    (tmp_path / "x").mkdir()
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    text = "\n".join(svc.run_action("start", "meshcom", apply=True).details)   # CLI entry point
+    i_daemon = text.index("daemon already serving 433")     # 1) daemon ensured READY
+    i_params = text.index("SF=10")                          # 2) radio params applied (before app)
+    i_stack = text.index("meshcom-bridge")                 # 3) then the stack's own component
+    assert i_daemon < i_params < i_stack                    # exact ordering
+    assert "CADIDLE=28" in text                             # meshcom's configured timing applied
+
+
 def test_app_start_brings_up_daemon_when_band_not_served(tmp_path):
     # No CONF socket -> daemon not serving 433 and not running -> it is started first.
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
@@ -186,3 +216,64 @@ def test_app_start_uses_running_daemon_when_serving_band(tmp_path):
     text = "\n".join(res.details)
     assert "daemon already serving 433" in text
     assert "start daemon" not in text
+
+
+# --- Area 2: partial dual-band daemon startup -------------------------------------------------
+
+def _daemon_svc(tmp_path, replies):
+    import os
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\nsleep 0.1\n")
+    os.chmod(binp, 0o755)
+    return ControllerService(system=FakeSystem(unix_replies=replies).system,
+                             paths=Paths(runtime_root=tmp_path))
+
+
+def _band_starts(details):
+    import re
+    return set(re.findall(r"start daemon --radio (\w+)", "\n".join(details)))
+
+
+_RDY = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+_UNINIT = b"STATUS RADIO=UNINITIALIZED\n"
+
+
+def test_dual_band_both_absent_starts_radio_both(tmp_path):
+    svc = _daemon_svc(tmp_path, {})
+    res = svc.start("daemon", apply=True)
+    assert _band_starts(res.details) == {"both"}          # one --radio both process, not two
+
+
+def test_dual_band_433_ready_starts_only_868(tmp_path):
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _RDY})
+    text = "\n".join(svc.start("daemon", apply=True).details)
+    assert _band_starts([text]) == {"868"}                # ONLY the missing band...
+    assert "daemon already serving 433" in text           # ...433 retained, no --radio both
+    assert "--radio both" not in text
+
+
+def test_dual_band_868_ready_starts_only_433(tmp_path):
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf868.sock": _RDY})
+    text = "\n".join(svc.start("daemon", apply=True).details)
+    assert _band_starts([text]) == {"433"}
+    assert "daemon already serving 868" in text and "--radio both" not in text
+
+
+def test_dual_band_reachable_not_ready_fails_without_relaunch(tmp_path):
+    # 433 reachable but NOT READY -> fail that band, never relaunch a conflicting instance on it.
+    svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _UNINIT, "/tmp/loraconf868.sock": _RDY})
+    res = svc.start("daemon", apply=True)
+    text = "\n".join(res.details)
+    assert not res.ok and "not READY" in text
+    assert "start daemon --radio 433" not in text and "--radio both" not in text
+
+
+def test_client_single_band_startup_unchanged(tmp_path):
+    # A single-band client with its band already served applies once, no daemon relaunch.
+    svc = ControllerService(system=FakeSystem(unix_replies={"/tmp/loraconf433.sock": _RDY}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "x").mkdir()
+    text = "\n".join(svc.start("kiss", apply=True).details)
+    assert "daemon already serving 433" in text
+    assert "start daemon" not in text                     # not relaunched

@@ -952,13 +952,6 @@ main = "meshcom-qemu"
   # match MANAGED — declaring DIRECT here only made lhpc set+verify DIRECT moments before
   # the bridge flipped it back to MANAGED.
   requires_daemon_tx = "MANAGED"
-  # Match the MeshCom firmware's channel-access timing: the firmware fires after a single
-  # ~28 ms CAD, whereas the daemon's default CADIDLE=250 ms requires a 250 ms confirmed-idle
-  # window before TX. Setting CADIDLE=0 makes the daemon's MANAGED LBT return free after a
-  # single clear CAD probe (≈ the firmware's behaviour) while keeping listen-before-talk.
-  # Non-gating: if the SET cannot be applied the start still proceeds (daemon keeps its
-  # current CADIDLE). Per-band global — also affects other MANAGED clients on this band.
-  requires_daemon_cadidle = "0"
   start_order = 1
   build = "cmake -S . -B build && cmake --build build"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"] } ]

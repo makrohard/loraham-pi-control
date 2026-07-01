@@ -100,7 +100,7 @@ def test_tx_mode_succeeds_when_readback_matches(tmp_path):
 
 def test_cadidle_skips_when_already_matching(tmp_path):
     svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=0\n")
-    ok, detail = svc._apply_cadidle("433", "0")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
     assert ok and "already 0ms" in detail
 
 
@@ -108,7 +108,7 @@ def test_cadidle_fails_when_readback_mismatches(tmp_path):
     # Daemon stuck at CADIDLE=250 -> requesting 0 cannot be confirmed -> (False, ...).
     # Reported but NON-GATING in _ensure_daemon (the start still proceeds).
     svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=250\n")
-    ok, detail = svc._apply_cadidle("433", "0")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
     assert not ok and "0" in detail
 
 
@@ -127,7 +127,7 @@ def test_cadidle_succeeds_when_readback_matches(tmp_path):
     sys = FakeSystem().system
     sys.unix = Stateful()
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    ok, detail = svc._apply_cadidle("433", "0")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
     assert ok and "confirmed" in detail
 
 

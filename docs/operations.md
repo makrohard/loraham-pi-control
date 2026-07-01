@@ -49,6 +49,39 @@ a dry-run plan first (TX-capable ones add an RF/dummy-load warning); daemon live
 settings apply only a whitelisted non-RF tuning (TX mode, CAD/LBT). Security
 headers (incl. `Content-Security-Policy: default-src 'self'`) on every response.
 
+## Daemon radio parameters
+
+Each daemon-client stack has a collapsible **Daemon radio parameters** panel (config, stack and
+start-confirm pages; follows the 433/868 band switch). Editable params: MODE, FREQ, SF, BW, CR, CRC,
+LDRO, PREAMBLE, SYNC, POWER, TXMODE, TXQUEUE, CADMONITOR, CADRSSI, CADWAIT, CADIDLE,
+CADTXAFTERTIMEOUT. Defaults come from each app's source (`lhpc/core/daemon_params.py`); MeshCom
+CADIDLE is 28 ms. Every value is validated + canonicalised server-side (`daemon_control.validate_set`)
+on save and read. **Save** persists, **Apply** pushes to the running daemon, **Reset** restores
+defaults. lhpc applies a stack's values to the daemon **once**, at daemon-READY before the stack's
+components (CLI and web share this path); params the app re-SETs on connect (radio + TXMODE) are shown
+**greyed**. MODE=FSK triggers a browser-only OK/Cancel warning. The daemon page also has per-parameter
+**live** controls prefilled with reported values, and closable STATUS/STATS readouts.
+
+**Apply live** is truthful: `ok` only when every set is applied; `PARTIAL`/total failure is a warning;
+radio params the daemon does not echo are reported SENT, not confirmed. It takes the band
+lifecycle/radio lock (re-entrant with an in-progress Start; a contended band returns a typed busy
+result); a failure leaves the saved profile persisted.
+
+**Start-confirm** shows one panel per band the launch touches (two for `--radio both`), with
+band-scoped `dp_<band>_<PARAM>` fields applied for **that start only** (never persisted). Every
+`dp_*` field is strictly parsed and validated (band/param/value) before any launch or CONF `SET`; a
+malformed, duplicated, unknown, wrong-band or invalid field fails the start. Blank/absent = no
+override; **Reset to defaults** submits the defaults.
+
+**Local config (`local.toml`).** Writes are type-safe and fail-closed: scalars and flat tables keep
+their exact types (bool/int/finite-float/string, quotes, control chars, Unicode, quoted keys all
+round-trip), validated by re-parse before the atomic write. A managed update **patches only its own
+keys** — an operator save touches only `callsign`/`locator`, a remote save only that component's key
+(blank clears it); everything else is preserved. An unsupported structure (array, nested table,
+datetime, NaN/inf, control-char key, invalid Unicode) or a wrong table shape (`operator = "text"`,
+`remotes = "x"`) refuses the save and preserves the file byte-for-byte. A remote may be changed only
+for a source component of the target stack.
+
 ## Safety
 
 `lhpc` only stops a process whose full identity still matches an LHPC ownership

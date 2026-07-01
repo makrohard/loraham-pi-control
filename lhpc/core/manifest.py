@@ -370,7 +370,6 @@ def _parse_component(raw: dict) -> Component:
             for p in raw.get("param", [])
         ),
         requires_daemon_tx=raw.get("requires_daemon_tx", ""),
-        requires_daemon_cadidle=str(raw.get("requires_daemon_cadidle", "")),
         interactive=raw.get("interactive", False),
         bands=tuple(str(b) for b in raw.get("bands", [])),
         config_file=_parse_file_config(raw.get("config_file")),

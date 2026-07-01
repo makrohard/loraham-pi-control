@@ -334,6 +334,19 @@ def test_start_confirm_shows_daemon_run_params(tmp_path):
     assert 'name="p_radio"' in body and 'name="p_debug"' in body   # radio + debug inputs
 
 
+def test_start_confirm_includes_daemon_params_panel(tmp_path):
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)            # daemon installed
+    binp.write_text("#!/bin/sh\n")             # and built
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    body = c.post("/action", data={"_csrf": token, "op": "start", "target": "daemon"}).get_data(as_text=True)
+    assert "Daemon radio parameters" in body                 # panel on the start-confirm page
+    assert '<details class="advcfg dparams">' in body        # inline panel, collapsed by default
+    assert "Reset to defaults" in body                       # (client-side) Reset stays...
+    assert ">Save</button>" not in body and ">Apply live</button>" not in body   # no Save/Apply
+
+
 def test_start_daemon_only_on_a_band(tmp_path):
     # The dash "Start daemon (868 only)" posts op=start target=daemon p_radio=868.
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
@@ -345,7 +358,8 @@ def test_start_daemon_only_on_a_band(tmp_path):
                                 "p_radio": "868"})
     body = r.get_data(as_text=True)
     assert r.status_code == 200 and "Confirm: start" in body
-    assert 'value="868" selected' in body            # band preselected to 868
+    # radio band is no longer a grid dropdown on the daemon confirm — preserved as a hidden input.
+    assert 'type="hidden" name="p_radio" value="868"' in body
 
 
 def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
@@ -512,3 +526,33 @@ def test_daemon_start_stop_confirm_shows_band(tmp_path):
         body = r.get_data(as_text=True)
         assert r.status_code == 200, f"{op}: {r.status_code}"
         assert f"Confirm: {op}" in body and "daemon 433" in body
+
+
+def test_daemon_confirm_hides_band_tx_cad_params_but_preserves_them(tmp_path):
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\n")
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    body = c.post("/action",
+                  data={"_csrf": token, "op": "start", "target": "daemon", "p_radio": "868"}).get_data(as_text=True)
+    # radio / tx / cad-monitor / cad-rssi are removed from the visible grid...
+    for name in ("tx_433", "cadmon_433", "cadrssi_433"):
+        assert f'type="hidden" name="p_{name}"' in body        # ...kept as hidden inputs
+    assert 'type="hidden" name="p_radio" value="868"' in body  # band selection preserved
+    assert 'name="p_debug"' in body                            # debug stays in the grid
+    assert 'name="dp_868_CADRSSI"' in body                     # CAD RSSI in the 868 panel
+
+
+def test_confirm_start_daemon_params_inline_client_reset(tmp_path):
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\n")
+    c = _real_app(tmp_path)
+    token = _csrf(c, "/stacks/daemon")
+    body = c.post("/action",
+                  data={"_csrf": token, "op": "start", "target": "daemon", "p_radio": "433"}).get_data(as_text=True)
+    # Panel inputs are part of the confirm form (applied for this start), with defaults for reset.
+    assert 'name="dp_433_CADIDLE"' in body and "data-dpdefault=" in body
+    assert 'type="button" class="act dp-reset-inline"' in body     # client-side reset...
+    assert "/daemon-params/reset" not in body                      # ...NOT the server config-reset

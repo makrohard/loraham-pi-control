@@ -47,6 +47,28 @@ _SECURITY_HEADERS = {
 ServiceFactory = Callable[[], ControllerService]
 
 
+def _parse_start_daemon_overrides(form):
+    """STRICTLY parse the Start-confirm `dp_*` fields into a per-band map ``{band: {PARAM: value}}``
+    (or None). Returns ``(per_band_or_None, error)``. Every field whose name starts with `dp_` must
+    have the exact shape ``dp_<band>_<PARAM>`` (both parts non-empty) and appear once — a malformed
+    or duplicated field name is rejected here (error != None) so the start fails BEFORE any launch.
+    Unknown band / unknown parameter / value validity are enforced by the service normalizer
+    (`_normalize_ephemeral_overrides`); this parser does not duplicate those rules. A blank value is
+    carried through (the service treats blank/absent as "no override")."""
+    per_band: dict = {}
+    for name in form.keys():
+        if not name.startswith("dp_"):
+            continue
+        if len(form.getlist(name)) > 1:                       # duplicated/conflicting field
+            return None, f"duplicated daemon field {name!r}"
+        parts = name.split("_", 2)                            # ["dp", band, PARAM]
+        if len(parts) != 3 or not parts[1] or not parts[2]:   # malformed shape (dp_bad, dp_433_, dp_)
+            return None, f"malformed daemon field {name!r}"
+        _, band, param = parts
+        per_band.setdefault(band, {})[param] = form[name]
+    return (per_band or None), None
+
+
 def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     """Build the Flask app. `service_factory` is injectable for tests."""
     app = Flask(__name__)
@@ -208,6 +230,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             needs_build=[c.id for c in stack_status.stack.components
                          if c.source and service._lifecycle().source_dir(c).exists()
                          and not service.is_built(c)],
+            # Collapsed daemon-parameter panel, pre-populated from the config file.
+            daemon_params=service.daemon_params_view(stack_id, request.args.get("band", "")),
         )
 
     @app.post("/interactive/<stack_id>/dismiss")
@@ -249,9 +273,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         value = request.form.get("value", "")
         if request.form.get("confirmed") != "yes":
             plan = service.daemon_set(band, key, value, apply=False)
+            fsk = key.upper() == "MODE" and value.upper() == "FSK"
             return render_template("confirm_radio.html", version=__version__,
                                    runtime_root=_runtime_root(), band=band,
-                                   key=key, value=value, plan=plan)
+                                   key=key, value=value, plan=plan, fsk=fsk,
+                                   warn_stacks=service.running_lora_stacks(band) if fsk else [])
         result = service.daemon_set(band, key, value, apply=True)
         # Truthful flash: the service summary already distinguishes "applied (confirmed)"
         # from "SENT (unconfirmed)". Never claim "Applied" for a setting the daemon does
@@ -283,6 +309,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         stored = service.stack_config(target, band) if run_params else {}
         params = {p.name: request.form.get("p_" + p.name, stored.get(p.name, p.default))
                   for p in run_params}
+        # On the daemon start-confirm, the radio band + per-band TX-mode/CAD-monitor/CAD-RSSI
+        # START flags are set from the dashboard and the "Daemon radio parameters" panel — keep
+        # them OUT of the confirm parameter grid (still submitted as hidden inputs, so the start
+        # values are unchanged). CAD RSSI now lives in the daemon-parameters panel instead.
+        _hide = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
+                 "cadrssi_433", "cadrssi_868"}
+        hidden_params = [p for p in run_params if p.name in _hide]
+        shown_params = [p for p in run_params if p.name not in _hide]
         # Source version selector (only meaningful for install/update). A MISSING selector
         # defaults to the production-safe 'pinned' — never 'dev'. An INVALID selector is
         # rejected by run_action (never rewritten to dev).
@@ -310,7 +344,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                       band=band)
             return render_template("confirm.html", version=__version__,
                                    runtime_root=_runtime_root(), op=op, target=target,
-                                   plan=plan, tx=("tx" in op), run_params=run_params,
+                                   plan=plan, tx=("tx" in op), run_params=shown_params,
+                                   hidden_params=hidden_params,
                                    params=params, source=source, band=band,
                                    blockers=(plan.data.get("blockers") if op == "start" else None),
                                    stop_deps=(plan.data.get("dependents") if op == "stop" else None),
@@ -318,6 +353,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                    commands=(plan.data.get("commands") if op in ("start", "stop") else None),
                                    missing_deps=(service.missing_system_deps(target)
                                                  if op in ("install", "build") else None),
+                                   daemon_panels=(service.daemon_start_panels(target, params, band)
+                                                  if op == "start" else None),
                                    frm=frm,
                                    source_choices=service.SOURCE_CHOICES if op in ("install", "update") else None)
         # Stage 2: apply.
@@ -336,8 +373,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _redirect_for(target)
             flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
             return redirect(url_for("logs_view", target=target, job=job))
+        # Ephemeral PER-BAND daemon-param values from the confirm panel(s). STRICT parse of EVERY
+        # dp_* field: a malformed/duplicated field shape is a visible start failure BEFORE any
+        # launch; unknown band/param/value are validated by the service normalizer. Band-scoped
+        # dp_<band>_<PARAM> keeps 433 and 868 separate; values are applied for THIS launch only.
+        daemon_overrides = None
+        if op == "start":
+            daemon_overrides, dp_err = _parse_start_daemon_overrides(request.form)
+            if dp_err:
+                flash(f"Cannot start '{target}': {dp_err}", "warn")
+                return _redirect_for(target)
         result = service.run_action(op, target, apply=True, params=params, source=source,
-                                    stop_owners=stop_owners, cascade=cascade, band=band)
+                                    stop_owners=stop_owners, cascade=cascade, band=band,
+                                    daemon_overrides=daemon_overrides)
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if result.ok else "warn")
         # Transient green note(s) for a just-started component (e.g. how to connect a
@@ -377,7 +425,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         return render_template("config.html", version=__version__,
                                runtime_root=_runtime_root(), stack_id=stack_id,
-                               view=service.config_view(stack_id, request.args.get("band", "")))
+                               view=service.config_view(stack_id, request.args.get("band", "")),
+                               daemon_params=service.daemon_params_view(
+                                   stack_id, request.args.get("band", "")))
 
     @app.post("/stacks/<stack_id>/config")
     def stack_config_save(stack_id: str):  # noqa: ANN202
@@ -420,6 +470,59 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None))
+
+    def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
+        from lhpc.core import daemon_params as _dp
+        band = request.form.get("band", "")
+        return band, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
+
+    def _dp_back(stack_id: str, band: str):  # redirect to the submitting page (local-only)
+        nxt = request.form.get("next", "")
+        if nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt:
+            sep = "&" if "?" in nxt else "?"                  # keep the panel expanded (dp=1)
+            return redirect(nxt + sep + "dp=1")               # open-redirect-safe local path
+        return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None, dp=1))
+
+    @app.post("/stacks/<stack_id>/daemon-params")
+    def daemon_params_save(stack_id: str):  # noqa: ANN202
+        if service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        band, values = _daemon_param_form()
+        result = service.save_daemon_params(stack_id, band, values)
+        flash(result.summary, "ok" if result.ok else "warn")
+        return _dp_back(stack_id, band)
+
+    @app.post("/stacks/<stack_id>/daemon-params/apply")
+    def daemon_params_apply(stack_id: str):  # noqa: ANN202
+        if service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        band, values = _daemon_param_form()
+        save = service.save_daemon_params(stack_id, band, values)   # persist first
+        if not save.ok:
+            flash(save.summary, "warn")
+            return _dp_back(stack_id, band)
+        result = service.apply_daemon_params(stack_id, band)         # then push live
+        # Truthful: partial/total apply failure flashes as a warning (never green), and the
+        # timing override stays saved regardless.
+        flash("Saved. Apply live: " + result.summary
+              + (" — " + "; ".join(result.details) if result.details else ""),
+              "ok" if result.ok else "warn")
+        return _dp_back(stack_id, band)
+
+    @app.post("/stacks/<stack_id>/daemon-params/reset")
+    def daemon_params_reset(stack_id: str):  # noqa: ANN202
+        if service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        band = request.form.get("band", "")
+        result = service.reset_daemon_params(stack_id, band)
+        flash(result.summary, "ok" if result.ok else "warn")
+        return _dp_back(stack_id, band)
 
     @app.post("/stacks/<stack_id>/config/reset")
     def stack_config_reset(stack_id: str):  # noqa: ANN202

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Per-stack, per-band daemon radio parameters: editable panel (config/stack/start-confirm) covering MODE/FREQ/SF/BW/CR/CRC/LDRO/PREAMBLE/SYNC/POWER/TXMODE/TXQUEUE/CADMONITOR/CADRSSI/CADWAIT/CADIDLE/CADTXAFTERTIMEOUT, with source-derived defaults, server-side validation + canonicalisation, Save/Apply-live/Reset; ephemeral per-band Start-confirm overrides applied once at daemon-READY before stack start (CLI+web); truthful Apply-live; browser-only MODE=FSK warning; MeshCom CADIDLE=28. Local/stack TOML writes are type-safe, fail-closed, and patch owned keys only (transaction-rolled-back).
+
 ## 0.1.1 — hardening
 
 Hardening (see `docs/hardening-0.1.md`):

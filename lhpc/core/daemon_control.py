@@ -237,6 +237,20 @@ def _norm(val: str) -> str:
         return v
 
 
+def canonical_value(key: str, value: str) -> str:
+    """Canonical STORED form of a VALIDATED (key, value): enum values upper-cased (so `fsk` →
+    `FSK`, `managed` → `MANAGED`), integer-range values normalised to a bare decimal (so `028` →
+    `28`, `+5` → `5`). FREQ / SYNC keep their validated textual form. Assumes
+    `validate_set(key, value)` is None. Lets equivalent values compare equal (no redundant
+    override) and display correctly."""
+    k, v = key.upper(), str(value).strip()
+    if k in _ALLOWED_SET:
+        return v.upper()
+    if k in _ALLOWED_SET_INT:
+        return str(int(v))
+    return v
+
+
 def is_confirmable(key: str) -> bool:
     """True if the daemon reports this key back over a GET, so a SET can be CONFIRMED.
     Radio params (FREQ/SF/BW/…) are applied to the chip but never echoed, so a SET of

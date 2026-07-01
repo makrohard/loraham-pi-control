@@ -94,19 +94,18 @@ def test_save_profile_is_contained(tmp_path):
     assert outside.read_text() == "orig"
 
 
-def test_reset_config_unlinks_via_runtime_fs(tmp_path, monkeypatch):
-    # reset_config must delete the saved stack config THROUGH runtime_fs (no-follow).
+def test_reset_config_preserves_daemon_profile_and_unrelated(tmp_path):
+    # reset_config owns ONLY normal Config-page keys (run/file/autostart). Daemon-profile dp_*
+    # overrides and unrelated manual scalars are PRESERVED (removed via the locked safe merge).
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core import runtime_fs, config as cfgmod
+    from lhpc.core import config as cfgmod
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     p = cfgmod._stack_config_path(svc._paths, "daemon", "")
-    p.parent.mkdir(parents=True, exist_ok=True); p.write_text("x=1\n")
-    seen = {}
-    real = runtime_fs.unlink
-    def spy(paths, path):
-        seen["path"] = str(path); return real(paths, path)
-    monkeypatch.setattr(runtime_fs, "unlink", spy)
-    res = svc.reset_config("daemon")
-    assert res.ok and seen.get("path", "").endswith(".toml")
-    assert not p.exists()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\nmanual = 7\n')   # normal + dp_ + unrelated
+    assert svc.reset_config("daemon").ok
+    stored = cfgmod.load_stack_config(svc._paths, "daemon")
+    assert "radio" not in stored                    # normal run-param reset to default
+    assert stored["dp_433_CADIDLE"] == "40"          # daemon-profile override preserved
+    assert stored["manual"] == 7                     # unrelated manual scalar preserved

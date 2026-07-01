@@ -239,3 +239,218 @@ def test_load_profiles_symlinked_dir_is_empty(tmp_path):
     outside = tmp_path / "outside"; outside.mkdir(); (outside / "p.toml").write_text('component_id="y"\n')
     os.symlink(outside, rt / "profiles")            # profiles/ -> outside
     assert load_profiles(Paths(runtime_root=rt)) == {}
+
+
+# --- update_stack_config: preserve manual typed scalars during daemon-param saves ----------
+
+def _seed_stack_toml(paths, stack_id, raw, band=""):
+    from lhpc.core.config import _stack_config_path
+    p = _stack_config_path(paths, stack_id, band)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(raw)
+    return p
+
+
+def test_update_preserves_manual_bool_int_float(tmp_path):
+    from lhpc.core.config import update_stack_config, load_stack_config
+    paths = _paths(tmp_path)
+    _seed_stack_toml(paths, "meshcom", 'my_flag = true\nmy_int = 42\nmy_float = 1.5\n')
+    update_stack_config(paths, "meshcom", {"dp_433_CADIDLE": "40"})
+    cfg = load_stack_config(paths, "meshcom")
+    assert cfg["my_flag"] is True                                         # bool kept
+    assert cfg["my_int"] == 42 and type(cfg["my_int"]) is int             # int kept (not bool/str)
+    assert cfg["my_float"] == 1.5 and type(cfg["my_float"]) is float      # finite float kept
+    assert cfg["dp_433_CADIDLE"] == "40"                                  # daemon param stays str
+
+
+def test_update_preserves_unrelated_strings_and_other_band(tmp_path):
+    from lhpc.core.config import update_stack_config, load_stack_config
+    paths = _paths(tmp_path)
+    _seed_stack_toml(paths, "voice", 'autostart_x = "on"\nc_foo = "bar"\ndp_868_CADIDLE = "77"\n')
+    update_stack_config(paths, "voice", {"dp_433_CADIDLE": "40"})
+    cfg = load_stack_config(paths, "voice")
+    assert cfg["autostart_x"] == "on" and cfg["c_foo"] == "bar"           # unrelated strings kept
+    assert cfg["dp_868_CADIDLE"] == "77" and cfg["dp_433_CADIDLE"] == "40"  # other band kept
+
+
+def test_update_clear_removes_only_requested_key(tmp_path):
+    from lhpc.core.config import update_stack_config, load_stack_config
+    paths = _paths(tmp_path)
+    _seed_stack_toml(paths, "voice",
+                     'my_flag = true\ndp_433_CADIDLE = "40"\ndp_868_CADIDLE = "77"\n')
+    update_stack_config(paths, "voice", {"dp_433_CADIDLE": ""})           # "" clears 433 only
+    cfg = load_stack_config(paths, "voice")
+    assert "dp_433_CADIDLE" not in cfg
+    assert cfg["dp_868_CADIDLE"] == "77" and cfg["my_flag"] is True       # everything else kept
+
+
+def test_update_rejects_list_value_and_leaves_file_unchanged(tmp_path):
+    import pytest
+    from lhpc.core.config import update_stack_config, ConfigError
+    paths = _paths(tmp_path)
+    p = _seed_stack_toml(paths, "meshcom", 'bad = [1, 2]\nkeep = "x"\n')
+    before = p.read_text()
+    with pytest.raises(ConfigError):
+        update_stack_config(paths, "meshcom", {"dp_433_CADIDLE": "40"})
+    assert p.read_text() == before                                       # original untouched
+
+
+def test_update_rejects_table_value_and_leaves_file_unchanged(tmp_path):
+    import pytest
+    from lhpc.core.config import update_stack_config, ConfigError
+    paths = _paths(tmp_path)
+    p = _seed_stack_toml(paths, "meshcom", '[nested]\nx = 1\n')
+    before = p.read_text()
+    with pytest.raises(ConfigError):
+        update_stack_config(paths, "meshcom", {"dp_433_CADIDLE": "40"})
+    assert p.read_text() == before
+
+
+def test_update_rejects_nan_and_inf(tmp_path):
+    import pytest
+    from lhpc.core.config import update_stack_config, ConfigError
+    paths = _paths(tmp_path)
+    for raw in ("bad = nan\n", "bad = inf\n", "bad = -inf\n"):
+        p = _seed_stack_toml(paths, "meshcom", raw)
+        before = p.read_text()
+        with pytest.raises(ConfigError):
+            update_stack_config(paths, "meshcom", {"dp_433_CADIDLE": "40"})
+        assert p.read_text() == before
+
+
+def test_update_string_only_config_behavior_unchanged(tmp_path):
+    from lhpc.core.config import update_stack_config, load_stack_config
+    paths = _paths(tmp_path)
+    _seed_stack_toml(paths, "kiss", 'radio = "433"\nautostart_x = "on"\n')
+    update_stack_config(paths, "kiss", {"dp_433_CADWAIT": "1200"})
+    cfg = load_stack_config(paths, "kiss")
+    assert cfg == {"radio": "433", "autostart_x": "on", "dp_433_CADWAIT": "1200"}   # all strings
+
+
+def test_manual_bool_survives_daemon_param_save_end_to_end(tmp_path):
+    # The full path: services.save_daemon_params -> update_stack_config keeps a manual bool.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.config import load_stack_config
+    svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
+    _seed_stack_toml(svc._paths, "meshcom", 'operator_ready = true\nretries = 3\n')
+    assert svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"}).ok
+    cfg = load_stack_config(svc._paths, "meshcom")
+    assert cfg["operator_ready"] is True and cfg["retries"] == 3          # typed values survive
+    assert cfg["dp_433_CADIDLE"] == "40"
+
+
+# --- Area 1: normal-config vs daemon-profile ownership (merge, never full-replace) ------------
+
+def _svc(tmp_path):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.probes.backends import FakeSystem
+    return ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
+
+
+def test_daemon_override_survives_save_config(tmp_path):
+    from lhpc.core.config import load_stack_config
+    svc = _svc(tmp_path)
+    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_config("meshcom", {}).ok                          # normal save (no run change)
+    assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
+
+
+def test_daemon_override_survives_save_config_bundle(tmp_path):
+    from lhpc.core.config import load_stack_config
+    svc = _svc(tmp_path)
+    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc.save_config_bundle("meshcom", values={}, remotes={}).ok
+    assert load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
+
+
+def test_daemon_override_survives_public_save_stack_config(tmp_path):
+    from lhpc.core.config import load_stack_config, _stack_config_path
+    svc = _svc(tmp_path)
+    p = _stack_config_path(svc._paths, "daemon", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('dp_433_CADIDLE = "40"\n')
+    assert svc.save_stack_config("daemon", {"radio": "868"}).ok       # a normal run param
+    stored = load_stack_config(svc._paths, "daemon")
+    assert stored["radio"] == "868" and stored["dp_433_CADIDLE"] == "40"
+
+
+def test_daemon_override_survives_normal_reset(tmp_path):
+    from lhpc.core.config import load_stack_config, _stack_config_path
+    svc = _svc(tmp_path)
+    p = _stack_config_path(svc._paths, "daemon", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('radio = "868"\ndp_433_CADIDLE = "40"\n')
+    assert svc.reset_config("daemon").ok
+    stored = load_stack_config(svc._paths, "daemon")
+    assert "radio" not in stored and stored["dp_433_CADIDLE"] == "40"
+
+
+def test_normal_and_autostart_survive_daemon_save_and_reset(tmp_path):
+    from lhpc.core.config import load_stack_config, _stack_config_path
+    svc = _svc(tmp_path)
+    p = _stack_config_path(svc._paths, "meshcom", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('autostart_meshcom-gps-relay = "on"\nfile_x = "y"\ndp_868_CADIDLE = "77"\n')
+    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    st = load_stack_config(svc._paths, "meshcom")
+    assert st["autostart_meshcom-gps-relay"] == "on" and st["file_x"] == "y"
+    assert st["dp_868_CADIDLE"] == "77" and st["dp_433_CADIDLE"] == "40"   # other band survives
+    svc.reset_daemon_params("meshcom", "433")
+    st = load_stack_config(svc._paths, "meshcom")
+    assert st["dp_868_CADIDLE"] == "77" and "dp_433_CADIDLE" not in st     # only 433 cleared
+    assert st["autostart_meshcom-gps-relay"] == "on"                      # normal untouched
+
+
+def test_bundle_transaction_failure_preserves_both_files(tmp_path):
+    # A stack-file merge that raises (unsupported manual value already in the file) rolls the whole
+    # transaction back — local.toml AND the stack file keep their prior bytes.
+    from lhpc.core.config import _stack_config_path
+    svc = _svc(tmp_path)
+    local = svc._paths.runtime_root / "config" / "local.toml"
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_text('[operator]\ncallsign = "N0AAA"\n')
+    sp = _stack_config_path(svc._paths, "meshcom", "")
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text('bad = [1, 2]\n')                                   # unsupported -> render raises
+    local_before, stack_before = local.read_text(), sp.read_text()
+    res = svc.save_config_bundle("meshcom", values={}, remotes={"meshcom-bridge": "https://x/y.git"})
+    assert not res.ok
+    assert local.read_text() == local_before and sp.read_text() == stack_before   # both intact
+
+
+# --- Area 3: complete TOML string/key round-trip + parse-before-write -------------------------
+
+def test_toml_control_char_and_unicode_round_trip(tmp_path):
+    from lhpc.core.config import render_stack_config
+    import tomllib
+    vals = {"s": "a\tb\nc\r\\\"\x00\x08\x0c\x1f\x7fé中"}
+    assert tomllib.loads(render_stack_config("t", vals)) == vals      # exact round-trip
+
+
+def test_toml_tricky_keys_stay_flat(tmp_path):
+    from lhpc.core.config import render_stack_config
+    import tomllib
+    vals = {"custom.key": "x", "spaced key": "y", "a#b": "z", "bare-_1": "w"}
+    back = tomllib.loads(render_stack_config("t", vals))
+    assert back == vals and set(back) == set(vals)                    # no nesting/dotting
+
+
+def test_toml_rejects_control_char_key(tmp_path):
+    from lhpc.core.config import render_stack_config, ConfigError
+    import pytest
+    with pytest.raises(ConfigError):
+        render_stack_config("t", {"bad\x01key": "x"})
+
+
+def test_update_rejects_control_key_leaves_file_unchanged(tmp_path):
+    import pytest
+    from lhpc.core.config import update_stack_config, ConfigError, _stack_config_path
+    paths = _paths(tmp_path)
+    p = _stack_config_path(paths, "meshcom", "")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('keep = "x"\n')
+    before = p.read_text()
+    with pytest.raises(ConfigError):
+        update_stack_config(paths, "meshcom", {"bad\x01k": "v"})
+    assert p.read_text() == before

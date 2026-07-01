@@ -324,8 +324,6 @@ class Component:
     optional: bool = False       # an optional dependency component within a stack
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters
     requires_daemon_tx: str = ""             # daemon TX mode this component needs (MANAGED/DIRECT)
-    requires_daemon_cadidle: str = ""        # daemon CADIDLE (ms) this component wants (tuning,
-                                             # non-gating); "" = leave the daemon's default
     interactive: bool = False    # must be run by the operator in a terminal (e.g. a TUI);
                                  # the controller tracks it but never starts it
     config_file: FileConfig | None = None   # a config FILE the controller writes

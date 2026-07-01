@@ -67,6 +67,22 @@
             <h4>Parameters</h4>
             {{ param_grid(param_layout(run_params), params, 'p_') }}
           {% endif %}
+          {# Start flags kept out of the grid (daemon radio band / TX / CAD) — preserved so the
+             start is unchanged. #}
+          {% for p in hidden_params|default([]) %}
+            <input type="hidden" name="p_{{ p.name }}" value="{{ params[p.name] }}">
+          {% endfor %}
+          {% if daemon_panels %}
+            {% set stack_id = target %}
+            {% set dp_inline = true %}
+            <hr class="sep">
+            {# One panel per band this launch touches (two for a daemon --radio both), each with
+               band-scoped input names so 433 and 868 never cross. #}
+            {% for panel in daemon_panels %}
+              {% set daemon_params = panel %}
+              {% include "_daemon_params.html" %}
+            {% endfor %}
+          {% endif %}
           <button type="submit">{% if blockers %}Stop owner(s) &amp; Run{% elif stop_deps %}Stop dependents &amp; {{ target }}{% else %}Apply {{ op }}{% endif %}</button>
         </form>
         {% if commands %}

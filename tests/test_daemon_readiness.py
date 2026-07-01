@@ -46,7 +46,7 @@ def test_apply_tx_mode_refuses_when_not_ready(tmp_path):
 
 def test_apply_cadidle_refuses_when_not_ready(tmp_path):
     svc = _svc(tmp_path, b"STATUS RADIO=UNINITIALIZED CADIDLE=250\n")
-    ok, detail = svc._apply_cadidle("433", "0")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
     assert not ok and "not READY" in detail
 
 

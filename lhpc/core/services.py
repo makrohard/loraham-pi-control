@@ -26,15 +26,17 @@ from .config import (
     Config,
     ConfigError,
     apply_config_transaction,
+    merge_stack_values,
+    _patch_local_table,
     render_local_tables,
     render_stack_config,
+    update_stack_config,
     _load_runtime_toml,
     _stack_config_path,
     load_config,
     load_stack_config,
     render_keyval,
     save_component_remote,
-    save_operator_config,
     save_stack_config,
     update_toml,
     update_yaml,
@@ -552,25 +554,22 @@ class ControllerService:
         return [idx[cid] for cid in order]
 
     def _daemon_needs(self, order, params, band: str = ""):
-        """The daemon's required radio band + TX mode (+ optional CADIDLE tuning) for
-        this run order. `band` overrides the band for a band-switchable app stack.
-        Returns (radio, tx, cadidle); tx/cadidle are None when no single value applies."""
+        """The daemon's required radio band + TX mode for this run order. `band`
+        overrides the band for a band-switchable app stack. Returns (radio, tx); tx is
+        None when no single value applies."""
         if not any(c.id == self.DAEMON_ID for _, c in order):
-            return None, None, None
+            return None, None
         if params and params.get("radio"):
-            return params["radio"], None, None    # explicit (daemon stack) override
+            return params["radio"], None          # explicit (daemon stack) override
         if band in ("433", "868"):
             bands = {band}
         else:
             bands = {c.band for _, c in order if self.DAEMON_ID in c.depends_on and c.band}
         txs = {c.requires_daemon_tx for _, c in order
                if self.DAEMON_ID in c.depends_on and c.requires_daemon_tx}
-        cads = {c.requires_daemon_cadidle for _, c in order
-                if self.DAEMON_ID in c.depends_on and c.requires_daemon_cadidle}
         radio = "both" if len(bands) != 1 else next(iter(bands))
         tx = next(iter(txs)) if len(txs) == 1 else None
-        cadidle = next(iter(cads)) if len(cads) == 1 else None
-        return radio, tx, cadidle
+        return radio, tx
 
     def _effective_band(self, stack_id: str, fallback: str = "") -> str:
         """The band a stack is actually running on (start marker, or for an
@@ -700,6 +699,28 @@ class ControllerService:
                 if counts[k] <= 0:
                     counts.pop(k, None)
 
+    @contextmanager
+    def _keys_guard(self, op: str, target: str, keys: list):
+        """Acquire an explicit set of reslock keys, RE-ENTRANT per thread (sharing the same
+        `_held_counts` as `_lifecycle_guard`, so a key already held by an enclosing start is not
+        re-flocked). Raises `reslock.ResourceBusy` if an independent operation holds one."""
+        from . import reslock
+        counts = self._held_counts()
+        bumped: list = []
+        try:
+            with contextlib.ExitStack() as stack:
+                for k in sorted(set(keys), key=reslock.canonical_key):
+                    if counts.get(k, 0) == 0:
+                        stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                    counts[k] = counts.get(k, 0) + 1
+                    bumped.append(k)
+                yield
+        finally:
+            for k in bumped:
+                counts[k] -= 1
+                if counts[k] <= 0:
+                    counts.pop(k, None)
+
     def run_blockers(self, target: str, band: str = "") -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
         use that a RUNNING component of another stack is *actually* using. Radio
@@ -772,17 +793,22 @@ class ControllerService:
         return blockers
 
     def start(self, target: str, apply: bool = False, params: dict | None = None,
-              stop_owners: bool = False, band: str = "") -> ActionResult:
+              stop_owners: bool = False, band: str = "",
+              daemon_overrides: dict | None = None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
-        when stop_owners) so a DIRECT call gets the same coordination as CLI/web."""
+        when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
+        `daemon_overrides` are ephemeral per-start daemon-param values (this launch only, never
+        persisted); None = apply the saved config, as the CLI does."""
         from . import reslock
         if not apply:
             return self._start_impl(target, apply=False, params=params,
-                                    stop_owners=stop_owners, band=band)
+                                    stop_owners=stop_owners, band=band,
+                                    daemon_overrides=daemon_overrides)
         try:
             with self._lifecycle_guard("start", target, band, stop_owners=stop_owners):
                 return self._start_impl(target, apply=True, params=params,
-                                        stop_owners=stop_owners, band=band)
+                                        stop_owners=stop_owners, band=band,
+                                        daemon_overrides=daemon_overrides)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -791,7 +817,8 @@ class ControllerService:
                                 next_commands=[f"lhpc status {target}"])
 
     def _start_impl(self, target: str, apply: bool = False, params: dict | None = None,
-                    stop_owners: bool = False, band: str = "") -> ActionResult:
+                    stop_owners: bool = False, band: str = "",
+                    daemon_overrides: dict | None = None) -> ActionResult:
         order = self._run_order(target)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
@@ -802,15 +829,26 @@ class ControllerService:
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         cfg_band = self._config_band(target, band)
         life = self._lifecycle()
-        radio, tx, cadidle = self._daemon_needs(order, params, cfg_band)
+        radio, tx = self._daemon_needs(order, params, cfg_band)
+        # The stack whose daemon params to apply once the daemon is up (resolve a bare
+        # component target to its owning stack).
+        start_sid = target if self.stack(target) is not None else (self.stack_of(target) or target)
+        # THE authoritative boundary for ephemeral Start-confirm overrides: validate + canonicalise
+        # per band BEFORE any daemon launch, CONF mutation or client launch. An invalid override is
+        # a typed failure (never silently discarded in favour of a saved/default value).
+        launch_bands = ["433", "868"] if radio == "both" else ([radio] if radio in ("433", "868") else [])
+        daemon_overrides, ov_err = self._normalize_ephemeral_overrides(
+            start_sid, launch_bands, daemon_overrides)
+        if ov_err:
+            return ActionResult(False, f"Cannot start '{target}': invalid daemon parameter — {ov_err}",
+                                next_commands=[f"lhpc status {target}"])
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
             for _, comp in order:
                 if comp.id == self.DAEMON_ID:
                     details.append(f"  [daemon] start/ensure --radio {radio or 'both'}"
-                                   + (f", TXMODE={tx}" if tx else "")
-                                   + (f", CADIDLE={cadidle}ms" if cadidle is not None else ""))
+                                   + (f", TXMODE={tx}" if tx else ""))
                 elif comp.interactive:
                     cmd = self.manual_start_command(comp)
                     details.append(f"  [manual] {comp.id} is interactive — the daemon is "
@@ -891,8 +929,8 @@ class ControllerService:
                        "endpoint is missing) — stop it (verified) and re-run")
                 continue
             if comp.id == self.DAEMON_ID:
-                dlines, dok = self._ensure_daemon(life, stack, comp, running, radio, tx,
-                                                  cadidle, params)
+                dlines, dok = self._ensure_daemon(life, stack, comp, running, radio, params,
+                                                  start_sid, daemon_overrides)
                 out.extend(dlines)
                 results.append(CompResult(component=comp.id, stack=stack.id, action="start",
                     outcome=(Outcome.VERIFIED if dok else Outcome.FAILED),
@@ -1095,7 +1133,8 @@ class ControllerService:
                 out.append(pid)
         return out
 
-    def _ensure_daemon(self, life, stack, comp, running, radio, tx, cadidle, params):
+    def _ensure_daemon(self, life, stack, comp, running, radio, params, start_sid,
+                       daemon_overrides=None):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
 
         "Running" means the band's CONF socket is reachable, not merely that a
@@ -1106,66 +1145,58 @@ class ControllerService:
           * not serving the band   -> start a daemon instance with --radio <band>
             (works alongside an instance already serving the other band).
         """
-        # Bands this start must make ready. --radio both must verify BOTH 433 and 868.
+        # Bands this start must make ready. --radio both must ensure BOTH 433 and 868.
         needed = ["433", "868"] if (radio or "both") == "both" else [radio]
         views = {b: daemon_control.read_view(self._system, b) for b in needed}
-        if all(v.reachable for v in views.values()):
-            lines, ok_all = [], True
-            for b in needed:
-                if not views[b].ready:
-                    # Reachable but the radio is NOT usable (RADIO=FAILED/UNINITIALIZED):
-                    # never treat it as serving the band, and never permit the dependent
-                    # to launch against a non-READY radio (no second instance is started
-                    # — a live daemon already holds the band's SPI).
-                    ok_all = False
-                    lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
-                                 f"{views[b].radio_state or 'unknown'} (not READY) — "
-                                 "dependent launch blocked")
-                    continue
-                if tx:
-                    tok, detail = self._apply_tx_mode(b, tx)
-                    ok_all = ok_all and tok
-                    lines.append(f"  [{'ok' if tok else 'fail'}] daemon already serving {b}; {detail}")
-                else:
-                    cur = views[b].status.get("TXMODE", "").upper()
-                    lines.append(f"  [ok] daemon already serving {b}"
-                                 + (f" (TXMODE={cur})" if cur else ""))
-                if cadidle is not None:                 # tuning: non-gating (see _apply_cadidle)
-                    cok, cdetail = self._apply_cadidle(b, cadidle)
-                    lines.append(f"  [{'ok' if cok else 'warn'}] {b}: {cdetail}")
-            return lines, ok_all
-        if comp.source and not life.source_dir(comp).exists():
-            return ["  [skip] daemon: not installed (lhpc install daemon)"], False
-        if not self.is_built(comp):
-            return ["  [BLOCKED] daemon: not built — build it first (lhpc build daemon)"], False
-        # Start with the saved daemon config (its normal/default TX mode). The needed
-        # TX mode is applied LIVE once the socket is up (SET TXMODE) — the documented
-        # MeshCom path; a --tx-mode-<band> direct START flag could fail to init.
-        dparams = dict(self.stack_config("daemon"))
-        dparams["radio"] = radio or "both"
-        if params and params.get("debug"):
-            dparams["debug"] = "1"
-        res = life.start(stack, comp, dparams, band=dparams["radio"])
-        base = f"start daemon --radio {dparams['radio']}"
-        if not res.ok:
-            return [f"  [fail] {base}: {res.detail}"], False
-        # The daemon inits the radio + opens its CONF socket asynchronously. VERIFY
-        # EACH needed band actually came up — a launch that never exposes its CONF
-        # socket is a FAILURE, not a warning-success.
-        lines, ok_all = [f"  [ok] {base}"], True
+        # Classify each band: READY (retain), reachable-but-not-READY (fail; NEVER relaunch a
+        # replacement against a live radio), or ABSENT (must be started).
+        not_ready = [b for b in needed if views[b].reachable and not views[b].ready]
+        absent = [b for b in needed if not views[b].reachable]
+        lines, ok_all = [], True
+        for b in not_ready:
+            ok_all = False
+            lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
+                         f"{views[b].radio_state or 'unknown'} (not READY) — dependent launch blocked")
+        started: set = set()
+        if absent:
+            if comp.source and not life.source_dir(comp).exists():
+                lines.append("  [skip] daemon: not installed (lhpc install daemon)")
+                return lines, False
+            if not self.is_built(comp):
+                lines.append("  [BLOCKED] daemon: not built — build it first (lhpc build daemon)")
+                return lines, False
+            # Start ONLY the missing bands: --radio both when BOTH are absent, else the single
+            # missing band — never a second --radio both while a radio is already served. The TX
+            # mode is applied LIVE once the socket is up (the documented MeshCom path).
+            radio_arg = "both" if set(absent) == {"433", "868"} else absent[0]
+            dparams = dict(self.stack_config("daemon"))
+            dparams["radio"] = radio_arg
+            if params and params.get("debug"):
+                dparams["debug"] = "1"
+            res = life.start(stack, comp, dparams, band=radio_arg)
+            base = f"start daemon --radio {radio_arg}"
+            if not res.ok:
+                lines.append(f"  [fail] {base}: {res.detail}")
+                return lines, False
+            lines.append(f"  [ok] {base}")
+            started = set(absent)
+        # Verify + apply, once per band that should now be READY (retained or freshly started;
+        # not-ready bands were already failed above and are skipped).
         for b in needed:
-            if self._verify_band_up(b):
-                if tx:
-                    tok, detail = self._apply_tx_mode(b, tx)
-                    ok_all = ok_all and tok
-                    lines.append(f"  [{'ok' if tok else 'fail'}] {b}: {detail}")
-                if cadidle is not None:                 # tuning: non-gating (see _apply_cadidle)
-                    cok, cdetail = self._apply_cadidle(b, cadidle)
-                    lines.append(f"  [{'ok' if cok else 'warn'}] {b}: {cdetail}")
+            if b in not_ready:
+                continue
+            if b in started:
+                if not self._verify_band_up(b):
+                    ok_all = False
+                    lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
+                                 f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
+                    continue
             else:
-                ok_all = False
-                lines.append(f"  [fail] {b} CONF socket never came up — the daemon failed "
-                             f"to init on {b} (radio/SPI busy or a stale lock); see its log.")
+                lines.append(f"  [ok] daemon already serving {b}")
+            plines, tx_ok = self._apply_stack_daemon_params(start_sid, b,
+                                                            (daemon_overrides or {}).get(b))
+            lines.extend(plines)
+            ok_all = ok_all and tx_ok
         return lines, ok_all
 
     def _apply_tx_mode(self, band: str, tx: str) -> tuple[bool, str]:
@@ -1203,32 +1234,295 @@ class ControllerService:
         except (TypeError, ValueError):
             return False
 
-    def _apply_cadidle(self, band: str, cadidle: str) -> tuple[bool, str]:
-        """Apply a requested daemon CADIDLE (channel stable-idle window, ms) and verify
-        by READBACK. Returns (ok, detail). This is NON-GATING tuning: it lowers TX
-        latency toward the source firmware's single-CAD timing, but a failure is only
-        reported (never blocks the dependent) because the daemon still does LBT at its
-        current CADIDLE. Skips the SET when the value already matches."""
-        want = str(cadidle).strip()
+    def _apply_conf_param(self, band: str, key: str, want) -> tuple[bool, str]:
+        """Apply a numeric daemon LBT param (CADIDLE/CADWAIT, ms) and verify by READBACK.
+        Returns (ok, detail). NON-GATING tuning: a failure is only reported (never blocks the
+        dependent) because the daemon still does LBT at its current value. Skips the SET when
+        the value already matches."""
+        want = str(want).strip()
         view = daemon_control.read_view(self._system, band)
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
-            return False, f"{band} radio not READY for CADIDLE set (RADIO={state})"
-        if self._cadidle_eq(view.status.get("CADIDLE"), want):
-            return True, f"CADIDLE already {want}ms"
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, "CADIDLE", want)
+            return False, f"{band} radio not READY for {key} set (RADIO={state})"
+        if self._cadidle_eq(view.status.get(key), want):
+            return True, f"{key} already {want}ms"
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, key, want)
         if not ok:
-            return False, f"SET CADIDLE={want} rejected: {detail}"
+            return False, f"SET {key}={want} rejected: {detail}"
         waited = 0.0
         while True:                              # bounded read-only readback
             v = daemon_control.read_view(self._system, band)
-            got = v.status.get("CADIDLE") if v.reachable else None
+            got = v.status.get(key) if v.reachable else None
             if self._cadidle_eq(got, want):
-                return True, f"SET CADIDLE={want}ms confirmed by readback"
+                return True, f"SET {key}={want}ms confirmed by readback"
             if self.DAEMON_VERIFY_TIMEOUT_S <= 0 or waited >= self.DAEMON_VERIFY_TIMEOUT_S:
-                return False, f"CADIDLE readback {got or 'absent'} != {want} (not applied)"
+                return False, f"{key} readback {got or 'absent'} != {want} (not applied)"
             time.sleep(self.DAEMON_VERIFY_POLL_S)
             waited += self.DAEMON_VERIFY_POLL_S
+
+    # -- per-stack daemon radio parameters (see core/daemon_params.py) ------
+
+    def _apply_daemon_param(self, band: str, key: str, value: str) -> tuple[bool, str]:
+        """Apply one daemon param at `band`. TXMODE and CAD timing are confirmed by readback;
+        radio params (FREQ/SF/BW/…) are SET once — the daemon never echoes them, so they are
+        reported SENT-but-unconfirmed (non-gating)."""
+        if key == "TXMODE":
+            return self._apply_tx_mode(band, value)
+        if key in ("CADWAIT", "CADIDLE"):
+            return self._apply_conf_param(band, key, value)
+        view = daemon_control.read_view(self._system, band)
+        if not view.ready:
+            state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
+            return False, f"{band} radio not READY for {key} (RADIO={state})"
+        ok, _confirmed, detail = daemon_control.apply_set(self._system, band, key, value)
+        return ok, detail
+
+    def _effective_daemon_band(self, target: str, band: str = "") -> str:
+        """The single band the daemon-params panel/apply uses: the requested band if valid, else
+        the stack's fixed band (from its band-component), else 433."""
+        if band in daemon_control.ALLOWED_BANDS:
+            return band
+        s = self.stack(target)
+        fixed = sorted({c.band for c in (s.components if s else ()) if c.band}
+                       & set(daemon_control.ALLOWED_BANDS))
+        return fixed[0] if fixed else "433"
+
+    def _daemon_param_overrides(self, stack_id: str, band: str) -> dict:
+        """Persisted operator overrides for a stack's daemon params, read from the stack's
+        runtime-local config as flat `dp_<band>_<PARAM>` keys (dot-free, so TOML never nests
+        them). Only validated keys are returned; {} when none."""
+        from . import daemon_params, config as cfgmod
+        stored = cfgmod.load_stack_config(self._paths, stack_id)
+        out: dict[str, str] = {}
+        for name in daemon_params.ALL_PARAMS:
+            v = stored.get(f"dp_{band}_{name}")
+            if v not in (None, "") and daemon_control.validate_set(name, str(v)) is None:
+                out[name] = str(v)
+        return out
+
+    def _has_daemon_params(self, target: str) -> bool:
+        """True when `target` gets a daemon-param panel: a daemon-client stack, the daemon
+        component, or the daemon stack (whose main IS the daemon component)."""
+        from . import daemon_params
+        s = self.stack(target)
+        return (daemon_params.is_client(target) or target == self.DAEMON_ID
+                or (s is not None and s.main == self.DAEMON_ID))
+
+    def _daemon_param_applies(self, stack_id: str, band: str, overrides: dict | None = None) -> dict:
+        """The daemon params lhpc APPLIES for this stack+band — the effective value (source
+        default merged with the persisted operator override) of EVERY param that has one. Applied
+        ONCE after the daemon is up and before the stack's own components start; the app then
+        overwrites the radio params it owns. `overrides` are EPHEMERAL per-start values (e.g. from
+        the start-confirm panel) that take precedence for this apply only and are NOT persisted —
+        so a confirm-page "Reset to defaults" changes what is applied now, never the saved config.
+        Ordered radio-first. Empty for non-daemon stacks."""
+        from . import daemon_params
+        if not self._has_daemon_params(stack_id):
+            return {}
+        if band not in daemon_control.ALLOWED_BANDS:
+            return {}
+        ov = self._daemon_param_overrides(stack_id, band)          # persisted config overrides
+        # Ephemeral this-start values (already validated + canonicalised at the start boundary,
+        # `_normalize_ephemeral_overrides`) take precedence for this apply only; never persisted.
+        for key, val in (overrides or {}).items():
+            if key in daemon_params.ALL_PARAMS and str(val) != "":
+                ov[key] = str(val)
+        out: dict[str, str] = {}
+        for name in daemon_params.ALL_PARAMS:
+            eff = ov.get(name) or daemon_params.default_value(stack_id, band, name)
+            if eff:
+                out[name] = eff
+        return out
+
+    def _normalize_ephemeral_overrides(self, target: str, launch_bands: list, raw):
+        """THE service-side validation/normalization boundary for ephemeral Start-confirm daemon
+        overrides. `raw` is a per-band map ``{band: {PARAM: value}}`` (or None). Returns
+        ``({band: {PARAM: canonical}}, None)`` on success, or ``({}, error)`` — REJECTING an unknown
+        param key, an unknown band, a band not part of THIS launch, and any malformed / out-of-range
+        / invalid-enum value (identifying the band + param). Accepted values are canonicalised
+        exactly like a persisted save (`fsk`→`FSK`, `028`→`28`); `MODE=FSK` is accepted (browser-
+        warning-only). A BLANK value = no override for that key (absent key = same); Reset submits
+        explicit default values, so a blank can never resurrect a saved override."""
+        from . import daemon_params
+        if not raw:
+            return {}, None
+        if not isinstance(raw, dict):
+            return {}, "malformed daemon override payload"
+        if not self._has_daemon_params(target):
+            return {}, f"{target} has no configurable daemon parameters"
+        allowed = set(launch_bands)
+        out: dict = {}
+        for band, params in raw.items():
+            if band not in daemon_control.ALLOWED_BANDS:
+                return {}, f"unknown radio band {band!r}"
+            if band not in allowed:
+                return {}, f"band {band} MHz is not part of this start"
+            if not isinstance(params, dict):
+                return {}, f"malformed override for band {band}"
+            canon: dict = {}
+            for name, val in params.items():
+                if name not in daemon_params.ALL_PARAMS:
+                    return {}, f"unknown daemon parameter {name!r} ({band} MHz)"
+                v = str(val).strip()
+                if v == "":
+                    continue                                       # blank -> no override
+                err = daemon_control.validate_set(name, v)
+                if err:
+                    return {}, f"{band} MHz {name}: {err}"
+                canon[name] = daemon_control.canonical_value(name, v)
+            if canon:
+                out[band] = canon
+        return out, None
+
+    def _apply_stack_daemon_params(self, stack_id: str, band: str,
+                                   overrides: dict | None = None) -> tuple[list, bool]:
+        """Apply the stack's daemon params to a READY band, once (ephemeral `overrides` take
+        precedence for this start only). Returns (lines, tx_ok): TXMODE is gating (the app needs
+        its mode); radio params (sent-unconfirmed) and CAD tuning are non-gating."""
+        lines, tx_ok = [], True
+        for key, val in self._daemon_param_applies(stack_id, band, overrides).items():
+            ok, detail = self._apply_daemon_param(band, key, val)
+            gating = key == "TXMODE"                     # the app needs its mode; radio/CAD not
+            if gating:
+                tx_ok = ok
+            tag = "ok" if ok else ("fail" if gating else "warn")
+            # Radio params aren't echoed by the daemon; keep the start log concise (no verbose
+            # "SENT but UNCONFIRMED …" explanation for each one).
+            if ok and not daemon_control.is_confirmable(key):
+                detail = f"{key}={val} sent"
+            lines.append(f"  [{tag}] {band}: {detail}")
+        return lines, tx_ok
+
+    def daemon_params_view(self, target: str, band: str = "") -> dict:
+        """Web view for the daemon-params panel: the grouped, editable radio-parameter rows for
+        ONE band (the page's selected band, or the stack's fixed band). {} for direct-SPI /
+        unknown stacks. Values are the effective config-file values (default + operator save)."""
+        from . import daemon_params
+        s = self.stack(target)
+        is_daemon = (target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID))
+        if not (is_daemon or daemon_params.is_client(target)):
+            return {}
+        b = self._effective_daemon_band(target, band)
+        # "Apply live" only makes sense against a live daemon: the daemon page always, or an
+        # app stack that is currently running (its daemon dependency is up).
+        can_apply = is_daemon or self.stack_running(target)
+        return {"stack": target, "band": b, "is_daemon": is_daemon, "can_apply": can_apply,
+                "rows": daemon_params.stack_view(target, b, self._daemon_param_overrides(target, b))}
+
+    def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "") -> list:
+        """Start-confirm panel view(s): ONE per band THIS launch will touch — two for a daemon
+        `--radio both`, one for a single-band daemon or client start. Each panel carries its own
+        band, source defaults + saved overrides, and (via the template) band-scoped input names
+        `dp_<band>_<PARAM>`, so a 433 value never reaches 868. The radio mode comes from `params`
+        (the daemon's `p_radio`), not just the URL band. [] for direct-SPI / unknown stacks."""
+        from . import daemon_params
+        s = self.stack(target)
+        is_daemon = target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID)
+        if not (is_daemon or daemon_params.is_client(target)):
+            return []
+        radio, _tx = self._daemon_needs(self._run_order(target), params, self._config_band(target, band))
+        if radio == "both":
+            bands = ["433", "868"]
+        elif radio in ("433", "868"):
+            bands = [radio]
+        else:
+            bands = [self._effective_daemon_band(target, band)]
+        return [{"stack": target, "band": b, "is_daemon": is_daemon,
+                 "rows": daemon_params.stack_view(target, b, self._daemon_param_overrides(target, b))}
+                for b in bands]
+
+    def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
+        """Persist operator overrides for a stack's daemon params (band-scoped). Semantics:
+          * a param NOT present in `values` is left UNCHANGED (direct callers patch a subset);
+          * an explicitly BLANK value clears ONLY that param's override;
+          * a supplied value is validated, then CANONICALISED (enum upper-cased, integer
+            normalised) before compare/store — an equivalent-to-default value clears rather than
+            persisting a redundant override, and e.g. `fsk` is stored/displayed as `FSK`.
+        Persisted via the LOCKED merge, so normal params, other-band dp_*, remotes and autostart
+        all survive. Never applies live."""
+        from . import daemon_params, config as cfgmod
+        band = self._effective_daemon_band(target, band)
+        if not self._has_daemon_params(target):
+            return ActionResult(False, f"{target} has no configurable daemon parameters")
+        updates: dict[str, str] = {}
+        for name in daemon_params.ALL_PARAMS:
+            if name not in values:
+                continue                                           # omitted -> leave unchanged
+            key = f"dp_{band}_{name}"
+            raw = str(values[name]).strip()
+            if raw == "":
+                updates[key] = ""                                  # explicit blank -> clear this key
+                continue
+            err = daemon_control.validate_set(name, raw)
+            if err:
+                return ActionResult(False, f"{name}: {err}")
+            canon = daemon_control.canonical_value(name, raw)
+            updates[key] = "" if canon == daemon_params.default_value(target, band, name) else canon
+        try:
+            cfgmod.update_stack_config(self._paths, target, updates)   # clear_empty=True
+        except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
+            return ActionResult(False, f"could not save daemon params: {exc}")
+        self._invalidate_config()
+        return ActionResult(True, f"saved daemon params for {target} ({band})")
+
+    def apply_daemon_params(self, target: str, band: str = "") -> ActionResult:
+        """Apply this stack's effective daemon params to the RUNNING daemon now (the Apply button).
+
+        Serializes against start/stop/restart and another Apply on the same band via the band
+        lifecycle lock (re-entrant per thread). TRUTHFUL: `ok=True` only when every attempted set
+        is applied; `ok=False` for total failure; a `PARTIAL` `ok=False` when some fail. The
+        structured `data` reports band + attempted/applied/failed/confirmed/sent-unconfirmed keys —
+        radio params the daemon does not echo are reported SENT (never claimed as read-back
+        confirmed). Valid settings were persisted first (by the caller); a live-apply failure never
+        rolls that back — `data['persisted']` says so."""
+        from . import daemon_params, reslock
+        if not self._has_daemon_params(target):
+            return ActionResult(False, f"{target} has no configurable daemon parameters")
+        # Apply live only on the daemon itself or a running app stack (defence in depth: the
+        # UI disables the button, the service enforces it).
+        s = self.stack(target)
+        is_daemon = target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID)
+        if not (is_daemon or self.stack_running(target)):
+            return ActionResult(False, f"Apply live is only available while {target} is running")
+        b = self._effective_daemon_band(target, band)
+        sid = self.stack_of(target) or target
+        keys = [f"lifecycle.{sid}", f"claim.loraham.radio.{b}"]   # serialize vs start/stop on band
+        try:
+            with self._keys_guard("apply", target, keys):        # re-entrant per thread
+                if not daemon_control.read_view(self._system, b).reachable:
+                    return ActionResult(False, f"daemon not serving {b} MHz — start it first",
+                                        data={"band": b, "persisted": True})
+                applies = self._daemon_param_applies(target, b)
+                applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
+                for key, val in applies.items():
+                    ok, detail = self._apply_daemon_param(b, key, val)
+                    if ok:
+                        applied.append(key)
+                        (confirmed if daemon_control.is_confirmable(key) else unconfirmed).append(key)
+                    else:
+                        failed.append(key)
+                    details.append(f"{key}={val}: {detail}")
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"radio {b} MHz is busy ({busy}); try again",
+                                data={"band": b, "busy": True, "persisted": True})
+        data = {"band": b, "attempted": list(applies), "applied": applied, "failed": failed,
+                "confirmed": confirmed, "sent_unconfirmed": unconfirmed, "persisted": True}
+        n = len(applies)
+        if n == 0:
+            return ActionResult(True, f"no daemon parameters to apply on {b} MHz", data=data)
+        if not failed:
+            return ActionResult(True, f"applied {n}/{n} on {b} MHz ({len(confirmed)} confirmed, "
+                                f"{len(unconfirmed)} sent-unconfirmed)", details=details, data=data)
+        if not applied:
+            return ActionResult(False, f"FAILED to apply any of {n} daemon params on {b} MHz "
+                                "(saved profile unchanged)", details=details, data=data)
+        return ActionResult(False, f"PARTIAL: applied {len(applied)}/{n}, {len(failed)} FAILED on "
+                            f"{b} MHz (saved profile unchanged)", details=details, data=data)
+
+    def reset_daemon_params(self, target: str, band: str) -> ActionResult:
+        """Clear all daemon-param overrides for a stack+band (back to source defaults)."""
+        from . import daemon_params
+        return self.save_daemon_params(target, band, {k: "" for k in daemon_params.ALL_PARAMS})
 
     def _verify_band_up(self, band: str) -> bool:
         """Poll a band's CONF socket until the daemon reports RADIO=READY, up to the
@@ -1940,6 +2234,17 @@ class ControllerService:
         except (OSError, ValueError):
             return default
 
+    def running_lora_stacks(self, band: str) -> list:
+        """Daemon-client (LoRa) stacks currently running on `band` — the ones a live switch to
+        MODE=FSK would break. Used to warn on the daemon's live-setting confirm."""
+        from . import daemon_params
+        out = []
+        for sid in daemon_params.CLIENT_STACKS:
+            if self.stack_running(sid) and \
+                    self._effective_daemon_band(sid, self.running_band(sid)) == band:
+                out.append(sid)
+        return out
+
     def stack_bands(self, target: str) -> tuple:
         """Bands the operator may choose for `target` (empty = single fixed band)."""
         s = self.stack(target)
@@ -2383,31 +2688,30 @@ class ControllerService:
             view["band"] = live_band
             view["live_band"] = True       # band switch selects the LIVE band, not config
             dv = self.daemon_view(live_band)
+            # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
+            # what it actually reports; the configured daemon-param value is the fallback for
+            # radio params the daemon does not echo (FREQ/SF/BW/…).
+            actual = {**dv.channel, **dv.status}
+            cfg = self._daemon_param_applies("daemon", live_band) if dv.reachable else {}
             view["radios"] = [{"band": live_band, "reachable": dv.reachable,
-                               "error": dv.error, "status": dv.status}]
-            view["live_settings"] = daemon_control.allowed_settings()
+                               "error": dv.error, "status": actual, "config": cfg}]
+            # Order the live per-parameter controls the same as the daemon-params panel
+            # below (shared keys in that order; any daemon-only extras after).
+            from . import daemon_params
+            allowed = daemon_control.allowed_settings()
+            order = ([k for k in daemon_params.ALL_PARAMS if k in allowed]
+                     + [k for k in allowed if k not in daemon_params.ALL_PARAMS])
+            view["live_settings"] = {k: allowed[k] for k in order}
         return view
 
     def save_config(self, target: str, values: dict,
                     callsign: str | None = None, locator: str | None = None,
                     band: str = "") -> ActionResult:
-        """Save operator identity (if supplied) and the stack's run parameters.
-        Callsign/locator are validated before persistence."""
-        if callsign is not None or locator is not None:
-            try:
-                cs = validators.callsign(callsign or "", field="callsign")
-                loc = validators.locator(locator or "", field="locator")
-            except validators.ValidationError as exc:
-                return ActionResult(False, f"Config not saved for '{target}'.",
-                                    details=[str(exc)])
-            try:
-                save_operator_config(self._paths, cs.upper(), loc)
-            except ConfigError as exc:
-                return ActionResult(
-                    False, f"Config not saved for '{target}'.",
-                    details=[f"existing local.toml is malformed and was preserved (not "
-                             f"overwritten) — fix or remove it: {exc}"])
-        return self.save_stack_config(target, values, band=band)
+        """Save operator identity (if supplied) and the stack's run parameters as ONE
+        all-or-recoverable transaction (via `save_config_bundle`): if the stack config fails to
+        validate/persist, operator identity is NOT partially written."""
+        return self.save_config_bundle(target, values=values, callsign=callsign,
+                                       locator=locator, band=band)
 
     def save_config_bundle(self, target: str, *, values: dict | None = None,
                            callsign: str | None = None, locator: str | None = None,
@@ -2453,14 +2757,25 @@ class ControllerService:
                 loc = validators.locator(locator or "", field="locator")
             except validators.ValidationError as exc:
                 errors.append(str(exc))
-        clean_remotes: dict = {}
+        # A remote submission is a PATCH for THIS stack's own source components only (enforced in
+        # the service, not the web form): validated non-blank -> set, blank -> clear that
+        # component's override. A component id not declared by `target` (unknown, another stack's,
+        # or one without a source remote) is REJECTED. Other stacks' overrides are untouched.
+        stack_remote_cids = {c.id for c in s.components if c.source and c.source.remote}
+        remote_patch: dict = {}
         if remotes is not None:
             for cid, url in remotes.items():
                 try:
                     vid = validators.path_component(cid, field="component id")
-                    vurl = validators.remote_url(url or "", field="remote")
-                    if vurl:
-                        clean_remotes[vid] = vurl
+                except validators.ValidationError as exc:
+                    errors.append(str(exc))
+                    continue
+                if vid not in stack_remote_cids:
+                    errors.append(f"remote override not allowed for {vid!r} — not a source "
+                                  f"component of '{target}'")
+                    continue
+                try:
+                    remote_patch[vid] = validators.remote_url(url or "", field="remote")   # "" clears
                 except validators.ValidationError as exc:
                     errors.append(str(exc))
         if errors:                                  # reject the whole bundle — zero mutation
@@ -2469,22 +2784,30 @@ class ControllerService:
         targets: list = []
         local_path = self._paths.runtime_root / "config" / "local.toml"
         if op_change or remotes is not None:
-            try:
-                # Descriptor-anchored no-follow read (a symlinked/escaping runtime
-                # local.toml is refused here, never followed out of the runtime root).
-                existing = _load_runtime_toml(self._paths, local_path)
-            except ConfigError as exc:
-                return ActionResult(False, f"Config not saved for '{target}'.",
-                                    details=[f"local.toml malformed and preserved: {exc}"])
-            tables = {k: dict(v) for k, v in existing.items() if isinstance(v, dict)}
-            if op_change:
-                tables["operator"] = {"callsign": cs, "locator": loc}
-            if remotes is not None:
-                tables["remotes"] = clean_remotes
-            targets.append(("local", local_path, render_local_tables(tables), 0o600))
+            def _render_local(p, opc=op_change, _cs=cs, _loc=loc, patch=remote_patch,
+                              do_remotes=(remotes is not None)):
+                # Read the LATEST local.toml INSIDE the transaction lock and MERGE — preserving
+                # every unrelated table and every other component's remote override. A malformed
+                # local.toml raises here -> the transaction rolls back and preserves it.
+                existing = _load_runtime_toml(self._paths, local_path)   # no-follow; ConfigError on corrupt
+                data = dict(existing)                     # keep root scalars + every other table
+                if opc:
+                    # Patch ONLY callsign/locator — preserve any other [operator] scalar keys.
+                    _patch_local_table(data, "operator", {"callsign": _cs, "locator": _loc})
+                if do_remotes:
+                    # Patch owned component keys only (None clears); other remotes preserved. A
+                    # non-table `operator`/`remotes` value is rejected here -> transaction rollback.
+                    _patch_local_table(data, "remotes",
+                                       {vid: (vurl or None) for vid, vurl in patch.items()})
+                return render_local_tables(data)          # type-safe, preserves root scalars
+            targets.append(("local", local_path, _render_local, 0o600))
         cfg_band = self._config_band(target, band)
+        # The stack file is written as a MERGE rendered INSIDE the transaction lock: read the
+        # latest config, overlay the submitted normal keys, keep daemon-profile dp_* + unrelated
+        # manual scalars. A raise here (unsupported manual value) rolls the whole transaction back.
         targets.append(("stack", _stack_config_path(self._paths, target, cfg_band),
-                        render_stack_config(target, clean), 0o644))
+                        lambda p, tgt=target, b=cfg_band, cl=clean: render_stack_config(
+                            tgt, merge_stack_values(p, tgt, b, cl, clear_empty=False)), 0o644))
         # Compute changed apply-modes against the PRE-SAVE effective config — BEFORE the
         # transaction writes the new values and BEFORE the cache is invalidated. Reading
         # `before` afterwards would compare new-vs-new and lose every restart/build hint.
@@ -2542,7 +2865,11 @@ class ControllerService:
         changed_modes = {params_by_name[k].apply_mode
                          for k, v in clean.items()
                          if k in params_by_name and str(before.get(k, "")) != str(v)}
-        save_stack_config(self._paths, target, clean, self._config_band(target, band))
+        # MERGE the normal keys (run/file/autostart) — never a full replace, so daemon-profile
+        # dp_* overrides and unrelated manual scalars survive. clear_empty=False keeps explicit
+        # empty normal values (e.g. an unset int / an off autostart flag).
+        update_stack_config(self._paths, target, clean, self._config_band(target, band),
+                            clear_empty=False)
         self._invalidate_config()               # subsequent reads see the new params
         hints = self._apply_hints(target, changed_modes)
         return ActionResult(True, f"Config saved for '{target}'.", details=hints,
@@ -2790,31 +3117,30 @@ class ControllerService:
                 raise
 
     def reset_config(self, target: str, band: str = "") -> ActionResult:
-        """Delete a stack/band's saved config so it reverts to the running defaults."""
+        """Reset a stack/band's NORMAL Config-page settings (run params, file config, autostart)
+        to defaults. Owns ONLY those keys — daemon-profile `dp_*` overrides, another band's
+        overrides, and unrelated manual scalars are PRESERVED (use the daemon panel's own Reset
+        for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        cfg_band = self._config_band(target, band)
-        # Use the SAME containment-checked helper as save/load (never hand-built).
-        from .config import _stack_config_path
-        from . import runtime_fs, validators
+        from . import validators
         from .paths import PathContainmentError
+        cfg_band = self._config_band(target, band)
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
-        # Descriptor-safe existence check (no `Path.exists()` follow-then-mutate): enumerate
-        # the parent no-follow and look for the leaf. An unsafe/symlinked config leaf or dir
-        # is a TYPED failure — never a web 500. `_stack_config_path` itself refuses a symlink
-        # -escaping leaf (ValidationError), so that is caught here too.
+        run_names = {p.name for p in self.run_params_for(target)}
         try:
-            path = _stack_config_path(self._paths, target, cfg_band)
-            names = dict(runtime_fs.scandir_nofollow(self._paths, path.parent))
-            existed = path.name in names
-            if existed:
-                runtime_fs.unlink(self._paths, path)     # contained, no-follow safe unlink
-                self._invalidate_config()                # reset visible to the next read
-        except (PathContainmentError, validators.ValidationError, OSError) as exc:
-            return ActionResult(False, f"Config reset blocked for {label}: unsafe config "
-                                f"path (refused, not modified): {exc}")
+            stored = load_stack_config(self._paths, target, cfg_band)
+            normal = [k for k in stored
+                      if k in run_names or k.startswith("file_") or k.startswith("autostart_")]
+            if normal:
+                # Clear ONLY the normal-owned keys under the config lock; dp_* + unrelated stay.
+                update_stack_config(self._paths, target, {k: "" for k in normal}, cfg_band)
+                self._invalidate_config()
+        except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:
+            return ActionResult(False, f"Config reset blocked for {label}: unsafe/malformed "
+                                f"config (refused, not modified): {exc}")
         return ActionResult(True,
-                            f"Config reset to defaults for {label}." if existed
+                            f"Config reset to defaults for {label}." if normal
                             else f"{label} already at defaults.",
                             next_commands=[f"lhpc stack start {target}"])
 
@@ -2837,7 +3163,7 @@ class ControllerService:
     def run_action(self, op: str, target: str, apply: bool = False,
                    params: dict | None = None, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "") -> ActionResult:
+                   band: str = "", daemon_overrides: dict | None = None) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.SOURCE_CHOICES:
@@ -2849,7 +3175,8 @@ class ControllerService:
             "update": lambda: self.update(target, apply=apply, source=source),
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, params=params,
-                                        stop_owners=stop_owners, band=band),
+                                        stop_owners=stop_owners, band=band,
+                                        daemon_overrides=daemon_overrides),
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),
             "restart": lambda: self.restart(target, apply=apply, params=params,
                                             stop_owners=stop_owners, band=band),

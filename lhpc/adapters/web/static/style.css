@@ -188,12 +188,42 @@ input.wide { width: 100%; min-width: 16rem; }
 .act button:hover { background: var(--brand); color: #fff; }
 .act a, a.act { text-decoration: none; }
 .settings th { width: 12rem; }
+/* Live daemon settings (daemon page): one param per cell, two columns when wide enough. */
+.settingsgrid { display: grid; grid-template-columns: 1fr; gap: .35rem 1.6rem; margin: .3rem 0 .6rem; }
+@media (min-width: 880px) { .settingsgrid { grid-template-columns: 1fr 1fr; } }
+.setcell { display: flex; align-items: center; gap: .6rem; }
+.setkey { min-width: 6rem; font-family: ui-monospace, monospace; font-size: .85rem; }
+/* Fill the cell and push the Apply button to the right edge so buttons line up per column. */
+.setcell .setform { flex: 1; }
+.setcell .setform button { margin-left: auto; }
+/* Live STATUS/STATS output box with an X to close */
+.liveout-wrap { position: relative; margin: .3rem 0 .6rem; }
+.liveout-body { margin: 0; }
+.liveclose { position: absolute; top: .3rem; right: .3rem; line-height: 1;
+             padding: .1rem .4rem; cursor: pointer; border: 1px solid var(--line);
+             border-radius: 6px; background: var(--surface); color: var(--muted); }
+.liveclose:hover { color: var(--ink); }
 .paramgrid { width: auto; margin: .3rem 0 .8rem; }
 .paramgrid th { width: 11rem; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: .92rem; }
 .paramgrid td { padding: .3rem .8rem; }
 .paramgrid .bandhead { width: auto; text-align: center; color: var(--muted); text-transform: uppercase; font-size: .78rem; }
 .setform { display: inline-flex; gap: .4rem; align-items: center; margin: 0; }
 .setform button { padding: .15rem .6rem; }
+/* FREQ / SYNC etc. are short values — keep the live-setting inputs compact, not full-width. */
+.setform input[type=text], .setform input[type=number] { width: 7rem; }
+
+.cfgreset { margin-top: 1.4rem; }                    /* space Save-config off from Reset */
+hr.sep { border: 0; border-top: 1px solid var(--line, #333); margin: 1.4rem 0 .6rem; }
+
+/* Per-stack daemon radio parameters (config page) — one param per line */
+.dptab { margin: .3rem 0 .6rem; }
+.dptab th { width: 6.5rem; font-family: ui-monospace, monospace; font-size: .82rem;
+            text-align: left; vertical-align: middle; }
+.dptab td { padding: .16rem .6rem; vertical-align: middle; }
+.dpin { width: 6.5rem; }
+.dphelp { font-size: .78rem; }
+tr.greyed th, tr.greyed .dpin { color: var(--muted); opacity: .75; }   /* visual only — still editable */
+span.greyed { color: var(--muted); opacity: .8; }
 .logbox { max-height: 28rem; overflow-y: auto; background: #0f1b2a; color: #d7e3f2;
           padding: .6rem .8rem; border-radius: 8px; font-size: .82rem; line-height: 1.35;
           white-space: pre-wrap; word-break: break-word; }

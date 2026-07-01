@@ -39,34 +39,39 @@
                 <button type="button" class="livebtn" data-band="{{ radio.band }}" data-kind="stats">Get STATS</button>
                 <span class="muted">live request on the config socket</span>
               </p>
-              <pre class="next liveout" id="liveout-{{ radio.band }}" hidden></pre>
-              <table class="settings">
+              <div class="liveout-wrap" id="liveout-{{ radio.band }}" hidden>
+                <button type="button" class="liveclose" data-band="{{ radio.band }}"
+                        aria-label="Close" title="Close">✕</button>
+                <pre class="next liveout-body" id="liveout-body-{{ radio.band }}"></pre>
+              </div>
+              <div class="settingsgrid">
                 {% for key, spec in view.live_settings.items() %}
-                  <tr><th>{{ key }}</th>
-                    <td>
-                      <form method="post" action="{{ url_for('radio_set', band=radio.band) }}" class="setform">
-                        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                        <input type="hidden" name="key" value="{{ key }}">
-                        {% if spec.type == 'enum' %}
-                          <select name="value">
-                            {% for ch in spec.choices %}
-                              <option value="{{ ch }}" {% if radio.status.get(key)==ch %}selected{% endif %}>{{ ch }}</option>
-                            {% endfor %}
-                          </select>
-                        {% elif spec.type == 'int' %}
-                          <input type="number" name="value" value="{{ radio.status.get(key, spec.min) }}"
-                                 min="{{ spec.min }}" max="{{ spec.max }}" required>
-                          <span class="muted">{{ spec.min }}..{{ spec.max }}</span>
-                        {% else %}
-                          <input type="text" name="value" value="{{ radio.status.get(key, '') }}"
-                                 autocomplete="off" required>
-                          <span class="muted">{{ spec.hint }}</span>
-                        {% endif %}
-                        <button type="submit">Apply</button>
-                      </form>
-                    </td></tr>
+                  <div class="setcell">
+                    <span class="setkey">{{ key }}</span>
+                    <form method="post" action="{{ url_for('radio_set', band=radio.band) }}" class="setform">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                      <input type="hidden" name="key" value="{{ key }}">
+                      {% set cur = radio.status.get(key) or radio.config.get(key) %}
+                      {% if spec.type == 'enum' %}
+                        <select name="value">
+                          {% for ch in spec.choices %}
+                            <option value="{{ ch }}" {% if cur==ch %}selected{% endif %}>{{ ch }}</option>
+                          {% endfor %}
+                        </select>
+                      {% elif spec.type == 'int' %}
+                        <input type="number" name="value" value="{{ cur or spec.min }}"
+                               min="{{ spec.min }}" max="{{ spec.max }}" required>
+                        <span class="muted">{{ spec.min }}..{{ spec.max }}</span>
+                      {% else %}
+                        <input type="text" name="value" value="{{ cur or '' }}"
+                               autocomplete="off" required>
+                        <span class="muted">{{ spec.hint }}</span>
+                      {% endif %}
+                      <button type="submit">Apply</button>
+                    </form>
+                  </div>
                 {% endfor %}
-              </table>
+              </div>
             {% endif %}
           {% endfor %}
         </section>
@@ -159,7 +164,7 @@
         <button type="submit">Save configuration</button>
       </form>
 
-      <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack_id) }}" class="act">
+      <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack_id) }}" class="act cfgreset">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="band" value="{{ view.band }}">
         <button type="submit">Reset {{ view.band + ' ' if view.band }}to defaults</button>
@@ -179,6 +184,9 @@
           </div>
         </section>
       {% endif %}
+
+      {% if daemon_params %}<hr class="sep">{% endif %}
+      {% include "_daemon_params.html" %}
 
       {% if view.running %}
         <section class="cfgsec">

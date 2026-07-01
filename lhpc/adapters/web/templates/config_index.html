@@ -5,8 +5,7 @@
   <div class="card">
     <header><h2>Configuration</h2></header>
     <div class="body stacklist">
-      <p class="muted">Per-stack configuration. The daemon's page also carries the live
-        per-band radio settings.</p>
+      <p class="muted">Per-stack configuration.</p>
       {% for g in groups %}
         <a class="stackrow-link" href="{{ url_for('stack_config_view', stack_id=g.stack.id) }}">
           <span class="ss-row">{{ stack_summary(g) }}</span>

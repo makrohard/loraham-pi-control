@@ -5,6 +5,11 @@
   <div class="card">
     <header><h2>Confirm live daemon setting <span class="pill">{{ band }} MHz</span></h2></header>
     <div class="body">
+      {% if fsk %}
+        <p class="flash flash-warn"><strong>⚠ MODE=FSK</strong> switches the radio off LoRa and
+          will break LoRa communication on {{ band }} MHz{% if warn_stacks %} — running LoRa
+          stack(s) affected: <strong>{{ warn_stacks|join(', ') }}</strong>{% endif %}.</p>
+      {% endif %}
       <p>{{ plan.summary }}</p>
       {% if plan.details %}
         <pre class="next">{% for line in plan.details %}{{ line }}

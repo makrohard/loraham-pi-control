@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
+import re
 import tomllib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -298,24 +300,44 @@ def update_yaml(text: str, params, values, subst) -> str:
     return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
 
-def _write_local_tables(paths: Paths, path: Path, updates: dict) -> Path:
-    """Merge `updates` (table -> {key: value}) into <runtime>/config/local.toml,
-    preserving any other tables already present. Local layer is never tracked.
+def _patch_local_table(data: dict, table: str, updates: dict) -> None:
+    """Patch ONLY the named keys of a managed local table, IN PLACE on `data`. Contract:
+        missing table                -> create a new flat table from `updates`;
+        existing flat table           -> patch only the named keys (all other keys preserved);
+        existing non-table value      -> `ConfigError` (before any write — fail closed on a valid-
+                                          but-wrong TOML shape, e.g. ``operator = "text"``).
+    A value of ``None`` in `updates` REMOVES that key (used to clear a remote override)."""
+    cur = data.get(table)
+    if cur is None:
+        base: dict = {}
+    elif isinstance(cur, dict):
+        base = dict(cur)                          # keep every existing key/type
+    else:
+        raise ConfigError(f"local.toml [{table}] is a {type(cur).__name__}, not a table; "
+                          f"refused (file unchanged)")
+    for key, value in updates.items():
+        if value is None:
+            base.pop(key, None)
+        else:
+            base[key] = value
+    data[table] = base
 
-    If the existing file is malformed, raise ConfigError WITHOUT writing — a corrupt
-    operator file is preserved for inspection, never silently overwritten."""
+
+def _write_local_tables(paths: Paths, path: Path, updates: dict) -> Path:
+    """PATCH managed tables into <runtime>/config/local.toml. `updates` is
+    ``{table: {key: value_or_None}}`` — each table is patched by owned keys only (see
+    `_patch_local_table`): other keys in that table, all other tables, and every root scalar are
+    preserved with their exact types. A value of ``None`` clears that key.
+
+    Fail closed: a malformed existing file, an incompatible managed-table shape (a non-table
+    ``operator``/``remotes`` value), or an unsupported value/key raises `ConfigError` WITHOUT
+    writing — the prior file is preserved byte-for-byte."""
     existing = _load_runtime_toml(paths, path)   # no-follow read; ConfigError on corrupt
+    data = dict(existing)                         # keep root scalars + every other table
     for table, kv in updates.items():
-        existing[table] = dict(kv)          # replace the named table wholesale
-    lines = ["# Local operator overrides (managed by lhpc — git-ignored)."]
-    for section, table in existing.items():
-        if not isinstance(table, dict):
-            continue
-        lines.append(f"\n[{section}]")
-        for key, value in table.items():
-            esc = str(value).replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'{key} = "{esc}"')
-    _atomic_write(paths, path, "\n".join(lines) + "\n", mode=0o600)   # local layer: 0600
+        _patch_local_table(data, table, kv)      # patch owned keys; ConfigError on non-table shape
+    # Type-safe + fail-closed render (raises before any write on an unsupported value/key).
+    _atomic_write(paths, path, render_local_tables(data), mode=0o600)   # local layer: 0600
     return path
 
 
@@ -335,35 +357,45 @@ def save_component_remote(paths: Paths, component_id: str, url: str) -> Path:
     clean = validators.remote_url(url, field="remote")
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
-        existing = _load_runtime_toml(paths, path)   # no-follow; ConfigError on corrupt -> preserved
-        remotes = dict(existing.get("remotes", {}))
-        if clean:
-            remotes[cid] = clean
-        else:
-            remotes.pop(cid, None)
-        return _write_local_tables(paths, path, {"remotes": remotes})
+        # Patch ONLY this component's key (None clears it), preserving every other remote. A
+        # non-table `remotes` value is rejected inside the patch (ConfigError), never a raw
+        # `dict("string")` ValueError.
+        return _write_local_tables(paths, path, {"remotes": {cid: clean or None}})
 
 
-def render_local_tables(tables: dict) -> str:
-    """Render a complete local.toml from {section: {key: value}} (strings)."""
+def render_local_tables(data: dict) -> str:
+    """Render a complete local.toml from a parsed structure ``{key: scalar | {key: scalar}}`` —
+    TYPE-SAFE and FAIL-CLOSED. Root scalar keys are preserved (never dropped), then each flat
+    ``[section]`` table. Keys/values go through `_toml_key`/`_toml_scalar`, so bool/int/finite-float
+    keep their type and quotes/backslashes/control chars/Unicode round-trip; a nested table, array,
+    datetime, non-finite float, unsupported object, or control-character key raises `ConfigError`
+    BEFORE any write. Finally the document is parsed with `tomllib` and its structure is verified
+    to equal `data` — a mismatch (an unsafe key/value) is refused."""
+    root = {k: v for k, v in data.items() if not isinstance(v, dict)}
+    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
     lines = ["# Local operator overrides (managed by lhpc — git-ignored)."]
+    for key, value in root.items():
+        lines.append(f"{_toml_key(key)} = {_toml_scalar(value)}")
     for section, table in tables.items():
-        if not isinstance(table, dict):
-            continue
-        lines.append(f"\n[{section}]")
+        lines.append(f"\n[{_toml_key(section)}]")
         for key, value in table.items():
-            esc = str(value).replace("\\", "\\\\").replace('"', '\\"')
-            lines.append(f'{key} = "{esc}"')
-    return "\n".join(lines) + "\n"
+            if isinstance(value, dict):
+                raise ConfigError(f"nested table [{section}.{key}] is not supported in local.toml")
+            lines.append(f"{_toml_key(key)} = {_toml_scalar(value)}")
+    rendered = "\n".join(lines) + "\n"
+    try:
+        parsed = tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"generated local.toml is not valid TOML (refused): {exc}") from exc
+    if parsed != data:
+        raise ConfigError("generated local.toml did not round-trip (unsafe key/value); refused")
+    return rendered
 
 
 def render_stack_config(stack_id: str, values: dict) -> str:
-    """Render a per-stack config file (flat key = "value")."""
-    lines = [f"# {stack_id} configuration (managed by lhpc — git-ignored)."]
-    for key, value in values.items():
-        esc = str(value).replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{key} = "{esc}"')
-    return "\n".join(lines) + "\n"
+    """Render a per-stack config file — type-aware, fully escaped, parse-validated before write
+    (see `_render_stack_config`)."""
+    return _render_stack_config(stack_id, values)
 
 
 def _txn_journal(paths: Paths) -> Path:
@@ -486,7 +518,10 @@ def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, i
         _atomic_write(paths, jp, json.dumps(journal), 0o600)   # anchored write creates parents
         try:
             for kind, p, content, mode in targets:
-                _atomic_write(paths, p, content, mode)
+                # `content` may be a callable rendered INSIDE this lock (merge-in-transaction),
+                # so it reads the LATEST file and preserves keys owned by another writer. A raise
+                # here (e.g. an unsupported manual value) triggers the rollback below.
+                _atomic_write(paths, p, content(paths) if callable(content) else content, mode)
         except Exception as failure:
             for rec in journal["targets"]:        # roll back everything
                 p = _resolve_journal_target(paths, rec)
@@ -541,14 +576,114 @@ def load_stack_config(paths: Paths, stack_id: str, band: str = "") -> dict:
         return {}            # a corrupt stored config falls back to defaults
 
 
+# TOML basic-string control-character escapes (TOML v1.0 §String). Other C0 controls + DEL are
+# emitted as \uXXXX; a raw control character is NEVER placed in a one-line basic string.
+_TOML_STR_ESC = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t",
+                 "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_basic_string(s: str) -> str:
+    """`s` as a TOML basic string (double-quoted), fully escaped so it round-trips exactly:
+    backslash/quote/backspace/tab/newline/formfeed/CR use short escapes, every other C0 control
+    and DEL become \\uXXXX, and Unicode text is preserved verbatim. Invalid (non-UTF-8-encodable)
+    text — e.g. a lone surrogate — is rejected BEFORE any write."""
+    try:
+        s.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ConfigError(f"string is not valid Unicode (lone surrogate?): {exc}") from exc
+    out = []
+    for ch in s:
+        if ch in _TOML_STR_ESC:
+            out.append(_TOML_STR_ESC[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def _toml_scalar(value) -> str:
+    """TOML representation of a SUPPORTED stack-config scalar, preserving its type: str (basic
+    string, fully escaped), bool (`true`/`false`), int (decimal), finite float (round-trippable
+    decimal). Anything else — list, table/mapping, datetime, NaN, ±inf, other objects — raises
+    `ConfigError` BEFORE any write. NB: bool is checked before int (bool is an int subclass)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ConfigError(f"non-finite float not allowed in stack config: {value!r}")
+        return repr(value)                       # shortest round-trippable decimal
+    if isinstance(value, str):
+        return _toml_basic_string(value)
+    raise ConfigError(f"unsupported stack-config value type "
+                      f"{type(value).__name__}: {value!r}")
+
+
+def _toml_key(key: str) -> str:
+    """A TOML key that stays a single FLAT literal key: bare `[A-Za-z0-9_-]+`, else a quoted basic
+    string (so `custom.key`, `spaced key`, `a#b` never become a dotted/nested path). A control
+    character in a key is rejected before any write."""
+    if not isinstance(key, str) or key == "":
+        raise ConfigError(f"invalid config key: {key!r}")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in key):
+        raise ConfigError(f"control character in config key: {key!r}")
+    return key if _BARE_KEY.fullmatch(key) else _toml_basic_string(key)
+
+
+def _render_stack_config(stack_id: str, values: dict) -> str:
+    """Render a stack config, then PARSE-BEFORE-WRITE: keys and scalars are type-aware and fully
+    escaped, and the result is validated with `tomllib` so a malformed line can never reach disk
+    (raises `ConfigError` before any write; the caller keeps the prior file)."""
+    lines = [f"# {stack_id} configuration (managed by lhpc — git-ignored)."]
+    for key, value in values.items():
+        lines.append(f"{_toml_key(key)} = {_toml_scalar(value)}")
+    rendered = "\n".join(lines) + "\n"
+    try:
+        parsed = tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"generated stack config is not valid TOML (refused): {exc}") from exc
+    if set(parsed) != {k for k in values}:       # a key became nested/dotted -> refuse
+        raise ConfigError("generated stack config changed the key set (unsafe key); refused")
+    return rendered
+
+
 def save_stack_config(paths: Paths, stack_id: str, values: dict, band: str = "") -> Path:
     """Persist a stack/band's configuration (flat key/value, stored as strings).
     Atomic + locked so concurrent web saves cannot corrupt or interleave."""
     path = _stack_config_path(paths, stack_id, band)
-    lines = [f"# {stack_id} configuration (managed by lhpc — git-ignored)."]
-    for key, value in values.items():
-        escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{key} = "{escaped}"')
     with config_lock(paths):
-        _atomic_write(paths, path, "\n".join(lines) + "\n", mode=0o644)
+        _atomic_write(paths, path, _render_stack_config(stack_id, values), mode=0o644)
+    return path
+
+
+def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
+                       clear_empty: bool = True) -> dict:
+    """Read the LATEST stack config (MUST be called inside `config_lock`) and merge `updates`,
+    keeping every OTHER key with its parsed type — so one owner's write never drops another's
+    keys (a daemon-profile save keeps normal params; a normal save keeps `dp_*`; a manual scalar
+    survives both). When `clear_empty`, a value of ""/None removes that key; otherwise it is
+    stored (normal-config semantics keep an explicit empty value). Returns the merged dict."""
+    current = dict(_load_runtime_toml(paths, _stack_config_path(paths, stack_id, band)))
+    for key, value in updates.items():
+        if clear_empty and value in (None, ""):
+            current.pop(key, None)
+        else:
+            current[key] = value if not isinstance(value, str) else value
+    return current
+
+
+def update_stack_config(paths: Paths, stack_id: str, updates: dict, band: str = "",
+                        clear_empty: bool = True) -> Path:
+    """Locked read-merge-write of a stack's config under ONE lock: read the LATEST config, merge
+    `updates` (see `merge_stack_values`), and atomic-write. Preserves every other key (run params,
+    file values, autostart, `dp_*`, manual scalars …) and any concurrent change committed before
+    the lock was taken. The render is type-aware and validates before the write, so a corrupt
+    manual entry blocks the save and leaves the file unchanged. Never nests `config_lock`."""
+    path = _stack_config_path(paths, stack_id, band)
+    with config_lock(paths):
+        merged = merge_stack_values(paths, stack_id, band, updates, clear_empty)
+        _atomic_write(paths, path, _render_stack_config(stack_id, merged), mode=0o644)
     return path

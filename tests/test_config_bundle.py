@@ -228,3 +228,164 @@ def test_save_config_bundle_refuses_symlinked_local(tmp_path):
         assert outside.read_text() == "[operator]\ncallsign='X'\n"  # never written through
     finally:
         outside.unlink(missing_ok=True)
+
+
+# --- Area 2: type-safe, fail-closed local.toml rendering -------------------------------------
+
+def _local(tmp_path):
+    return tmp_path / "config" / "local.toml"
+
+
+def test_local_root_scalars_and_types_survive_bundle_save(tmp_path):
+    import tomllib
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('rootstr = "hi"\nenabled = true\nlimit = 5\nratio = 1.25\n'
+                 '"quoted.key" = "q"\n[operator]\ncallsign = "OLD"\n[extra]\nflag = false\nn = 9\n')
+    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa").ok
+    d = tomllib.loads(p.read_text())
+    assert d["rootstr"] == "hi" and d["enabled"] is True and d["limit"] == 5 and d["ratio"] == 1.25
+    assert d["quoted.key"] == "q"                              # quoted root key stays literal
+    assert d["extra"]["flag"] is False and d["extra"]["n"] == 9   # unrelated table types exact
+    assert d["operator"]["callsign"] == "DK0ABC"
+
+
+def test_local_control_and_multiline_strings_round_trip(tmp_path):
+    import tomllib
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")
+    cfgmod._write_local_tables(_svc(tmp_path)._paths, p, {"t": {"s": "a\tb\nc\r\\\"\x00é中"}})
+    assert tomllib.loads(p.read_text())["t"]["s"] == "a\tb\nc\r\\\"\x00é中"
+
+
+@pytest.mark.parametrize("bad", ['arr = [1, 2]\n', '[a.b]\nx = 1\n',
+                                 'when = 2020-01-01T00:00:00\n'])
+def test_local_unsupported_structures_block_and_preserve(tmp_path, bad):
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(bad)
+    before = p.read_text()
+    r = svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa")
+    assert not r.ok and p.read_text() == before                # refused, byte-for-byte preserved
+
+
+def test_operator_and_component_remote_use_safe_renderer(tmp_path):
+    # save_operator_config / save_component_remote must preserve unrelated root scalars + types.
+    import tomllib
+    paths = _svc(tmp_path)._paths
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('keepme = 42\nenabled = true\n')
+    cfgmod.save_operator_config(paths, "DL1ABC", "JO31")
+    cfgmod.save_component_remote(paths, "loraham-daemon", "https://x/y.git")
+    d = tomllib.loads(p.read_text())
+    assert d["keepme"] == 42 and d["enabled"] is True          # unrelated root scalars/types kept
+    assert d["operator"]["callsign"] == "DL1ABC"
+    assert d["remotes"]["loraham-daemon"] == "https://x/y.git"
+
+
+def test_operator_save_refuses_when_local_has_unsupported(tmp_path):
+    paths = _svc(tmp_path)._paths
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('arr = [1, 2]\n'); before = p.read_text()
+    with pytest.raises(cfgmod.ConfigError):
+        cfgmod.save_operator_config(paths, "DL1ABC", "JO31")
+    assert p.read_text() == before                              # preserved, not mutated
+
+
+# --- Area 3: remote patch ownership (service-enforced) ---------------------------------------
+
+def test_remote_patch_rejects_foreign_component(tmp_path):
+    import tomllib
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n'); before = p.read_text()
+    # meshcore-pi is NOT a component of meshcom -> reject, zero mutation
+    r = svc.save_config_bundle("meshcom", values={}, remotes={"meshcore-pi": "https://evil/x.git"})
+    assert not r.ok and p.read_text() == before
+
+
+def test_remote_patch_own_component_preserves_others(tmp_path):
+    import tomllib
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n')
+    assert svc.save_config_bundle("meshcom", values={},
+                                  remotes={"meshcom-bridge": "https://c/br.git"}).ok
+    rem = tomllib.loads(p.read_text())["remotes"]
+    assert rem["meshcom-bridge"] == "https://c/br.git" and rem["meshcore-pi"] == "https://b/mc.git"
+
+
+def test_remote_clear_own_preserves_other_components(tmp_path):
+    import tomllib
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[remotes]\n"meshcom-bridge" = "https://c/br.git"\n"meshcore-pi" = "https://b/mc.git"\n')
+    assert svc.save_config_bundle("meshcom", values={}, remotes={"meshcom-bridge": ""}).ok
+    rem = tomllib.loads(p.read_text())["remotes"]
+    assert "meshcom-bridge" not in rem and rem["meshcore-pi"] == "https://b/mc.git"
+
+
+# --- Patch [operator]/[remotes] by owned keys; fail closed on wrong shape --------------------
+
+def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
+    import tomllib
+    from lhpc.core import config as cfg
+    paths = _svc(tmp_path)._paths
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('rootn = 3\n[operator]\ncallsign = "OLD"\nlocator = "AA00"\n'
+                 'note = "portable profile"\nenabled = true\ncount = 5\n[extra]\nx = 1\n')
+    cfg.save_operator_config(paths, "DJ0CHE", "JO31")
+    d = tomllib.loads(p.read_text())
+    assert d["operator"]["callsign"] == "DJ0CHE" and d["operator"]["locator"] == "JO31"
+    assert d["operator"]["note"] == "portable profile"        # extra string preserved
+    assert d["operator"]["enabled"] is True and d["operator"]["count"] == 5   # bool/int types kept
+    assert d["rootn"] == 3 and d["extra"]["x"] == 1            # unrelated root scalar + table kept
+
+
+def test_bundle_operator_update_preserves_extra_operator_keys(tmp_path):
+    import tomllib
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[operator]\ncallsign = "OLD"\nlocator = "AA00"\nnote = "keep"\nflag = false\n')
+    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa").ok
+    op = tomllib.loads(p.read_text())["operator"]
+    assert op["callsign"] == "DK0ABC" and op["note"] == "keep" and op["flag"] is False
+
+
+def test_scalar_operator_shape_rejects_operator_save(tmp_path):
+    from lhpc.core import config as cfg
+    paths = _svc(tmp_path)._paths
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('operator = "manual text"\n'); before = p.read_text()
+    with pytest.raises(cfg.ConfigError):
+        cfg.save_operator_config(paths, "DJ0CHE", "JO31")
+    assert p.read_text() == before                            # byte-for-byte preserved
+
+
+def test_scalar_remotes_shape_rejects_bundle_remote_save(tmp_path):
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('remotes = "not a table"\n'); before = p.read_text()
+    r = svc.save_config_bundle("meshcom", values={}, remotes={"meshcom-bridge": "https://c/br.git"})
+    assert not r.ok and p.read_text() == before
+
+
+def test_scalar_remotes_via_component_remote_is_controlled_failure(tmp_path):
+    # No raw ValueError/TypeError from dict("string") — a normal failed ActionResult, file intact.
+    svc = _svc(tmp_path)
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('remotes = "x"\n'); before = p.read_text()
+    r = svc.save_component_remote("loraham-daemon", "https://x/y.git")
+    assert not r.ok and p.read_text() == before
+
+
+def test_component_remote_set_and_clear_preserve_others(tmp_path):
+    import tomllib
+    from lhpc.core import config as cfg
+    paths = _svc(tmp_path)._paths
+    p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n')
+    cfg.save_component_remote(paths, "loraham-daemon", "https://x/y.git")
+    rem = tomllib.loads(p.read_text())["remotes"]
+    assert rem["loraham-daemon"] == "https://x/y.git" and rem["meshcore-pi"] == "https://b/mc.git"
+    cfg.save_component_remote(paths, "loraham-daemon", "")     # clear
+    rem = tomllib.loads(p.read_text())["remotes"]
+    assert "loraham-daemon" not in rem and rem["meshcore-pi"] == "https://b/mc.git"
