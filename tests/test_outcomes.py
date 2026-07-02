@@ -36,3 +36,18 @@ def test_line_is_derived_from_outcome():
     r = CompResult(component="daemon", action="start", outcome=Outcome.VERIFIED,
                    summary="up on 433")
     assert r.line() == "  [verified] daemon: up on 433"
+
+
+def test_manual_required_only_classifies_interactive_success():
+    from lhpc.core.outcomes import manual_required_only, CompResult, Outcome
+    def r(o):
+        return CompResult(component="c", action="start", outcome=o)
+    # chat-like: daemon verified + interactive main manual -> the non-alarming success case
+    assert manual_required_only([r(Outcome.VERIFIED), r(Outcome.MANUAL_REQUIRED)]) is True
+    assert manual_required_only([r(Outcome.MANUAL_REQUIRED)]) is True
+    # a real problem alongside the manual step is NOT the manual-only case
+    assert manual_required_only([r(Outcome.MANUAL_REQUIRED), r(Outcome.BLOCKED)]) is False
+    assert manual_required_only([r(Outcome.MANUAL_REQUIRED), r(Outcome.FAILED)]) is False
+    # no manual step at all, or nothing -> False (ordinary ok/verified handled by `ok`)
+    assert manual_required_only([r(Outcome.VERIFIED)]) is False
+    assert manual_required_only([]) is False

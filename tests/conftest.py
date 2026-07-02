@@ -9,6 +9,15 @@ import pytest
 from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
 
+
+def set_call(svc, callsign="DJ0CHE", locator=""):
+    """Configure a valid operator callsign so a LICENSED stack (chat/igate/voice/meshcom) passes
+    CALL-enforcement — the realistic precondition for starting one. Returns the service."""
+    from lhpc.core.config import save_operator_config
+    save_operator_config(svc._paths, callsign, locator)
+    svc._invalidate_config()
+    return svc
+
 # Real-but-harmless spawn shim: ownership recording now requires a COMPLETE /proc
 # identity, so tests that "start" something must spawn a real process (a detached
 # `sleep`) rather than a fake pid. All spawned sleepers are reaped at session end.

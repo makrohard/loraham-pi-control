@@ -1,0 +1,54 @@
+{# Start-confirm "Stack parameters" panel. Same design as the daemon-radio panel: its inputs live
+   INSIDE the confirm form (names p_<name> / pf_<name>) so they are EXACTLY the values used for this
+   start. Collapsed by default; forced open when a CALL/node field must be corrected. "Reset to
+   defaults" is a client-side reset to the manifest defaults; "Save" persists to the user config
+   (a submit that sets _save=stack) without starting. Requires `stack_params` (+ optional
+   `enforce_field`). #}
+{% if stack_param_groups %}
+  <details class="advcfg stackparams"{% if enforce_field %} open{% endif %}>
+    <summary>Stack parameters</summary>
+    <p class="muted">The values lhpc will use for <strong>this start</strong>. They start from your
+      saved config — adjust them for this launch, <em>Reset to defaults</em> to load the source
+      defaults, or <em>Save</em> to store them as your config (Save does not start). Fields marked
+      <span class="req">*</span> are required to start.</p>
+    <table class="paramgrid dptab">
+      {% for group in stack_param_groups %}
+        <tr class="spgroup"><th colspan="3">{{ group.header }}</th></tr>
+        {% for r in group.rows %}
+          <tr class="{% if r.advanced %}advrow{% endif %}{% if r.field == enforce_field %} field-bad{% endif %}"
+              data-adv="{{ 'y' if r.advanced else 'n' }}">
+            <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
+            <td>
+              {% if r.kind == 'flag' %}
+                <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}
+                       class="spin" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
+              {% elif r.choices %}
+                <select name="{{ r.field }}" class="spin"
+                        data-default="{{ r.default }}" data-config="{{ r.config_value }}">
+                  {% for ch in r.choices %}
+                    <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>
+                  {% endfor %}
+                </select>
+              {% elif r.kind in ('int','float') %}
+                <input type="number" name="{{ r.field }}" value="{{ r.value }}"
+                       {% if r.min is not none %}min="{{ r.min }}"{% endif %}
+                       {% if r.max is not none %}max="{{ r.max }}"{% endif %} step="any"
+                       autocomplete="off" class="spin"
+                       placeholder="{{ r.default }}" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
+              {% else %}
+                <input type="text" name="{{ r.field }}" value="{{ r.value }}" autocomplete="off"
+                       class="spin{% if r.is_identity %} identin{% endif %}"
+                       placeholder="{{ r.default }}" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
+              {% endif %}
+            </td>
+            <td class="dphelp muted">{{ r.label }}</td>
+          </tr>
+        {% endfor %}
+      {% endfor %}
+    </table>
+    <div class="actrow">
+      <button type="button" class="act sp-reset">Reset to defaults</button>
+      <button type="submit" class="act" name="_save" value="stack">Save</button>
+    </div>
+  </details>
+{% endif %}

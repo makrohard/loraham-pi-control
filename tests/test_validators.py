@@ -133,3 +133,29 @@ def test_start_allows_valid_values(tmp_path):
     life = _life(tmp_path, callsign="N0CALL-7")
     res = life.start(Stack(id="s", name="s", main="c"), comp)
     assert res.ok
+
+
+def test_sync_word_validator():
+    import lhpc.core.validators as V
+    assert V.sync_word("0x12") == "0x12" and V.sync_word("0xFF") == "0xFF"
+    assert V.sync_word("") == ""                              # blank = source default
+    for bad in ("zz", "0x1FF", "18", "0x", "garbage", "0xGG"):
+        with pytest.raises(V.ValidationError):
+            V.sync_word(bad)
+
+
+def test_voice_params_all_validate_defaults():
+    # Every voice config-file param must be validated by its declared kind/validator, and its
+    # own default (operator-substituted) must pass — no silently-unvalidated param.
+    from lhpc.core.services import ControllerService
+    from lhpc.core import validators as V
+    svc = ControllerService()
+    comp = next(c for c in svc.stack("voice").components if c.config_file)
+    op = svc.config().operator
+    for p in comp.config_file.params:
+        raw = (p.default or "").replace("{callsign}", op.callsign or "N0CALL")
+        V.validate_param(p, raw or "0")                       # must not raise
+    names = {p.name for p in comp.config_file.params}
+    assert {"preamble", "sync", "ldro"} <= names              # present, not missing
+    assert next(p for p in comp.config_file.params if p.name == "freq").validator == "freq"
+    assert next(p for p in comp.config_file.params if p.name == "sync").validator == "sync"

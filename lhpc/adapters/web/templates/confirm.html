@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import param_grid, cmdbox %}
+{% from "_macros.html" import cmdbox, param_input %}
 {% block title %}confirm {{ op }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   <p><a href="{{ url_for('stack_detail', stack_id=target) if target else url_for('dashboard') }}">&larr; back</a></p>
@@ -63,15 +63,27 @@
             </label>
             <br>
           {% endif %}
-          {% if run_params %}
-            <h4>Parameters</h4>
-            {{ param_grid(param_layout(run_params), params, 'p_') }}
-          {% endif %}
-          {# Start flags kept out of the grid (daemon radio band / TX / CAD) — preserved so the
-             start is unchanged. #}
+          {% if op == 'start' %}<input type="hidden" name="_params" value="1">{% endif %}
+          {# Daemon radio band / TX / CAD START flags are chosen elsewhere — submitted as hidden
+             inputs so the start is unchanged (never shown in the editable panels). #}
           {% for p in hidden_params|default([]) %}
             <input type="hidden" name="p_{{ p.name }}" value="{{ params[p.name] }}">
           {% endfor %}
+          {# Plain ephemeral start options not part of savable config (e.g. the daemon debug flag). #}
+          {% if plain_params %}
+            <table class="paramgrid">
+              {% for p in plain_params %}
+                <tr><th>{{ p.label or p.name }}</th>
+                    <td>{{ param_input(p, params.get(p.name), 'p_' + p.name) }}</td></tr>
+              {% endfor %}
+            </table>
+          {% endif %}
+          {# All editable stack config params (run + config-file) for THIS start — collapsed,
+             above the daemon panel. #}
+          {% if stack_param_groups %}
+            <hr class="sep">
+            {% include "_stack_params.html" %}
+          {% endif %}
           {% if daemon_panels %}
             {% set stack_id = target %}
             {% set dp_inline = true %}

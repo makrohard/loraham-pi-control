@@ -7,6 +7,7 @@ from conftest import real_spawn
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
+from conftest import set_call
 
 STATUS = b"STATUS RADIO=READY TXMODE=MANAGED\n"
 
@@ -144,6 +145,7 @@ def test_failed_tx_gating_blocks_dependent(tmp_path):
     (tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
     (tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
     svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=DIRECT\n")
+    set_call(svc)
     res = svc.start("meshcom", apply=True)
     assert not res.ok
     assert any("TXMODE" in d and ("!=" in d or "fail" in d.lower()) for d in res.details)
@@ -196,6 +198,7 @@ def test_interactive_main_start_is_manual_required(tmp_path):
     src.mkdir(parents=True)
     (src / "loraham_chat").write_text("#!bin")          # built artifact present
     svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")
+    set_call(svc)
     res = svc.start("chat", apply=True)
     assert not res.ok                                   # LHPC cannot launch the TUI
     assert any("manual_required" in d and "loraham-chat" in d for d in res.details)
@@ -240,11 +243,12 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
     monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="": [])
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [])
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: Lifecycle(self._paths, self.stacks(), self.config(),
                                                self._system, spawn=real_spawn))
     monkeypatch.setattr(type(svc), "_set_running_band", lambda self, s, b: False)  # marker fails
+    set_call(svc)
     res = svc.start("voice", apply=True, band="433")
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
                and "running-band marker" in (r.summary or "") for r in res.results)

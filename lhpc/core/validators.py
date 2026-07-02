@@ -179,6 +179,17 @@ def aprs_symbol(value, *, field: str = "value") -> str:
     return s
 
 
+def sync_word(value, *, field: str = "sync word") -> str:
+    """A LoRa sync word: a single byte written as hex (e.g. `0x12`, range 0x00–0xFF). Blank is
+    allowed (means: leave the source default)."""
+    s = str(value).strip()
+    if s == "":
+        return ""
+    if not re.fullmatch(r"0[xX][0-9a-fA-F]{1,2}", s) or not (0 <= int(s, 16) <= 0xFF):
+        raise ValidationError(f"{field}: must be a hex byte like 0x12 (0x00–0xFF)")
+    return s
+
+
 # Named validators selectable from the manifest via a param's `validator` field.
 _NAMED = {
     "callsign": callsign,
@@ -190,6 +201,7 @@ _NAMED = {
     "node": node_name,
     "path": path_value,
     "aprs_symbol": aprs_symbol,
+    "sync": sync_word,
     "text": safe_text,
 }
 

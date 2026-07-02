@@ -102,31 +102,31 @@
           {% set adv = comp.params|selectattr('advanced')|list %}
           <section class="cfgsec" id="cfg-{{ comp.id }}">
             <h3>{{ comp.name }}</h3>
-            {% if basic %}{{ param_grid(param_layout(basic), view['values'], 'c_') }}{% endif %}
+            {% if basic %}{{ param_grid(param_layout(basic), comp['values'], comp['fields']) }}{% endif %}
             {% if adv %}
               <details class="advcfg">
                 <summary>Advanced config</summary>
-                {{ param_grid(param_layout(adv), view['values'], 'c_') }}
+                {{ param_grid(param_layout(adv), comp['values'], comp['fields']) }}
               </details>
             {% endif %}
           </section>
         {% endfor %}
 
-        {% if view.file_params %}
-          {% set fbasic = view.file_params|rejectattr('advanced')|list %}
-          {% set fadv = view.file_params|selectattr('advanced')|list %}
-          <section class="cfgsec">
-            <h3>Config file</h3>
+        {% for comp in view.file_components %}
+          {% set fbasic = comp.params|rejectattr('advanced')|list %}
+          {% set fadv = comp.params|selectattr('advanced')|list %}
+          <section class="cfgsec" id="cfgfile-{{ comp.id }}">
+            <h3>{{ comp.name }} config file</h3>
             <p class="muted">Written to the app's own config file on save (and on each Run).</p>
-            {% if fbasic %}{{ param_grid(param_layout(fbasic), view.file_values, 'f_') }}{% endif %}
+            {% if fbasic %}{{ param_grid(param_layout(fbasic), comp['values'], comp['fields']) }}{% endif %}
             {% if fadv %}
               <details class="advcfg">
                 <summary>Advanced config</summary>
-                {{ param_grid(param_layout(fadv), view.file_values, 'f_') }}
+                {{ param_grid(param_layout(fadv), comp['values'], comp['fields']) }}
               </details>
             {% endif %}
           </section>
-        {% endif %}
+        {% endfor %}
 
         {% if view.sources %}
           <section class="cfgsec">

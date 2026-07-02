@@ -10,6 +10,7 @@ from lhpc.core.model import Component, ComponentKind, Stack
 from lhpc.core.paths import Paths
 from lhpc.core.probes import RealSystem
 from lhpc.core.probes.backends import FakeSystem
+from conftest import set_call
 
 
 def _real_life(tmp_path):
@@ -77,6 +78,7 @@ def test_start_required_post_start_failure_is_unverified(tmp_path, monkeypatch):
     # Drives ControllerService.start() and exercises the CALLER's handling of the typed
     # required-post-start result (the bug was the caller using a nonexistent Outcome.ok).
     svc = _igate_svc(tmp_path)
+    set_call(svc)
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     monkeypatch.setattr(ControllerService, "_run_post_start",
                         lambda self, *a, **k: (False, "required post-start failed (rc 7)"))
@@ -92,6 +94,7 @@ def test_start_required_post_start_success_verifies(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     monkeypatch.setattr(ControllerService, "_run_post_start",
                         lambda self, *a, **k: (True, "required post-start completed"))
+    set_call(svc)
     res = svc.start("igate", apply=True)
     assert any(r.component == "loraham-igate" and r.outcome.value == "verified"
                for r in res.results)
@@ -211,6 +214,7 @@ def test_ephemeral_start_params_override_saved_config(tmp_path, monkeypatch):
         seen["cfg"] = dict(comp_cfg)
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
+    set_call(svc)
     svc.start("igate", apply=True, params={"tx_freq": "434.500"})
     assert seen["cfg"]["tx_freq"] == "434.500"                  # ephemeral wins over saved 433.900
 
@@ -354,7 +358,7 @@ def test_meshcom_empty_call_schedules_no_setcall():
 
 def test_meshcom_saved_call_schedules_retrying_setcall():
     script, _ = _meshcom_launcher("DJ0CHE")
-    assert "setcall DJ0CHE" in script and "'repeat': 14" in script
+    assert "setcall DJ0CHE" in script and "'repeat': 21" in script
 
 
 def test_meshcom_ephemeral_overrides_saved_and_leaves_config():

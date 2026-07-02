@@ -33,7 +33,7 @@
             <td>
               {% if r.choices %}
                 <select name="{{ dp_pref }}{{ r.name }}" class="dpin"
-                        data-dpdefault="{{ r.default }}"{% if r.name == 'MODE' %} data-mode-warn{% endif %}>
+                        data-dpdefault="{{ r.default }}" data-config="{{ r.value }}"{% if r.name == 'MODE' %} data-mode-warn{% endif %}>
                   {% for ch in r.choices %}
                     <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>
                   {% endfor %}
@@ -42,11 +42,11 @@
                 <input type="number" name="{{ dp_pref }}{{ r.name }}" value="{{ r.value }}"
                        min="{{ r.num.min }}" max="{{ r.num.max }}" step="any"
                        placeholder="{{ r.default }}" autocomplete="off" class="dpin"
-                       data-dpdefault="{{ r.default }}">
+                       data-dpdefault="{{ r.default }}" data-config="{{ r.value }}">
               {% else %}
                 <input type="text" name="{{ dp_pref }}{{ r.name }}" value="{{ r.value }}"
                        placeholder="{{ r.default }}" autocomplete="off" class="dpin"
-                       data-dpdefault="{{ r.default }}">
+                       data-dpdefault="{{ r.default }}" data-config="{{ r.value }}">
               {% endif %}
             </td>
             <td class="dphelp muted">{{ r.desc }}</td>
@@ -56,6 +56,7 @@
       <div class="actrow">
         {% if dp_inline %}
           <button type="button" class="act dp-reset-inline">Reset to defaults</button>
+          <button type="submit" class="act" name="_save" value="daemon">Save</button>
         {% else %}
           <button type="submit" class="act">Save</button>
           <button type="submit" class="act"

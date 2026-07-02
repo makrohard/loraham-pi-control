@@ -96,10 +96,12 @@ def test_owner_bundle_includes_owner_lifecycle_key(tmp_path):
 
 def test_lifecycle_guard_is_thread_scoped(tmp_path):
     # ONE shared service. Thread A holds the guard (delayed); thread B, an INDEPENDENT
-    # thread, must contend through reslock (ResourceBusy) and NOT run the mutation —
-    # the re-entrancy skip is per-thread, never a process-wide set.
+    # thread, must contend through reslock and NOT run the mutation — the re-entrancy skip is
+    # per-thread, never a process-wide set. Same-process contention SERIALIZES with a bounded wait
+    # (kept short here) and then raises ResourceBusy while A still holds.
     import threading
     svc = _svc(tmp_path)
+    svc._SELF_LOCK_WAIT_S = 0.3          # short same-process serialize window for the test
     started, release, results = threading.Event(), threading.Event(), {}
 
     def holder():

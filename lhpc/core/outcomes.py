@@ -78,3 +78,22 @@ def applied_ok(results) -> bool:
 def any_blocking(results) -> bool:
     """True if any result is a hard non-success (blocks dependent/parent actions)."""
     return any(r.outcome in _NON_SUCCESS for r in results)
+
+
+# Non-success outcomes that are a genuine PROBLEM (as opposed to MANUAL_REQUIRED, which is the
+# expected result for an interactive/systemd component the operator launches themselves).
+_HARD_NON_SUCCESS = frozenset({
+    Outcome.BLOCKED, Outcome.FAILED, Outcome.UNVERIFIED,
+    Outcome.STILL_RUNNING, Outcome.ENDPOINT_STILL_PRESENT,
+})
+
+
+def manual_required_only(results) -> bool:
+    """True when an action had NO hard failure and its only non-success is MANUAL_REQUIRED — the
+    expected, non-alarming outcome for an interactive/systemd stack (e.g. chat: the daemon came up
+    and readied, and the operator now runs the TUI). Lets an adapter show it as success, not a
+    warning, while `ok`/`applied_ok` stay strict (it is not verified-running)."""
+    results = list(results)
+    if not results or any(r.outcome in _HARD_NON_SUCCESS for r in results):
+        return False
+    return any(r.outcome == Outcome.MANUAL_REQUIRED for r in results)

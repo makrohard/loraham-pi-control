@@ -5,6 +5,7 @@ from __future__ import annotations
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ActionResult, ControllerService
+from conftest import set_call
 
 
 def _svc(tmp_path):
@@ -171,6 +172,7 @@ def test_start_log_omits_unconfirmed_boilerplate(tmp_path):
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
     text = "\n".join(svc.start("meshcom", apply=True).details)
     assert "UNCONFIRMED" not in text and "does not report back" not in text
     assert "SF=10 sent" in text                          # concise radio-param line instead
@@ -184,6 +186,7 @@ def test_cli_start_same_sequence_as_web(tmp_path):
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
     text = "\n".join(svc.run_action("start", "meshcom", apply=True).details)   # CLI entry point
     i_daemon = text.index("daemon already serving 433")     # 1) daemon ensured READY
     i_params = text.index("SF=10")                          # 2) radio params applied (before app)
@@ -486,6 +489,7 @@ def _healthy_igate(tmp_path):
 
 def test_healthy_client_start_sends_no_daemon_set(tmp_path):
     svc = _healthy_igate(tmp_path)
+    set_call(svc)
     res = svc.start("igate", apply=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("sent" in d.lower() or "serving" in d for d in res.details)   # no CONF SET
@@ -493,6 +497,7 @@ def test_healthy_client_start_sends_no_daemon_set(tmp_path):
 
 def test_healthy_start_with_ephemeral_fsk_sends_no_set(tmp_path):
     svc = _healthy_igate(tmp_path)
+    set_call(svc)
     res = svc.start("igate", apply=True, daemon_overrides={"433": {"MODE": "FSK"}})
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("MODE" in d or "sent" in d.lower() for d in res.details)       # FSK not applied
@@ -503,6 +508,7 @@ def test_stopped_client_with_ready_daemon_applies_before_launch(tmp_path):
     svc = ControllerService(system=FakeSystem(       # daemon ready 433; igate NOT running
         cmdlines_data={100: ["loraham_daemon", "--radio", "433"]},
         unix_replies={"/tmp/loraconf433.sock": _RDY}).system, paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
     res = svc.start("igate", apply=True)
     text = "\n".join(res.details)
     assert "daemon already serving 433" in text and "sent" in text.lower()        # params applied
@@ -665,6 +671,7 @@ def test_healthy_start_stop_owners_stops_no_owner(tmp_path, monkeypatch):
         cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_igate", "-c", "X"]},
         unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
     calls = _spy_stop(monkeypatch)
+    set_call(svc)
     res = svc.start("igate", apply=True, stop_owners=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert calls == []                                # no owner stopped

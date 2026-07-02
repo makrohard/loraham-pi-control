@@ -8,6 +8,7 @@ from lhpc.core.config import Config, OperatorConfig
 from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
+from conftest import set_call
 
 
 def _life(tmp_path):
@@ -122,8 +123,9 @@ def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="": [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
         ConfigWrite("loraham-voice", "/x/voice.conf", "failed", "disk full")])
+    set_call(svc)
     res = svc.start("voice", apply=True)
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
                and "config generation failed" in (r.summary or "") for r in res.results)
@@ -147,8 +149,9 @@ def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="": [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
         ConfigWrite("loraham-voice", "/ext/voice.conf", "linked-readonly", "read-only")])
+    set_call(svc)
     res = svc.start("voice", apply=True)
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.MANUAL_REQUIRED
                and "linked source is read-only" in (r.summary or "") for r in res.results)
@@ -174,10 +177,11 @@ def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeyp
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="": [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
         ConfigWrite("loraham-chat", "/x/lorachat.conf", "failed", "disk full")])
     marks = {"n": 0}
     monkeypatch.setattr(type(svc), "mark_interactive", lambda self, s, b="": marks.__setitem__("n", marks["n"] + 1))
+    set_call(svc)
     res = svc.start("chat", apply=True)
     assert not res.ok
     assert any(r.component == "loraham-chat" and r.outcome == Outcome.BLOCKED

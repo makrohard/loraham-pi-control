@@ -23,6 +23,7 @@ from flask import (
     Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for,
 )
 
+from lhpc.core.outcomes import manual_required_only
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
 from lhpc.version import __version__
@@ -294,6 +295,97 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         sid = service.stack_of(target)
         return redirect(url_for("stack_detail", stack_id=sid) if sid else url_for("dashboard"))
 
+    # START-confirm run/file/daemon params share the daemon-flag hide set + the confirm form.
+    _HIDE_RUN = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
+                 "cadrssi_433", "cadrssi_868"}
+
+    def _collect_start_params(target: str, band: str):
+        """(params, file_overrides, have_form) from the submitted confirm form, keyed by component-
+        aware API key (bare when unique, `component.name` when the name collides). `have_form` marks
+        a submission of the confirm form itself (`_params=1`) vs the initial dashboard POST — only
+        then are unchecked flag checkboxes read as OFF and `pf_*` file overrides collected."""
+        have_form = request.form.get("_params") == "1"
+        params: dict = {}
+        file_over = {} if have_form else None
+        for f in service.start_param_fields(target, band):
+            if f["kind"] == "run":
+                if f["flag"] and have_form:
+                    params[f["key"]] = "1" if request.form.get(f["field"]) else ""
+                else:
+                    params[f["key"]] = request.form.get(f["field"], f["saved"])
+            elif have_form:                                   # file overrides only on a real submit
+                if f["flag"]:
+                    file_over[f["key"]] = "1" if request.form.get(f["field"]) else ""
+                else:
+                    v = request.form.get(f["field"])
+                    if v is not None:
+                        file_over[f["key"]] = v
+        return params, file_over, have_form
+
+    def _stack_save_values(target: str, band: str, params: dict, file_over: dict | None) -> dict:
+        """Map the confirm 'Stack parameters' rows into a `save_config_bundle` values dict, keyed by
+        component-aware API key (run -> `<key>`, file -> `file_<key>`; `key` is bare when unique,
+        `component.name` when duplicated). Only the SAVABLE section rows are persisted — a stack
+        without a savable section (the daemon, whose run params are ephemeral start options) saves
+        nothing here."""
+        values: dict = {}
+        for r in service.stack_start_params(target, band, params, file_over):
+            if r["field"].startswith("pf_"):
+                values[f"file_{r['key']}"] = r["value"]
+            else:
+                values[r["key"]] = r["value"]
+        return values
+
+    def _save_daemon_confirm(target: str) -> dict:
+        """Persist the inline daemon-radio panel values (per band) from the confirm form. Returns a
+        STRUCTURED per-band result — {"parse_error": str|None, "bands": {band: bool}, "ok": bool} —
+        so the caller can report EXACTLY which bands persisted (truthful partial persistence) and
+        never over-claim. `ok` is True only when there was no parse error and every submitted band
+        saved (a submission with no daemon values is trivially ok)."""
+        per_band, err = _parse_start_daemon_overrides(request.form)
+        if err:
+            return {"parse_error": err, "bands": {}, "ok": False}
+        bands: dict = {}
+        for b in sorted((per_band or {}).keys()):
+            bands[b] = service.save_daemon_params(target, b, per_band[b]).ok
+        return {"parse_error": None, "bands": bands, "ok": all(bands.values()) if bands else True}
+
+    def _render_confirm(op: str, target: str, band: str, params: dict, file_over,
+                        source: str, frm: str, enforce_field: str = ""):
+        """Stage-1 (and post-Save / enforcement re-render) of the confirm page."""
+        run_params = service.run_params_for(target) if op == "start" else []
+        hidden_params = [p for p in run_params if p.name in _HIDE_RUN]
+        stack_params = (service.stack_start_params(target, band, params, file_over)
+                        if op == "start" else None)
+        stack_param_groups = (service.stack_start_param_groups(target, band, params, file_over)
+                              if op == "start" else None)
+        # Run params covered by the savable 'Stack parameters' panel; the rest (e.g. the daemon's
+        # ephemeral `debug` start flag) render as PLAIN inputs — start options, never persisted.
+        covered = {r["name"] for r in (stack_params or []) if r["field"].startswith("p_")}
+        plain_params = [p for p in run_params
+                        if p.name not in _HIDE_RUN and p.name not in covered] if op == "start" else []
+        # Submitted-but-unsaved daemon-panel values (best-effort parse; a malformed field is ignored
+        # for DISPLAY only) so a re-render after a failed Save/enforcement keeps the operator's edits.
+        _dp_display, _ = (_parse_start_daemon_overrides(request.form) if op == "start" else (None, ""))
+        plan = service.run_action(op, target, apply=False, params=params, source=source, band=band)
+        return render_template(
+            "confirm.html", version=__version__, runtime_root=_runtime_root(),
+            op=op, target=target, plan=plan, tx=("tx" in op),
+            hidden_params=hidden_params, plain_params=plain_params,
+            params=params, source=source, band=band,
+            stack_params=stack_params, stack_param_groups=stack_param_groups,
+            enforce_field=enforce_field,
+            blockers=(plan.data.get("blockers") if op == "start" else None),
+            stop_deps=(plan.data.get("dependents") if op == "stop" else None),
+            other_bands=(plan.data.get("other_bands") if op == "stop" else None),
+            commands=(plan.data.get("commands") if op in ("start", "stop") else None),
+            missing_deps=(service.missing_system_deps(target)
+                          if op in ("install", "build") else None),
+            daemon_panels=(service.daemon_start_panels(target, params, band, _dp_display)
+                           if op == "start" else None),
+            frm=frm,
+            source_choices=service.SOURCE_CHOICES if op in ("install", "update") else None)
+
     @app.post("/action")
     def action():  # noqa: ANN202
         if not _csrf_ok():
@@ -303,20 +395,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op not in service.WEB_ACTIONS:
             abort(400)
         band = request.form.get("band", "")    # chosen band for a band-switchable stack
-        # Collect run parameters (only meaningful for start); defaults come from
-        # the stack's saved config for the chosen band, overridable on the confirm.
-        run_params = service.run_params_for(target) if op == "start" else []
-        stored = service.stack_config(target, band) if run_params else {}
-        params = {p.name: request.form.get("p_" + p.name, stored.get(p.name, p.default))
-                  for p in run_params}
-        # On the daemon start-confirm, the radio band + per-band TX-mode/CAD-monitor/CAD-RSSI
-        # START flags are set from the dashboard and the "Daemon radio parameters" panel — keep
-        # them OUT of the confirm parameter grid (still submitted as hidden inputs, so the start
-        # values are unchanged). CAD RSSI now lives in the daemon-parameters panel instead.
-        _hide = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
-                 "cadrssi_433", "cadrssi_868"}
-        hidden_params = [p for p in run_params if p.name in _hide]
-        shown_params = [p for p in run_params if p.name not in _hide]
+        # Collect run + file params (only meaningful for start). The confirm 'Stack parameters'
+        # panel submits p_<name> (run) / pf_<name> (file); defaults come from the saved config.
+        params, file_over, _have = (_collect_start_params(target, band)
+                                    if op == "start" else ({}, None, False))
         # Source version selector (only meaningful for install/update). A MISSING selector
         # defaults to the production-safe 'pinned' — never 'dev'. An INVALID selector is
         # rejected by run_action (never rewritten to dev).
@@ -324,6 +406,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
+        save_mode = request.form.get("_save", "")           # "stack" | "daemon" | ""
         # Refuse to start an app that isn't installed or built yet — send the
         # operator to its page (which has the Install/Build buttons) with a warning
         # and the CLI command, rather than spawning a doomed start.
@@ -338,25 +421,66 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       f"missing ({', '.join(unbuilt)}). Build it on this page "
                       f"(or run: lhpc build {target}).", "warn")
                 return redirect(url_for("stack_detail", stack_id=target))
+        # Panel "Save" / "Save & start". FAIL CLOSED: for Save & start the requested start happens
+        # ONLY after EVERY selected persistence succeeds. Any failure (parse, stack or per-band
+        # daemon write) blocks the start and re-renders the confirm with the SUBMITTED values +
+        # visible errors — nothing is started, reconfigured, generated or recorded.
+        if op == "start" and save_mode in ("stack", "daemon", "all"):
+            then_start = request.form.get("_save_then_start") == "1"
+            # Validate the daemon form BEFORE the first write, so a malformed field fails closed
+            # without persisting anything.
+            if save_mode in ("daemon", "all"):
+                _pb, _derr = _parse_start_daemon_overrides(request.form)
+                if _derr:
+                    flash(f"Cannot save daemon parameters: {_derr}", "warn")
+                    return _render_confirm(op, target, band, params, file_over, source, frm)
+            stack_ok = True
+            stack_values = _stack_save_values(target, band, params, file_over)
+            if save_mode in ("stack", "all") and stack_values:
+                res = service.save_config_bundle(target, values=stack_values, band=band)
+                flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
+                      "ok" if res.ok else "warn")
+                stack_ok = res.ok
+            # Save & start SHORT-CIRCUIT: a failed stack save must NOT trigger the daemon save and
+            # must NOT start — re-render immediately with the submitted values. (`_save_daemon_confirm`
+            # / `save_daemon_params` are never reached.)
+            if then_start and not stack_ok:
+                flash("Not started — the stack configuration could not be saved.", "warn")
+                return _render_confirm(op, target, band, params, file_over, source, frm)
+            daemon_res = {"parse_error": None, "bands": {}, "ok": True}
+            if save_mode in ("daemon", "all"):
+                daemon_res = _save_daemon_confirm(target)
+                if daemon_res["parse_error"]:
+                    flash(f"Daemon parameters not saved: {daemon_res['parse_error']}", "warn")
+                for _b, _bok in daemon_res["bands"].items():
+                    flash(f"Daemon {_b} MHz: {'saved' if _bok else 'save FAILED'}",
+                          "ok" if _bok else "warn")
+            if not then_start:
+                # Save-only: re-render with the (now saved) config — never starts.
+                fresh = service.stack_config(target, band)
+                return _render_confirm(op, target, band, dict(fresh), None, source, frm)
+            if not (stack_ok and daemon_res["ok"]):
+                # Save & start, but a later save failed (a per-band DAEMON save after a successful/
+                # absent stack save) -> DO NOT start. Earlier successful saves are RETAINED. Report
+                # PRECISELY what did and did not persist (never over-claim the stack save — during
+                # `_save=daemon` no stack config is written), and re-render with the submitted values.
+                saved, not_saved = [], []
+                if save_mode in ("stack", "all") and stack_values:
+                    (saved if stack_ok else not_saved).append("stack config")
+                for _b, _bok in daemon_res["bands"].items():
+                    (saved if _bok else not_saved).append(f"daemon {_b} MHz")
+                parts = []
+                if saved:
+                    parts.append("saved: " + ", ".join(saved))
+                if not_saved:
+                    parts.append("NOT saved: " + ", ".join(not_saved))
+                flash("Not started — a save failed" + (f" ({'; '.join(parts)})" if parts else "")
+                      + ". Fix it and try again.", "warn")
+                return _render_confirm(op, target, band, params, file_over, source, frm)
+            # every selected save succeeded -> fall through to the apply below
         if request.form.get("confirmed") != "yes":
             # Stage 1: show the dry-run plan, options and a confirmation form.
-            plan = service.run_action(op, target, apply=False, params=params, source=source,
-                                      band=band)
-            return render_template("confirm.html", version=__version__,
-                                   runtime_root=_runtime_root(), op=op, target=target,
-                                   plan=plan, tx=("tx" in op), run_params=shown_params,
-                                   hidden_params=hidden_params,
-                                   params=params, source=source, band=band,
-                                   blockers=(plan.data.get("blockers") if op == "start" else None),
-                                   stop_deps=(plan.data.get("dependents") if op == "stop" else None),
-                                   other_bands=(plan.data.get("other_bands") if op == "stop" else None),
-                                   commands=(plan.data.get("commands") if op in ("start", "stop") else None),
-                                   missing_deps=(service.missing_system_deps(target)
-                                                 if op in ("install", "build") else None),
-                                   daemon_panels=(service.daemon_start_panels(target, params, band)
-                                                  if op == "start" else None),
-                                   frm=frm,
-                                   source_choices=service.SOURCE_CHOICES if op in ("install", "update") else None)
+            return _render_confirm(op, target, band, params, file_over, source, frm)
         # Stage 2: apply.
         # install/build/test run as detached jobs streaming to a log -> show it live.
         if op in ("install", "build", "test"):
@@ -383,11 +507,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if dp_err:
                 flash(f"Cannot start '{target}': {dp_err}", "warn")
                 return _redirect_for(target)
+            # CALL/node enforcement (UX): block the start and RE-RENDER the confirm with the
+            # 'Stack parameters' panel expanded and the offending field highlighted, so the operator
+            # can supply the call/node in place. The service layer enforces this authoritatively too.
+            id_ok, id_field, id_msg = service.enforce_identity(target, band, params, file_over)
+            if not id_ok:
+                flash(id_msg, "warn")
+                return _render_confirm(op, target, band, params, file_over, source, frm,
+                                       enforce_field=id_field)
         result = service.run_action(op, target, apply=True, params=params, source=source,
                                     stop_owners=stop_owners, cascade=cascade, band=band,
-                                    daemon_overrides=daemon_overrides)
+                                    daemon_overrides=daemon_overrides, file_overrides=file_over)
+        # An interactive/systemd start whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
+        # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
+        ok_flash = result.ok or manual_required_only(result.results)
         flash(f"{result.summary} {' '.join(result.details[:6])}",
-              "ok" if result.ok else "warn")
+              "ok" if ok_flash else "warn")
         # Transient green note(s) for a just-started component (e.g. how to connect a
         # launched GUI to its node) — auto-hidden on the dashboard.
         if op == "start":
@@ -436,20 +571,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if not _csrf_ok():
             abort(400)
         band = request.form.get("band", "")
-        run_params = service.run_params_for(stack_id)
-        values = {}
-        for p in run_params:
-            if p.kind == "flag":
-                values[p.name] = "1" if request.form.get("c_" + p.name) else ""
-            else:
-                values[p.name] = request.form.get("c_" + p.name, p.default)
         view = service.config_view(stack_id, band)
-        # File-config values (written to the app's own config file on save).
-        for fp in view["file_params"]:
-            if fp.kind == "flag":
-                values[f"file_{fp.name}"] = "1" if request.form.get("f_" + fp.name) else ""
+        # Fold each submitted Config-page field (`c_`/`f_`, component-qualified when the name
+        # collides) into the canonical API key (`name` or `component.name`; file keys carry the
+        # `file_` prefix) BEFORE save — so duplicate names never flatten and unqualified duplicates
+        # are rejected by the canonical bundle path.
+        values = {}
+        for f in service.config_param_fields(stack_id, band):
+            if f["flag"]:
+                v = "1" if request.form.get(f["field"]) else ""
             else:
-                values[f"file_{fp.name}"] = request.form.get("f_" + fp.name, fp.default)
+                v = request.form.get(f["field"], f["default"])
+            values[f"file_{f['key']}" if f["kind"] == "file" else f["key"]] = v
         # Auto-start toggles for the stack's optional components.
         for opt in view["optional"]:
             values[f"autostart_{opt['id']}"] = (

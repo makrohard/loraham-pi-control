@@ -82,6 +82,7 @@ tr:last-child td { border-bottom: none; }
 .badge::before { content: "● "; }
 .badge-running { background: #e7f6ec; color: var(--ok); border-color: #b7e3c4; }
 .badge-degraded { background: #fbf1d8; color: var(--warn); border-color: #f0d79a; }
+.badge-booting { background: #fbf1d8; color: var(--warn); border-color: #f0d79a; }   /* transient: firmware booting / callsign applying */
 .badge-failed { background: #fde7e9; color: var(--bad); border-color: #f3b9bf; }
 .badge-stopped, .badge-not-installed, .badge-unknown { background: #eef1f4; color: var(--idle); border-color: #dbe1e8; }
 .badge-not-applicable { background: #eef1f4; color: var(--idle); border-color: #dbe1e8; }
@@ -229,6 +230,35 @@ span.greyed { color: var(--muted); opacity: .8; }
 .logbox { max-height: 28rem; overflow-y: auto; background: #0f1b2a; color: #d7e3f2;
           padding: .6rem .8rem; border-radius: 8px; font-size: .82rem; line-height: 1.35;
           white-space: pre-wrap; word-break: break-word; }
+
+/* Start-confirm "Stack parameters" panel + CALL/node enforcement.
+   Same 3-column design as the daemon panel: monospace NAME | input | short description, all
+   top-aligned at the start of the row (so a wrapping description keeps name+input at the top). */
+.stackparams input[type=text], .stackparams input[type=number] { width: 11rem; }
+.stackparams select { min-width: 8rem; }
+.stackparams .spin { max-width: 14rem; }
+.stackparams .dptab th { width: 8.5rem; vertical-align: top; padding-top: .3rem; }
+.stackparams .dptab td { vertical-align: top; }
+.stackparams .dphelp { padding-top: .34rem; }
+/* Per-component group header row (with a separating h-line above it, like the daemon panel). */
+.stackparams tr.spgroup th { font-family: inherit; font-weight: 700; font-size: .82rem;
+                             text-transform: none; letter-spacing: 0; color: var(--ink);
+                             border-top: 1px solid var(--line); padding: .7rem 0 .3rem;
+                             vertical-align: baseline; }
+.stackparams tr.spgroup:first-child th { border-top: 0; padding-top: .2rem; }
+.req { color: var(--bad, #e05252); font-weight: 700; white-space: nowrap; }
+tr.field-bad th, tr.field-bad td { background: rgba(224, 82, 82, .12); }
+tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252); }
+
+/* "Save before apply?" modal (3-choice) */
+.modal-back { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .55);
+              z-index: 50; align-items: center; justify-content: center; }
+.modal-back.open { display: flex; }
+.modal-box { background: var(--surface, #fff); color: var(--ink, #1b2733); padding: 1.1rem 1.3rem;
+             border: 1px solid var(--line); border-radius: 10px; max-width: 26rem;
+             box-shadow: 0 8px 30px rgba(0, 0, 0, .5); }
+.modal-box p { color: var(--ink, #1b2733); }
+.modal-btns { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .9rem; }
 
 /* Utility classes (avoid inline styles under CSP default-src 'self') ----- */
 .header-wrap { padding-top: 0; padding-bottom: 0; }

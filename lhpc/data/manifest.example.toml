@@ -459,45 +459,22 @@ main = "loraham-voice"
     [stack.component.config_file]
     path = "{runtime}/config/files/loraham_voice.conf"
     fmt = "env"
+      # Display order (Config + Start-confirm): CALL, then the LoRa radio params in the operator's
+      # preferred order (freq sf bw cr crc preamble sync power ldro), then the rest. The radio params
+      # are NOT hidden under "Advanced config" — they are shown inline with the basic ones.
       [[stack.component.config_file.param]]
       name = "callsign"
       validator = "callsign"
       key = "callsign"
       default = "{callsign}"
       label = "Callsign"
-      # active_band (0=433, 1=868) is written automatically from the band the stack
-      # is started on — not shown on the Config page.
-      [[stack.component.config_file.param]]
-      name = "active_band"
-      key = "active_band"
-      default = "0"
-      band_defaults = { "433" = "0", "868" = "1" }
-      hidden = true
-      [[stack.component.config_file.param]]
-      name = "audio_capture"
-      key = "audio_capture"
-      default = "default"
-      label = "Audio capture device (ALSA)"
-      [[stack.component.config_file.param]]
-      name = "audio_playback"
-      key = "audio_playback"
-      default = "default"
-      label = "Audio playback device (ALSA)"
-      [[stack.component.config_file.param]]
-      name = "codec_mode"
-      key = "codec_mode"
-      kind = "int"
-      default = "0"
-      min = 0
-      max = 7
-      label = "Codec2 mode index"
-      advanced = true
-      # Per-band LoRa radio params: the file key carries {band}, so editing the 433
-      # config writes lora433_* and the 868 config writes lora868_* (one file holds
-      # both bands; active_band selects which is used). Defaults match the app struct.
+      # Per-band LoRa radio params: the file key carries {band}, so editing the 433 config writes
+      # lora433_* and the 868 config writes lora868_* (one file holds both bands; active_band selects
+      # which is used). Defaults match the app struct.
       [[stack.component.config_file.param]]
       name = "freq"
       key = "{band}_freq"
+      validator = "freq"
       band_defaults = { "433" = "434.700", "868" = "869.525" }
       default = "434.700"
       label = "Frequency MHz"
@@ -528,15 +505,6 @@ main = "loraham-voice"
       max = 8
       label = "Coding rate (4/CR)"
       [[stack.component.config_file.param]]
-      name = "power"
-      key = "{band}_power"
-      kind = "int"
-      band_defaults = { "433" = "17", "868" = "10" }
-      default = "17"
-      min = 0
-      max = 20
-      label = "TX power dBm"
-      [[stack.component.config_file.param]]
       name = "crc"
       key = "{band}_crc"
       kind = "enum"
@@ -544,7 +512,6 @@ main = "loraham-voice"
       band_defaults = { "433" = "1", "868" = "1" }
       default = "1"
       label = "CRC (0/1)"
-      advanced = true
       [[stack.component.config_file.param]]
       name = "preamble"
       key = "{band}_preamble"
@@ -554,14 +521,22 @@ main = "loraham-voice"
       min = 6
       max = 65535
       label = "Preamble length"
-      advanced = true
       [[stack.component.config_file.param]]
       name = "sync"
       key = "{band}_sync"
+      validator = "sync"
       band_defaults = { "433" = "0x12", "868" = "0x2B" }
       default = "0x12"
       label = "Sync word (hex)"
-      advanced = true
+      [[stack.component.config_file.param]]
+      name = "power"
+      key = "{band}_power"
+      kind = "int"
+      band_defaults = { "433" = "17", "868" = "10" }
+      default = "17"
+      min = 0
+      max = 20
+      label = "TX power dBm"
       [[stack.component.config_file.param]]
       name = "ldro"
       key = "{band}_ldro"
@@ -570,7 +545,36 @@ main = "loraham-voice"
       band_defaults = { "433" = "2", "868" = "2" }
       default = "2"
       label = "LDRO (0=off, 1=on, 2=auto)"
-      advanced = true
+      # --- the rest (shown after the radio params) ---
+      [[stack.component.config_file.param]]
+      name = "codec_mode"
+      key = "codec_mode"
+      kind = "int"
+      default = "0"
+      min = 0
+      max = 7
+      label = "Codec2 mode index"
+      [[stack.component.config_file.param]]
+      name = "audio_capture"
+      key = "audio_capture"
+      default = "default"
+      label = "Audio capture device (ALSA)"
+      [[stack.component.config_file.param]]
+      name = "audio_playback"
+      key = "audio_playback"
+      default = "default"
+      label = "Audio playback device (ALSA)"
+      # active_band (0=433, 1=868) is written automatically from the band the stack is started on —
+      # hidden (not shown on the Config or Start-confirm pages).
+      [[stack.component.config_file.param]]
+      name = "active_band"
+      key = "active_band"
+      kind = "int"
+      min = 0
+      max = 1
+      default = "0"
+      band_defaults = { "433" = "0", "868" = "1" }
+      hidden = true
 
 # =====================================================================
 # Stack: kiss — KISS/TCP TNC (+ optional serial PTY)
@@ -1076,6 +1080,9 @@ main = "meshcom-qemu"
   tx_capable = true
   depends_on = ["meshcom-bridge", "meshcom-gps-relay"]
   start_order = 3
+  # Shown as a transient note right after start — the emulated node is slow to boot, so set
+  # expectations (and steer heavy GUI viewing off this Pi during boot).
+  start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then (best viewed from another machine), and its callsign switches to yours once the node finishes booting."
   # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
   # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
@@ -1095,7 +1102,7 @@ main = "meshcom-qemu"
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", repeat = 14, interval = 12, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the

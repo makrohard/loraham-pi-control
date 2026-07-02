@@ -344,7 +344,8 @@ def test_start_confirm_includes_daemon_params_panel(tmp_path):
     assert "Daemon radio parameters" in body                 # panel on the start-confirm page
     assert '<details class="advcfg dparams">' in body        # inline panel, collapsed by default
     assert "Reset to defaults" in body                       # (client-side) Reset stays...
-    assert ">Save</button>" not in body and ">Apply live</button>" not in body   # no Save/Apply
+    assert 'name="_save" value="daemon">Save</button>' in body   # inline Save persists these params
+    assert ">Apply live</button>" not in body                # ...but no Apply-live on the confirm
 
 
 def test_start_daemon_only_on_a_band(tmp_path):
@@ -590,3 +591,380 @@ def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path):
     assert "loraham.radio.868" in body and "loraham.radio.433" not in body
     detail = c.get("/stacks/meshtastic").get_data(as_text=True)
     assert "OBSERVED" in detail and "loraham.radio.868" in detail
+
+
+# --- Start-confirm "Stack parameters" panel + CALL/node enforcement + Save -------------------
+
+def _install_igate(tmp_path):
+    # igate shares LoRaHAM_Daemon source; create its built binary so the start-confirm renders.
+    from lhpc.core.services import ControllerService as _CS
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    srcdir = svc._lifecycle().source_dir(svc.stack("igate").main_component)
+    srcdir.mkdir(parents=True, exist_ok=True)
+    (srcdir / "loraham_igate").write_text("#!/bin/sh\n")
+    return _real_app(tmp_path)
+
+
+def test_confirm_shows_stack_params_panel(tmp_path):
+    c = _install_igate(tmp_path)
+    tok = _csrf(c, "/stacks/igate")
+    body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate"}).get_data(as_text=True)
+    assert "Stack parameters" in body                        # the new panel
+    assert 'name="_params" value="1"' in body                # confirm-form marker
+    assert 'name="p_call"' in body                           # the identity run param
+    assert 'class="act sp-reset"' in body                    # client Reset-to-defaults
+    assert 'name="_save" value="stack">Save</button>' in body  # Save persists to config
+    assert '<span class="req"' in body                       # identity marked required
+
+
+def test_confirm_blocks_empty_call_and_highlights(tmp_path):
+    c = _install_igate(tmp_path)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+                                "confirmed": "yes", "_params": "1", "p_call": "", "band": ""})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200                              # re-rendered, not started
+    assert 'class="advcfg stackparams" open' in body         # panel expanded
+    assert "field-bad" in body                               # offending field highlighted
+    assert "callsign is required" in body.lower() or "valid callsign" in body.lower()
+
+
+def test_confirm_save_stack_persists_config(tmp_path):
+    c = _install_igate(tmp_path)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+                                "_save": "stack", "_params": "1",
+                                "p_call": "DJ0CHE-10", "p_tx_freq": "434.500", "band": ""})
+    assert r.status_code == 200                              # re-rendered confirm, not started
+    # persisted to the user config
+    from lhpc.core.services import ControllerService as _CS
+    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
+    assert cfg["call"] == "DJ0CHE-10" and cfg["tx_freq"] == "434.500"
+
+
+def test_confirm_save_does_not_start(tmp_path):
+    # A ReadOnlyGuard app would raise if Save invoked a mutating lifecycle method — Save only writes
+    # config. Use the guarded client to prove Save never starts.
+    binp = tmp_path / "src" / "LoRaHAM_Daemon" / "loraham_igate"
+    binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")
+    c = _client(tmp_path)                                    # ReadOnlyGuard
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+                                "_save": "stack", "_params": "1", "p_call": "DJ0CHE", "band": ""})
+    assert r.status_code == 200                              # no start attempted (no guard tripwire)
+
+
+def test_confirm_save_then_start_persists_and_starts(tmp_path):
+    # The modal "Save & start" path sets _save=all + _save_then_start=1: persist, then proceed to
+    # apply (which here blocks later in the pipeline, but MUST get past enforcement + save first).
+    c = _install_igate(tmp_path)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+                                "confirmed": "yes", "_save": "all", "_save_then_start": "1",
+                                "_params": "1", "p_call": "DJ0CHE-10", "band": ""})
+    assert r.status_code in (302, 303)                       # proceeded to apply (not a re-render)
+    from lhpc.core.services import ControllerService as _CS
+    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
+    assert cfg["call"] == "DJ0CHE-10"                        # saved before starting
+
+
+def test_confirm_daemon_inline_save_persists(tmp_path):
+    c = _install_igate(tmp_path)                             # igate is a daemon client -> has panel
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+                                "_save": "daemon", "_params": "1",
+                                "dp_433_SF": "10", "band": "433"})
+    assert r.status_code == 200                              # re-rendered confirm, not started
+    from lhpc.core.services import ControllerService as _CS
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    rows = {r["name"]: r for r in svc.daemon_params_view("igate", "433")["rows"]}
+    assert rows["SF"]["value"] == "10"
+
+
+# --- Area 2: fail-closed Save & start -------------------------------------------------------
+
+def _spy_starts(monkeypatch):
+    """Record run_action(apply=True, op=start) calls and stub them (no real start)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    starts = []
+    orig = ControllerService.run_action
+    def spy(self, op, target, apply=False, **k):
+        if apply and op == "start":
+            starts.append(target)
+            return ActionResult(True, "started (stub)")
+        return orig(self, op, target, apply=apply, **k)
+    monkeypatch.setattr(ControllerService, "run_action", spy)
+    return starts
+
+
+def test_save_and_start_blocks_on_failed_stack_save(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    monkeypatch.setattr(ControllerService, "save_config_bundle",
+                        lambda self, *a, **k: ActionResult(False, "could not save (disk full)"))
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-10", "band": ""})
+    assert r.status_code == 200 and starts == []             # re-rendered, run_action(apply) NOT called
+    assert "not started" in r.get_data(as_text=True).lower()
+
+
+def test_save_and_start_blocks_on_failed_daemon_save(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    monkeypatch.setattr(ControllerService, "save_daemon_params",
+                        lambda self, *a, **k: ActionResult(False, "CONF write failed"))
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+    assert r.status_code == 200 and starts == []             # daemon save failed -> no start
+
+
+def test_save_and_start_blocks_on_invalid_daemon_form(tmp_path, monkeypatch):
+    c = _install_igate(tmp_path)
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-10", "dp_bad": "x", "band": ""})   # malformed dp_
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200 and starts == []
+    assert "daemon" in body.lower()
+
+
+def test_failed_save_and_start_rerenders_submitted_values(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    monkeypatch.setattr(ControllerService, "save_config_bundle",
+                        lambda self, *a, **k: ActionResult(False, "nope"))
+    _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-99", "dp_433_SF": "9", "band": ""})
+    body = r.get_data(as_text=True)
+    assert 'value="DJ0CHE-99"' in body                       # submitted stack value preserved
+    assert 'value="9"' in body                               # submitted daemon-panel value preserved
+
+
+def test_save_and_start_success_persists_and_starts_once(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService as _CS
+    c = _install_igate(tmp_path)
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-7", "band": ""})
+    assert starts == ["igate"]                               # started exactly once, after saving
+    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
+    assert cfg["call"] == "DJ0CHE-7"                         # persisted before starting
+
+
+def test_start_without_saving_is_ephemeral(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService as _CS
+    c = _install_igate(tmp_path)
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_params": "1", "p_call": "DJ0CHE-8", "band": ""})   # no _save
+    assert starts == ["igate"]                               # started
+    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
+    assert cfg["call"] != "DJ0CHE-8"                         # ephemeral: NOT persisted
+
+
+# --- Area 2: Save & start short-circuits after the first failed persistence ------------------
+
+def test_failed_stack_save_short_circuits_daemon_save_and_start(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    monkeypatch.setattr(ControllerService, "save_config_bundle",
+                        lambda self, *a, **k: ActionResult(False, "stack save failed"))
+    daemon_saves = []
+    monkeypatch.setattr(ControllerService, "save_daemon_params",
+                        lambda self, *a, **k: daemon_saves.append(1) or ActionResult(True, "ok"))
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+    assert r.status_code == 200
+    assert daemon_saves == []                    # daemon save NEVER reached after stack-save failure
+    assert starts == []                          # run_action(apply=True) never called
+
+
+def test_stack_ok_then_daemon_fail_is_partial_and_non_starting(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    monkeypatch.setattr(ControllerService, "save_daemon_params",   # stack save is REAL (succeeds)
+                        lambda self, *a, **k: ActionResult(False, "CONF write failed"))
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-13", "dp_433_SF": "10", "band": ""})
+    assert r.status_code == 200 and starts == []               # not started
+    body = r.get_data(as_text=True)
+    assert "not started" in body.lower()                       # truthful report
+    assert 'value="DJ0CHE-13"' in body and 'value="10"' in body  # submitted stack + daemon visible
+    # the earlier successful stack save is RETAINED
+    cfg = ControllerService(system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path)).stack_config("igate")
+    assert cfg["call"] == "DJ0CHE-13"
+
+
+# --- Area 3: truthful daemon-save reporting -------------------------------------------------
+
+def test_daemon_only_save_and_start_failure_no_false_stack_claim(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _install_igate(tmp_path)
+    sb_calls = []
+    orig_sb = ControllerService.save_config_bundle
+    monkeypatch.setattr(ControllerService, "save_config_bundle",
+                        lambda self, *a, **k: sb_calls.append(1) or orig_sb(self, *a, **k))
+    monkeypatch.setattr(ControllerService, "save_daemon_params",
+                        lambda self, *a, **k: ActionResult(False, "CONF write failed"))
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                                "_save": "daemon", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+    body = r.get_data(as_text=True).lower()
+    assert starts == []                              # not started
+    assert sb_calls == []                            # _save=daemon -> NO stack save attempted
+    assert "not saved: daemon 433" in body           # truthful about the daemon failure
+    assert "saved: stack config" not in body         # NEVER falsely claims stack config was saved
+
+
+def test_daemon_433_ok_868_fail_partial_no_start(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")    # daemon installed+built
+    c = _real_app(tmp_path)
+    saved_bands = []
+    def _sd(self, target, band, values):
+        ok = band != "868"                           # 433 succeeds, 868 fails
+        if ok:
+            saved_bands.append(band)
+        return ActionResult(ok, "saved" if ok else "868 CONF write failed")
+    monkeypatch.setattr(ControllerService, "save_daemon_params", _sd)
+    starts = _spy_starts(monkeypatch)
+    tok = _csrf(c, "/stacks/daemon")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_radio": "both", "dp_433_SF": "9", "dp_868_SF": "9", "band": ""})
+    body = r.get_data(as_text=True).lower()
+    assert starts == []                              # not started
+    assert saved_bands == ["433"]                    # 433 persisted (retained); 868 failed
+    assert "433 mhz: saved" in body and "868 mhz: save failed" in body   # both outcomes shown accurately
+
+
+# --- component identity end to end through the web (stack-target collisions) -----------------
+
+def _collide_app(tmp_path):
+    from test_stack_params import _SCOPE2_MANIFEST
+    m = tmp_path / "col.toml"; m.write_text(_SCOPE2_MANIFEST)
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "files").mkdir(parents=True, exist_ok=True)
+    return m, _real_app(tmp_path, manifest=m)
+
+
+def test_stack_confirm_panel_distinct_collision_fields(tmp_path):                  # (1)
+    m, c = _collide_app(tmp_path)
+    # save distinct scoped values for the colliding components
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
+                                                     "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
+    tok = _csrf(c, "/stacks/ostack2")
+    body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "ostack2"}).get_data(as_text=True)
+    # distinct, component-qualified field names — never a shared bare field
+    assert 'name="p_tgt__rp"' in body and 'name="p_dep__rp"' in body
+    assert 'name="pf_tgt__fp"' in body and 'name="pf_dep__fp"' in body
+    assert 'name="p_rp"' not in body and 'name="pf_fp"' not in body
+    # each colliding component shows its OWN saved value
+    assert 'value="RP-T"' in body and 'value="RP-D"' in body
+    assert 'value="FP-T"' in body and 'value="FP-D"' in body
+
+
+def test_stack_save_and_start_scoped_per_component(tmp_path, monkeypatch):         # (2)
+    from lhpc.core.lifecycle import Lifecycle, StartLaunch
+    from lhpc.core import config as cfgmod
+    m, c = _collide_app(tmp_path)
+    seen = {}
+    def stub(self, stack, comp, cfg, band=""):
+        seen[comp.id] = dict(cfg)
+        return StartLaunch(True, "log", "")
+    monkeypatch.setattr(Lifecycle, "start", stub)
+    tok = _csrf(c, "/stacks/ostack2")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "ostack2", "confirmed": "yes",
+                                "_save": "all", "_save_then_start": "1", "_params": "1",
+                                "p_tgt__rp": "RP-T", "p_dep__rp": "RP-D", "p_uniq": "U-FLAT",
+                                "pf_tgt__fp": "FP-T", "pf_dep__fp": "FP-D", "band": ""})
+    assert r.status_code in (200, 302)
+    cfg = cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "ostack2")
+    assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"     # scoped run keys
+    assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"     # scoped file keys
+    assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
+    assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"         # launched per component
+    files = tmp_path / "config" / "files"
+    assert "FP=FP-T" in (files / "tgt.conf").read_text()                      # own generated config
+    assert "FP=FP-D" in (files / "dep.conf").read_text()
+    assert not (files / "sib.conf").exists()                                  # sibling never generated
+
+
+# --- permanent Config page: component-aware (collision fixture) ------------------------------
+
+def test_config_page_distinct_collision_fields_and_values(tmp_path):
+    m, c = _collide_app(tmp_path)
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
+                                                     "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
+    body = c.get("/stacks/ostack2/config").get_data(as_text=True)
+    assert 'name="c_tgt__rp"' in body and 'name="c_dep__rp"' in body        # distinct run fields
+    assert 'name="f_tgt__fp"' in body and 'name="f_dep__fp"' in body        # distinct file fields
+    assert 'name="c_rp"' not in body and 'name="f_fp"' not in body          # no shared bare field
+    assert 'name="c_uniq"' in body                                          # unique stays bare
+    assert 'value="RP-T"' in body and 'value="RP-D"' in body                # each component's own value
+    assert 'value="FP-T"' in body and 'value="FP-D"' in body
+
+
+def test_config_page_post_persists_scoped_and_reloads(tmp_path):
+    from lhpc.core import config as cfgmod
+    m, c = _collide_app(tmp_path)
+    tok = _csrf(c, "/stacks/ostack2/config")
+    r = c.post("/stacks/ostack2/config",
+               data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+                     "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
+    assert r.status_code in (200, 302)
+    cfg = cfgmod.load_stack_config(Paths(runtime_root=tmp_path), "ostack2")
+    assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"    # scoped run keys
+    assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"    # scoped file keys
+    assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
+    body = c.get("/stacks/ostack2/config").get_data(as_text=True)             # reloads correctly
+    assert 'value="RP-T"' in body and 'value="RP-D"' in body
+
+
+def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle, StartLaunch
+    m, c = _collide_app(tmp_path)
+    tok = _csrf(c, "/stacks/ostack2/config")
+    c.post("/stacks/ostack2/config",
+           data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
+                 "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
+    seen = {}
+    def stub(self, stack, comp, cfg, band=""):
+        seen[comp.id] = dict(cfg)
+        return StartLaunch(True, "log", "")
+    monkeypatch.setattr(Lifecycle, "start", stub)
+    ControllerService(manifest_path=m, system=FakeSystem().system,
+                      paths=Paths(runtime_root=tmp_path)).start("ostack2", apply=True)
+    assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"        # own saved run value
+    files = tmp_path / "config" / "files"
+    assert "FP=FP-T" in (files / "tgt.conf").read_text()                     # own generated file config
+    assert "FP=FP-D" in (files / "dep.conf").read_text()
+    assert not (files / "sib.conf").exists()

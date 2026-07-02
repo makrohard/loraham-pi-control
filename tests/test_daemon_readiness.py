@@ -11,6 +11,7 @@ from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core import daemon_control
+from conftest import set_call
 
 
 def _svc(tmp_path, status: bytes):
@@ -63,6 +64,7 @@ def test_failed_radio_blocks_dependent_launch(tmp_path):
     d.mkdir(parents=True)
     (d / "loraham_daemon").write_text("#bin")
     svc = _svc(tmp_path, b"STATUS RADIO=FAILED TXMODE=MANAGED\n")
+    set_call(svc)
     res = svc.start("meshcom", apply=True)
     assert not res.ok
     assert any("not READY" in dt or "RADIO=FAILED" in dt for dt in res.details)

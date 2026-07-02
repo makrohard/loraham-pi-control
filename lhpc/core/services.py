@@ -120,6 +120,43 @@ class ControllerService:
         # contends through `reslock`. Recursion COUNTS (not a flat set) so a nested
         # lifecycle call cannot prematurely release an outer guard's lock.
         self._lock_state = threading.local()
+        # Per-thread re-entrancy for the SHARED configuration-stability guard held across an applied
+        # start/restart (see `_config_stable`).
+        self._cfg_stable_state = threading.local()
+
+    @contextmanager
+    def _config_stable(self):
+        """Hold saved configuration STABLE for the duration of an applied lifecycle transition — a
+        SHARED read lock on the runtime config lock file. Config MUTATIONS take the EXCLUSIVE
+        `config_lock` (LOCK_EX), so a concurrent save (this process or another) WAITS until the
+        protected transition completes, and a start WAITS for an in-progress save. Independent starts
+        share the lock and never serialise. RE-ENTRANT per thread, so a public start/restart nests
+        with the internal `_start_impl`/`_restart_impl` (and stop/start within a restart) without
+        self-deadlock. LOCK ORDER: this guard is acquired BEFORE any lifecycle/resource lock; a
+        lock/read failure raises here so the caller fails typed BEFORE any lifecycle side effect."""
+        import fcntl
+        from . import runtime_fs
+        st = self._cfg_stable_state
+        depth = getattr(st, "depth", 0)
+        if depth == 0:
+            fh = runtime_fs.open_lock(self._paths, self._paths.under("config", ".lock"))
+            try:
+                fcntl.flock(fh, fcntl.LOCK_SH)
+            except OSError:
+                fh.close()
+                raise
+            st.fh = fh
+        st.depth = depth + 1
+        try:
+            yield
+        finally:
+            st.depth -= 1
+            if st.depth == 0:
+                try:
+                    fcntl.flock(st.fh, fcntl.LOCK_UN)
+                finally:
+                    st.fh.close()
+                    st.fh = None
 
     # ---- config / installer ---------------------------------------------
 
@@ -538,6 +575,38 @@ class ControllerService:
     def _component_index(self):
         return {c.id: (s, c) for s in self.stacks() for c in s.components}
 
+    # -- target resolution: a target is either a STACK id or a direct COMPONENT id --------------
+    # For a direct component target the OWNER STACK provides persisted config / per-band selection /
+    # config-file storage, while only the TARGETED component contributes editable fields + identity.
+
+    def _owner_stack(self, target: str):
+        """The stack that owns `target` for config/per-band/config-file storage — the stack itself
+        for a stack target, or the owning stack for a direct component target; None if unknown."""
+        s = self.stack(target)
+        if s is not None:
+            return s
+        hit = self._component_index().get(target)
+        return hit[0] if hit else None
+
+    def _owner_stack_id(self, target: str) -> str:
+        s = self._owner_stack(target)
+        return s.id if s is not None else target
+
+    def _target_components(self, target: str) -> list:
+        """The components whose run/file params + identity a target exposes: ALL of a stack's
+        components, or JUST the one component for a direct component target."""
+        s = self.stack(target)
+        if s is not None:
+            return list(s.components)
+        hit = self._component_index().get(target)
+        return [hit[1]] if hit else []
+
+    def _is_daemon_target(self, target: str) -> bool:
+        """A target is daemon-scoped (identity/param-panel exempt) when its owner stack's main IS
+        the daemon (a daemon stack target, or a direct daemon-component target)."""
+        owner = self._owner_stack(target)
+        return owner is not None and owner.main == self.DAEMON_ID
+
     def _run_order(self, target: str):
         """Ordered (stack, component) list to bring `target` up: the target's
         non-optional components plus their transitive dependencies, deps first."""
@@ -738,6 +807,28 @@ class ControllerService:
             counts = st.counts = {}
         return counts
 
+    # How long to WAIT for a resource claim held by our OWN controller process before failing.
+    _SELF_LOCK_WAIT_S = 5.0
+
+    def _acquire_key(self, stack, k: str, op: str, target: str) -> None:
+        """Enter one reslock key into `stack`. A claim held by ANOTHER process is a real external
+        conflict → fail fast (`ResourceBusy`). A claim held by our OWN controller process is a
+        concurrent/overlapping controller op (this service is shared across waitress threads, and
+        two lifecycle ops can touch a shared claim like `loraham.daemon-socket.433`) that releases
+        shortly → wait BOUNDED, so the operator is never told their own stack is 'busy' on itself,
+        while a genuinely hung holder still can't wedge us forever."""
+        from . import reslock
+        deadline = time.monotonic() + self._SELF_LOCK_WAIT_S
+        while True:
+            try:
+                stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                return
+            except reslock.ResourceBusy as busy:
+                same_process = str(busy.holder.get("pid")) == str(os.getpid())
+                if not same_process or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
     @contextmanager
     def _lifecycle_guard(self, op: str, target: str, band: str = "",
                          stop_owners: bool = False, cascade: bool = False, radio: str = ""):
@@ -771,7 +862,7 @@ class ControllerService:
                                 "resolve it before starting")
                     for k in keys:
                         if counts.get(k, 0) == 0:   # not held by an outer guard in THIS thread
-                            stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                            self._acquire_key(stack, k, op, target)
                         counts[k] = counts.get(k, 0) + 1
                         bumped.append(k)
                 finally:
@@ -795,7 +886,7 @@ class ControllerService:
             with contextlib.ExitStack() as stack:
                 for k in sorted(set(keys), key=reslock.canonical_key):
                     if counts.get(k, 0) == 0:
-                        stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                        self._acquire_key(stack, k, op, target)
                     counts[k] = counts.get(k, 0) + 1
                     bumped.append(k)
                 yield
@@ -885,37 +976,86 @@ class ControllerService:
 
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
-              daemon_overrides: dict | None = None) -> ActionResult:
+              daemon_overrides: dict | None = None,
+              file_overrides: dict | None = None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
-        `daemon_overrides` are ephemeral per-start daemon-param values (this launch only, never
+        `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
         persisted); None = apply the saved config, as the CLI does."""
         from . import reslock
         if not apply:
             return self._start_impl(target, apply=False, params=params,
                                     stop_owners=stop_owners, band=band,
-                                    daemon_overrides=daemon_overrides)
-        # The daemon's REQUESTED radio mode determines which radio bands the lock bundle covers.
-        _order = self._run_order(target)
-        _radio = ""
-        if _order:
-            _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
-            _radio = _r or ""
+                                    daemon_overrides=daemon_overrides,
+                                    file_overrides=file_overrides)
+        # Validate + canonicalize ordinary run params + file overrides BEFORE any lock — including
+        # the config-stability guard. This is config-INDEPENDENT (it validates against the manifest,
+        # not stored config), so an unqualified duplicate name, a non-mapping payload, or an unknown/
+        # invalid value fails TYPED here — before config-stability/lifecycle locks, daemon work, owner
+        # stops, config writes, spawn, or post-start. The canonical values feed lock planning and
+        # `_start_impl` (which re-validates as a defensive boundary for internal/direct callers).
+        params, pv_err = self._normalize_run_params(target, params)
+        if pv_err:
+            return ActionResult(False, f"Cannot start '{target}': invalid parameter — {pv_err}",
+                                next_commands=[f"lhpc status {target}"])
+        file_overrides, fo_err = self._normalize_file_overrides(target, file_overrides)
+        if fo_err:
+            return ActionResult(False, f"Cannot start '{target}': invalid parameter — {fo_err}",
+                                next_commands=[f"lhpc status {target}"])
+        # Hold saved configuration STABLE from lock planning through the whole applied start (LOCK
+        # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _start_impl).
         try:
-            with self._lifecycle_guard("start", target, band, stop_owners=stop_owners, radio=_radio):
-                return self._start_impl(target, apply=True, params=params,
-                                        stop_owners=stop_owners, band=band,
-                                        daemon_overrides=daemon_overrides)
-        except SourceTxnBlocked as blocked:
-            return ActionResult(False, f"Cannot start '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot start '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
+            with self._config_stable():
+                # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
+                _order = self._run_order(target)
+                _radio = ""
+                if _order:
+                    _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
+                    _radio = _r or ""
+                try:
+                    with self._lifecycle_guard("start", target, band,
+                                               stop_owners=stop_owners, radio=_radio):
+                        return self._start_impl(target, apply=True, params=params,
+                                                stop_owners=stop_owners, band=band,
+                                                daemon_overrides=daemon_overrides,
+                                                file_overrides=file_overrides)
+                except SourceTxnBlocked as blocked:
+                    return ActionResult(False, f"Cannot start '{target}': {blocked}",
+                                        next_commands=[f"lhpc status {target}"])
+                except reslock.ResourceBusy as busy:
+                    return ActionResult(False, f"Cannot start '{target}': {busy}",
+                                        next_commands=[f"lhpc status {target}"])
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
+                                f"({exc})", next_commands=[f"lhpc status {target}"])
 
     def _start_impl(self, target: str, apply: bool = False, params: dict | None = None,
                     stop_owners: bool = False, band: str = "",
-                    daemon_overrides: dict | None = None) -> ActionResult:
+                    daemon_overrides: dict | None = None,
+                    file_overrides: dict | None = None) -> ActionResult:
+        """Applied starts run under the configuration-stability guard so saved config is a stable
+        snapshot from the first read through generation/launch/post-start — a direct/internal
+        apply=True call cannot bypass it. Dry-run holds no long-lived guard. A guard/read failure is
+        a TYPED failure returned BEFORE any lifecycle side effect."""
+        if not apply:
+            return self._start_impl_inner(target, apply=False, params=params,
+                                          stop_owners=stop_owners, band=band,
+                                          daemon_overrides=daemon_overrides,
+                                          file_overrides=file_overrides)
+        try:
+            with self._config_stable():                          # re-entrant (no-op if start() holds it)
+                return self._start_impl_inner(target, apply=True, params=params,
+                                              stop_owners=stop_owners, band=band,
+                                              daemon_overrides=daemon_overrides,
+                                              file_overrides=file_overrides)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
+                                f"({exc})", next_commands=[f"lhpc status {target}"])
+
+    def _start_impl_inner(self, target: str, apply: bool = False, params: dict | None = None,
+                          stop_owners: bool = False, band: str = "",
+                          daemon_overrides: dict | None = None,
+                          file_overrides: dict | None = None) -> ActionResult:
         order = self._run_order(target)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
@@ -923,13 +1063,22 @@ class ControllerService:
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root not bootstrapped.",
                                 next_commands=["lhpc bootstrap"])
+        # THE authoritative validation of ordinary ephemeral run params — BEFORE daemon-band
+        # calculation, lifecycle-lock selection, conflict/owner handling, any daemon launch, CONF
+        # change, config generation, client launch or post-start. Scoped to the target (a stack's
+        # exposed params, or a direct component's own). An invalid/unknown override is a typed
+        # failure; a dry-run plan surfaces it too, but apply fails before ANY lifecycle side effect.
+        params, pv_err = self._normalize_run_params(target, params)
+        if pv_err:
+            return ActionResult(False, f"Cannot start '{target}': invalid parameter — {pv_err}",
+                                next_commands=[f"lhpc status {target}"])
         # Band-switchable stack: resolve the chosen band (default = first allowed).
         cfg_band = self._config_band(target, band)
         life = self._lifecycle()
         radio, tx = self._daemon_needs(order, params, cfg_band)
-        # The stack whose daemon params to apply once the daemon is up (resolve a bare
-        # component target to its owning stack).
-        start_sid = target if self.stack(target) is not None else (self.stack_of(target) or target)
+        # The stack whose daemon params to apply once the daemon is up (a direct component target
+        # resolves to its owning stack).
+        start_sid = self._owner_stack_id(target)
         # THE authoritative boundary for ephemeral Start-confirm overrides: validate + canonicalise
         # per band BEFORE any daemon launch, CONF mutation or client launch. An invalid override is
         # a typed failure (never silently discarded in favour of a saved/default value).
@@ -939,6 +1088,22 @@ class ControllerService:
         if ov_err:
             return ActionResult(False, f"Cannot start '{target}': invalid daemon parameter — {ov_err}",
                                 next_commands=[f"lhpc status {target}"])
+        # Ephemeral file-config overrides (Start-confirm 'Stack parameters'): validated here, then
+        # applied for THIS launch only when the config file is (re)generated. Invalid = typed fail.
+        file_over, fo_err = self._normalize_file_overrides(target, file_overrides)
+        if fo_err:
+            return ActionResult(False, f"Cannot start '{target}': invalid parameter — {fo_err}",
+                                next_commands=[f"lhpc status {target}"])
+        # CALL/node enforcement (authoritative backstop; the web also guards for UX): a licensed
+        # stack refuses an empty/N0CALL callsign, an unlicensed stack refuses an empty node name.
+        # Only the actual APPLY is blocked — the dry-run PLAN still renders so the confirm page can
+        # show the 'Stack parameters' panel where the operator supplies the call/node.
+        if apply:
+            id_ok, id_field, id_msg = self.enforce_identity(target, band, params, file_over)
+            if not id_ok:
+                return ActionResult(False, f"Cannot start '{target}': {id_msg}",
+                                    data={"enforce_field": id_field},
+                                    next_commands=[f"lhpc config {target}"])
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
@@ -984,6 +1149,15 @@ class ControllerService:
                 return ActionResult(True, f"'{target}' already healthy — nothing to start.",
                     details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
                     results=tuple(_hres), next_commands=[f"lhpc status {target}"])
+
+        # A component about to start must never SILENTLY inherit an AMBIGUOUS flat legacy value (a
+        # run/file param name declared by >= 2 owner-stack components, with a flat value present and
+        # no component-scoped value). Fail TYPED here — BEFORE any owner stop, daemon launch, daemon
+        # mutation, config-file write, process spawn or post-start scheduling.
+        _amb = self._config_ambiguity(target, order, band)
+        if _amb is not None:
+            return ActionResult(False, f"Cannot start '{target}': {_amb}",
+                                next_commands=[f"lhpc config {target}"])
 
         # Ownership check: if a needed resource is held by another running stack,
         # either stop that stack first (stop_owners) or refuse and report it.
@@ -1032,6 +1206,16 @@ class ControllerService:
                                       outcome=outcome, summary=summary))
             out.append(f"  [{outcome.value}] {comp.id}: {summary}")
 
+        # Config generation + launch config are COMPONENT-scoped so a direct component start never
+        # writes a sibling's config nor leaks the target's ephemeral overrides / run params into a
+        # dependency: the explicit target's overrides apply ONLY to the target (or every component
+        # of a stack target); each dependency uses its OWN saved/default values.
+        _target_is_stack = self.stack(target) is not None
+        def _comp_overrides(comp_id):
+            if not (_target_is_stack or comp_id == target):
+                return None
+            return self._overrides_for_comp(target, "file", file_over, comp_id)
+
         for stack, comp in order:
             state = st_index[comp.id].run_state
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
@@ -1067,7 +1251,7 @@ class ControllerService:
                 # tree, DO NOT write the interactive marker and DO NOT present a manual
                 # command as ready-to-run — return a typed block/manual-required instead.
                 if comp.config_file:
-                    cw = self.write_config_files(stack.id, cfg_band)
+                    cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id))
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1115,7 +1299,7 @@ class ControllerService:
             # generation FAILURE for this component blocks the launch — never start with
             # stale or absent configuration.
             if comp.config_file:
-                cw = self.write_config_files(stack.id, cfg_band)
+                cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id))
                 mine = [w for w in cw if w.component == comp.id]
                 bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                 if bad:
@@ -1131,13 +1315,14 @@ class ControllerService:
                            f"linked source is read-only — generate {comp.id}'s config in "
                            f"your own checkout ({linked.path})")
                     continue
-            # Ephemeral confirm-page params (this start only) override the saved config for BOTH
-            # the launch and the post-start steps — so a value set on the start page (e.g.
-            # meshtastic NodeName / region) is actually applied, not just the saved default.
-            comp_cfg = dict(self.stack_config(stack.id, cfg_band))
-            for _k, _v in (params or {}).items():
-                if _v is not None:
-                    comp_cfg[_k] = _v
+            # COMPONENT-scoped launch config (this component's OWN run params from the owner-stack
+            # store) so a stored sibling run parameter can never leak into another component's argv
+            # through a name collision. Ephemeral confirm-page params (this start only) override it
+            # for BOTH the launch and post-start — but only for the explicit target (or every
+            # component of a stack target), never leaking the target's values into a dependency.
+            comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            if _target_is_stack or comp.id == target:
+                comp_cfg.update(self._overrides_for_comp(target, "run", params, comp.id))
             res = life.start(stack, comp, comp_cfg, band=cfg_band)
             if not res.ok:
                 # A launch that couldn't be owned AND couldn't be proven ceased is a
@@ -1455,7 +1640,7 @@ class ControllerService:
         the stack's fixed band (from its band-component), else 433."""
         if band in daemon_control.ALLOWED_BANDS:
             return band
-        s = self.stack(target)
+        s = self._owner_stack(target)
         fixed = sorted({c.band for c in (s.components if s else ()) if c.band}
                        & set(daemon_control.ALLOWED_BANDS))
         return fixed[0] if fixed else "433"
@@ -1465,7 +1650,7 @@ class ControllerService:
         runtime-local config as flat `dp_<band>_<PARAM>` keys (dot-free, so TOML never nests
         them). Only validated keys are returned; {} when none."""
         from . import daemon_params, config as cfgmod
-        stored = cfgmod.load_stack_config(self._paths, stack_id)
+        stored = cfgmod.load_stack_config(self._paths, self._owner_stack_id(stack_id))
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
             v = stored.get(f"dp_{band}_{name}")
@@ -1474,12 +1659,11 @@ class ControllerService:
         return out
 
     def _has_daemon_params(self, target: str) -> bool:
-        """True when `target` gets a daemon-param panel: a daemon-client stack, the daemon
-        component, or the daemon stack (whose main IS the daemon component)."""
+        """True when `target` gets a daemon-param panel: a daemon-client stack/component, the daemon
+        component, or the daemon stack. Owner-stack scoped, so a direct daemon-backed COMPONENT
+        target (e.g. meshcom-qemu, meshcore-pi) resolves through its owning stack."""
         from . import daemon_params
-        s = self.stack(target)
-        return (daemon_params.is_client(target) or target == self.DAEMON_ID
-                or (s is not None and s.main == self.DAEMON_ID))
+        return daemon_params.is_client(self._owner_stack_id(target)) or self._is_daemon_target(target)
 
     def _daemon_param_applies(self, stack_id: str, band: str, overrides: dict | None = None) -> dict:
         """The daemon params lhpc APPLIES for this stack+band — the effective value (source
@@ -1571,27 +1755,29 @@ class ControllerService:
         ONE band (the page's selected band, or the stack's fixed band). {} for direct-SPI /
         unknown stacks. Values are the effective config-file values (default + operator save)."""
         from . import daemon_params
-        s = self.stack(target)
-        is_daemon = (target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID))
-        if not (is_daemon or daemon_params.is_client(target)):
+        sid = self._owner_stack_id(target)                   # owner-stack daemon profile + storage
+        is_daemon = self._is_daemon_target(target)
+        if not (is_daemon or daemon_params.is_client(sid)):
             return {}
         b = self._effective_daemon_band(target, band)
         # "Apply live" only makes sense against a live daemon: the daemon page always, or an
         # app stack that is currently running (its daemon dependency is up).
-        can_apply = is_daemon or self.stack_running(target)
+        can_apply = is_daemon or self.stack_running(sid)
         return {"stack": target, "band": b, "is_daemon": is_daemon, "can_apply": can_apply,
-                "rows": daemon_params.stack_view(target, b, self._daemon_param_overrides(target, b))}
+                "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b))}
 
-    def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "") -> list:
+    def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "",
+                            display_overrides: dict | None = None) -> list:
         """Start-confirm panel view(s): ONE per band THIS launch will touch — two for a daemon
         `--radio both`, one for a single-band daemon or client start. Each panel carries its own
         band, source defaults + saved overrides, and (via the template) band-scoped input names
         `dp_<band>_<PARAM>`, so a 433 value never reaches 868. The radio mode comes from `params`
-        (the daemon's `p_radio`), not just the URL band. [] for direct-SPI / unknown stacks."""
+        (the daemon's `p_radio`), not just the URL band. `display_overrides` ({band: {PARAM: value}})
+        are SUBMITTED-but-unsaved panel values shown on a re-render (so a failed Save & start keeps
+        the operator's edits). [] for direct-SPI / unknown stacks."""
         from . import daemon_params
-        s = self.stack(target)
-        is_daemon = target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID)
-        if not (is_daemon or daemon_params.is_client(target)):
+        is_daemon = self._is_daemon_target(target)
+        if not (is_daemon or daemon_params.is_client(self._owner_stack_id(target))):
             return []
         radio, _tx = self._daemon_needs(self._run_order(target), params, self._config_band(target, band))
         if radio == "both":
@@ -1600,8 +1786,15 @@ class ControllerService:
             bands = [radio]
         else:
             bands = [self._effective_daemon_band(target, band)]
-        return [{"stack": target, "band": b, "is_daemon": is_daemon,
-                 "rows": daemon_params.stack_view(target, b, self._daemon_param_overrides(target, b))}
+
+        sid = self._owner_stack_id(target)                   # owner-stack daemon profile + overrides
+        def _rows(b):
+            over = dict(self._daemon_param_overrides(target, b))
+            sub = (display_overrides or {}).get(b) if display_overrides else None
+            if sub:                                          # show non-blank submitted values
+                over.update({k: v for k, v in sub.items() if str(v).strip() != ""})
+            return daemon_params.stack_view(sid, b, over)
+        return [{"stack": target, "band": b, "is_daemon": is_daemon, "rows": _rows(b)}
                 for b in bands]
 
     def save_daemon_params(self, target: str, band: str, values: dict) -> ActionResult:
@@ -1614,6 +1807,7 @@ class ControllerService:
         Persisted via the LOCKED merge, so normal params, other-band dp_*, remotes and autostart
         all survive. Never applies live."""
         from . import daemon_params, config as cfgmod
+        sid = self._owner_stack_id(target)                     # persist into the OWNER stack config
         band = self._effective_daemon_band(target, band)
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
@@ -1630,9 +1824,11 @@ class ControllerService:
             if err:
                 return ActionResult(False, f"{name}: {err}")
             canon = daemon_control.canonical_value(name, raw)
-            updates[key] = "" if canon == daemon_params.default_value(target, band, name) else canon
+            updates[key] = "" if canon == daemon_params.default_value(sid, band, name) else canon
         try:
-            cfgmod.update_stack_config(self._paths, target, updates)   # clear_empty=True
+            # Merge ONLY the dp_<band>_<PARAM> keys into the OWNER stack config (clear_empty=True);
+            # sibling run/file params, other-band dp_*, remotes and autostart all survive untouched.
+            cfgmod.update_stack_config(self._paths, sid, updates)
         except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
             return ActionResult(False, f"could not save daemon params: {exc}")
         self._invalidate_config()
@@ -1649,23 +1845,22 @@ class ControllerService:
         confirmed). Valid settings were persisted first (by the caller); a live-apply failure never
         rolls that back — `data['persisted']` says so."""
         from . import daemon_params, reslock
+        sid = self._owner_stack_id(target)                       # owner-stack profile + lock scope
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
         # Apply live only on the daemon itself or a running app stack (defence in depth: the
         # UI disables the button, the service enforces it).
-        s = self.stack(target)
-        is_daemon = target == self.DAEMON_ID or (s is not None and s.main == self.DAEMON_ID)
-        if not (is_daemon or self.stack_running(target)):
+        is_daemon = self._is_daemon_target(target)
+        if not (is_daemon or self.stack_running(sid)):
             return ActionResult(False, f"Apply live is only available while {target} is running")
         b = self._effective_daemon_band(target, band)
-        sid = self.stack_of(target) or target
         keys = [f"lifecycle.{sid}", f"claim.loraham.radio.{b}"]   # serialize vs start/stop on band
         try:
             with self._keys_guard("apply", target, keys):        # re-entrant per thread
                 if not daemon_control.read_view(self._system, b).reachable:
                     return ActionResult(False, f"daemon not serving {b} MHz — start it first",
                                         data={"band": b, "persisted": True})
-                applies = self._daemon_param_applies(target, b)
+                applies = self._daemon_param_applies(sid, b)
                 applied, failed, confirmed, unconfirmed, details = [], [], [], [], []
                 for key, val in applies.items():
                     ok, detail = self._apply_daemon_param(b, key, val)
@@ -1960,13 +2155,15 @@ class ControllerService:
                             next_commands=[f"lhpc status {target}"])
 
     def restart(self, target: str, apply: bool = False, params: dict | None = None,
-                stop_owners: bool = False, band: str = "") -> ActionResult:
+                stop_owners: bool = False, band: str = "",
+                file_overrides: dict | None = None) -> ActionResult:
         """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
         DIRECT call gets the same coordination as CLI/web."""
         from . import reslock
         if not apply:
             return self._restart_impl(target, apply=False, params=params,
-                                      stop_owners=stop_owners, band=band)
+                                      stop_owners=stop_owners, band=band,
+                                      file_overrides=file_overrides)
         # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
         # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
         # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433).
@@ -1975,34 +2172,91 @@ class ControllerService:
         _stk = self.stack(_sid) if _sid else None
         if not band and _stk is not None and _stk.main != self.DAEMON_ID and self.stack_bands(_sid):
             _rband = self._effective_band(_sid, "") or band
-        _order = self._run_order(target)
-        _radio = ""
-        if _order:
-            _r, _ = self._daemon_needs(_order, params, self._config_band(target, _rband))
-            _radio = _r or ""
+        # Reject invalid / unqualified-duplicate params + file overrides BEFORE any lock (config-
+        # independent validation) — so an unqualified duplicate name never acquires the config-
+        # stability/lifecycle lock or stops the target. The preflight below re-validates (idempotent)
+        # and adds identity enforcement, which needs the stable config read.
+        params, _pv = self._normalize_run_params(target, params)
+        if _pv:
+            return ActionResult(False, f"Cannot restart '{target}': invalid parameter — {_pv}",
+                                next_commands=[f"lhpc status {target}"])
+        file_overrides, _fo = self._normalize_file_overrides(target, file_overrides)
+        if _fo:
+            return ActionResult(False, f"Cannot restart '{target}': invalid parameter — {_fo}",
+                                next_commands=[f"lhpc status {target}"])
+        # Hold saved configuration STABLE from PREFLIGHT through the whole stop→start transition, so
+        # a valid target is never stopped and then rejected by a concurrently-mutated config (LOCK
+        # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _restart_impl).
         try:
-            with self._lifecycle_guard("restart", target, _rband, stop_owners=stop_owners, radio=_radio):
-                return self._restart_impl(target, apply=True, params=params,
-                                          stop_owners=stop_owners, band=_rband)
-        except SourceTxnBlocked as blocked:
-            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
-                                next_commands=[f"lhpc status {target}"])
-        except reslock.ResourceBusy as busy:
-            return ActionResult(False, f"Cannot restart '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
+            with self._config_stable():
+                # PREFLIGHT all start inputs BEFORE lock planning, the guard, owner handling or any
+                # stop. A failed preflight is a typed failure that never acquires a lock or touches
+                # lifecycle state. Canonical values feed lock/radio planning + _restart_impl.
+                params, file_over, _pf_err = self._preflight_start_inputs(
+                    target, _rband, params, file_overrides, "restart")
+                if _pf_err is not None:
+                    return _pf_err
+                _order = self._run_order(target)
+                _radio = ""
+                if _order:
+                    _r, _ = self._daemon_needs(_order, params, self._config_band(target, _rband))
+                    _radio = _r or ""
+                try:
+                    with self._lifecycle_guard("restart", target, _rband,
+                                               stop_owners=stop_owners, radio=_radio):
+                        return self._restart_impl(target, apply=True, params=params,
+                                                  stop_owners=stop_owners, band=_rband,
+                                                  file_overrides=file_over)
+                except SourceTxnBlocked as blocked:
+                    return ActionResult(False, f"Cannot restart '{target}': {blocked}",
+                                        next_commands=[f"lhpc status {target}"])
+                except reslock.ResourceBusy as busy:
+                    return ActionResult(False, f"Cannot restart '{target}': {busy}",
+                                        next_commands=[f"lhpc status {target}"])
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
+                                f"({exc})", next_commands=[f"lhpc status {target}"])
 
     def _restart_impl(self, target: str, apply: bool = False, params: dict | None = None,
-                      stop_owners: bool = False, band: str = "") -> ActionResult:
+                      stop_owners: bool = False, band: str = "",
+                      file_overrides: dict | None = None) -> ActionResult:
+        """Applied restarts run the WHOLE preflight→stop→start transition under the configuration-
+        stability guard, so a concurrent save can never change the inputs mid-transition (and a valid
+        target is never stopped only to be rejected by the later start). A direct/internal apply=True
+        call cannot bypass it; dry-run holds no long-lived guard."""
+        if not apply:
+            return self._restart_impl_inner(target, apply=False, params=params,
+                                             stop_owners=stop_owners, band=band,
+                                             file_overrides=file_overrides)
+        try:
+            with self._config_stable():                          # re-entrant (no-op if restart() holds it)
+                return self._restart_impl_inner(target, apply=True, params=params,
+                                                stop_owners=stop_owners, band=band,
+                                                file_overrides=file_overrides)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
+                                f"({exc})", next_commands=[f"lhpc status {target}"])
+
+    def _restart_impl_inner(self, target: str, apply: bool = False, params: dict | None = None,
+                            stop_owners: bool = False, band: str = "",
+                            file_overrides: dict | None = None) -> ActionResult:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
         restart doesn't move a band-switchable stack back to its default band)."""
         if not band:
             band = self._effective_band(self.stack_of(target) or target)
         if not apply:
-            res = self.start(target, apply=False, params=params, band=band)
+            res = self.start(target, apply=False, params=params, band=band,
+                             file_overrides=file_overrides)
             return ActionResult(res.ok, f"Restart plan for '{target}': stop then run.",
                                 details=res.details, data=res.data,
                                 next_commands=[f"lhpc stack restart {target} --yes"])
+        # Defensive: an internal/direct apply=True call must validate BEFORE its stop() — never stop
+        # a running target and only then discover the start inputs are invalid.
+        params, file_overrides, _pf_err = self._preflight_start_inputs(
+            target, band, params, file_overrides, "restart")
+        if _pf_err is not None:
+            return _pf_err
         stopped = self.stop(target, apply=True, band=band)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
@@ -2014,7 +2268,8 @@ class ControllerService:
                                 results=tuple(stopped.results),
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
-        res = self.start(target, apply=True, params=params, stop_owners=stop_owners, band=band)
+        res = self.start(target, apply=True, params=params, stop_owners=stop_owners, band=band,
+                         file_overrides=file_overrides)
         # Restart's typed results are the stop results followed by the start results.
         return ActionResult(res.ok, f"Restarted '{target}'. {res.summary}",
                             details=res.details,
@@ -2536,8 +2791,9 @@ class ControllerService:
         return out
 
     def stack_bands(self, target: str) -> tuple:
-        """Bands the operator may choose for `target` (empty = single fixed band)."""
-        s = self.stack(target)
+        """Bands the operator may choose for `target` (empty = single fixed band). Owner-stack
+        scoped, so a direct component target uses its stack's band choices."""
+        s = self._owner_stack(target)
         for c in (s.components if s else ()):
             if c.bands:
                 return c.bands
@@ -2553,22 +2809,209 @@ class ControllerService:
             return ""
         if band in allowed:
             return band
-        s = self.stack(target)
+        s = self._owner_stack(target)
         for c in (s.components if s else ()):
             if c.bands and c.band in allowed:
                 return c.band
         return allowed[0]
 
-    def stack_config(self, target: str, band: str = "") -> dict:
-        """Effective config for `target` (and band, for band-switchable stacks):
-        the stored value, else the per-band default, else the manifest default.
+    # -- component-scoped persisted keys (collision-free, inside the owner stack config) ---------
+    # A run/file value can be stored either FLAT (legacy `<name>` / `file_<name>`) or COMPONENT-
+    # SCOPED (`__r__<comp>__<name>` / `__f__<comp>__<name>`). A direct component save writes SCOPED
+    # keys; a stack save keeps FLAT keys. On read, a scoped value wins; else a flat legacy value is
+    # honoured ONLY when its param name is UNIQUE for that kind across the owner stack (otherwise it
+    # is ambiguous and never silently applied — the start fails typed, see `_config_ambiguity`).
 
-        Run-param DEFAULTS (not saved values) have operator `{callsign}`/`{locator}`
-        tokens substituted from the configured operator identity, so the Config and Start
-        pages show the SAME default and the Start page reflects the operator callsign set
-        on the Config page (a saved value is used verbatim — never re-substituted)."""
+    @staticmethod
+    def _scoped_key(kind: str, comp_id: str, name: str) -> str:
+        return f"__{kind}__{comp_id}__{name}"
+
+    def _owner_param_counts(self, owner) -> tuple[dict, dict]:
+        """(run_counts, file_counts): how many owner-stack components declare each run/file param
+        name — a name with count >= 2 is AMBIGUOUS for a flat legacy value."""
+        run_c: dict = {}
+        file_c: dict = {}
+        for c in (owner.components if owner is not None else ()):
+            for p in c.run_params:
+                run_c[p.name] = run_c.get(p.name, 0) + 1
+            for p in (c.config_file.params if c.config_file else ()):
+                file_c[p.name] = file_c.get(p.name, 0) + 1
+        return run_c, file_c
+
+    def _resolve_stored(self, stored: dict, kind: str, comp_id: str, name: str,
+                        count: int) -> tuple:
+        """(value_or_None, ambiguous). A component-SCOPED key wins; else a FLAT legacy key ONLY when
+        the name is UNIQUE (count <= 1). `ambiguous` is True when a flat legacy value exists but the
+        name is declared by >= 2 components and no scoped value overrides it — a value that must NOT
+        be silently applied."""
+        sk = self._scoped_key(kind, comp_id, name)
+        if sk in stored:
+            return stored[sk], False
+        flat = name if kind == "r" else f"file_{name}"
+        if flat in stored:
+            if count <= 1:
+                return stored[flat], False               # unique legacy -> backward compatible
+            return None, True                            # ambiguous flat -> never silently applied
+        return None, False
+
+    # -- component identity through the parameter pipeline (form/API/overrides/save) -------------
+    # Every editable value is (component_id, kind, name). A name UNIQUE within the target's own
+    # components keeps its bare representation (`name`, `p_<name>`/`pf_<name>`) — backward compatible;
+    # a DUPLICATED name is component-qualified: API/CLI key `component_id.name`, web field
+    # `p_<component_id>__<name>` / `pf_<component_id>__<name>`. This keeps colliding components'
+    # values distinct end to end instead of flattening them into one `{name: value}` map.
+
+    def _dup_names(self, target: str) -> tuple[set, set]:
+        """(dup_run, dup_file): run/file parameter names declared by MORE THAN ONE component of the
+        TARGET's own scope (a direct component target has one component, so never any duplicates)."""
+        rc: dict = {}
+        fc: dict = {}
+        for c in self._target_components(target):
+            for p in c.run_params:
+                rc[p.name] = rc.get(p.name, 0) + 1
+            for p in (c.config_file.params if c.config_file else ()):
+                fc[p.name] = fc.get(p.name, 0) + 1
+        return {n for n, k in rc.items() if k > 1}, {n for n, k in fc.items() if k > 1}
+
+    def _param_key(self, target: str, kind: str, comp_id: str, name: str) -> str:
+        """The API/CLI key for one (component, kind, name): bare `name` when unique, else the
+        component-qualified `component_id.name`."""
+        dup_run, dup_file = self._dup_names(target)
+        dup = dup_run if kind == "run" else dup_file
+        return f"{comp_id}.{name}" if name in dup else name
+
+    def _param_field(self, target: str, kind: str, comp_id: str, name: str) -> str:
+        """The Start-confirm form field for one (component, kind, name): `p_<name>`/`pf_<name>` when
+        unique, else `p_<component_id>__<name>` / `pf_<component_id>__<name>`."""
+        prefix = "p_" if kind == "run" else "pf_"
+        dup_run, dup_file = self._dup_names(target)
+        dup = dup_run if kind == "run" else dup_file
+        return f"{prefix}{comp_id}__{name}" if name in dup else f"{prefix}{name}"
+
+    def _config_field(self, target: str, kind: str, comp_id: str, name: str) -> str:
+        """The permanent Config-page form field for one (component, kind, name): `c_<name>`/`f_<name>`
+        when unique, else `c_<component_id>__<name>` / `f_<component_id>__<name>` (same qualification
+        rule + canonical API key as Start-confirm, just the Config page's `c_`/`f_` prefixes)."""
+        prefix = "c_" if kind == "run" else "f_"
+        dup_run, dup_file = self._dup_names(target)
+        dup = dup_run if kind == "run" else dup_file
+        return f"{prefix}{comp_id}__{name}" if name in dup else f"{prefix}{name}"
+
+    def config_param_fields(self, target: str, band: str = "") -> list[dict]:
+        """Config-page editable run + file parameters as {component, name, kind ('run'|'file'), field
+        (`c_`/`f_` scheme), key (canonical API key), flag, default} — the single source of truth for
+        the Config POST parser to fold each submitted field into its canonical API key. [] for a
+        daemon target (its radio params are ephemeral start options, not persisted config)."""
+        if self._is_daemon_target(target):
+            return []
+        out: list[dict] = []
+        for c in self._target_components(target):
+            for kind, p in ([("run", p) for p in c.run_params]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
+                               if not getattr(p, "hidden", False)]):
+                out.append({
+                    "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
+                    "field": self._config_field(target, kind, c.id, p.name),
+                    "key": self._param_key(target, kind, c.id, p.name),
+                    "default": p.default})
+        return out
+
+    def _param_ref(self, target: str, kind: str, key: str):
+        """Resolve an API/CLI override key to (component, param, err). A `component_id.name` key is
+        component-qualified; a bare key is the NAME and must be UNIQUE within the target's scope — a
+        duplicated bare name is a TYPED error (the caller must qualify it). `err` is None on success."""
+        comps = self._target_components(target)
+
+        def _pget(c, nm):
+            ps = (c.run_params if kind == "run"
+                  else (c.config_file.params if c.config_file else ()))
+            return next((p for p in ps if p.name == nm), None)
+
+        if "." in key:
+            cid, nm = key.split(".", 1)
+            c = next((c for c in comps if c.id == cid), None)
+            p = _pget(c, nm) if c is not None else None
+            if p is None:
+                return None, None, f"unknown {kind} parameter {key!r}"
+            return c, p, None
+        owners = [(c, _pget(c, key)) for c in comps if _pget(c, key) is not None]
+        if not owners:
+            return None, None, f"unknown {kind} parameter {key!r}"
+        if len(owners) == 1:
+            return owners[0][0], owners[0][1], None
+        return None, None, (f"{kind} parameter {key!r} is declared by multiple components — qualify "
+                            f"it as '<component>.{key}'")
+
+    def _overrides_for_comp(self, target: str, kind: str, overrides, comp_id: str) -> dict:
+        """The subset of ephemeral overrides (API-key form) that target `comp_id`, as {name: value}
+        — so a qualified duplicate value overlays ONLY its named component and never a sibling."""
+        out: dict = {}
+        for k, v in (overrides or {}).items():
+            if v is None:
+                continue
+            c, p, err = self._param_ref(target, kind, k)
+            if err is None and c.id == comp_id:
+                out[p.name] = v
+        return out
+
+    def _resolved_param_value(self, target: str, kind: str, comp_id: str, name: str,
+                              band: str = "") -> str:
+        """The component's OWN persisted value (component-scoped, else a UNIQUE flat legacy) or its
+        operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
-        stored = load_stack_config(self._paths, target, cfg_band)
+        owner = self._owner_stack(target)
+        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        rc, fc = self._owner_param_counts(owner)
+        k = "r" if kind == "run" else "f"
+        count = (rc if kind == "run" else fc).get(name, 0)
+        val, _amb = self._resolve_stored(stored, k, comp_id, name, count)
+        if val is not None:
+            return str(val)
+        _c, p, _e = self._param_ref(target, kind, f"{comp_id}.{name}")
+        bd = dict(p.band_defaults).get(cfg_band or band, p.default) if p is not None else ""
+        return self._op_subst(bd)
+
+    def _config_ambiguity(self, target: str, order, band: str = ""):
+        """A message naming the first AMBIGUOUS legacy value a started component would rely on — a
+        run/file param name declared by >= 2 owner-stack components, stored as a flat legacy value,
+        with no component-scoped value for that component. None when every started component resolves
+        unambiguously. Used to fail a start TYPED (never silently apply a value to the wrong
+        component). `order` is the resolved [(stack, comp), …] launch order."""
+        owner = self._owner_stack(target)
+        if owner is None:
+            return None
+        stored = load_stack_config(self._paths, self._owner_stack_id(target),
+                                   self._config_band(target, band))
+        run_counts, file_counts = self._owner_param_counts(owner)
+        owner_comp_ids = {c.id for c in owner.components}
+        for _stack, comp in order:
+            if comp.id not in owner_comp_ids:
+                continue                                     # a dependency from another stack
+            for p in comp.run_params:
+                _v, amb = self._resolve_stored(stored, "r", comp.id, p.name,
+                                               run_counts.get(p.name, 0))
+                if amb:
+                    return (f"run parameter '{p.name}' is ambiguous — declared by more than one "
+                            f"component and stored only as a flat legacy value; set a "
+                            f"component-scoped value for '{comp.id}'")
+            for p in (comp.config_file.params if comp.config_file else ()):
+                _v, amb = self._resolve_stored(stored, "f", comp.id, p.name,
+                                               file_counts.get(p.name, 0))
+                if amb:
+                    return (f"file parameter '{p.name}' is ambiguous — declared by more than one "
+                            f"component and stored only as a flat legacy value; set a "
+                            f"component-scoped value for '{comp.id}'")
+        return None
+
+    def stack_config(self, target: str, band: str = "") -> dict:
+        """Effective run config for `target` (and band): the component-scoped saved value, else a
+        UNIQUE flat legacy value, else the per-band/manifest default (operator `{callsign}`/
+        `{locator}` tokens substituted in DEFAULTS only — a saved value is used verbatim). An
+        ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
+        cfg_band = self._config_band(target, band)
+        owner = self._owner_stack(target)
+        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
         def _op_subst(v: str) -> str:
@@ -2576,12 +3019,15 @@ class ControllerService:
                           .replace("{locator}", op.locator or ""))
 
         out = {}
-        for p in self.run_params_for(target):
-            if p.name in stored:
-                out[p.name] = stored[p.name]                  # saved value, verbatim
-            else:
-                bd = dict(p.band_defaults).get(cfg_band or band, p.default)
-                out[p.name] = _op_subst(bd)                   # default with operator tokens
+        for c in self._target_components(target):
+            for p in c.run_params:
+                val, _amb = self._resolve_stored(stored, "r", c.id, p.name,
+                                                 run_counts.get(p.name, 0))
+                if val is not None:
+                    out[p.name] = str(val)                    # saved value (scoped/unique), verbatim
+                else:
+                    bd = dict(p.band_defaults).get(cfg_band or band, p.default)
+                    out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
 
     def missing_system_deps(self, target: str) -> list[dict]:
@@ -2769,6 +3215,17 @@ class ControllerService:
                         "scheme": sp.scheme or "tcp", "link": link})
         return out
 
+    def _component_booting(self, comp_id: str) -> bool:
+        """True while a detached post-start runner (e.g. MeshCom's `--setcall` retry) is STILL
+        applying settings to a just-launched component. Surfaced as a transient 'booting' state
+        (yellow, no client link yet) until the callsign lands and the runner finishes — then the
+        component reads 'running' (green) with its web-UI link."""
+        life = self._lifecycle()
+        for rec in life.owned_records(comp_id, role="post"):
+            if not life._original_ceased(rec):        # the runner process is still alive
+                return True
+        return False
+
     def radio_overview(self) -> list[dict]:
         """Per-band view for the radio dashboard: daemon/radio config (if running),
         which stack (+ its components) is up on that band, and which stacks can be
@@ -2804,7 +3261,13 @@ class ControllerService:
                 multi = bool(self.stack_bands(s.id))
                 running_up = any(c.id in live and live[c.id].run_state in up
                                  for c in s.components if c.band or c.bands)
-                comps = [{"id": c.id, "name": c.name, "optional": c.optional,
+                comps = []
+                for c in s.components:
+                    # A running component whose post-start runner is still applying settings reads
+                    # 'booting' (no client link yet) until the callsign lands (e.g. MeshCom).
+                    booting = (c.id in live and live[c.id].run_state in up
+                               and self._component_booting(c.id))
+                    comps.append({"id": c.id, "name": c.name, "optional": c.optional,
                           "runnable": c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE),
                           "interactive": c.interactive,
                           # Interactive components (GUI/CLI/REPL) are run by the
@@ -2815,9 +3278,10 @@ class ControllerService:
                           # (non-interactive run) or it declares its own -> a log link.
                           "configurable": bool(c.run_params or c.config_file),
                           "writes_log": bool(c.log_paths) or bool(c.run_argv and not c.interactive),
-                          "state": (live[c.id].run_state.value if c.id in live else "unknown"),
-                          "interfaces": self._client_interfaces(live.get(c.id))}
-                         for c in s.components]
+                          "state": ("booting" if booting
+                                    else (live[c.id].run_state.value if c.id in live else "unknown")),
+                          # No web-UI/client link while booting — it isn't serving yet.
+                          "interfaces": ([] if booting else self._client_interfaces(live.get(c.id)))})
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
                 main_comp = s.component(s.main)
@@ -2959,9 +3423,28 @@ class ControllerService:
         view = {
             "operator": ({"callsign": cfg.operator.callsign, "locator": cfg.operator.locator}
                          if uses_operator else None),
-            "components": [{"id": c.id, "name": c.name, "params": c.run_params} for c in comps],
+            # Each component carries its OWN field-name map (`fields`) and its OWN
+            # component-scoped value map (`values`) so duplicate run/file names across components
+            # never share a form field nor flatten into one value.
+            "components": [{"id": c.id, "name": c.name, "params": list(c.run_params),
+                            "fields": {p.name: self._config_field(target, "run", c.id, p.name)
+                                       for p in c.run_params},
+                            "values": {p.name: self._resolved_param_value(target, "run", c.id,
+                                                                          p.name, cfg_band)
+                                       for p in c.run_params}}
+                           for c in comps],
             "optional": optional,
             "sources": sources,
+            # File params GROUPED by component (like run params) — each with its own fields/values.
+            "file_components": [{"id": c.id, "name": c.name,
+                                 "params": [p for p in c.config_file.params if not p.hidden],
+                                 "fields": {p.name: self._config_field(target, "file", c.id, p.name)
+                                            for p in c.config_file.params},
+                                 "values": {p.name: self._resolved_param_value(target, "file", c.id,
+                                                                               p.name, cfg_band)
+                                            for p in c.config_file.params}}
+                                for c in members if c.config_file
+                                and any(not p.hidden for p in c.config_file.params)],
             "file_params": [p for c in members if c.config_file
                             for p in c.config_file.params if not p.hidden],
             "file_values": self.file_config_values(target, cfg_band),
@@ -3013,34 +3496,51 @@ class ControllerService:
         Nothing is written unless every value validates; unknown fields are
         rejected; a malformed local.toml is preserved. (P0: replaces the previous
         per-remote sequential writes.)"""
-        s = self.stack(target)
-        if s is None:
+        owner = self._owner_stack(target)
+        if owner is None:
             return self._unknown_stack(target)
+        # A direct COMPONENT target persists into its OWNER stack config, but may edit ONLY its own
+        # run/file fields — never sibling components' fields, remotes, or autostart (those are
+        # whole-stack concerns, allowed only for a stack target).
+        is_stack_target = self.stack(target) is not None
+        sid = owner.id
         errors: list[str] = []
-        run_by = {p.name: p for p in self.run_params_for(target)}
-        file_by = {p.name: p for c in self._file_config_components(target)
-                   for p in c.config_file.params}
-        optional_ids = {c.id for c in s.components if c.optional}
-        clean: dict = {}
+        optional_ids = ({c.id for c in owner.components if c.optional} if is_stack_target else set())
+        # Each submitted value carries component identity: a run value key is the API key
+        # (`name`/`component.name`); a file value key is `file_<apikey>`. `_param_ref` resolves it to
+        # (component, param) and REJECTS an unqualified duplicate — so colliding names never flatten.
+        clean_params: list = []      # (kind 'r'|'f', component, param, value)
+        clean_auto: dict = {}        # autostart_<id> -> "on"/""  (stack target only, flat)
         for key, value in (values or {}).items():
-            if key in run_by:
-                p, v = run_by[key], str(value)
-                if p.kind == "int" and v.strip() == "":
-                    clean[key] = v
+            if key.startswith("autostart_"):
+                if key[len("autostart_"):] in optional_ids:
+                    clean_auto[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
+                else:
+                    errors.append(f"unknown config field: {key!r}")
+                continue
+            if key.startswith("file_"):
+                c, p, err = self._param_ref(target, "file", key[len("file_"):])
+                if err:
+                    errors.append(f"unknown config field: {key!r}" if err.startswith("unknown")
+                                  else err)
                     continue
                 try:
-                    clean[key] = validators.validate_param(p, v)
+                    clean_params.append(("f", c, p, validators.validate_param(p, value)))
                 except validators.ValidationError as exc:
                     errors.append(str(exc))
-            elif key.startswith("file_") and key[len("file_"):] in file_by:
-                try:
-                    clean[key] = validators.validate_param(file_by[key[len("file_"):]], value)
-                except validators.ValidationError as exc:
-                    errors.append(str(exc))
-            elif key.startswith("autostart_") and key[len("autostart_"):] in optional_ids:
-                clean[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
-            else:
-                errors.append(f"unknown config field: {key!r}")
+                continue
+            c, p, err = self._param_ref(target, "run", key)
+            if err:
+                errors.append(f"unknown config field: {key!r}" if err.startswith("unknown") else err)
+                continue
+            v = str(value)
+            if p.kind == "int" and v.strip() == "":
+                clean_params.append(("r", c, p, v))
+                continue
+            try:
+                clean_params.append(("r", c, p, validators.validate_param(p, v)))
+            except validators.ValidationError as exc:
+                errors.append(str(exc))
         op_change = callsign is not None or locator is not None
         cs = loc = None
         if op_change:
@@ -3053,7 +3553,8 @@ class ControllerService:
         # the service, not the web form): validated non-blank -> set, blank -> clear that
         # component's override. A component id not declared by `target` (unknown, another stack's,
         # or one without a source remote) is REJECTED. Other stacks' overrides are untouched.
-        stack_remote_cids = {c.id for c in s.components if c.source and c.source.remote}
+        stack_remote_cids = ({c.id for c in owner.components if c.source and c.source.remote}
+                             if is_stack_target else set())
         remote_patch: dict = {}
         if remotes is not None:
             for cid, url in remotes.items():
@@ -3094,19 +3595,29 @@ class ControllerService:
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
         cfg_band = self._config_band(target, band)
+        # Apply-mode hints (restart/build) from CHANGED run params, compared per-component against the
+        # PRE-SAVE effective value (never masked by a same-named sibling), BEFORE the write.
+        modes = {p.apply_mode for kind, c, p, v in clean_params
+                 if kind == "r"
+                 and self._resolved_param_value(target, "run", c.id, p.name, band) != str(v)}
+        # Persisted keys: a DIRECT component target, or a DUPLICATED stack-target name, is written
+        # COMPONENT-SCOPED (`__r__/__f__<comp>__<name>`) so colliding components never share a key; a
+        # UNIQUE name on a stack target keeps its FLAT legacy key (backward compatible). Autostart
+        # (stack-only) stays flat.
+        dup_run, dup_file = self._dup_names(target)
+        clean: dict = dict(clean_auto)
+        for kind, c, p, v in clean_params:
+            dup = (dup_run if kind == "r" else dup_file)
+            if is_stack_target and p.name not in dup:
+                clean[p.name if kind == "r" else f"file_{p.name}"] = v      # unique -> flat legacy
+            else:
+                clean[self._scoped_key(kind, c.id, p.name)] = v             # scoped
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: read the
-        # latest config, overlay the submitted normal keys, keep daemon-profile dp_* + unrelated
+        # latest config, overlay the submitted keys, keep daemon-profile dp_* + unrelated
         # manual scalars. A raise here (unsupported manual value) rolls the whole transaction back.
-        targets.append(("stack", _stack_config_path(self._paths, target, cfg_band),
-                        lambda p, tgt=target, b=cfg_band, cl=clean: render_stack_config(
+        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band),
+                        lambda p, tgt=sid, b=cfg_band, cl=clean: render_stack_config(
                             tgt, merge_stack_values(p, tgt, b, cl, clear_empty=False)), 0o644))
-        # Compute changed apply-modes against the PRE-SAVE effective config — BEFORE the
-        # transaction writes the new values and BEFORE the cache is invalidated. Reading
-        # `before` afterwards would compare new-vs-new and lose every restart/build hint.
-        params_by_name = {p.name: p for p in self.run_params_for(target)}
-        before = self.stack_config(target, band)
-        modes = {params_by_name[k].apply_mode for k, v in clean.items()
-                 if k in params_by_name and str(before.get(k, "")) != str(v)}
         try:
             apply_config_transaction(self._paths, targets)
         except ConfigError as exc:
@@ -3117,55 +3628,15 @@ class ControllerService:
                             next_commands=[f"lhpc stack start {target}"])
 
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
-        """Validate and persist a stack/band's configuration (used on the next Run).
-        Run-params AND file-config fields are validated by type before persistence;
-        an invalid value is rejected (never written, never reaches a command)."""
+        """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
+        path (`save_config_bundle`). `values` keys are the same canonical API keys the Config/Start
+        pages use: `name`/`file_<name>` when unique, `component.name`/`file_<component.name>` when the
+        name is duplicated across the stack. Unknown fields and unqualified duplicate names are typed
+        failures with NO mutation; unique names keep their flat-key/field compatibility; daemon-profile
+        `dp_*`, autostart, remotes and the transactional semantics are preserved."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        clean, errors = {}, []
-        for p in self.run_params_for(target):
-            if p.name not in values:
-                continue
-            v = str(values[p.name])
-            if p.kind == "int" and v.strip() == "":    # empty = unset (optional option)
-                clean[p.name] = v
-                continue
-            try:
-                clean[p.name] = validators.validate_param(p, v)
-            except validators.ValidationError as exc:
-                errors.append(str(exc))
-        # File-config fields are validated against their FileParam too.
-        file_params = {p.name: p for c in self._file_config_components(target)
-                       for p in c.config_file.params}
-        for key, value in values.items():
-            if key.startswith("autostart_"):
-                clean[key] = "on" if str(value) in ("on", "1", "true", "yes") else ""
-            elif key.startswith("file_"):
-                fp = file_params.get(key[len("file_"):])
-                if fp is None:
-                    continue                            # unknown field -> ignore
-                try:
-                    clean[key] = validators.validate_param(fp, value)
-                except validators.ValidationError as exc:
-                    errors.append(str(exc))
-        if errors:
-            return ActionResult(False, f"Config not saved for '{target}'.", details=errors,
-                                next_commands=[])
-        # What changed vs the effective config, and what workflow that needs.
-        before = self.stack_config(target, band)
-        params_by_name = {p.name: p for p in self.run_params_for(target)}
-        changed_modes = {params_by_name[k].apply_mode
-                         for k, v in clean.items()
-                         if k in params_by_name and str(before.get(k, "")) != str(v)}
-        # MERGE the normal keys (run/file/autostart) — never a full replace, so daemon-profile
-        # dp_* overrides and unrelated manual scalars survive. clear_empty=False keeps explicit
-        # empty normal values (e.g. an unset int / an off autostart flag).
-        update_stack_config(self._paths, target, clean, self._config_band(target, band),
-                            clear_empty=False)
-        self._invalidate_config()               # subsequent reads see the new params
-        hints = self._apply_hints(target, changed_modes)
-        return ActionResult(True, f"Config saved for '{target}'.", details=hints,
-                            next_commands=[f"lhpc stack start {target}"])
+        return self.save_config_bundle(target, values=values, band=band)
 
     def _apply_hints(self, target: str, modes: set) -> list[str]:
         """Human guidance on how a saved config change takes effect."""
@@ -3197,26 +3668,262 @@ class ControllerService:
     # ---- file-based component config (writes the app's own config file) -----
 
     def _file_config_components(self, target: str):
-        s = self.stack(target)
-        return [c for c in (s.components if s else ()) if c.config_file]
+        # Owner-stack scoped for a stack target; JUST the targeted component for a direct component.
+        return [c for c in self._target_components(target) if c.config_file]
+
+    def file_params_for(self, target: str):
+        """Every file-config FileParam of a stack (for the web to collect `pf_<name>` inputs)."""
+        return [p for c in self._file_config_components(target) for p in c.config_file.params]
 
     def file_config_values(self, target: str, band: str = "") -> dict:
-        """Stored file-config values (key `file_<name>` in the per-band stack
-        config), falling back to the per-band default, then the FileParam default."""
+        """Stored file-config values (component-scoped `__f__<comp>__<name>`, else a UNIQUE flat
+        legacy `file_<name>`), falling back to the per-band default, then the FileParam default. An
+        ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
-        stored = load_stack_config(self._paths, target, cfg_band)
+        owner = self._owner_stack(target)
+        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):
             for p in c.config_file.params:
                 bd = dict(p.band_defaults).get(cfg_band or band, p.default)
-                out[p.name] = stored.get(f"file_{p.name}", bd)
+                val, _amb = self._resolve_stored(stored, "f", c.id, p.name,
+                                                 file_counts.get(p.name, 0))
+                out[p.name] = str(val) if val is not None else bd
         return out
 
-    def write_config_files(self, target: str, band: str = "") -> list["ConfigWrite"]:
+    # -- Start-confirm "Stack parameters" panel + CALL/node enforcement ----------
+
+    # A run/file param whose validator marks it the stack's operator identity: a "callsign"
+    # validator => LICENSED (refuse empty / N0CALL); a "node" validator => UNLICENSED (refuse only
+    # empty, the default name is accepted).
+    _IDENTITY_ENFORCE = {"callsign": "licensed", "node": "unlicensed"}
+
+    def _op_subst(self, text: str) -> str:
+        op = self.config().operator
+        return (str(text).replace("{callsign}", op.callsign or "")
+                         .replace("{locator}", op.locator or ""))
+
+    def _identity_field(self, target: str) -> dict | None:
+        """The operator-identity field CALL/node enforcement guards, or None. Scoped to the target:
+        a STACK target inspects every component; a direct COMPONENT target inspects ONLY that
+        component. The daemon is exempt. The FIRST run/file param with a callsign/node validator
+        wins; a callsign (licensed) is preferred over a node (unlicensed) if both are declared."""
+        if self._is_daemon_target(target):
+            return None
+        found = None
+        for c in self._target_components(target):
+            candidates = [("run", p) for p in c.run_params]
+            candidates += [("file", p) for p in (c.config_file.params if c.config_file else ())]
+            for kind, p in candidates:
+                enforce = self._IDENTITY_ENFORCE.get(getattr(p, "validator", ""))
+                if not enforce:
+                    continue
+                rec = {"comp": c.id, "name": p.name, "kind": kind, "enforce": enforce,
+                       "field": self._param_field(target, kind, c.id, p.name)}
+                if enforce == "licensed":
+                    return rec                       # licensed wins immediately
+                found = found or rec                 # remember an unlicensed node field
+        return found
+
+    def _identity_value(self, target: str, band: str, params, file_over) -> str:
+        """The value of the SELECTED identity field, read from ITS OWN component (never masked by a
+        same-named sibling): the ephemeral override for that component's key, else its own
+        component-scoped/unique-flat stored value, else its operator-substituted default."""
+        idf = self._identity_field(target)
+        if not idf:
+            return ""
+        kind = "run" if idf["kind"] == "run" else "file"
+        comp_id, name = idf["comp"], idf["name"]
+        key = self._param_key(target, kind, comp_id, name)   # bare or component-qualified
+        val = ((params if kind == "run" else file_over) or {}).get(key)
+        if val is None:
+            val = self._resolved_param_value(target, kind, comp_id, name, band)
+        return str(self._op_subst(val or "")).strip()
+
+    def enforce_identity(self, target: str, band: str = "", params: dict | None = None,
+                         file_over: dict | None = None) -> tuple[bool, str, str]:
+        """Whether `target` may start given its CALL/node rule. Returns (ok, field, message).
+        Licensed stacks refuse an empty or `N0CALL` callsign; unlicensed stacks refuse only an
+        empty node name (the default name is accepted). `field` is the confirm input to highlight."""
+        idf = self._identity_field(target)
+        if not idf:
+            return (True, "", "")
+        val = self._identity_value(target, band, params, file_over)
+        if idf["enforce"] == "licensed":
+            # Refuse empty and the reserved placeholder N0CALL, including any N0CALL-<SSID>.
+            if not val or val.split("-", 1)[0].upper() == "N0CALL":
+                return (False, idf["field"], f"A valid callsign is required to start '{target}' "
+                        f"(licensed) — set '{idf['name']}' to your callsign (not empty or N0CALL).")
+        elif not val:
+            return (False, idf["field"], f"A node name is required to start '{target}' — "
+                    f"set '{idf['name']}'.")
+        return (True, idf["field"], "")
+
+    def _stack_param_components(self, target: str):
+        """Components whose run/file params make up the editable 'Stack parameters' set (never the
+        daemon — its radio params are the separate daemon panel). Target-scoped: a stack target
+        exposes all components, a direct component target only itself."""
+        if self._is_daemon_target(target):
+            return []
+        return self._target_components(target)
+
+    def stack_start_params(self, target: str, band: str = "", params: dict | None = None,
+                           file_over: dict | None = None) -> list[dict]:
+        """Rows for the Start-confirm 'Stack parameters' panel: every editable run + file param of
+        the stack (never repo source / operator box / autostart), prefilled with the value that WILL
+        be used for this start (ephemeral override, else saved config, else operator-substituted
+        default). `field` is the confirm input name (`p_`/`pf_`); `default` is the manifest default
+        (for the client Reset-to-defaults button)."""
+        idf = self._identity_field(target)
+        cfg_band = self._config_band(target, band)
+        rows: list[dict] = []
+        for c in self._stack_param_components(target):
+            for kind, p in ([("run", p) for p in c.run_params]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
+                               if not getattr(p, "hidden", False)]):
+                # Each (component, kind, name) carries its OWN field + API key (bare when unique,
+                # component-qualified when the name collides) and its OWN saved value — colliding
+                # components never share a field name or flatten into one value.
+                default = self._op_subst(dict(p.band_defaults).get(cfg_band or band, p.default))
+                saved = self._resolved_param_value(target, kind, c.id, p.name, band)
+                key = self._param_key(target, kind, c.id, p.name)
+                field = self._param_field(target, kind, c.id, p.name)
+                cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
+                is_id = bool(idf and idf["comp"] == c.id and idf["name"] == p.name
+                             and idf["kind"] == kind)
+                rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
+                                            c.name, key, c.id))
+        return rows
+
+    def start_param_fields(self, target: str, band: str = "") -> list[dict]:
+        """Every editable run + file parameter as {component, name, kind ('run'|'file'), field, key,
+        flag, saved} — covering BOTH the savable panel params and plain start-option params (e.g. the
+        daemon's radio/debug). The single source of truth for the web to read each submitted form
+        field into its correctly-scoped API key (bare when unique, `component.name` when duplicated)."""
+        out: list[dict] = []
+        for c in self._target_components(target):
+            for kind, p in ([("run", p) for p in c.run_params]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())]):
+                out.append({
+                    "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
+                    "field": self._param_field(target, kind, c.id, p.name),
+                    "key": self._param_key(target, kind, c.id, p.name),
+                    "saved": self._resolved_param_value(target, kind, c.id, p.name, band)})
+        return out
+
+    def stack_start_param_groups(self, target: str, band: str = "", params: dict | None = None,
+                                 file_over: dict | None = None) -> list[dict]:
+        """The Start-confirm panel rows GROUPED for display: a first 'Required' group with the
+        identity (CALL/node) field(s) on top, then one group per component (header = component name)
+        with that component's remaining params. [] when the stack has no editable params."""
+        rows = self.stack_start_params(target, band, params, file_over)
+        groups: list[dict] = []
+        required = [r for r in rows if r["is_identity"]]
+        if required:
+            groups.append({"header": "Required", "rows": required})
+        by_comp: dict[str, list] = {}
+        order: list[str] = []
+        for r in rows:
+            if r["is_identity"]:
+                continue
+            if r["comp_name"] not in by_comp:
+                by_comp[r["comp_name"]] = []
+                order.append(r["comp_name"])
+            by_comp[r["comp_name"]].append(r)
+        for name in order:
+            groups.append({"header": name, "rows": by_comp[name]})
+        return groups
+
+    @staticmethod
+    def _param_row(p, field: str, kind: str, value, saved: str, default: str, is_identity: bool,
+                   comp_name: str = "", key: str = "", component: str = "") -> dict:
+        return {"field": field, "name": p.name, "key": key, "component": component,
+                "kind": p.kind, "comp_name": comp_name,
+                "choices": list(p.choices), "label": p.label or p.name,
+                "value": "" if value is None else str(value),
+                "config_value": "" if saved is None else str(saved), "default": default,
+                "advanced": bool(getattr(p, "advanced", False)),
+                "validator": getattr(p, "validator", ""),
+                "is_identity": bool(is_identity),
+                "min": getattr(p, "min", None), "max": getattr(p, "max", None)}
+
+    def _normalize_file_overrides(self, target: str, raw: dict | None) -> tuple[dict, str]:
+        """Validate ephemeral file-config overrides ({name: value}) against the TARGET's FileParams
+        (a stack's whole set, or a direct component's own). Returns (clean, err); a non-mapping
+        payload, an UNKNOWN name, or an invalid value is a TYPED start failure — never silently
+        discarded. A blank string is passed through (defaults apply downstream only when ABSENT)."""
+        if raw is None:
+            return {}, ""
+        if not isinstance(raw, dict):
+            return {}, "file overrides must be a mapping"
+        clean: dict[str, str] = {}
+        for key, val in raw.items():
+            _c, p, err = self._param_ref(target, "file", key)      # rejects unqualified duplicates
+            if err:
+                return {}, f"unknown file parameter {key!r}" if err.startswith("unknown") else err
+            try:
+                clean[key] = validators.validate_param(p, str(val))
+            except validators.ValidationError as exc:
+                return {}, f"{p.name}: {exc}"
+        return clean, ""
+
+    def _normalize_run_params(self, target: str, raw) -> tuple[dict | None, str]:
+        """THE authoritative validation/canonicalisation boundary for ordinary ephemeral run params
+        — parallel to `_normalize_ephemeral_overrides` (daemon) and `_normalize_file_overrides`
+        (file). Validates each supplied value against the TARGET's own run params (a stack's whole
+        exposed set, or a direct component's own) and returns (clean, err). `None` passes through
+        (means: use saved config). A non-mapping payload, an UNKNOWN parameter name, or an invalid
+        value is a TYPED failure — a requested override is NEVER silently ignored."""
+        if raw is None:
+            return None, ""
+        if not isinstance(raw, dict):
+            return {}, "run parameters must be a mapping"
+        clean: dict[str, str] = {}
+        for key, val in raw.items():
+            _c, p, err = self._param_ref(target, "run", key)       # rejects unqualified duplicates
+            if err:
+                return {}, f"unknown parameter {key!r}" if err.startswith("unknown") else err
+            try:
+                clean[key] = validators.validate_param(p, val)
+            except validators.ValidationError as exc:
+                return {}, f"{p.name}: {exc}"
+        return clean, ""
+
+    def _preflight_start_inputs(self, target: str, band: str, params, file_overrides, op: str):
+        """Validate ALL supplied start inputs — ordinary `params`, file overrides, and CALL/node
+        identity (using the canonicalized ephemeral values + owner-stack persisted values) — BEFORE
+        any lifecycle side effect. Returns (params_canon, file_canon, err) where `err` is a TYPED
+        failed ActionResult (or None on success). Used by `restart()` before lock planning/stop and
+        by `_restart_impl()` before its `stop()`; a non-mapping/unknown/invalid input NEVER raises,
+        acquires a lock, or stops/alters any process/marker/config/daemon/owner."""
+        params, pv_err = self._normalize_run_params(target, params)
+        if pv_err:
+            return None, None, ActionResult(
+                False, f"Cannot {op} '{target}': invalid parameter — {pv_err}",
+                next_commands=[f"lhpc status {target}"])
+        file_over, fo_err = self._normalize_file_overrides(target, file_overrides)
+        if fo_err:
+            return None, None, ActionResult(
+                False, f"Cannot {op} '{target}': invalid parameter — {fo_err}",
+                next_commands=[f"lhpc status {target}"])
+        id_ok, id_field, id_msg = self.enforce_identity(target, band, params, file_over)
+        if not id_ok:
+            return None, None, ActionResult(
+                False, f"Cannot {op} '{target}': {id_msg}", data={"enforce_field": id_field},
+                next_commands=[f"lhpc config {target}"])
+        return params, file_over, None
+
+    def write_config_files(self, target: str, band: str = "",
+                           overrides: dict | None = None) -> list["ConfigWrite"]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         linked-readonly / no-base / failed) so an auto-start can block on a generation
-        failure rather than silently launching with stale or absent configuration."""
+        failure rather than silently launching with stale or absent configuration.
+
+        `overrides` are EPHEMERAL per-start file values ({param_name: value}, this launch only,
+        never persisted) taken from the Start-confirm 'Stack parameters' panel — validated by the
+        caller via `_normalize_file_overrides` before they reach here."""
         from pathlib import Path
         op = self.config().operator
         runtime = str(self._paths.runtime_root)
@@ -3239,15 +3946,17 @@ class ControllerService:
                         .replace("{band}", cfg_band))    # for per-band config keys
 
         stored = self.file_config_values(target, band)
+        over = overrides or {}
         written: list[ConfigWrite] = []
         for c in self._file_config_components(target):
             fc = c.config_file
             # Validate every stored value against its FileParam; an invalid value
             # (e.g. hand-edited TOML) reverts to the manifest default — never written
-            # raw into the app's config file.
+            # raw into the app's config file. An ephemeral override (already validated by
+            # `_normalize_file_overrides`) takes precedence for THIS launch only.
             values = {}
             for p in fc.params:
-                raw = stored.get(p.name, p.default)
+                raw = over.get(p.name, stored.get(p.name, p.default))
                 try:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:
@@ -3423,7 +4132,8 @@ class ControllerService:
         try:
             stored = load_stack_config(self._paths, target, cfg_band)
             normal = [k for k in stored
-                      if k in run_names or k.startswith("file_") or k.startswith("autostart_")]
+                      if k in run_names or k.startswith("file_") or k.startswith("autostart_")
+                      or k.startswith("__r__") or k.startswith("__f__")]
             if normal:
                 # Clear ONLY the normal-owned keys under the config lock; dp_* + unrelated stay.
                 update_stack_config(self._paths, target, {k: "" for k in normal}, cfg_band)
@@ -3455,7 +4165,8 @@ class ControllerService:
     def run_action(self, op: str, target: str, apply: bool = False,
                    params: dict | None = None, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
-                   band: str = "", daemon_overrides: dict | None = None) -> ActionResult:
+                   band: str = "", daemon_overrides: dict | None = None,
+                   file_overrides: dict | None = None) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.SOURCE_CHOICES:
@@ -3468,10 +4179,12 @@ class ControllerService:
             "uninstall": lambda: self.uninstall(target, apply=apply),
             "start": lambda: self.start(target, apply=apply, params=params,
                                         stop_owners=stop_owners, band=band,
-                                        daemon_overrides=daemon_overrides),
+                                        daemon_overrides=daemon_overrides,
+                                        file_overrides=file_overrides),
             "stop": lambda: self.stop(target, apply=apply, cascade=cascade, band=band),
             "restart": lambda: self.restart(target, apply=apply, params=params,
-                                            stop_owners=stop_owners, band=band),
+                                            stop_owners=stop_owners, band=band,
+                                            file_overrides=file_overrides),
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
             "test-tx": lambda: self.test(target, tx=True, apply=apply),

@@ -71,18 +71,18 @@
 {% endmacro %}
 
 {# Grid of run parameters: globals one per row; per-band ones as band columns. #}
-{% macro param_grid(layout, values, prefix) %}
+{% macro param_grid(layout, values, fields) %}
 <table class="paramgrid">
   {% for p in layout.globals %}
     <tr><th>{{ p.label or p.name }}</th>
-        <td{% if layout.bands %} colspan="{{ layout.bands|length }}"{% endif %}>{{ param_input(p, values.get(p.name), prefix + p.name) }}</td></tr>
+        <td{% if layout.bands %} colspan="{{ layout.bands|length }}"{% endif %}>{{ param_input(p, values.get(p.name), fields[p.name]) }}</td></tr>
   {% endfor %}
   {% if layout.groups %}
     <tr><th></th>{% for b in layout.bands %}<th class="bandhead" data-band="{{ b }}">{{ b }}</th>{% endfor %}</tr>
     {% for g in layout.groups %}
       <tr><th>{{ g.label }}</th>
         {% for b in layout.bands %}
-          <td data-band="{{ b }}">{% if g.byband.get(b) %}{{ param_input(g.byband[b], values.get(g.byband[b].name), prefix + g.byband[b].name) }}{% endif %}</td>
+          <td data-band="{{ b }}">{% if g.byband.get(b) %}{{ param_input(g.byband[b], values.get(g.byband[b].name), fields[g.byband[b].name]) }}{% endif %}</td>
         {% endfor %}
       </tr>
     {% endfor %}
