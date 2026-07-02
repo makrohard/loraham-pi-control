@@ -91,8 +91,9 @@ def test_failed_owner_stop_blocks_start(tmp_path, monkeypatch):
     # A conflicting owner that won't verify-stop must block the target launch.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "run_blockers",
-                        lambda self, t, b="": [{"resource": "radio 433", "holder_stack": "meshtastic",
-                                                "holder": "meshtastic"}])
+                        lambda self, t, b="", radio="": [{"resource": "radio 433",
+                                                          "holder_stack": "meshtastic",
+                                                          "holder": "meshtastic"}])
     _patch_life(monkeypatch, svc, Outcome.STILL_RUNNING)
     res = svc.start("kiss", apply=True, stop_owners=True)
     assert not res.ok and "could not be verified stopped" in res.summary

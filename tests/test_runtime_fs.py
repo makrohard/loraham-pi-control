@@ -103,11 +103,18 @@ def test_symlinked_job_marker_not_followed(tmp_path):
 
 # --- unique concurrent launchers ---------------------------------------------
 
-def test_concurrent_post_launchers_are_unique(tmp_path):
+def test_concurrent_post_launchers_are_unique(tmp_path, monkeypatch):
     captured = []
     life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
-                     FakeSystem().system,
-                     spawn=lambda argv, log, cwd=None, env=None: captured.append(argv[1]) or 4321)
+                     FakeSystem().system)
+    # A detached runner requires a verified main binding + goes through the arm-gate spawn.
+    monkeypatch.setattr(life, "_binding_for", lambda cid, band: {
+        "main_launch_id": "m", "main_pid": 1, "main_starttime": 1, "main_pgid": 1, "main_sid": 1})
+    def fake_runner(argv, log):
+        captured.append(argv[1])
+        r, w = os.pipe(); os.close(r)
+        return 4321, w                                         # (pid, arm_write_fd)
+    monkeypatch.setattr(life, "_spawn_post_runner", fake_runner)
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE, readiness="process",
                      run_argv=("true",), post_steps=({"kind": "delay", "seconds": 0},))
     stk = Stack(id="s", name="s", main="c")

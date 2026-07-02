@@ -556,3 +556,37 @@ def test_confirm_start_daemon_params_inline_client_reset(tmp_path):
     assert 'name="dp_433_CADIDLE"' in body and "data-dpdefault=" in body
     assert 'type="button" class="act dp-reset-inline"' in body     # client-side reset...
     assert "/daemon-params/reset" not in body                      # ...NOT the server config-reset
+
+
+# --- A5: band-aware observed conflicts in the web UI ----------------------------------------
+
+def _conflict_app(tmp_path, cmdlines, socks, mesh_band):
+    def factory():
+        svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system,
+                                paths=Paths(runtime_root=tmp_path))
+        svc._set_running_band("meshtastic", mesh_band)
+        return svc
+    return create_app(service_factory=factory).test_client()
+
+
+_RDY_A5 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+
+
+def test_stacks_pages_suppress_false_daemon433_vs_meshtastic868(tmp_path):
+    # daemon serving ONLY 433 + meshtastic on 868 must NOT show a conflict.
+    c = _conflict_app(tmp_path, {100: ["loraham_daemon", "--radio", "433"], 200: ["meshtasticd"]},
+                      {"/tmp/loraconf433.sock": _RDY_A5}, "868")
+    body = c.get("/stacks").get_data(as_text=True)
+    assert "loraham.radio.433" not in body and "loraham.radio.868" not in body   # no false conflict
+    detail = c.get("/stacks/meshtastic").get_data(as_text=True)
+    assert "OBSERVED" not in detail
+
+
+def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path):
+    # daemon serving BOTH + meshtastic on 868 IS a real conflict on 868 -> shown.
+    c = _conflict_app(tmp_path, {100: ["loraham_daemon", "--radio", "both"], 200: ["meshtasticd"]},
+                      {"/tmp/loraconf433.sock": _RDY_A5, "/tmp/loraconf868.sock": _RDY_A5}, "868")
+    body = c.get("/stacks").get_data(as_text=True)
+    assert "loraham.radio.868" in body and "loraham.radio.433" not in body
+    detail = c.get("/stacks/meshtastic").get_data(as_text=True)
+    assert "OBSERVED" in detail and "loraham.radio.868" in detail

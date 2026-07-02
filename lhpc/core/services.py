@@ -224,7 +224,7 @@ class ControllerService:
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st))
-        observed = [c for c in snap.conflicts if c.observed]
+        observed = self._observed_conflicts(snap)
         if observed:
             details.append("")
             details.append("Observed resource conflicts:")
@@ -331,7 +331,7 @@ class ControllerService:
             for st in ss.components.values():
                 tally[st.run_state.value] = tally.get(st.run_state.value, 0) + 1
         details.append("  components: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
-        observed = [c for c in snap.conflicts if c.observed]
+        observed = self._observed_conflicts(snap)
         details.append(f"  observed resource conflicts: {len(observed)}")
 
         return ActionResult(
@@ -424,25 +424,25 @@ class ControllerService:
                 return [(st, c)], None
         return [], f"Unknown stack or component '{target}'."
 
-    def _running_conflicts(self, comp, band: str = "") -> list[str]:
-        """Observed conflicts that would block starting `comp` right now. Radio
-        claims are matched by the band each side actually uses, so a multi-band app
-        on 868 does not conflict with a daemon serving only 433 (and vice-versa)."""
+    def _band_limited_running(self, snap):
+        """(limited_fn, running_components, running_ids) with each running component's
+        `loraham.radio.<band>` claims restricted to the band(s) it ACTUALLY uses — the daemon to
+        the bands it currently serves, a band-switchable app to its effective band, a fixed-band
+        app to its band. So a daemon on 433 and meshtastic on 868 are NOT seen as one radio."""
         import dataclasses
-        snap = self.build_snapshot()
-        served = {b for b in self.RADIO_BANDS if self.daemon_view(b).reachable}
+        # Daemon radio ownership is PROCESS topology (a dead CONF socket does not free the radio),
+        # not socket reachability.
+        served = self._daemon_claimed_bands()
 
         def limited(c, eff_bands):
-            # Drop a multi-band/daemon component's radio.<band> claims for bands it
-            # is not actually using; single-fixed-band components are unchanged.
             if c.id != self.DAEMON_ID and not c.bands:
-                return c
-            keep = []
-            for r in c.resources:
-                if r.key.startswith("loraham.radio.") and eff_bands:
-                    if r.key.rsplit(".", 1)[-1] not in eff_bands:
-                        continue
-                keep.append(r)
+                return c                                  # single-fixed-band: unchanged
+            # Keep only radio claims for the band(s) this component actually uses. When the band is
+            # unknown (empty eff_bands), STRIP every radio claim — a band-switchable app must never
+            # claim BOTH radios just because its running-band marker is missing.
+            keep = [r for r in c.resources
+                    if not (r.key.startswith("loraham.radio.")
+                            and r.key.rsplit(".", 1)[-1] not in eff_bands)]
             return dataclasses.replace(c, resources=tuple(keep))
 
         running, running_ids = [], set()
@@ -453,12 +453,34 @@ class ControllerService:
                 if c.id == self.DAEMON_ID:
                     eff = served
                 elif c.bands:
-                    eb = self._effective_band(ss.stack.id)
-                    eff = {eb} if eb else set()
+                    # Actual running band, else the component's DECLARED band — never "both".
+                    eb = self._effective_band(ss.stack.id, c.band)
+                    eff = {eb} if eb in ("433", "868") else set()
                 else:
                     eff = {c.band} if c.band else set()
                 running.append(limited(c, eff))
                 running_ids.add(c.id)
+        return limited, running, running_ids
+
+    def _observed_conflicts(self, snap=None):
+        """Band-aware observed resource conflicts (both claimants running, radio claims limited to
+        the band each actually uses). Replaces the raw, band-blind `snap.conflicts` for display."""
+        snap = snap if snap is not None else self.build_snapshot()
+        _, running, running_ids = self._band_limited_running(snap)
+        return [c for c in resources_mod.interpret_conflicts(running, running_ids) if c.observed]
+
+    def observed_conflicts(self, snap=None):
+        """PUBLIC read-only band-aware observed resource conflicts — the single source of truth for
+        every UI (CLI status, doctor, /stacks, /stacks/<id>). Never renders a false 433/868 conflict
+        (a daemon serving only 433 does not conflict with a direct-radio owner on 868)."""
+        return self._observed_conflicts(snap)
+
+    def _running_conflicts(self, comp, band: str = "") -> list[str]:
+        """Observed conflicts that would block starting `comp` right now. Radio
+        claims are matched by the band each side actually uses, so a multi-band app
+        on 868 does not conflict with a daemon serving only 433 (and vice-versa)."""
+        snap = self.build_snapshot()
+        limited, running, running_ids = self._band_limited_running(snap)
         target = limited(comp, {band} if band else set())
         conflicts = resources_mod.interpret_conflicts(running + [target], running_ids | {comp.id})
         return [c.message for c in conflicts if comp.id in c.holders and c.observed]
@@ -553,6 +575,23 @@ class ControllerService:
             visit(sid)
         return [idx[cid] for cid in order]
 
+    def _all_components_healthy(self, order, st_index, radio: str) -> bool:
+        """True when EVERY requested component is already healthy — the daemon serving every needed
+        band (READY), and each non-library service component RUNNING. Basis for a no-side-effect
+        Start (no launch, no daemon CONF SET, no param apply). A missing band or a stopped client
+        makes it False so the normal apply-once-then-start path runs."""
+        need = ["433", "868"] if radio == "both" else ([radio] if radio in ("433", "868") else [])
+        for _stack, comp in order:
+            if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
+                continue
+            if comp.id == self.DAEMON_ID:
+                if not need or not all(self.daemon_view(b).ready for b in need):
+                    return False
+                continue
+            if st_index[comp.id].run_state != RunState.RUNNING:
+                return False
+        return True
+
     def _daemon_needs(self, order, params, band: str = ""):
         """The daemon's required radio band + TX mode for this run order. `band`
         overrides the band for a band-switchable app stack. Returns (radio, tx); tx is
@@ -577,24 +616,67 @@ class ControllerService:
         return (self.running_band(stack_id, "") or self.interactive_band(stack_id)
                 or fallback)
 
-    def _operation_resource_keys(self, target: str, band: str = "") -> list[str]:
+    def _operation_bands(self, target: str, band: str = "", radio: str = "",
+                         op: str = "") -> set:
+        """THE authoritative radio band(s) a lifecycle op on `target` touches — one source of truth
+        for radio locking + conflict detection.
+          * START  — the REQUESTED bands (client: its chosen/declared band; daemon: `radio`, else
+                     the saved daemon `radio`). Never inferred from the daemon's empty Component.band.
+          * STOP   — the ACTUAL running bands: a client uses its running/interactive MARKER (falling
+                     back to the declared band only when there is NO runtime evidence); the daemon
+                     uses PROCESS TOPOLOGY — a per-band stop also locks the other band when the SAME
+                     process serves it (a manual `--radio both`), and a whole-daemon stop locks
+                     every band an owned/observed daemon PROCESS serves, even if that band's CONF
+                     socket is unreachable / UNINITIALIZED / FAILED.
+          * RESTART— the UNION of the actual STOP bands and the requested START bands."""
+        order = self._run_order(target)
+        if not order:
+            return set()
+        sid = self.stack_of(target) or target
+        stk = self.stack(sid)
+        is_daemon = stk is not None and stk.main == self.DAEMON_ID
+        if op == "restart":
+            return (self._operation_bands(target, band, "", "stop")
+                    | self._operation_bands(target, band, radio, "start"))
+        if is_daemon:
+            if op == "stop":
+                if band in ("433", "868"):
+                    bands = {band}
+                    other = "868" if band == "433" else "433"
+                    # --radio both collateral: the SAME process also serves the other band -> lock
+                    # it too, regardless of that band's CONF socket state (topology, not reachability).
+                    if set(self._daemon_pids_for_band(band)) & set(self._daemon_pids_for_band(other)):
+                        bands.add(other)
+                    return bands
+                # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
+                return self._daemon_claimed_bands()
+            r = radio or str(self.stack_config(sid).get("radio") or "both")
+            return {"433", "868"} if r == "both" else ({r} if r in ("433", "868") else set())
+        # Client.
+        if op == "stop":
+            eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)
+            if eb in ("433", "868"):
+                return {eb}
+        cfg_band = self._config_band(target, band)    # declared/default (start, or stop w/o evidence)
+        return {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
+
+    def _operation_resource_keys(self, target: str, band: str = "", radio: str = "",
+                                 op: str = "") -> list[str]:
         """Canonical resource keys an EXCLUSIVE/PROVIDER operation on `target` touches —
         the basis for cross-stack operation locks so a start/stop/restart of one stack
         serializes against another stack claiming the SAME radio/port/socket. Radio claims
-        are scoped to the band(s) the run actually uses. Mirrors `run_blockers` exactly so
-        the lock set equals the conflict set. CONSUMER/COOPERATIVE claims take no lock."""
+        are scoped by `_operation_bands` (band-aware, daemon-radio-aware). Mirrors `run_blockers`
+        so the lock set equals the conflict set. CONSUMER/COOPERATIVE claims take no lock."""
         order = self._run_order(target)
         if not order:
             return []
-        cfg_band = self._config_band(target, band)
-        needed_bands = {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
         keys = set()
         for _, c in order:
             for r in c.resources:
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
                         and not r.key.startswith("loraham.radio.")):
                     keys.add(r.key)
-        for b in needed_bands:
+        for b in self._operation_bands(target, band, radio, op):
             keys.add(f"loraham.radio.{b}")
         return sorted(keys)
 
@@ -607,33 +689,35 @@ class ControllerService:
         return sorted({c.source.path for _, c in order if c.source})
 
     def _lifecycle_lock_keys(self, op: str, target: str, band: str = "",
-                             stop_owners: bool = False, cascade: bool = False) -> list[str]:
+                             stop_owners: bool = False, cascade: bool = False,
+                             radio: str = "") -> list[str]:
         """The COMPLETE lock bundle a lifecycle op must hold: the target's
         `lifecycle.<stack>` + `claim.<resource>` keys (+ source-path keys for start/
         restart), AND — for `stop_owners`/`cascade` — the owners'/dependents' keys too, so
-        a cross-target mutation never bypasses another target's coordination. Returned
-        de-duplicated; the caller acquires them in ONE stable sorted order."""
+        a cross-target mutation never bypasses another target's coordination. Radio claims are
+        band-aware (`radio` carries the daemon's requested mode for a daemon start/restart).
+        Returned de-duplicated; the caller acquires them in ONE stable sorted order."""
         from . import reslock
         keys: set[str] = set()
 
-        def add(t: str, with_source: bool, scoped_band: str) -> None:
+        def add(t: str, with_source: bool, scoped_band: str, scoped_radio: str, scoped_op: str) -> None:
             sid = self.stack_of(t) or t
             keys.add(f"lifecycle.{sid}")
-            for rk in self._operation_resource_keys(t, scoped_band):
+            for rk in self._operation_resource_keys(t, scoped_band, scoped_radio, scoped_op):
                 keys.add(f"claim.{rk}")
             if with_source:
                 for sp in self._operation_source_paths(t):
                     keys.add(reslock.source_lock_key(sp))
 
-        add(target, op in ("start", "restart"), band)
+        add(target, op in ("start", "restart"), band, radio, op)
         if stop_owners and op in ("start", "restart"):
-            for b in self.run_blockers(target, band):
+            for b in self.run_blockers(target, band, radio):
                 holder = b.get("holder_stack") or b.get("holder")
                 if holder:
-                    add(holder, False, "")
+                    add(holder, False, "", "", "")   # holder is a running peer; its own bands apply
         if cascade and op == "stop":
             for dep in self._dependents_of(target):
-                add(dep, False, "")
+                add(dep, False, "", "", "stop")
         return sorted(keys, key=reslock.canonical_key)
 
     def _dependents_of(self, target: str) -> list[str]:
@@ -656,14 +740,14 @@ class ControllerService:
 
     @contextmanager
     def _lifecycle_guard(self, op: str, target: str, band: str = "",
-                         stop_owners: bool = False, cascade: bool = False):
+                         stop_owners: bool = False, cascade: bool = False, radio: str = ""):
         """Acquire the lifecycle lock bundle. RE-ENTRANT per THREAD: a key already held by
         an outer guard in THIS thread is not re-flocked (so restart→stop+start and
         stop_owners→stop nest without self-contending), but an INDEPENDENT thread sharing
         this service contends through `reslock` and gets `ResourceBusy`. Recursion counts
         ensure a nested guard never releases an outer guard's flock."""
         from . import reslock
-        keys = self._lifecycle_lock_keys(op, target, band, stop_owners, cascade)
+        keys = self._lifecycle_lock_keys(op, target, band, stop_owners, cascade, radio)
         counts = self._held_counts()
         bumped: list[str] = []
         # For a start/restart that acquires source locks FRESH (not nested inside an outer
@@ -721,21 +805,23 @@ class ControllerService:
                 if counts[k] <= 0:
                     counts.pop(k, None)
 
-    def run_blockers(self, target: str, band: str = "") -> list[dict]:
+    def run_blockers(self, target: str, band: str = "", radio: str = "") -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
         use that a RUNNING component of another stack is *actually* using. Radio
         bands are matched by the band each side really uses (a multi-band stack on
         868 does not block another stack on 433; the daemon only conflicts on the
-        bands it currently serves)."""
+        bands it currently serves). A daemon start's bands come from its REQUESTED radio
+        mode (`radio`), not its empty `Component.band`."""
         order = self._run_order(target)
         if not order:
             return []
         cfg_band = self._config_band(target, band)
         order_ids = {c.id for _, c in order}
         target_stack = self.stack_of(target)
-        # Bands this run actually uses (the chosen/app band — never both for a
-        # band-switchable stack).
-        needed_bands = {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
+        target_is_daemon = bool(target_stack and self.stack(target_stack)
+                                and self.stack(target_stack).main == self.DAEMON_ID)
+        # Bands this run actually uses (band-aware + daemon-radio-aware).
+        needed_bands = self._operation_bands(target, band, radio, "start")
         # Non-radio exclusive/provider claims (ports, sockets, …) + only the radio
         # band(s) the run really needs.
         claims: dict[str, str] = {}
@@ -748,7 +834,9 @@ class ControllerService:
             claims.setdefault(f"loraham.radio.{b}", target)
 
         snap = self.build_snapshot()
-        served = {b for b in self.RADIO_BANDS if self.daemon_view(b).reachable}
+        # Daemon radio ownership is PROCESS topology (a dead CONF socket does not free the radio),
+        # not socket reachability.
+        served = self._daemon_claimed_bands()
         blockers, seen = [], set()
 
         def add(stack_id, holder, resource):
@@ -770,8 +858,8 @@ class ControllerService:
                 if c.id == self.DAEMON_ID:
                     active = served
                 elif multi:
-                    eb = self._effective_band(sid)
-                    active = {eb} if eb else set()
+                    eb = self._effective_band(sid, c.band)   # actual band, else declared (never both)
+                    active = {eb} if eb in ("433", "868") else set()
                 else:
                     active = {c.band} if c.band else set()
                 for r in c.resources:
@@ -783,11 +871,14 @@ class ControllerService:
                             add(sid, c.id, r.key)
                     elif r.key in claims:
                         add(sid, c.id, r.key)
-                # same-frequency rule: another stack on a band we need. Exclude the
-                # daemon STACK (it provides the radio, not a competing app) — by its
-                # stack id, since DAEMON_ID is a component id.
+                # same-frequency rule: another APP stack competing for a band we need. Exclude the
+                # daemon STACK (it provides the radio). Also skip it entirely when the TARGET is the
+                # daemon: its own dependent clients are consumers of the radio it provides, not
+                # competitors — a real competitor (a direct-radio EXCLUSIVE owner like meshtastic)
+                # is already caught by the exclusive-claim check above.
                 comp_band = self._effective_band(sid, c.band) if multi else c.band
-                if (sid != target_stack and sid != self.stack_of(self.DAEMON_ID)
+                if (not target_is_daemon and sid != target_stack
+                        and sid != self.stack_of(self.DAEMON_ID)
                         and comp_band and comp_band in needed_bands):
                     add(sid, c.id, f"radio {comp_band} MHz")
         return blockers
@@ -804,8 +895,14 @@ class ControllerService:
             return self._start_impl(target, apply=False, params=params,
                                     stop_owners=stop_owners, band=band,
                                     daemon_overrides=daemon_overrides)
+        # The daemon's REQUESTED radio mode determines which radio bands the lock bundle covers.
+        _order = self._run_order(target)
+        _radio = ""
+        if _order:
+            _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
+            _radio = _r or ""
         try:
-            with self._lifecycle_guard("start", target, band, stop_owners=stop_owners):
+            with self._lifecycle_guard("start", target, band, stop_owners=stop_owners, radio=_radio):
                 return self._start_impl(target, apply=True, params=params,
                                         stop_owners=stop_owners, band=band,
                                         daemon_overrides=daemon_overrides)
@@ -862,7 +959,7 @@ class ControllerService:
                     commands.append(cmd)
                 else:
                     details.append(f"  [start] {comp.id} (band {cfg_band or comp.band or '-'})")
-            blockers = self.run_blockers(target, band)
+            blockers = self.run_blockers(target, band, radio)
             for bl in blockers:
                 details.append(f"  [conflict] {bl['resource']} is held by running stack "
                                f"'{bl['holder_stack']}' ({bl['holder']})")
@@ -872,9 +969,25 @@ class ControllerService:
                                 data={"changes": len(order), "blockers": blockers,
                                       "commands": commands})
 
+        # No-side-effect Start FIRST — BEFORE any owner handling: if EVERY requested component is
+        # already healthy, return ALREADY_HEALTHY immediately. Never run blockers for mutation,
+        # never stop owners (even with stop_owners=True), never launch/write config/apply params/
+        # CONF SET/touch markers for an already-healthy target.
+        if apply:
+            _hsnap = self.build_snapshot()
+            _hidx = {c.id: ss.components[c.id] for ss in _hsnap.stacks for c in ss.stack.components}
+            if self._all_components_healthy(order, _hidx, radio):
+                _hres = [CompResult(component=comp.id, stack=stack.id, action="start",
+                             outcome=Outcome.ALREADY_HEALTHY, summary="already running")
+                         for stack, comp in order
+                         if comp.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
+                return ActionResult(True, f"'{target}' already healthy — nothing to start.",
+                    details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
+                    results=tuple(_hres), next_commands=[f"lhpc status {target}"])
+
         # Ownership check: if a needed resource is held by another running stack,
         # either stop that stack first (stop_owners) or refuse and report it.
-        blockers = self.run_blockers(target, band)
+        blockers = self.run_blockers(target, band, radio)
         if blockers:
             owners = sorted({bl["holder_stack"] for bl in blockers})
             if not stop_owners:
@@ -1018,7 +1131,13 @@ class ControllerService:
                            f"linked source is read-only — generate {comp.id}'s config in "
                            f"your own checkout ({linked.path})")
                     continue
-            comp_cfg = self.stack_config(stack.id, cfg_band)
+            # Ephemeral confirm-page params (this start only) override the saved config for BOTH
+            # the launch and the post-start steps — so a value set on the start page (e.g.
+            # meshtastic NodeName / region) is actually applied, not just the saved default.
+            comp_cfg = dict(self.stack_config(stack.id, cfg_band))
+            for _k, _v in (params or {}).items():
+                if _v is not None:
+                    comp_cfg[_k] = _v
             res = life.start(stack, comp, comp_cfg, band=cfg_band)
             if not res.ok:
                 # A launch that couldn't be owned AND couldn't be proven ceased is a
@@ -1112,7 +1231,43 @@ class ControllerService:
         sched = life.spawn_post_start(stack, comp, comp_cfg, band=band)
         if sched.ok:
             return None, "optional post-start scheduled"
+        if getattr(sched, "unverified", False):
+            # Lifecycle-INTEGRITY failure: a spawned runner we can neither own nor prove stopped.
+            # This GATES the main VERIFIED result (unlike an ordinary optional transport failure).
+            return False, f"post-start runner integrity failure: {sched.detail}"
         return None, f"optional post-start could NOT be scheduled: {sched.detail}"
+
+    def _daemon_radio_modes(self) -> list:
+        """`--radio` mode of every OBSERVED daemon process (by command line). A missing/unknown
+        mode is returned as None so callers can treat it conservatively."""
+        import posixpath
+        modes = []
+        for _pid, argv in self._system.procfs.cmdlines().items():
+            if not argv or posixpath.basename(argv[0]) != "loraham_daemon":
+                continue
+            radio = None
+            for i, tok in enumerate(argv):
+                if tok == "--radio" and i + 1 < len(argv):
+                    radio = argv[i + 1]
+                elif tok.startswith("--radio="):
+                    radio = tok.split("=", 1)[1]
+            modes.append(radio)
+        return modes
+
+    def _daemon_claimed_bands(self) -> set:
+        """Radio bands CLAIMED by observed daemon PROCESSES (command-line topology — the authoritative
+        ownership signal). `--radio 433` → {433}, `--radio 868` → {868}, `--radio both` (or a
+        missing/unknown mode) → conservatively {433, 868}. A CONF socket that is unreachable /
+        UNINITIALIZED / FAILED does NOT free the radio — the live process still owns it."""
+        bands = set()
+        for radio in self._daemon_radio_modes():
+            if radio == "433":
+                bands.add("433")
+            elif radio == "868":
+                bands.add("868")
+            else:
+                bands |= {"433", "868"}       # both / missing / unknown -> conservative
+        return bands
 
     def _daemon_pids_for_band(self, band: str) -> list[int]:
         """PIDs of daemon instances that serve `band` — those launched with
@@ -1129,8 +1284,8 @@ class ControllerService:
                     radio = argv[i + 1]
                 elif tok.startswith("--radio="):
                     radio = tok.split("=", 1)[1]
-            if radio in (band, "both"):
-                out.append(pid)
+            if radio in (band, "both") or radio not in ("433", "868"):
+                out.append(pid)              # unknown mode -> conservatively serves the band
         return out
 
     def _ensure_daemon(self, life, stack, comp, running, radio, params, start_sid,
@@ -1148,15 +1303,23 @@ class ControllerService:
         # Bands this start must make ready. --radio both must ensure BOTH 433 and 868.
         needed = ["433", "868"] if (radio or "both") == "both" else [radio]
         views = {b: daemon_control.read_view(self._system, b) for b in needed}
-        # Classify each band: READY (retain), reachable-but-not-READY (fail; NEVER relaunch a
-        # replacement against a live radio), or ABSENT (must be started).
+        # Classify each band from CONF readiness AND process topology. A CONF socket that is
+        # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
+        #   READY (retain) | reachable-not-READY (fail) | CONF-down-but-process-claims-it (fail, do
+        #   NOT relaunch/SET) | truly absent (safe to launch).
+        claimed = self._daemon_claimed_bands()
         not_ready = [b for b in needed if views[b].reachable and not views[b].ready]
-        absent = [b for b in needed if not views[b].reachable]
+        claimed_down = [b for b in needed if not views[b].reachable and b in claimed]
+        absent = [b for b in needed if not views[b].reachable and b not in claimed]
         lines, ok_all = [], True
         for b in not_ready:
             ok_all = False
             lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
                          f"{views[b].radio_state or 'unknown'} (not READY) — dependent launch blocked")
+        for b in claimed_down:
+            ok_all = False
+            lines.append(f"  [fail] daemon on {b}: CONF socket unreachable but a daemon process "
+                         f"still holds the radio — not relaunched (resolve the stuck instance first)")
         started: set = set()
         if absent:
             if comp.source and not life.source_dir(comp).exists():
@@ -1165,26 +1328,26 @@ class ControllerService:
             if not self.is_built(comp):
                 lines.append("  [BLOCKED] daemon: not built — build it first (lhpc build daemon)")
                 return lines, False
-            # Start ONLY the missing bands: --radio both when BOTH are absent, else the single
-            # missing band — never a second --radio both while a radio is already served. The TX
-            # mode is applied LIVE once the socket is up (the documented MeshCom path).
-            radio_arg = "both" if set(absent) == {"433", "868"} else absent[0]
-            dparams = dict(self.stack_config("daemon"))
-            dparams["radio"] = radio_arg
-            if params and params.get("debug"):
-                dparams["debug"] = "1"
-            res = life.start(stack, comp, dparams, band=radio_arg)
-            base = f"start daemon --radio {radio_arg}"
-            if not res.ok:
-                lines.append(f"  [fail] {base}: {res.detail}")
-                return lines, False
-            lines.append(f"  [ok] {base}")
-            started = set(absent)
+            # Start ONE per-band instance for EACH missing band — lhpc NEVER launches `--radio
+            # both` (a legacy mode the operator may still start manually); it runs an independent
+            # `--radio <band>` per band. The TX mode is applied LIVE once the socket is up.
+            for b in sorted(absent):
+                dparams = dict(self.stack_config("daemon"))
+                dparams["radio"] = b
+                if params and params.get("debug"):
+                    dparams["debug"] = "1"
+                res = life.start(stack, comp, dparams, band=b)
+                base = f"start daemon --radio {b}"
+                if not res.ok:
+                    lines.append(f"  [fail] {base}: {res.detail}")
+                    return lines, False
+                lines.append(f"  [ok] {base}")
+                started.add(b)
         # Verify + apply, once per band that should now be READY (retained or freshly started;
         # not-ready bands were already failed above and are skipped).
         for b in needed:
-            if b in not_ready:
-                continue
+            if b in not_ready or b in claimed_down:
+                continue                      # failed bands: no retain, no CONF SET
             if b in started:
                 if not self._verify_band_up(b):
                     ok_all = False
@@ -1193,6 +1356,16 @@ class ControllerService:
                     continue
             else:
                 lines.append(f"  [ok] daemon already serving {b}")
+                # A band already serving ANOTHER running stack must NOT be reconfigured — a daemon
+                # (re)start in a new mode (e.g. FSK) must never disrupt a client already using this
+                # band (its config is whatever that client needs). Freshly-started bands still get
+                # this start's params applied.
+                daemon_sid = self.stack_of(self.DAEMON_ID) or "daemon"
+                others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != start_sid]
+                if others:
+                    lines.append(f"  [keep] {b} in use by {', '.join(others)} — daemon "
+                                 f"config left unchanged")
+                    continue
             plines, tx_ok = self._apply_stack_daemon_params(start_sid, b,
                                                             (daemon_overrides or {}).get(b))
             lines.extend(plines)
@@ -1547,6 +1720,28 @@ class ControllerService:
             return {eb} if eb else set()
         return {c.band for c in run_comps if c.band}
 
+    def _uncertain_daemon_dependents(self, target: str) -> list[str]:
+        """Running daemon-dependent stacks whose ACTIVE radio band cannot be trusted for a PER-BAND
+        daemon stop — band-switchable stacks with NO valid running/interactive marker. A per-band
+        stop must never guess such a peer's band (it could stop or spare the wrong one)."""
+        tstack = self.stack(target)
+        if tstack is None:
+            return []
+        member_ids = {c.id for c in tstack.components}
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        out = []
+        for ss in self.build_snapshot().stacks:
+            if ss.stack.id == tstack.id:
+                continue
+            run_comps = [c for c in ss.stack.components if ss.components[c.id].run_state in up]
+            if not run_comps:
+                continue
+            if not any(d in member_ids for c in ss.stack.components for d in c.depends_on):
+                continue
+            if self.stack_bands(ss.stack.id) and not self._effective_band(ss.stack.id):
+                out.append(ss.stack.id)
+        return out
+
     def stop_dependents(self, target: str, bands=None) -> list[str]:
         """Running stacks that would be orphaned if `target` stops (they depend on one of
         its components) — e.g. stopping the daemon orphans kiss/igate/…
@@ -1577,45 +1772,85 @@ class ControllerService:
             out.append(ss.stack.id)
         return out
 
+    def _daemon_bands_to_release(self, stk, sid, active_bands) -> tuple[str, list]:
+        """(daemon_stack_id, bands) a stopping CLIENT stack no longer needs — the band(s) it was
+        ACTUALLY running on (`active_bands`, resolved from its running marker BEFORE deletion) that
+        NO other running daemon-dependent stack still uses and where the daemon is still up. Empty
+        for the daemon stack itself or a non-daemon-dependent stack. A band-switchable client (KISS/
+        Voice) thus releases only the band it ran on, never both."""
+        daemon_sid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
+        if stk is None or not daemon_sid or sid == daemon_sid:
+            return daemon_sid or "", []
+        if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):
+            return daemon_sid, []
+        release = []
+        for b in sorted(bb for bb in active_bands if bb in ("433", "868")):
+            others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d != sid]
+            if not others and self.daemon_view(b).reachable:
+                release.append(b)
+        return daemon_sid, release
+
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
-             band: str = "") -> ActionResult:
+             band: str = "", release_daemon: bool = True) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
-        cascade) so a DIRECT call gets the same coordination as CLI/web."""
+        cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
+        is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
+        release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
         from . import reslock
+        # A daemon stop is FORCED-cascade — resolve that BEFORE acquiring the lock bundle so the
+        # dependents' lifecycle/resource locks are part of the outer guard (no dependent races the
+        # cascade), and so a blocking dependent can gate the daemon stop.
+        _sid0 = self.stack_of(target)
+        _stk0 = self.stack(_sid0) if _sid0 else None
+        if _stk0 is not None and _stk0.main == self.DAEMON_ID:
+            cascade = True
         if not apply:
-            return self._stop_impl(target, apply=False, cascade=cascade, band=band)
+            return self._stop_impl(target, apply=False, cascade=cascade, band=band,
+                                   release_daemon=release_daemon)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
-                return self._stop_impl(target, apply=True, cascade=cascade, band=band)
+                return self._stop_impl(target, apply=True, cascade=cascade, band=band,
+                                       release_daemon=release_daemon)
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])
 
     def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
-                   band: str = "") -> ActionResult:
+                   band: str = "", release_daemon: bool = True) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         life = self._lifecycle()
         # Stop in reverse start order.
         items = list(reversed(items))
-        # Per-band daemon stop signals only the requested band's instance(s). The
-        # other band is collateral ONLY when it is served by the SAME process — i.e.
-        # a --radio both instance (so every PID serving the other band is also in
-        # this band's stop set). Separate per-band instances are unaffected.
-        other_bands = []
         _sid = self.stack_of(target)
         _stk = self.stack(_sid) if _sid else None
-        _daemon_band_stop = bool(_stk and _stk.main == self.DAEMON_ID and band in ("433", "868"))
+        target_is_daemon = bool(_stk and _stk.main == self.DAEMON_ID)
+        # The daemon is shared infrastructure: stopping it ALWAYS orphans its dependents, so the
+        # cascade is forced (a client is never left pointing at a dead daemon).
+        if target_is_daemon:
+            cascade = True
+        # Bands ACTUALLY being stopped — from the authoritative topology resolver (per-band daemon
+        # stop includes its --radio both collateral; separate per-band instances are unaffected).
+        _daemon_band_stop = bool(target_is_daemon and band in ("433", "868"))
+        stopped_bands = self._operation_bands(target, band, "", "stop") if _daemon_band_stop else None
+        other_bands = sorted((stopped_bands or set()) - {band}) if _daemon_band_stop else []
+        # Fail closed: a PER-BAND daemon stop must not guess the band of a running band-switchable
+        # dependent that has no trustworthy marker — block, name it, and stop NOTHING.
         if _daemon_band_stop:
-            other = "868" if band == "433" else "433"
-            stop_pids = set(self._daemon_pids_for_band(band))
-            other_pids = set(self._daemon_pids_for_band(other))
-            if other_pids and other_pids <= stop_pids and self.daemon_view(other).reachable:
-                other_bands = [other]
-        # Orphaned dependents are scoped to the band(s) actually being stopped: a daemon
-        # 433 stop orphans only 433 dependents (plus 868's if the SAME process serves it).
-        stopped_bands = ({band} | set(other_bands)) if _daemon_band_stop else None
+            uncertain = self._uncertain_daemon_dependents(target)
+            if uncertain:
+                results = [CompResult(component=d, stack=d, action="stop", outcome=Outcome.BLOCKED,
+                    summary="active radio band unknown (no running-band marker) — cannot safely "
+                            "scope a per-band daemon stop; stop it explicitly first")
+                    for d in uncertain]
+                det = [f"  [blocked] dependent '{d}': active radio band unknown — daemon and all "
+                       "dependents left untouched" for d in uncertain]
+                return ActionResult(False, f"Per-band daemon stop for '{target}' ({band}) blocked — "
+                                    f"dependent(s) with unknown active band: {', '.join(uncertain)}",
+                                    details=det, results=tuple(results),
+                                    next_commands=[f"lhpc status {target}"])
+        # Orphaned dependents are scoped to the band(s) actually being stopped.
         dependents = self.stop_dependents(target, bands=stopped_bands)
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
@@ -1630,32 +1865,52 @@ class ControllerService:
                                 data={"changes": len(items), "dependents": dependents,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
-        results: list[CompResult] = []
-        # Cascade: stop dependent stacks first so they aren't orphaned. An interactive
-        # app the operator started by hand is MANUAL_REQUIRED (it blocks a verified
-        # parent stop), never silently "kept".
+        results: list[CompResult] = []          # every result (dependents + own + daemon release)
+        own_results: list[CompResult] = []       # ONLY the target's own components
+
+        # Forced daemon cascade: stop dependents FIRST. An interactive/manual dependent (preflighted
+        # before ANY automatic stop), or a dependent whose automatic stop fails / does not verify,
+        # BLOCKS the daemon stop — the daemon is never stopped while a dependent is still running.
+        dep_block = False
         if cascade:
-            for dep in dependents:
-                dstk = self.stack(dep)
-                dmain = dstk.main_component if dstk else None
-                if dmain is not None and dmain.interactive:
+            interactive_deps = [dep for dep in dependents
+                                if (self.stack(dep) and self.stack(dep).main_component
+                                    and self.stack(dep).main_component.interactive)]
+            if interactive_deps:
+                for dep in interactive_deps:
                     results.append(CompResult(component=dep, stack=dep, action="stop",
                         outcome=Outcome.MANUAL_REQUIRED,
                         summary="interactive dependent — stop it yourself before this stack"))
                     details.append(f"  [manual_required] dependent '{dep}' is interactive — "
-                                   "stop it yourself")
-                    continue
-                dep_res = self.stop(dep, apply=True)
-                results.append(CompResult(component=dep, stack=dep, action="stop",
-                    outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
-                    summary=dep_res.summary))
-                details.append(f"  [{'stopped' if dep_res.ok else 'unverified'} dependent] {dep}")
+                                   "stop it yourself first (daemon left running)")
+                dep_block = True                 # preflight block: stop NO automatic dependent
+            else:
+                for dep in dependents:
+                    # release_daemon=False: the OUTER daemon stop owns teardown — a dependent must
+                    # not recursively stop the daemon (it just clears its own marker on cessation).
+                    dep_res = self.stop(dep, apply=True, release_daemon=False)
+                    results.append(CompResult(component=dep, stack=dep, action="stop",
+                        outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
+                        summary=dep_res.summary))
+                    details.append(f"  [{'stopped' if dep_res.ok else 'unverified'} dependent] {dep}")
+                    if not dep_res.ok:
+                        dep_block = True
+
         for _, comp in items:
+            # Never stop the daemon while a dependent is still running / not verified stopped.
+            if target_is_daemon and comp.id == self.DAEMON_ID and dep_block:
+                cr = CompResult(component=comp.id, stack=target, action="stop",
+                    outcome=Outcome.BLOCKED,
+                    summary="not attempted — a dependent is still running or not verified stopped")
+                results.append(cr); own_results.append(cr)
+                details.append(f"  [blocked] {comp.id}: a dependent is still running — daemon left up")
+                continue
             if comp.units and not comp.run_argv:
                 # Externally supervised: LHPC cannot verify the stop -> MANUAL_REQUIRED.
-                results.append(CompResult(component=comp.id, stack=target, action="stop",
+                cr = CompResult(component=comp.id, stack=target, action="stop",
                     outcome=Outcome.MANUAL_REQUIRED,
-                    summary=f"system service — stop as root: sudo systemctl stop {comp.units[0].name}"))
+                    summary=f"system service — stop as root: sudo systemctl stop {comp.units[0].name}")
+                results.append(cr); own_results.append(cr)
                 details.append(f"  [manual_required] {comp.id}: stop it as root: "
                                f"sudo systemctl stop {comp.units[0].name}")
                 continue
@@ -1666,17 +1921,39 @@ class ControllerService:
                 cr = life.stop(comp, band=band)
             else:
                 cr = life.stop(comp)
-            results.append(cr)
+            results.append(cr); own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"
                            + (f" (pid {cr.pid})" if cr.pid else ""))
-        # ok only when every result is a successful, verified stop.
-        ok = applied_ok(results) if results else True
-        # Clear band/interactive markers ONLY after a fully verified stop — never
-        # after a failed/unverified/manual/endpoint-lingering result.
+
+        # The target's OWN cessation (independent of dependents / daemon-release outcome).
+        own_ok = applied_ok(own_results) if own_results else True
         sid = self.stack_of(target)
-        if sid and ok:
+        # Resolve the client's ACTUAL active band BEFORE clearing its running marker (topology
+        # resolver: running/interactive marker, else declared band).
+        active_bands = set()
+        if own_ok and _stk is not None and not target_is_daemon:
+            active_bands = self._operation_bands(target, "", "", "stop")
+        # Clear band/interactive markers after the target's OWN verified cessation — even if the
+        # later daemon-release fails, a stopped client must never look running.
+        if sid and own_ok:
             self._safe_unlink(self._band_marker(sid))
             self.dismiss_interactive(sid)
+        # A CLIENT stop also releases the daemon band it used — only where no other running
+        # dependent needs it. Its typed result feeds the aggregate success (a failed release makes
+        # the whole client stop non-success). The just-stopped client is excluded from that check,
+        # so there is no recursive re-stop of it.
+        if own_ok and not target_is_daemon and release_daemon:
+            daemon_sid, release = self._daemon_bands_to_release(_stk, sid, active_bands)
+            for b in release:
+                dres = self.stop(daemon_sid, apply=True, band=b)
+                results.append(CompResult(component=self.DAEMON_ID, stack=daemon_sid, action="stop",
+                    outcome=Outcome.STOPPED if dres.ok else Outcome.UNVERIFIED,
+                    summary=(f"released {daemon_sid} {b} (no other stack needs it)" if dres.ok
+                             else f"{daemon_sid} {b} release NOT verified — {dres.summary}")))
+                details.append(f"  [{'stopped' if dres.ok else 'unverified'} daemon] "
+                               f"{daemon_sid} {b}: no other stack needs it")
+        # ok only when every result (dependents + own + daemon release) is a verified stop.
+        ok = applied_ok(results) if results else True
         summary = (f"Stop applied for '{target}'." if ok else
                    f"Stop for '{target}' is NOT fully verified — see details.")
         return ActionResult(ok, summary, details=details, results=tuple(results),
@@ -1690,10 +1967,23 @@ class ControllerService:
         if not apply:
             return self._restart_impl(target, apply=False, params=params,
                                       stop_owners=stop_owners, band=band)
+        # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
+        # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
+        # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433).
+        _rband = band
+        _sid = self.stack_of(target)
+        _stk = self.stack(_sid) if _sid else None
+        if not band and _stk is not None and _stk.main != self.DAEMON_ID and self.stack_bands(_sid):
+            _rband = self._effective_band(_sid, "") or band
+        _order = self._run_order(target)
+        _radio = ""
+        if _order:
+            _r, _ = self._daemon_needs(_order, params, self._config_band(target, _rband))
+            _radio = _r or ""
         try:
-            with self._lifecycle_guard("restart", target, band, stop_owners=stop_owners):
+            with self._lifecycle_guard("restart", target, _rband, stop_owners=stop_owners, radio=_radio):
                 return self._restart_impl(target, apply=True, params=params,
-                                          stop_owners=stop_owners, band=band)
+                                          stop_owners=stop_owners, band=_rband)
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot restart '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -2652,7 +2942,9 @@ class ControllerService:
         main = s.main_component if s else None
         # Operator identity is only relevant to stacks that actually substitute
         # {callsign}/{locator} into a run/pre command (e.g. iGate) — not the daemon.
-        uses_operator = any(
+        # Stacks that edit their callsign in their own config (operator_box=false) don't show the
+        # shared Operator box — the callsign lives in their config/run params instead.
+        uses_operator = (s is not None and s.operator_box) and any(
             tok in (c.run_cmd or "") or tok in (c.pre_cmd or "")
             or any(tok in (p.default or "") for p in c.run_params)
             or any(tok in (p.default or "") for p in (c.config_file.params if c.config_file else ()))

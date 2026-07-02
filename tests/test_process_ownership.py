@@ -367,10 +367,22 @@ def test_terminate_refuses_on_identity_mismatch(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
     ident = life._capture_identity(p.pid)
-    for field, val in (("argv_fp", "deadbeef"), ("exec", "other"), ("starttime", 999999999)):
+    # A changed START TIME / pgid / sid means it is NOT our process -> never signal.
+    for field, val in (("starttime", 999999999), ("pgid", 424242), ("sid", 424242)):
         bad = dict(ident); bad[field] = val
-        assert life._terminate_unobserved(p.pid, bad) is False     # any mismatch -> no signal
+        assert life._terminate_unobserved(p.pid, bad) is False
         assert life._proc_alive(p.pid)
+
+
+def test_terminate_tolerates_exec_argv_change(tmp_path, reaper):
+    # A legitimate later exec (e.g. env -> bash) changes exec/argv but NOT start time, so the
+    # process is still safely cleanable (matches the accepted stable-identity ownership model).
+    life = _life(tmp_path)
+    p = _leader(reaper)
+    ident = life._capture_identity(p.pid)
+    bad = dict(ident); bad["exec"] = "env"; bad["argv_fp"] = "deadbeef"
+    assert life._terminate_unobserved(p.pid, bad) is True          # exec change tolerated -> cleaned
+    assert not life._proc_alive(p.pid)
 
 
 def test_terminate_signals_and_verifies_with_complete_identity(tmp_path, reaper):
@@ -601,3 +613,17 @@ def test_symlinked_marker_leaf_not_active_and_no_crash(tmp_path):
     os.symlink(outside, d / "build-x.job")               # symlinked marker leaf
     assert svc.active_jobs() == []                        # skipped, never followed, no crash
     assert (d / "build-x.job").is_symlink()              # evidence retained
+
+
+def test_identity_tolerates_exec_change_same_starttime():
+    # A process that exec's after launch (e.g. `#!/usr/bin/env bash`: env -> bash) changes its
+    # exec/argv but NOT its start time. Ownership must still match (start time is reuse-proof);
+    # requiring exec/argv wrongly disowned MeshCom's run.sh and blocked its stop.
+    import os
+    from lhpc.core import procident
+    live = procident.proc_identity(os.getpid())
+    assert live is not None
+    rec = dict(live); rec["exec"] = "env"; rec["argv_fp"] = "0" * 64; rec["argv_len"] = 1
+    assert procident.identity_matches(rec, os.getpid()) is True          # exec changed, same proc
+    reused = dict(live); reused["starttime"] = int(live["starttime"]) + 7
+    assert procident.identity_matches(reused, os.getpid()) is False       # different start = reuse

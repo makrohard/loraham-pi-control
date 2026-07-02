@@ -76,10 +76,11 @@ def identity_complete(ident) -> bool:
 
 
 def identity_matches(recorded: dict, pid: int) -> bool:
-    """True if `pid` is alive and STILL the process described by `recorded` — start
-    time must match (the strongest reuse detector); exec/argv fingerprint must match
-    when they were recorded. A reused PID fails this even though the number exists.
-    An INCOMPLETE record is rejected outright (never a partial-identity match)."""
+    """True if `pid` is alive and STILL the process described by `recorded`. START TIME is the
+    reuse-proof identity (a recycled pid gets a NEW start time), so a reused PID fails this even
+    though the number exists. exec/argv are NOT required to match: a process may legitimately exec
+    into a different image after launch (e.g. a `#!/usr/bin/env bash` script: env → bash), and the
+    matching start time already proves it is the same process. An INCOMPLETE record is rejected."""
     if not identity_complete(recorded):
         return False
     if not proc_alive(pid):
@@ -87,10 +88,4 @@ def identity_matches(recorded: dict, pid: int) -> bool:
     now = proc_identity(pid)
     if now is None:
         return False
-    if int(recorded.get("starttime", -1)) != now["starttime"]:
-        return False
-    for key in ("exec", "argv_fp"):
-        want = recorded.get(key)
-        if want and want != now[key]:
-            return False
-    return True
+    return int(recorded.get("starttime", -1)) == now["starttime"]

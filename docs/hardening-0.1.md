@@ -47,7 +47,7 @@ are the current rules.
 
 ## Truthful outcomes & readiness
 - `start` returns failure unless every required component reached a verified healthy
-  state. A daemon `--radio both` verifies BOTH 433 and 868 CONF sockets; a launch
+  state. A daemon start verifies each requested band's CONF socket; a launch
   that never exposes its socket is a failure, not a warning. A dependent is not
   started when daemon readiness failed. `update` aggregates and reports nonzero on
   partial failure. CLI exit status, web flash and summaries agree. Tests:

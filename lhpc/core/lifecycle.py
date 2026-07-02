@@ -57,12 +57,14 @@ class StartLaunch:
 
 @dataclass
 class PostStartSchedule:
-    """Result of SCHEDULING an OPTIONAL (detached) post-start. Non-gating, but every
-    scheduling-stage failure (render / launcher write / log+dir setup / spawn / runtime
-    containment) is reported via `detail` rather than swallowed."""
+    """Result of SCHEDULING an OPTIONAL (detached) post-start. An ordinary transport failure
+    (render / launcher write / log+dir setup / spawn / runtime containment) is NON-gating and
+    reported via `detail`. `unverified=True` marks a lifecycle-INTEGRITY failure — a spawned runner
+    we could neither own nor prove stopped — which DOES gate the main VERIFIED result."""
 
     ok: bool
     detail: str = ""
+    unverified: bool = False
 
 
 @dataclass
@@ -119,6 +121,31 @@ class Lifecycle:
             return proc.pid
         finally:
             log.close()
+
+    def _spawn_post_runner(self, argv: list[str], log_path: Path) -> tuple[int, int]:
+        """Spawn a detached post-start runner behind an ARM GATE, NO shell: it inherits a pipe on
+        stdin and does NO post-step side effect until the controller writes the arm byte (only after
+        its ownership record is durable). Returns (pid, arm_write_fd) — the caller MUST write b'1' to
+        arm, or close the fd to leave it UNARMED (the runner then exits without any post step)."""
+        r, w = os.pipe()
+        try:
+            log = runtime_fs.open_log_append(self.paths, log_path)
+            try:
+                proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, stdin=r,
+                                        start_new_session=True)
+            finally:
+                log.close()
+        except BaseException:
+            os.close(w)
+            raise
+        finally:
+            os.close(r)                    # parent keeps ONLY the arm (write) end
+        return proc.pid, w
+
+    def _arm(self, fd: int) -> bool:
+        """Release the runner's arm gate with EXACTLY one byte. True ONLY on a complete 1-byte
+        write; a short/zero write returns False and is never treated as armed."""
+        return os.write(fd, b"1") == 1
 
     # -- locations ---------------------------------------------------------
 
@@ -214,6 +241,15 @@ class Lifecycle:
         except (commands.CommandError, validators.ValidationError) as exc:
             return StartLaunch(False, str(log), f"invalid configuration: {exc}")
         env = {**os.environ, **extra} if extra else None
+        # PREFLIGHT: cancel/clean any stale post-start runner bound to a PRIOR launch of this
+        # component+band BEFORE launching a new one (clean verified-ceased records, cancel live
+        # stale runners). A runner that can't be verified stopped BLOCKS the new launch with typed
+        # evidence — a stale runner must never survive into the new launch.
+        pre_notes, pre_unverified = self._cancel_post_runners(comp, band)
+        if pre_unverified:
+            return StartLaunch(False, str(log),
+                               "a prior post-start runner could not be verified stopped — resolve "
+                               "it before starting (" + "; ".join(pre_notes) + ")")
         try:
             # The default spawn opens the start log via the anchored runtime_fs; a
             # symlinked log leaf/parent raises PathContainmentError, also typed here.
@@ -332,9 +368,11 @@ class Lifecycle:
             # Identity unreadable: only "ceased" if PROVABLY gone — a transient /proc
             # read failure is never treated as proof of cessation.
             return self._proc_ceased(pid)
-        # FULL identity match required (a reused pid differs in start time; an unrelated
-        # process differs in exec/argv). ANY mismatch: do NOT signal, NOT proven ceased.
-        for k in ("starttime", "pgid", "sid", "exec", "argv_fp"):
+        # STABLE identity: START TIME (reuse-proof) + session/group leadership. A legitimate later
+        # exec (e.g. `#!/usr/bin/env bash`: env → bash) changes exec/argv but NOT start time, so
+        # those are advisory — a matching start time already proves it is our launched process.
+        # A changed start time / pgid / sid means it is NOT ours: do NOT signal, NOT proven ceased.
+        for k in ("starttime", "pgid", "sid"):
             if str(now.get(k)) != str(launch_ident.get(k)):
                 return False
         try:
@@ -349,6 +387,33 @@ class Lifecycle:
             time.sleep(0.1)
         return self._proc_ceased(pid)           # True ONLY if cessation is PROVEN
 
+    def _verified_main_record(self, comp_id: str, band: str):
+        """The currently VERIFIED main (role="") ownership record for this component+band, or None.
+        A detached post-runner is bound to this exact launch so it can never act for a later one."""
+        for rec in self.owned_records(comp_id, band, role=""):
+            ok, _why = self.verify_owned(rec)
+            if ok:
+                return rec
+        return None
+
+    def _binding_for(self, comp_id: str, band: str) -> dict | None:
+        """Strictly-validated binding to the currently VERIFIED main launch, or None: a non-empty
+        launch id and POSITIVE, non-boolean integer pid/starttime/pgid/sid."""
+        main = self._verified_main_record(comp_id, band)
+        if main is None:
+            return None
+        lid = main.get("launch_id")
+        if not isinstance(lid, str) or not lid:
+            return None
+        out = {"main_launch_id": lid}
+        for src, dst in (("pid", "main_pid"), ("starttime", "main_starttime"),
+                         ("pgid", "main_pgid"), ("sid", "main_sid")):
+            v = main.get(src)
+            if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+                return None
+            out[dst] = v
+        return out
+
     def spawn_post_start(self, stack: Stack, comp: Component,
                          params: dict | None = None, band: str = "") -> PostStartSchedule:
         """Schedule typed OPTIONAL post-start steps detached, with NO shell: a self-
@@ -360,9 +425,16 @@ class Lifecycle:
             return PostStartSchedule(True, "")
         op = self.config.operator
         runtime, src = str(self.paths.runtime_root), str(self.source_dir(comp))
+        # A detached runner MUST be bound to a currently verified main launch — never BINDING=None.
+        # No verified main record -> spawn nothing (no launcher) and return a typed integrity
+        # failure that gates the main VERIFIED result.
+        binding = self._binding_for(comp.id, band)
+        if binding is None:
+            return PostStartSchedule(False, "no verified main launch to bind the post-start runner "
+                                     "to — refusing to spawn an unbound runner", unverified=True)
         try:
             script = commands.render_post_launcher(comp.post_steps, comp, params, op,
-                                                   runtime, src, band)
+                                                   runtime, src, band, binding=binding, gated=True)
         except (commands.CommandError, validators.ValidationError) as exc:
             return PostStartSchedule(False, f"launcher render failed: {exc}")
         # Unique runtime-owned launcher so concurrent post-start actions never
@@ -373,13 +445,48 @@ class Lifecycle:
             runtime_fs.write_launcher(self.paths, launcher, script)
         except (OSError, PathContainmentError) as exc:
             return PostStartSchedule(False, f"launcher write failed: {exc}")
+        # ARM GATE: spawn the runner BLOCKED on a controller-owned pipe. It performs NO post-step
+        # side effect until we capture its identity, durably write its ownership record, and ARM it.
         try:
             log = self.paths.under("logs", f"post-{uid}.log")   # may raise on symlinked logs/
             runtime_fs.ensure_dir(self.paths, self.logs_dir())
-            self._spawn(["python3", str(launcher)], log)
+            pid, arm = self._spawn_post_runner(["python3", str(launcher)], log)
         except (OSError, PathContainmentError) as exc:
             return PostStartSchedule(False, f"launcher spawn/log setup failed: {exc}")
-        return PostStartSchedule(True, "scheduled")
+        ident = self._capture_identity(pid)
+        if self.record_launch(stack, comp, pid, band, ident=ident, role="post", binding=binding):
+            # Record durable -> ARM the runner with exactly one byte (it may now act for THIS launch
+            # only). An arming FAILURE (exception OR a short/zero write) must NEVER be reported as
+            # "scheduled": close the gate and unwind via the identity-safe SIGTERM cessation
+            # machinery, dropping the just-created record only once cessation is proven.
+            try:
+                armed = self._arm(arm)
+            except OSError:
+                armed = False
+            finally:
+                try:
+                    os.close(arm)
+                except OSError:
+                    pass
+            if armed:
+                return PostStartSchedule(True, "scheduled")
+            notes, unverified = self._cancel_post_runners(comp, band)
+            if unverified:
+                return PostStartSchedule(False, "post-start runner could not be armed AND could not "
+                                         "be verified stopped/removed — ownership retained ("
+                                         + "; ".join(notes) + ")", unverified=True)
+            return PostStartSchedule(False, "post-start runner could not be armed — terminated, no "
+                                     "side effect (" + "; ".join(notes) + ")")
+        # Record NOT durable -> do NOT arm: closing the gate makes the runner exit having done
+        # NOTHING (no exec/--setcall). Prove cessation via the ACTUAL terminate result:
+        #  * cessation PROVED     -> typed SCHEDULING failure, no runner left;
+        #  * cessation NOT proved -> typed UNVERIFIED lifecycle-integrity failure (gates VERIFIED).
+        os.close(arm)
+        if self._terminate_unobserved(pid, ident):
+            return PostStartSchedule(False, "post-start runner could not be owned — terminated "
+                                     "(never armed, no side effect)")
+        return PostStartSchedule(False, "post-start runner could not be owned AND could not be "
+                                 "proven stopped", unverified=True)
 
     @staticmethod
     def _launch_uid(comp_id: str) -> str:
@@ -459,7 +566,8 @@ class Lifecycle:
         return ident
 
     def record_launch(self, stack: Stack, comp: Component, pid: int | None,
-                      band: str = "", ident: dict | None = None) -> bool:
+                      band: str = "", ident: dict | None = None, role: str = "",
+                      binding: dict | None = None) -> bool:
         """Atomically persist an LHPC-owned launch with its full process identity, via
         the safe runtime FS (no symlink-leaf, fsync'd). Returns True ONLY when the
         record was durably written. A start must NOT be reported owned/verified unless
@@ -479,9 +587,13 @@ class Lifecycle:
         # Persist the record. The WRITE is the mandatory guarantee (P0.2). A record
         # whose identity later fails to verify is treated as stale by `stop`/
         # `verify_owned`, never falsely owned.
-        rec = {"launch_id": f"{comp.id}__{band or 'x'}__{pid}", "stack": stack.id,
-               "component": comp.id, "band": band or "", "pid": pid,
-               "launched_at": int(time.time()), **(ident or {})}
+        # A post-start RUNNER is recorded under the SAME component (so a component stop cancels it)
+        # but tagged role="post" and given a role-scoped launch_id, so it never collides with the
+        # main record and is filtered out of status (the main component never looks duplicated).
+        tag = f"{role}-" if role else ""
+        rec = {"launch_id": f"{comp.id}__{band or 'x'}__{tag}{pid}", "stack": stack.id,
+               "component": comp.id, "band": band or "", "pid": pid, "role": role,
+               "launched_at": int(time.time()), **(binding or {}), **(ident or {})}
         path = self._owned_dir() / f"{rec['launch_id']}.json"
         try:
             runtime_fs.atomic_write(self.paths, path, json.dumps(rec), 0o600)
@@ -489,9 +601,12 @@ class Lifecycle:
         except (OSError, PathContainmentError):
             return False                 # could not persist ownership -> not owned
 
-    def owned_records(self, comp_id: str, band: str | None = None) -> list[dict]:
-        """Records for a component, optionally scoped to a band (a `both` instance
-        matches any band request)."""
+    def owned_records(self, comp_id: str, band: str | None = None,
+                      role: str | None = "") -> list[dict]:
+        """Records for a component, optionally scoped to a band (a `both` instance matches any
+        band request). `role` selects the record class: "" = MAIN launches (default — so status and
+        the ordinary stop never see auxiliary runners), "post" = detached post-start runners,
+        None = every role."""
         out = []
         d = self._owned_dir()
         # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping owned dir
@@ -510,6 +625,8 @@ class Lifecycle:
             except (OSError, ValueError):
                 continue
             if rec.get("component") != comp_id:
+                continue
+            if role is not None and rec.get("role", "") != role:
                 continue
             if band is not None and rec.get("band") not in (band, "both", ""):
                 continue
@@ -554,7 +671,12 @@ class Lifecycle:
         live = self._proc_identity(pid)
         if live is None:
             return False, "no /proc identity"
-        for k in ("starttime", "pgid", "sid", "exec", "argv_fp"):
+        # START TIME is the reuse-proof identity (a recycled pid gets a NEW start time), and an
+        # LHPC-launched session leader has pgid == sid == pid. exec/argv are NOT part of the hard
+        # identity: a process may legitimately exec into a different image AFTER launch (e.g. a
+        # `#!/usr/bin/env bash` script goes env → bash), which a matching start time already proves
+        # is the SAME process — requiring exec/argv here wrongly disowns it and blocks its stop.
+        for k in ("starttime", "pgid", "sid"):
             if str(rec.get(k)) != str(live.get(k)):
                 return False, f"{k} mismatch (stale/reused pid)"
         if live["pgid"] == self._controller_pgid():
@@ -601,6 +723,41 @@ class Lifecycle:
                 lingering.append(e.address)
         return (not lingering), lingering
 
+    def _cancel_post_runners(self, comp: Component, band: str | None) -> tuple[list, bool]:
+        """Stop every detached post-start runner owned for this component (identity-verified SIGTERM,
+        no SIGKILL, bounded verified cessation). Returns (notes, unverified) — `unverified` True when
+        a still-live runner could NOT be proven stopped (so the caller reports a non-success stop and
+        never lets an old runner survive to mutate a subsequent launch)."""
+        notes, unverified = [], False
+        for rec in self.owned_records(comp.id, band, role="post"):
+            ok, why = self.verify_owned(rec)
+            if not ok:
+                if self._original_ceased(rec):
+                    # Runner already ended: harmless, BUT failing to remove its stale record is a
+                    # typed UNVERIFIED (same as a lingering main record).
+                    if self._remove_record(rec):
+                        notes.append(f"post-runner pid {rec['pid']}: already ceased — record dropped")
+                    else:
+                        notes.append(f"post-runner pid {rec['pid']}: ceased but stale record could "
+                                     "NOT be removed")
+                        unverified = True
+                else:
+                    notes.append(f"post-runner pid {rec['pid']}: unverified ({why}) — not signalled")
+                    unverified = True
+                continue
+            try:
+                os.killpg(rec["pgid"], signal.SIGTERM)
+            except OSError as exc:
+                notes.append(f"post-runner pid {rec['pid']}: signal failed: {exc}")
+                unverified = True
+                continue
+            if self._wait_ceased(rec) and self._remove_record(rec):
+                notes.append(f"post-runner pid {rec['pid']}: cancelled")
+            else:
+                notes.append(f"post-runner pid {rec['pid']}: SIGTERM sent but NOT verified stopped")
+                unverified = True
+        return notes, unverified
+
     def stop(self, comp: Component, band: str | None = None) -> CompResult:
         """Stop the LHPC-owned launch(es) for this component (optionally one band),
         returning a TYPED outcome.
@@ -610,9 +767,21 @@ class Lifecycle:
         signalled (MANUAL_REQUIRED). A verified stop requires both process cessation
         AND disappearance of every `ready=true` endpoint — a lingering readiness
         endpoint yields ENDPOINT_STILL_PRESENT (record retained, not a green stop)."""
+        # FIRST cancel any detached post-start RUNNER bound to this component — it must never
+        # outlive the component (an old `--setcall` retry could hit a freshly restarted node).
+        # Identity-verified SIGTERM only, no SIGKILL, bounded verified cessation.
+        post_notes, post_unverified = self._cancel_post_runners(comp, band)
+        # If a live runner could NOT be verified stopped/removed, DO NOT touch the main component:
+        # never orphan the main behind a rogue runner. Typed non-success, all evidence retained, no
+        # markers cleared (the caller leaves band/interactive markers intact on a non-success stop).
+        if post_unverified:
+            return CompResult(component=comp.id, action="stop", outcome=Outcome.UNVERIFIED,
+                summary="post-start runner(s) could NOT be verified stopped — main NOT signalled; "
+                        "ownership retained", details=tuple(post_notes))
+
         def result(outcome, summary, killed=(), details=()):
             return CompResult(component=comp.id, action="stop", outcome=outcome,
-                              summary=summary, details=tuple(details),
+                              summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
         recs = self.owned_records(comp.id, band)
         if not recs:

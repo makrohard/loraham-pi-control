@@ -339,6 +339,8 @@ class Stack:
     summary: str = ""
     components: tuple[Component, ...] = ()
     main: str = ""               # id of the primary component (the app itself)
+    operator_box: bool = True    # show the shared Operator (callsign/locator) box on the config
+                                 # page; false when the stack edits its callsign in its own config
 
     def component(self, component_id: str) -> Component | None:
         for c in self.components:

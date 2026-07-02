@@ -72,10 +72,12 @@ def test_config_view_splits_basic_advanced_and_operator(tmp_path):
     # are chosen on confirm:start. The page carries the live tuning settings instead.
     assert view["components"] == []
     assert "live_settings" in view
-    # a stack that substitutes {callsign} (iGate) DOES expose the operator section
-    # and still splits its run params into basic/advanced.
+    # a stack that still shows the shared Operator box (voice substitutes {callsign}).
+    assert svc.config_view("voice")["operator"] is not None
+    # iGate now edits its callsign in its own config -> no shared Operator box, but its run
+    # params still split into basic/advanced.
     igate = svc.config_view("igate")
-    assert igate["operator"] is not None
+    assert igate["operator"] is None
     params = igate["components"][0]["params"]
     assert any(p.advanced for p in params) and any(not p.advanced for p in params)
 
@@ -86,9 +88,8 @@ def test_save_config_writes_operator_and_params(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
     r = svc.save_config("igate", {"tx_freq": "434.000"}, callsign="oe1abc", locator="JN88")
     assert r.ok
-    view = svc.config_view("igate")
-    assert view["operator"]["callsign"] == "OE1ABC"   # normalised upper-case
-    assert view["values"]["tx_freq"] == "434.000"
+    assert svc.config().operator.callsign == "OE1ABC"   # global operator saved (normalised upper)
+    assert svc.config_view("igate")["values"]["tx_freq"] == "434.000"
 
 
 def test_save_warns_apply_workflow_and_reset(tmp_path):
