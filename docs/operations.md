@@ -67,7 +67,7 @@ radio params the daemon does not echo are reported SENT, not confirmed. It takes
 lifecycle/radio lock (re-entrant with an in-progress Start; a contended band returns a typed busy
 result); a failure leaves the saved profile persisted.
 
-**Start-confirm** shows one panel per band the launch touches (two for `--radio both`), with
+**Start-confirm** shows one panel per band the launch touches (two when both bands are requested), with
 band-scoped `dp_<band>_<PARAM>` fields applied for **that start only** (never persisted). Every
 `dp_*` field is strictly parsed and validated (band/param/value) before any launch or CONF `SET`; a
 malformed, duplicated, unknown, wrong-band or invalid field fails the start. Blank/absent = no

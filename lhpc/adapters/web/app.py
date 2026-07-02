@@ -196,7 +196,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             snapshot=snapshot,
             summary=summarize(snapshot),
             groups=groups,
-            observed_conflicts=[c for c in snapshot.conflicts if c.observed],
+            observed_conflicts=service.observed_conflicts(snapshot),   # band-aware (no false 433/868)
         )
 
     @app.get("/stacks/<stack_id>")
@@ -222,7 +222,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # GET pages do NO network: freshness ("update available?") is an explicit
             # action (`lhpc update --check`), never a page-load git ls-remote.
             update_status="unknown",
-            conflicts=[c for c in snapshot.conflicts
+            conflicts=[c for c in service.observed_conflicts(snapshot)   # band-aware (no false 433/868)
                        if any(h in member_ids for h in c.holders)],
             system_deps=service.system_deps(stack_id),
             # Components installed but whose compiled binary is missing (e.g. dropped

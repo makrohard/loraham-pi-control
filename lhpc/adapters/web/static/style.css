@@ -142,6 +142,8 @@ form button { font: inherit; padding: .3rem .9rem; border-radius: 6px; border: 1
 .iface { font-size: .8rem; margin-left: .4rem; padding: .05rem .4rem; border-radius: 6px;
          background: var(--bg); border: 1px solid var(--line); }
 a.iface { text-decoration: none; color: var(--brand); }
+/* On the dashboard running list, each endpoint sits on its own indented line. */
+.complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
                    padding: .1rem .5rem; cursor: pointer; }

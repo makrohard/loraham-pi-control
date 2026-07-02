@@ -167,6 +167,18 @@ def path_component(value, *, field: str = "id") -> str:
     return s
 
 
+def aprs_symbol(value, *, field: str = "value") -> str:
+    """A single APRS symbol character — one printable ASCII glyph (0x21–0x7E), e.g. `&` (I-gate),
+    `#` (digi), `R`. APRS symbols are intentionally punctuation, so the generic safe-text rules do
+    not apply. Blank is allowed (means: leave the source default). The daemon uses the first char."""
+    s = str(value).strip()
+    if s == "":
+        return ""
+    if len(s) != 1 or not (0x21 <= ord(s) <= 0x7E):
+        raise ValidationError(f"{field}: must be a single printable APRS symbol character")
+    return s
+
+
 # Named validators selectable from the manifest via a param's `validator` field.
 _NAMED = {
     "callsign": callsign,
@@ -177,6 +189,7 @@ _NAMED = {
     "band": band,
     "node": node_name,
     "path": path_value,
+    "aprs_symbol": aprs_symbol,
     "text": safe_text,
 }
 

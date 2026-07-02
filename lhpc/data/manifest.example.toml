@@ -180,6 +180,7 @@ id = "chat"
 name = "LoRaHAM Chat"
 summary = "Interactive daemon-backed APRS/chat client (loraham_chat) on 433."
 main = "loraham-chat"
+operator_box = false   # callsign lives in the app's own config file (CALL); no locator used
 
   [[stack.component]]
   id = "loraham-chat"
@@ -220,7 +221,7 @@ main = "loraham-chat"
       validator = "callsign"
       key = "CALL"
       default = "{callsign}"
-      label = "Callsign (CALL)"
+      label = "Callsign"
       [[stack.component.config_file.param]]
       name = "tx_freq"
       validator = "freq"
@@ -255,6 +256,7 @@ id = "igate"
 name = "LoRaHAM iGate"
 summary = "APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
 main = "loraham-igate"
+operator_box = false   # callsign is the iGate's own -c param; position is lat/lon, no locator
 
   [[stack.component]]
   id = "loraham-igate"
@@ -290,7 +292,7 @@ main = "loraham-igate"
     kind = "str"
     arg = "-c"
     default = "{callsign}"
-    label = "iGate callsign (with -SSID, e.g. N0CALL-10)"
+    label = "Callsign (e.g. N0CALL-10)"
     [[stack.component.param]]
     name = "tx_freq"
     validator = "freq"
@@ -320,8 +322,9 @@ main = "loraham-igate"
     [[stack.component.param]]
     name = "symbol"
     kind = "str"
+    validator = "aprs_symbol"
     arg = "-S"
-    default = ""
+    default = "&"
     label = "APRS symbol char"
     [[stack.component.param]]
     name = "digipeat"
@@ -366,7 +369,7 @@ main = "loraham-igate"
     name = "filter_radius"
     kind = "str"
     arg = "-R"
-    default = ""
+    default = "50"
     label = "APRS-IS filter radius (km)"
     advanced = true
     [[stack.component.param]]
@@ -701,8 +704,8 @@ main = "loraham-kiss-tnc"
   optional = true
   depends_on = ["loraham-kiss-tnc"]
   start_order = 2
-  run = "loraham_kiss_tnc/start-serial-kiss.sh"
-  note = "Optional. Exposes PTY /tmp/loraham_kiss; needs socat."
+  run_argv = ["socat", "-d", "-d", "PTY,link=/tmp/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:8001"]
+  note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes /tmp/loraham_kiss. Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
@@ -759,7 +762,7 @@ main = "meshtastic"
   post_steps = [
     { kind = "delay", seconds = 12 },
     { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/../.local/bin/meshtastic"], optional = true },
-    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], optional = true },
+    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/../.local/bin/meshtastic"], optional = true },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). You are already in the spi+gpio groups, so lhpc runs/stops it WITHOUT root. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
@@ -1085,15 +1088,14 @@ main = "meshcom-qemu"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
-  # MeshCom's callsign is a NODE setting applied over the net-console (12323) and
-  # stored in flash/NVS (survives restarts). After the console comes up we send
-  # `--setcall`; skipped if the callsign is unset/N0CALL.
-  post_start = 'C="{mc_callsign}"; case "$C" in ""|N0CALL) exit 0;; esac; for i in $(seq 1 90); do nc -z 127.0.0.1 12323 2>/dev/null && break; sleep 2; done; sleep 3; printf -- "--setcall %s\n" "$C" | nc -w2 127.0.0.1 12323'
-  # Wait for the QEMU net-console, then push the callsign over it — no nc/shell.
+  # MeshCom's callsign is a NODE setting applied over the net-console (12323) and stored in
+  # flash/NVS (survives restarts). Wait for the port, then push `--setcall` — no nc/shell. QEMU
+  # opens 12323 almost immediately, but the firmware needs ~a minute to boot before it accepts a
+  # command, so re-send over a window until it lands (idempotent). `skip_if_param` sends NO
+  # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    { kind = "delay", seconds = 3 },
-    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n" },
+    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", repeat = 14, interval = 12, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the

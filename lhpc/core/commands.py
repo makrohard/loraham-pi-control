@@ -17,6 +17,7 @@ change the executable/cwd/env, or become shell syntax. Tokens are executed with
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shlex
@@ -193,12 +194,71 @@ def display_command(comp, op, runtime: str, source: str, band: str = "") -> str:
 
 
 # Steps a detached post-start launcher understands (all shell-free).
+def _post_repeat(v) -> int:
+    """A tcp_send `repeat`: a GENUINE integer >= 1. Rejects booleans and non-integral floats such
+    as 1.5 (fail-closed); an all-digit string is accepted."""
+    if isinstance(v, bool):
+        raise CommandError(f"tcp_send: repeat must be an integer, not a boolean ({v!r})")
+    if isinstance(v, int):
+        n = v
+    elif isinstance(v, str) and re.fullmatch(r"\+?[0-9]+", v.strip()):
+        n = int(v)
+    else:
+        raise CommandError(f"tcp_send: repeat must be an integer >= 1 (got {v!r})")
+    if n < 1:
+        raise CommandError(f"tcp_send: repeat must be >= 1 (got {n})")
+    return n
+
+
+def _post_interval(v) -> float:
+    """A tcp_send `interval`: a finite, non-negative number. Rejects booleans."""
+    if isinstance(v, bool):
+        raise CommandError(f"tcp_send: interval must be a number, not a boolean ({v!r})")
+    if isinstance(v, (int, float)):
+        f = float(v)
+    elif isinstance(v, str):
+        try:
+            f = float(v)
+        except ValueError:
+            raise CommandError(f"tcp_send: interval must be a number (got {v!r})")
+    else:
+        raise CommandError(f"tcp_send: interval must be a number (got {v!r})")
+    if not (math.isfinite(f) and f >= 0):
+        raise CommandError(f"tcp_send: interval must be finite and >= 0 (got {v!r})")
+    return f
+
+
 def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
-                         band: str = "") -> str:
-    """Serialize typed post-start steps into a self-contained Python launcher that
-    runs them detached with no shell: delay / exec(argv) / tcp_wait / tcp_send."""
+                         band: str = "", binding: dict | None = None) -> str:
+    """Serialize typed post-start steps into a self-contained Python launcher that runs them
+    detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
+    time + session/group) ties the runner to one exact main launch — it re-checks that main before
+    every side-effectful step and stops if it ceased/was replaced."""
+    if binding is not None:
+        if not isinstance(binding, dict) or not all(
+                isinstance(binding.get(k), int) for k in
+                ("main_pid", "main_starttime", "main_pgid", "main_sid")):
+            raise CommandError("post-start binding must carry integer main pid/starttime/pgid/sid")
     resolved = []
     for step in (steps or ()):
+        # Declarative placeholder guard (no shell): skip this step entirely when the named param
+        # resolves to a placeholder value — e.g. MeshCom sends NO `--setcall` for an empty / N0CALL
+        # callsign. The raw resolved value (before validation) is compared, so an empty value that
+        # a validator would reject still cleanly skips rather than failing the render.
+        guard = step.get("skip_if_param")
+        if guard is not None:
+            gp = {p.name: p for p in comp.run_params}.get(guard)
+            if gp is None:
+                raise CommandError(f"post-step skip_if_param references unknown run param {guard!r}")
+            sv = step.get("skip_values") or []
+            if (not isinstance(sv, (list, tuple))
+                    or any(isinstance(v, (list, tuple, dict)) for v in sv)):
+                raise CommandError("post-step skip_values must be a list of scalar strings")
+            graw = str((params or {}).get(guard, gp.default))
+            graw = (graw.replace("{callsign}", op.callsign or "N0CALL")
+                        .replace("{locator}", op.locator or "")).strip()
+            if graw in [str(v) for v in sv]:
+                continue
         kind = step.get("kind")
         if kind == "delay":
             resolved.append({"kind": "delay", "seconds": float(step.get("seconds", 0))})
@@ -220,12 +280,18 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             if kind == "tcp_wait":
                 d["timeout"] = float(step.get("timeout", 60))
             else:
-                d["data"] = expand_argv(["{x}"], comp, params, op, runtime, source, band) \
-                    if False else _post_data(step.get("data", ""), comp, params, op, runtime, source, band)
+                d["data"] = _post_data(step.get("data", ""), comp, params, op, runtime, source, band)
+                # A slow guest (e.g. QEMU firmware) may open its console port long before it is
+                # ready to process a command. `repeat`/`interval` re-send the line until it lands
+                # (idempotent settings like --setcall); default = send once. Malformed retry
+                # metadata is a typed render failure — fail-closed, never a silent clamp.
+                d["repeat"] = _post_repeat(step.get("repeat", 1))
+                d["interval"] = _post_interval(step.get("interval", 0))
             resolved.append(d)
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
-    return _POST_RUNNER.replace("__STEPS__", repr(resolved))
+    return (_POST_RUNNER.replace("__STEPS__", repr(resolved))
+            .replace("__BINDING__", repr(binding)))
 
 
 def _post_data(template: str, comp, params, op, runtime, source, band) -> str:
@@ -240,12 +306,32 @@ def _post_data(template: str, comp, params, op, runtime, source, band) -> str:
 _POST_RUNNER = '''\
 import socket, sys, time, subprocess
 STEPS = __STEPS__
+BINDING = __BINDING__
+
+def _main_ok():
+    # The runner is BOUND to one exact main-process launch: before any side-effectful step it
+    # re-verifies that main pid still has the SAME start time + session/group. If the main has
+    # ceased or been replaced (a later launch reuses the pid with a new start time), the runner
+    # stops without sending — an old payload must never reach a newly restarted main.
+    if not BINDING:
+        return True
+    try:
+        with open("/proc/%d/stat" % BINDING["main_pid"], "rb") as f:
+            rest = f.read().rsplit(b") ", 1)[1].split()
+        pgrp, session, starttime = int(rest[2]), int(rest[3]), int(rest[19])
+    except (OSError, ValueError, IndexError):
+        return False
+    return (starttime == BINDING["main_starttime"] and session == BINDING["main_sid"]
+            and pgrp == BINDING["main_pgid"])
+
 for s in STEPS:
     k = s["kind"]
     try:
         if k == "delay":
             time.sleep(s["seconds"])
         elif k == "exec":
+            if not _main_ok():
+                break                   # bound main gone/replaced -> no further side effects
             rc = subprocess.run(s["argv"], shell=False, timeout=120,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
             if rc != 0 and not s.get("optional", True):
@@ -263,8 +349,28 @@ for s in STEPS:
             if not ok and not s.get("optional", True):
                 sys.exit(1)             # a required endpoint that never appears fails
         elif k == "tcp_send":
-            with socket.create_connection((s["host"], s["port"]), 2) as c:
-                c.sendall(s["data"].encode())
+            reps = s.get("repeat", 1)
+            sent = 0
+            for i in range(reps):
+                if not _main_ok():
+                    sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop (no send)\\n"
+                                     % (s["host"], s["port"]))
+                    sys.exit(0)          # exit WITHOUT sending — never hit a restarted main
+                try:
+                    with socket.create_connection((s["host"], s["port"]), 2) as c:
+                        c.sendall(s["data"].encode())
+                    sent += 1                # one complete connect + sendall succeeded
+                except OSError as e:
+                    sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
+                                     % (s["host"], s["port"], i + 1, reps, e))
+                if i + 1 < reps and s.get("interval", 0):
+                    time.sleep(s["interval"])
+            # Truthful: a REQUIRED send fails only if EVERY attempt failed (one success is enough,
+            # even if later idempotent repeats fail). An OPTIONAL send never gates the start.
+            if sent == 0 and not s.get("optional", True):
+                sys.stderr.write("tcp_send %s:%s: all %d attempt(s) failed\\n"
+                                 % (s["host"], s["port"], reps))
+                sys.exit(1)
     except Exception:
         if not s.get("optional", True):
             sys.exit(1)
