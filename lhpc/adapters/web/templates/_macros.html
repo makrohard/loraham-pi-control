@@ -14,6 +14,7 @@
     <span class="grouplabel">Source</span>
     {% if not installed %}{{ action_btn('install', stack_id, 'Install') }}{% endif %}
     {% if installed %}{{ action_btn('update', stack_id, 'Update') }}{{ action_btn('uninstall', stack_id, 'Uninstall') }}{% endif %}
+    {{ action_btn('clean', stack_id, 'Clean all') }}
   </div>
 {% endif %}
 {% if installed %}

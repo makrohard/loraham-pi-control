@@ -221,25 +221,27 @@ def test_load_config_ignores_symlinked_local_toml(tmp_path):
     assert cfg.diagnostics                          # surfaced as a diagnostic, not a crash
 
 
-def test_load_profiles_skips_symlinked_profile(tmp_path):
+def test_known_working_store_skips_symlinked_leaf(tmp_path):
     import os
-    from lhpc.core.profiles import load_profiles, profiles_dir
+    from lhpc.core import known_working
     from lhpc.core.paths import Paths
     paths = Paths(runtime_root=tmp_path)
-    d = profiles_dir(paths); d.mkdir(parents=True)
-    outside = tmp_path / "evil.toml"; outside.write_text('component_id = "x"\n')
-    os.symlink(outside, d / "x.toml")               # symlinked profile leaf
-    assert load_profiles(paths) == {}               # contributes nothing
+    sp = known_working.store_path(paths, "s"); sp.parent.mkdir(parents=True)
+    outside = tmp_path / "evil.json"
+    outside.write_text('{"version": 1, "compositions": []}')
+    os.symlink(outside, sp)                         # symlinked store leaf
+    assert known_working.load(paths, "s") == []     # contributes nothing
 
 
-def test_load_profiles_symlinked_dir_is_empty(tmp_path):
+def test_known_working_symlinked_dir_is_empty(tmp_path):
     import os
-    from lhpc.core.profiles import load_profiles
+    from lhpc.core import known_working
     from lhpc.core.paths import Paths
     rt = tmp_path / "rt"; rt.mkdir()
-    outside = tmp_path / "outside"; outside.mkdir(); (outside / "p.toml").write_text('component_id="y"\n')
-    os.symlink(outside, rt / "profiles")            # profiles/ -> outside
-    assert load_profiles(Paths(runtime_root=rt)) == {}
+    outside = tmp_path / "outside"; outside.mkdir()
+    (outside / "known-working").mkdir()
+    os.symlink(outside, rt / "profiles")            # profiles/ -> outside the runtime root
+    assert known_working.load(Paths(runtime_root=rt), "s") == []
 
 
 # --- update_stack_config: preserve manual typed scalars during daemon-param saves ----------

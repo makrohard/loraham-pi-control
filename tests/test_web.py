@@ -17,10 +17,14 @@ _MUTATING = {"start", "stop", "build", "update", "test",
              "uninstall", "daemon_set"}
 
 
-def _real_app(tmp_path, manifest=None):
-    """App backed by a fake-system ControllerService (daemon unreachable)."""
+def _real_app(tmp_path, manifest=None, cmdlines=None, commands=None):
+    """App backed by a fake-system ControllerService (daemon unreachable). `cmdlines`
+    fakes running processes ({pid: argv}); `commands` fakes exact subprocess argv results
+    (e.g. the source-identity git queries)."""
     def factory():
-        return ControllerService(manifest_path=manifest, system=FakeSystem().system,
+        return ControllerService(manifest_path=manifest,
+                                 system=FakeSystem(cmdlines_data=cmdlines or {},
+                                                   commands=commands or {}).system,
                                  paths=Paths(runtime_root=tmp_path))
     return create_app(service_factory=factory).test_client()
 
@@ -310,7 +314,8 @@ def test_install_confirm_offers_source_versions(tmp_path):
     c = _real_app(tmp_path)
     token = _csrf(c, "/stacks/daemon")
     cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "daemon"}).get_data(as_text=True)
-    assert 'name="source"' in cf and "pinned known-good" in cf and "latest dev" in cf
+    assert 'name="source"' in cf and "Known working" in cf and "Development" in cf \
+        and "Latest stable" in cf
 
 
 def test_apps_page_shows_interactive_command_with_copy(tmp_path):
@@ -1289,3 +1294,188 @@ def test_self_update_journal_corrupt_renders_recovery_message(tmp_path, monkeypa
     tok = _csrf(c, "/self-update")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
     assert "migration journal is corrupt" in body and "recovery needed" in body
+
+
+# --- M4: "Confirm this stack as working" (operator-confirmed known-working) ------------------
+
+def _seed_kw_offer(tmp_path, commit="a" * 40):
+    import time as _t
+    from lhpc.core import known_working, source_registry
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
+    entries = {"loraham-chat": {"commit": commit, "selector": "dev", "remote": "",
+                                "source_rel": "src/LoRaHAM_Daemon"}}
+    assert known_working.write_candidate(paths, "chat", entries, "433")
+    assert source_registry.write_record(paths, source_registry.RegistryRecord(
+        "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "", "",
+        ("loraham-chat", "loraham-igate")))
+    return paths, entries
+
+
+def _kw_bound_app(tmp_path, commit="a" * 40, cmdlines=None):
+    """A client whose service answers the identity git queries by REALPATH — the
+    handle-bound POST confirmation queries the captured leaf's fd-pinned path."""
+    import os as _os
+    from lhpc.core.probes.backends import CommandResult, FakeSystem
+    svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines or {}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    real_run = svc._system.runner.run
+    dest_real = _os.path.realpath(str(tmp_path / "src" / "LoRaHAM_Daemon"))
+    def run(argv, timeout, *a, **k):
+        argv = list(argv)
+        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
+                and _os.path.realpath(argv[2]) == dest_real):
+            if argv[3:] == ["config", "--get", "remote.origin.url"]:
+                return CommandResult(
+                    0, "https://github.com/LoRaHAM/LoRaHAM_Daemon.git\n", "")
+            if argv[3:] == ["rev-parse", "HEAD"]:
+                return CommandResult(0, commit + "\n", "")
+        return real_run(argv, timeout, *a, **k)
+    svc._system.runner.run = run
+    return create_app(service_factory=lambda: svc).test_client()
+
+
+def test_confirm_working_button_renders_when_offer_valid(tmp_path):
+    _seed_kw_offer(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    body = c.get("/stacks/chat").get_data(as_text=True)
+    assert "Confirm this stack as working" in body
+    assert "known-working/confirm" in body
+
+
+def test_confirm_working_button_hidden_when_stopped_or_recorded(tmp_path):
+    from lhpc.core import known_working
+    paths, entries = _seed_kw_offer(tmp_path)
+    # stopped -> hidden
+    c = _real_app(tmp_path)
+    assert "Confirm this stack as working" not in c.get("/stacks/chat").get_data(as_text=True)
+    # running but already recorded -> hidden
+    known_working.record(paths, "chat", entries, {"confirmed_at": 1.0})
+    c2 = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    assert "Confirm this stack as working" not in c2.get("/stacks/chat").get_data(as_text=True)
+
+
+def test_confirm_working_post_records_and_hides_button(tmp_path):
+    from lhpc.core import known_working
+    from lhpc.core.paths import Paths
+    _seed_kw_offer(tmp_path)
+    c = _kw_bound_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    tok = _csrf(c, "/stacks/chat")
+    assert c.post("/stacks/chat/known-working/confirm").status_code == 400   # CSRF enforced
+    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
+    assert r.status_code in (302, 303)
+    assert known_working.newest_commit_for(Paths(runtime_root=tmp_path),
+                                           "chat", "loraham-chat") == "a" * 40
+    assert "Confirm this stack as working" not in c.get("/stacks/chat").get_data(as_text=True)
+    assert c.post("/stacks/nope/known-working/confirm", data={"_csrf": tok}).status_code == 404
+
+
+# --- M6: restart-required yellow chip + Restart now action -----------------------------------
+
+def _flag_restart(tmp_path, sid="chat"):
+    import json as _json
+    d = tmp_path / "state" / "restart-required"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{sid}.json").write_text(_json.dumps(
+        {"version": 1, "stack": sid, "mode": "restart", "params": ["tx_freq"],
+         "band": "", "created_at": 1.0}))
+
+
+def test_restart_required_chip_on_stack_page_and_dashboard(tmp_path):
+    _flag_restart(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    body = c.get("/stacks/chat").get_data(as_text=True)
+    assert "Restart required" in body and "Restart now" in body
+    dash = c.get("/").get_data(as_text=True)
+    assert "Restart required" in dash and "Restart chat now" in dash
+
+
+def test_restart_now_goes_through_normal_confirm(tmp_path):
+    _flag_restart(tmp_path)
+    c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
+    tok = _csrf(c, "/stacks/chat")
+    r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat"})
+    assert r.status_code == 200                                     # stage-1 confirm page
+    assert "Confirm: restart" in r.get_data(as_text=True) or "restart" in r.get_data(as_text=True)
+
+
+def test_no_chip_without_flag(tmp_path):
+    c = _real_app(tmp_path)
+    assert "Restart required" not in c.get("/stacks/chat").get_data(as_text=True)
+    assert "Restart required" not in c.get("/").get_data(as_text=True)
+
+
+# --- M7: Clean all confirm flow (typed stack id, zero mutation on mismatch) -------------------
+
+def _seed_clean_target(tmp_path):
+    import time as _t
+    from lhpc.core import source_registry
+    from lhpc.core.paths import Paths
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    assert source_registry.write_record(
+        Paths(runtime_root=tmp_path),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+
+
+def _bind_web_identity(client_factory_svc, dest, remote):
+    """Answer identity git queries by realpath — the verifier runs them against the captured
+    leaf's fd-pinned /proc path."""
+    import os as _os
+    from lhpc.core.probes.backends import CommandResult
+    real_run = client_factory_svc._system.runner.run
+    dest_real = _os.path.realpath(str(dest))
+    def run(argv, timeout, *a, **k):
+        argv = list(argv)
+        if (len(argv) >= 4 and argv[:2] == ["git", "-C"]
+                and _os.path.realpath(argv[2]) == dest_real
+                and argv[3:] == ["config", "--get", "remote.origin.url"]):
+            return CommandResult(0, remote + "\n", "")
+        return real_run(argv, timeout, *a, **k)
+    client_factory_svc._system.runner.run = run
+
+
+def test_clean_confirm_page_requires_typed_id(tmp_path):
+    _seed_clean_target(tmp_path)
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks/kiss")
+    body = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss"})
+    page = body.get_data(as_text=True)
+    assert body.status_code == 200 and "DESTRUCTIVE" in page and "confirm_text" in page
+
+
+def test_clean_confirm_text_mismatch_is_zero_mutation(tmp_path):
+    _seed_clean_target(tmp_path)
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks/kiss")
+    r = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss",
+                                "confirmed": "yes", "confirm_text": "WRONG"})
+    assert r.status_code == 200                                      # re-rendered confirm
+    assert (tmp_path / "src" / "loraham-kiss-tnc").exists()          # ZERO mutation
+
+
+def test_clean_confirm_text_match_purges(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    _seed_clean_target(tmp_path)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    _bind_web_identity(svc, tmp_path / "src" / "loraham-kiss-tnc",
+                       "https://github.com/makrohard/LoRaHAM_Daemon.git")
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c, "/stacks/kiss")
+    r = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss",
+                                "confirmed": "yes", "confirm_text": "kiss"})
+    assert r.status_code in (302, 303)
+    assert not (tmp_path / "src" / "loraham-kiss-tnc").exists()      # purged
+
+
+def test_confirm_working_post_refuses_drifted_tree(tmp_path):
+    from lhpc.core import known_working
+    from lhpc.core.paths import Paths
+    _seed_kw_offer(tmp_path)
+    c = _kw_bound_app(tmp_path, commit="b" * 40,
+                      cmdlines={555: ["loraham_chat"]})                   # HEAD drifted
+    tok = _csrf(c, "/stacks/chat")
+    r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
+    assert r.status_code in (302, 303)                                    # flashed refusal
+    assert known_working.load(Paths(runtime_root=tmp_path), "chat") == [] # nothing recorded

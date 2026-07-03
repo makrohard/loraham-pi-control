@@ -24,11 +24,47 @@
           installed but the compiled binary is missing (a fresh clone drops it).
           Run <strong>Build</strong> before starting.</p>
       {% endif %}
+      {% if restart_required %}
+        {# Durable, truthful: set atomically WITH the config save that changed restart-mode
+           settings while the stack ran; the action runs the normal full controlled restart. #}
+        <div class="flash flash-warn">
+          {% if restart_required.unsafe %}
+          <span class="ver ver-yellow">Restart required (safe-side)</span> —
+          {{ restart_required.reason }}
+          {% else %}
+          <span class="ver ver-yellow">Restart required</span> — saved
+          {{ 'compile-time' if restart_required.mode == 'build' else 'start-time' }} settings
+          ({{ restart_required.params|join(', ') }}) differ from what the running stack uses.
+          {% if restart_required.mode == 'build' %}Run <strong>Build</strong>, then restart.{% endif %}
+          {% endif %}
+          <form method="post" action="{{ url_for('action') }}" class="act">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="restart">
+            <input type="hidden" name="target" value="{{ stack.id }}">
+            <button type="submit" class="warnbtn">Restart now</button>
+          </form>
+        </div>
+      {% endif %}
+      {% if kw_offer %}
+        {# A healthy start of a composition not yet operator-confirmed: the OPERATOR decides
+           what counts as working — nothing is recorded automatically. #}
+        <div class="flash flash-warn">
+          This stack started healthy with a source composition that is not yet recorded as
+          known working ({{ kw_offer.components|join(', ') }}).
+          <form method="post" class="act"
+                action="{{ url_for('known_working_confirm', stack_id=stack.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit" class="warnbtn">Confirm this stack as working</button>
+          </form>
+        </div>
+      {% endif %}
       <h4>Stack actions</h4>
       {{ stack_actions(stack.id, installed, has_source) }}
 
       <h4>System dependencies</h4>
       {% if system_deps %}
+        <p class="muted">Commands shown are <strong>not executed by LHPC</strong> — run them
+          yourself.</p>
         <ul class="clean">
           {% for d in system_deps %}
             <li>
@@ -44,6 +80,31 @@
         </ul>
       {% else %}
         <p class="muted">None required for this stack.</p>
+      {% endif %}
+      {% if deps and deps.build %}
+        <h4>Build dependencies</h4>
+        <ul class="clean">
+          {% for d in deps.build %}
+            <li>
+              <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">
+                {{ 'installed' if d.satisfied else 'missing' }}</span>
+              {{ d.label }} <span class="muted">(needed by {{ d.component }})</span>
+              {% if not d.satisfied and d.install_cmd %}
+                <div class="muted">{{ d.note }}:</div>
+                {{ cmdbox('bdep-' ~ loop.index0, d.install_cmd) }}
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if deps and deps.runtime %}
+        <h4>Runtime ordering</h4>
+        <ul class="clean">
+          {% for d in deps.runtime %}
+            <li><span class="pill">{{ d.component }}</span> {{ d.label }}
+              <span class="muted">({{ d.detail }})</span></li>
+          {% endfor %}
+        </ul>
       {% endif %}
     </div>
   </div>

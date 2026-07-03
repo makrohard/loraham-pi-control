@@ -2,6 +2,22 @@
 {% from "_macros.html" import cmdbox %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+  {% if restart_required %}
+    {# Durable restart-required flags: yellow, explicit — the action opens the normal
+       controlled restart confirm (never restarts anything by itself). #}
+    <div class="flash flash-warn">
+      <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
+      running stack{{ 's' if restart_required|length > 1 }}:
+      {% for sid in restart_required %}
+        <form method="post" action="{{ url_for('action') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="op" value="restart">
+          <input type="hidden" name="target" value="{{ sid }}">
+          <button type="submit" class="warnbtn">Restart {{ sid }} now</button>
+        </form>
+      {% endfor %}
+    </div>
+  {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
     {% for r in radios %}

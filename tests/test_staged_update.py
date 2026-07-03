@@ -24,7 +24,9 @@ def _installer(rt, stacks, runner=None, local=None):
 
 class _Runner:
     """Scripted git runner. `clone_ok` controls whether a `git clone` 'succeeds'
-    (and creates the target dir); other git commands return success."""
+    (and creates the target dir); other git commands return success. Answers the
+    current-identity queries (origin url, HEAD) consistently with `_comp()` +
+    `_register()` so registered trees pass the identity gate."""
     def __init__(self, clone_ok=True):
         self.clone_ok = clone_ok
     def run(self, argv, timeout=None, *a, **k):
@@ -39,6 +41,8 @@ class _Runner:
             return CommandResult(1, "", "fatal: could not connect")
         if "status" in argv:
             return CommandResult(0, "", "")          # clean working tree
+        if "config" in argv:                          # remote.origin.url identity query
+            return CommandResult(0, "https://example/repo.git\n", "")
         return CommandResult(0, "abc123\n", "")       # rev-parse / checkout / describe
 
 
@@ -48,12 +52,22 @@ def _comp():
                                        remote="https://example/repo.git", branch="main"))
 
 
+def _register(rt, commit="abc123", remote="https://example/repo.git"):
+    """Seed the ownership record an existing tree must match (identity gate)."""
+    import time as _t
+    from lhpc.core import source_registry
+    from lhpc.core.paths import Paths
+    assert source_registry.write_record(Paths(runtime_root=rt), source_registry.RegistryRecord(
+        "src/repo", remote, "dev", commit, _t.time(), "", "", ("c",)))
+
+
 def test_failed_clone_leaves_active_source_intact(tmp_path):
     rt = tmp_path / "rt"
     active = rt / "src" / "repo"
     active.mkdir(parents=True)
     (active / "file.txt").write_text("ACTIVE")          # the installed, working source
     comp = _comp()
+    _register(rt)
     inst = _installer(rt, _stack(comp), runner=_Runner(clone_ok=False))
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "failed"
@@ -70,6 +84,7 @@ def test_successful_update_activates_and_removes_prior(tmp_path):
     active.mkdir(parents=True)
     (active / "file.txt").write_text("OLD")
     comp = _comp()
+    _register(rt)
     inst = _installer(rt, _stack(comp), runner=_Runner(clone_ok=True))
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status != "failed"
@@ -86,6 +101,7 @@ def test_two_consecutive_force_updates_both_succeed(tmp_path):
     active.mkdir(parents=True)
     (active / "file.txt").write_text("OLD")
     comp = _comp()
+    _register(rt)
     inst = _installer(rt, _stack(comp), runner=_Runner(clone_ok=True))
     for _ in range(2):
         action = inst.adopt_source(comp, force=True, source="dev")
@@ -101,6 +117,7 @@ def test_dirty_source_is_not_overwritten(tmp_path):
     (active / ".git").mkdir(parents=True)
     (active / "file.txt").write_text("LOCAL EDIT")
     comp = _comp()
+    _register(rt)
 
     class Dirty(_Runner):
         def run(self, argv, timeout=None, *a, **k):

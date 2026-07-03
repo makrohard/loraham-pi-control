@@ -44,7 +44,6 @@ from .config import (
 )
 from .install import Installer, Plan
 from .lifecycle import Lifecycle
-from . import profiles as profiles_mod
 from .model import (
     ComponentKind,
     ResourceMode,
@@ -225,9 +224,19 @@ class ControllerService:
     # ---- the single probing path (used by CLI and web) -------------------
 
     def build_snapshot(self) -> Snapshot:
-        """Fresh, bounded, read-only assessment of every stack. No caching."""
-        profiles = profiles_mod.load_profiles(self._paths)
-        return StatusProber(self._system, self._paths, profiles).assess_stacks(self.stacks())
+        """Fresh, bounded, read-only assessment of every stack. No caching. The
+        confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions
+        (file reads only): a component is confirmed-working when its clean source HEAD appears
+        in a stored composition of its stack."""
+        from . import known_working
+        confirmed: dict = {}
+        for s in self.stacks():
+            comps = known_working.load(self._paths, s.id)
+            for comp in comps:
+                for cid, entry in comp["entries"].items():
+                    if entry.get("commit"):
+                        confirmed.setdefault(cid, set()).add(entry["commit"])
+        return StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
 
     # ---- read-only operations --------------------------------------------
 
@@ -268,6 +277,19 @@ class ControllerService:
             details.append("Observed resource conflicts:")
             for c in observed:
                 details.append(f"  ! {c.message}")
+        flagged = [sid for sid in self.restart_required_stacks()
+                   if not stack_id or sid == stack_id]
+        if flagged:
+            details.append("")
+            for sid in flagged:
+                marker = self.restart_required(sid) or {}
+                if marker.get("unsafe"):
+                    details.append(f"  ! RESTART REQUIRED (safe-side): '{sid}' — "
+                                   f"{marker.get('reason', 'marker unreadable')}")
+                else:
+                    details.append(f"  ! RESTART REQUIRED: '{sid}' — saved settings differ "
+                                   f"from the running stack (lhpc stack stop {sid} && "
+                                   f"lhpc stack start {sid})")
         if not snap.runtime_root_exists:
             details.append("")
             details.append(
@@ -362,6 +384,26 @@ class ControllerService:
                     missing += 1
         details.append(f"  configured sources: {present} present, {missing} missing")
 
+        # Itemized UNMET dependencies per stack (grouped): system prerequisites carry the
+        # exact operator command — LHPC never installs system packages itself.
+        from . import deps as deps_mod
+        any_missing = False
+        for s in self.stacks():
+            groups = self.deps_report(s.id)
+            unmet = [d for d in groups["system"] + groups["build"] if not d.satisfied]
+            if not unmet:
+                continue
+            any_missing = True
+            details.append(f"  {s.id}: unmet dependencies")
+            for d in unmet:
+                line = f"    [{d.kind}] {d.label} — {d.detail}"
+                if d.install_cmd:
+                    line += f" | run yourself: {d.install_cmd}"
+                details.append(line)
+        if not any_missing:
+            details.append("  dependencies: all declared system/build prerequisites satisfied")
+        details.append(f"  ({deps_mod.NOT_EXECUTED_NOTE})")
+
         # Run-state tally from a fresh snapshot.
         snap = self.build_snapshot()
         tally: dict[str, int] = {}
@@ -400,26 +442,63 @@ class ControllerService:
                 details=[f"Run 'lhpc bootstrap' to create {self._paths.runtime_root}."],
                 next_commands=["lhpc bootstrap"],
             )
+        # SHARED-SOURCE REMOTE COHERENCE gates BOTH planning and mutation: one checkout is
+        # one clone with ONE effective remote — a legacy divergent per-component override
+        # blocks install with ZERO candidate/source/registry/config mutation.
+        planned_paths = sorted({c.source.path for st in self.stacks()
+                                if not stack_id or st.id == stack_id
+                                for c in st.components if c.source})
+        conflicts = sorted({c for c in (self._shared_remote_conflict(p)
+                                        for p in planned_paths) if c})
+        if conflicts:
+            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
+                                "shared-source remote configuration is inconsistent.",
+                                details=[f"  {c}" for c in conflicts])
         inst = self._installer()
         plan = inst.plan_install(stack_id)
         if not apply:
             cmd = f"lhpc install {stack_id} --yes" if stack_id else "lhpc install --yes"
             return self._plan_result(plan, applied=False, next_apply=cmd)
-        for stack in self.stacks():
-            if stack_id and stack.id != stack_id:
-                continue
-            for comp in stack.components:
-                if comp.source is None:
+        from . import source_fs
+        # ONE adoption per coherent source GROUP: each shared path is installed exactly once
+        # (deterministic first declarer), never opportunistically re-attempted through
+        # whichever consumer is encountered next.
+        # ONE immutable plan for the whole install: known-working frozen per stack, one
+        # adoption per shared source group, incompatible resolutions blocked up front.
+        install_items = [(st, c) for st in self.stacks()
+                         if not stack_id or st.id == stack_id
+                         for c in st.components if c.source]
+        groups, plan_conflicts = self._plan_source_groups(install_items, source)
+        if plan_conflicts:
+            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
+                                "incompatible source resolutions for a shared checkout.",
+                                details=[f"  {c}" for c in plan_conflicts])
+        mutated_paths, extra_out = [], []
+        for path, comp, resolved in groups:
+            dest = self._paths.resolve_source(path)
+            # DESCRIPTOR-PROVEN skip: only a healthy managed DIRECTORY is "already
+            # installed". Anything else (absent, symlink, regular/special file) flows
+            # into `adopt_source`, whose locked leaf checks install or refuse typed —
+            # a dangling/unknown leaf is never silently treated as installed.
+            try:
+                if source_fs.leaf_kind(self._paths, dest) == "dir":
                     continue
-                dest = self._paths.resolve_source(comp.source.path)
-                if dest.exists():
-                    continue
-                result = inst.adopt_source(comp, source=source)
-                for a in plan.actions:
-                    if a.target == str(dest):
-                        a.status, a.detail = result.status, result.detail
-                        a.provenance = result.provenance
-        return self._plan_result(plan, applied=True, next_apply=None)
+            except PathContainmentError:
+                pass                       # unsafe parent -> adopt_source refuses typed
+            result = inst.adopt_source(comp, source=source, pinned_expected=resolved)
+            if result.status == "done":
+                mutated_paths.append(path)
+            for a in plan.actions:
+                if a.target == str(dest):
+                    a.status, a.detail = result.status, result.detail
+                    a.provenance = result.provenance
+        retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
+        res = self._plan_result(plan, applied=True, next_apply=None)
+        if not retire_ok:
+            return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
+                                details=list(res.details) + extra_out,
+                                next_commands=res.next_commands)
+        return res
 
     def _plan_result(self, plan: Plan, *, applied: bool, next_apply: str | None) -> ActionResult:
         details = [
@@ -1391,6 +1470,14 @@ class ControllerService:
                        f"{', '.join(required_manual)} — see the dashboard.")
         else:
             summary = f"Run applied for '{target}'."
+        # HEALTHY STACK START: persist the last-start CANDIDATE composition (durable, written
+        # here in the mutation path so GET pages never need git). It is NOT a known-working
+        # record — the operator confirms it explicitly ("Confirm this stack as working").
+        # A successful start also satisfies any restart-required flag: the processes now
+        # run the saved config.
+        if ok and self.stack(target) is not None:
+            self._capture_start_composition(target, cfg_band)
+            self._clear_restart_required(target)
         return ActionResult(ok, summary, details=out, results=tuple(results),
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
@@ -2152,6 +2239,14 @@ class ControllerService:
         ok = applied_ok(results) if results else True
         summary = (f"Stop applied for '{target}'." if ok else
                    f"Stop for '{target}' is NOT fully verified — see details.")
+        # A VERIFIED stack stop retires the last-start candidate (the running state it
+        # captured no longer exists, so the confirm-known-working offer must disappear) and
+        # clears the restart-required flag (the stale processes are gone; the next start uses
+        # the saved config).
+        if ok and apply and self.stack(target) is not None:
+            from . import known_working
+            known_working.clear_candidate(self._paths, target)
+            self._clear_restart_required(target)
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
@@ -2683,7 +2778,7 @@ class ControllerService:
 
     # Web-exposed actions -> the same gated service methods the CLI calls.
     WEB_ACTIONS = ("install", "update", "uninstall", "start", "stop", "restart",
-                   "build", "test", "test-tx")
+                   "build", "test", "test-tx", "clean")
 
     def run_params_for(self, target: str):
         """Run parameters offered for `target` (from its main/own components)."""
@@ -3363,7 +3458,9 @@ class ControllerService:
                 marks.append(f"{stem}={runtime_fs.read_text(self._paths, idir / name).strip()}")
             except (OSError, ValueError):
                 marks.append(stem)
-        return "R:" + ",".join(running) + ";D:" + ",".join(usable) + ";I:" + ",".join(marks)
+        rr = self.restart_required_stacks()      # dashboard reloads when the yellow flag flips
+        return ("R:" + ",".join(running) + ";D:" + ",".join(usable)
+                + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr))
 
     def _build_artifact(self, comp):
         """Relative path of the built binary (explicit `bin`, else the process
@@ -3789,6 +3886,32 @@ class ControllerService:
                     remote_patch[vid] = validators.remote_url(url or "", field="remote")   # "" clears
                 except validators.ValidationError as exc:
                     errors.append(str(exc))
+        # ONE remote per shared checkout: a submission giving two components of the same
+        # source path DIFFERENT remotes is rejected whole; a coherent value is expanded
+        # ATOMICALLY to every declarer of that path (explicitly disclosed), so divergence
+        # can never be saved — not even for consumers in other stacks.
+        remote_notes: list = []
+        if remote_patch:
+            comp_index = {c.id: c for st in self.stacks() for c in st.components}
+            by_path: dict = {}
+            for vid, vurl in remote_patch.items():
+                c = comp_index.get(vid)
+                if c is None or c.source is None:
+                    continue
+                by_path.setdefault(c.source.path, {})[vid] = vurl
+            for pth, vals in by_path.items():
+                if len(set(vals.values())) > 1:
+                    errors.append(f"conflicting remotes submitted for shared source {pth!r} "
+                                  f"({', '.join(sorted(vals))}) — one checkout has ONE remote")
+                    continue
+                url = next(iter(vals.values()))
+                group = [d.id for d in self._path_declarers(pth)]
+                extra = sorted(set(group) - set(vals))
+                for did in group:
+                    remote_patch[did] = url
+                if extra:
+                    remote_notes.append(f"shared checkout {pth}: the same remote was applied "
+                                        f"to {', '.join(extra)}")
         if errors:                                  # reject the whole bundle — zero mutation
             return ActionResult(False, f"Config not saved for '{target}'.", details=errors)
 
@@ -3813,11 +3936,11 @@ class ControllerService:
                 return render_local_tables(data)          # type-safe, preserves root scalars
             targets.append(("local", local_path, _render_local, 0o600))
         cfg_band = self._config_band(target, band)
-        # Apply-mode hints (restart/build) from CHANGED run params, compared per-component against the
-        # PRE-SAVE effective value (never masked by a same-named sibling), BEFORE the write.
+        # Apply-mode hints (restart/build) from CHANGED run AND file params, compared per-component
+        # against the PRE-SAVE effective value (never masked by a same-named sibling), BEFORE the write.
         modes = {p.apply_mode for kind, c, p, v in clean_params
-                 if kind == "r"
-                 and self._resolved_param_value(target, "run", c.id, p.name, band) != str(v)}
+                 if self._resolved_param_value(target, "run" if kind == "r" else "file",
+                                               c.id, p.name, band) != str(v)}
         # OVERRIDES-ONLY persistence: a value equal to its CURRENT default is NOT stored, so it always
         # follows the current/updated manifest default (and a self-update that changes a default takes
         # effect for values still at the old default) — exactly what daemon params already do. A value
@@ -3855,13 +3978,32 @@ class ControllerService:
                 merged.pop(k, None)
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
+        # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
+        # journal kind "state", pre-image journaled): a restart/build-mode param changed while
+        # the stack is RUNNING means the running processes no longer match the saved config.
+        # Atomic with the config change: if the marker cannot be persisted the whole save
+        # rolls back — a running stack can never hold changed restart-mode settings without
+        # the warning.
+        marker_modes = modes & {"restart", "build"}
+        if marker_modes and self.stack_running(target):
+            import json as _json
+            payload = _json.dumps({
+                "version": 1, "stack": sid,
+                "mode": "build" if "build" in marker_modes else "restart",
+                "params": sorted(
+                    p.name for kind, c, p, v in clean_params
+                    if p.apply_mode in marker_modes
+                    and self._resolved_param_value(target, "run" if kind == "r" else "file",
+                                                   c.id, p.name, band) != str(v)),
+                "band": cfg_band, "created_at": time.time()})
+            targets.append(("state", self._restart_marker_path(sid), payload, 0o600))
         try:
             apply_config_transaction(self._paths, targets)
         except ConfigError as exc:
             return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)])
         self._invalidate_config()               # saved operator/remotes visible immediately
         return ActionResult(True, f"Config saved for '{target}'.",
-                            details=self._apply_hints(target, modes),
+                            details=self._apply_hints(target, modes) + remote_notes,
                             next_commands=[f"lhpc stack start {target}"])
 
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
@@ -3888,19 +4030,82 @@ class ControllerService:
             hints.append("Runtime change — applied live.")
         return hints
 
-    def save_component_remote(self, component_id: str, url: str) -> ActionResult:
-        """Override (or clear, if url is blank) a component's GitHub remote. The URL
-        is validated to a safe remote policy before any file change."""
+    # ---- durable restart-required state -------------------------------------
+
+    def _restart_marker_path(self, stack_id: str):
+        return self._paths.under("state", "restart-required",
+                                 f"{validators.path_component(stack_id, field='stack')}.json")
+
+    def restart_required(self, stack_id: str) -> dict | None:
+        """The durable restart-required marker (FILE READ ONLY, GET-safe, TRI-STATE): set
+        atomically with a config save that changed restart/build-mode params while the stack
+        ran; cleared on a verified stop or a successful start/restart.
+
+          * SAFELY ABSENT (FileNotFoundError only)  -> None: no warning;
+          * SAFELY VALID                            -> the marker dict;
+          * PRESENT BUT UNSAFE (malformed, symlinked, a directory, special, inaccessible,
+            or claiming another stack) -> {"unsafe": True, "stack": …, "reason": …}: the
+            warning stays visible SAFE-SIDE with the explicit Restart action and a
+            diagnostic — an unreadable marker must never look like "no restart required".
+            The marker is NEVER silently cleared here (GET stays non-mutating)."""
+        import json as _json
+
+        def _unsafe(reason: str) -> dict:
+            return {"unsafe": True, "stack": stack_id, "mode": "restart", "params": [],
+                    "reason": reason}
         try:
-            save_component_remote(self._paths, component_id, url)
+            raw = runtime_fs.read_text_regular(self._paths, self._restart_marker_path(stack_id))
+        except FileNotFoundError:
+            return None                                   # SAFELY absent — proven
+        except (OSError, PathContainmentError, ValueError) as exc:
+            return _unsafe(f"restart-required marker is present but unreadable/unsafe "
+                           f"({exc}) — treat as restart required; resolve the marker")
+        try:
+            d = _json.loads(raw)
+        except (ValueError, TypeError):
+            return _unsafe("restart-required marker is malformed — treat as restart "
+                           "required; resolve the marker")
+        if not isinstance(d, dict) or d.get("version") != 1 or d.get("stack") != stack_id:
+            return _unsafe("restart-required marker fails validation — treat as restart "
+                           "required; resolve the marker")
+        return d
+
+    def restart_required_stacks(self) -> list:
+        """All stacks currently flagged restart-required — including SAFE-SIDE unsafe markers
+        (for the dashboard + CLI status + dash signature)."""
+        return [s.id for s in self.stacks() if self.restart_required(s.id) is not None]
+
+    def _clear_restart_required(self, stack_id: str) -> None:
+        """Clear the marker (best effort — a stale marker is safe-side: the operator sees a
+        yellow action that a fresh restart simply satisfies)."""
+        try:
+            runtime_fs.unlink(self._paths, self._restart_marker_path(stack_id))
+        except (OSError, PathContainmentError):
+            pass
+
+    def save_component_remote(self, component_id: str, url: str) -> ActionResult:
+        """Override (or clear, if url is blank) a component's GitHub remote. A shared source
+        path is ONE checkout with ONE remote: the change is applied ATOMICALLY to EVERY
+        component declaring the same source path (one locked write), and the propagation is
+        explicitly disclosed in the result — per-component divergence is never left behind."""
+        from .config import save_component_remotes
+        comp = next((c for st in self.stacks() for c in st.components
+                     if c.id == component_id), None)
+        group = ([d.id for d in self._path_declarers(comp.source.path)]
+                 if comp is not None and comp.source else [component_id])
+        try:
+            save_component_remotes(self._paths, {cid: url for cid in group})
         except validators.ValidationError as exc:
             return ActionResult(False, "Remote override rejected.", details=[str(exc)])
         except ConfigError as exc:
             return ActionResult(False, "Remote override not saved.",
                                 details=[f"local.toml is malformed and was preserved: {exc}"])
         self._invalidate_config()               # new remote visible to the next read
+        extra = sorted(set(group) - {component_id})
+        details = ([f"  shared checkout — the same remote was applied to: {', '.join(extra)}"]
+                   if extra else [])
         return ActionResult(True, "Remote override saved." if url.strip()
-                            else "Remote override cleared.")
+                            else "Remote override cleared.", details=details)
 
     # ---- file-based component config (writes the app's own config file) -----
 
@@ -4403,7 +4608,7 @@ class ControllerService:
                    params: dict | None = None, source: str = "pinned",
                    stop_owners: bool = False, cascade: bool = False,
                    band: str = "", daemon_overrides: dict | None = None,
-                   file_overrides: dict | None = None) -> ActionResult:
+                   file_overrides: dict | None = None, purge: bool = False) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
         if op in ("install", "update") and source not in self.SOURCE_CHOICES:
@@ -4425,6 +4630,7 @@ class ControllerService:
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
             "test-tx": lambda: self.test(target, tx=True, apply=apply),
+            "clean": lambda: self.clean(target, apply=apply, purge=purge),
         }
         fn = ops.get(op)
         if fn is None:
@@ -4731,6 +4937,313 @@ class ControllerService:
                 out.append((s, c))
         return out
 
+    def _source_consumers(self) -> dict:
+        """Manifest-wide: every component id consuming each source path — direct source
+        declarations AND `build_requires` edges (a component whose BUILD consumes a checkout
+        references it: the daemon consumes src/RadioLib, so uninstalling radiolib alone is
+        refused while the daemon's source is installed). The reference map used by
+        update/uninstall/clean gates."""
+        comp_index = {c.id: c for s in self.stacks() for c in s.components}
+        consumers: dict[str, set] = {}
+        for s in self.stacks():
+            for c in s.components:
+                if c.source:
+                    consumers.setdefault(c.source.path, set()).add(c.id)
+                for dep_id in c.build_requires:
+                    dep = comp_index.get(dep_id)
+                    if dep is not None and dep.source is not None:
+                        # the build edge holds only while the CONSUMER's own source is
+                        # installed (an uninstalled daemon no longer references RadioLib)
+                        if c.source is None or self._paths.resolve_source(c.source.path).exists():
+                            consumers.setdefault(dep.source.path, set()).add(c.id)
+        return consumers
+
+    def _path_declarers(self, source_path: str) -> list:
+        """Every manifest component DECLARING `source_path` as its own source (the set whose
+        effective remotes must agree — one checkout has ONE remote)."""
+        return [c for st in self.stacks() for c in st.components
+                if c.source and c.source.path == source_path]
+
+    def _effective_remote(self, comp) -> str:
+        return (self.config().remotes.get(comp.id)
+                or (comp.source.remote if comp.source else "") or "")
+
+    def _shared_remote_conflict(self, source_path: str) -> str | None:
+        """A source path is ONE checkout and must have ONE effective remote. Returns a typed
+        detail when the current consumers' normalized effective remotes diverge (e.g. a
+        legacy hand-edited per-component override) — destructive operations and known-working
+        confirmation must fail closed on it, with zero source mutation."""
+        from . import source_registry
+        seen: dict = {}
+        for c in self._path_declarers(source_path):
+            seen.setdefault(source_registry.norm_remote(self._effective_remote(c)),
+                            []).append(c.id)
+        if len(seen) <= 1:
+            return None
+        parts = "; ".join(f"{', '.join(cids)} -> {norm or '(none)'}"
+                          for norm, cids in sorted(seen.items()))
+        return (f"conflicting effective remotes for shared source {source_path!r} "
+                f"({parts}) — set ONE remote for all of its components before mutating it")
+
+    def _retire_candidates_for_paths(self, paths_mutated, out: list) -> bool:
+        """After a source belonging to a stack was changed/removed, retire that stack's
+        `last-start` candidate marker (an older composition must not remain eligible for a
+        later confirmation). Returns False — the operation is INCOMPLETE — when a present
+        marker could not be cleared; the failure is recorded as durable evidence in `out`."""
+        from . import known_working
+        if not paths_mutated:
+            return True
+        affected = sorted({st.id for st in self.stacks()
+                           for c in st.components
+                           if c.source and c.source.path in set(paths_mutated)})
+        ok = True
+        for sid in affected:
+            cleared, why = known_working.clear_candidate_checked(self._paths, sid)
+            if not cleared:
+                out.append(f"  [fail] {why}")
+                ok = False
+        return ok
+
+    def _op_seam(self, point: str) -> None:
+        """DETERMINISTIC TEST SEAM for operation serialization — a no-op hook fired at
+        defined points of applied update/uninstall/clean (e.g. after preflight, after the
+        locks are held, between source groups). Tests monkeypatch it to inject concurrent
+        events; it carries no production behaviour."""
+
+    def _plan_source_groups(self, items, source: str) -> tuple:
+        """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
+
+          * known-working is resolved ONCE per affected stack from one complete compatible
+            composition (never re-computed while iterating; a concurrent confirmation
+            cannot alter this operation);
+          * components are grouped by shared source path; every targeted consumer of a path
+            must resolve to the SAME source identity — strategy, artifact form, normalized
+            effective remote, and (for 'pinned') the same frozen commit/fallback;
+          * incompatible resolutions block BEFORE any candidate/source/registry/config
+            mutation.
+
+        Returns (groups, error): groups = ordered [(path, comp, (expected, label))]."""
+        from . import known_working, source_registry
+        compositions: dict = {}
+        if source == "pinned":
+            for st in {s.id: s for s, _ in items}.values():
+                compositions[st.id] = known_working.compatible_composition(
+                    self._paths, st, lambda c: self._effective_remote(c))
+        by_path: dict = {}
+        for st, comp in items:
+            spec = comp.source
+            if source != "pinned" or spec.artifact:
+                resolved = ("", "")
+            else:
+                entries = compositions.get(st.id)
+                if entries and comp.id in entries:
+                    resolved = (entries[comp.id]["commit"],
+                                "known working (operator-confirmed composition)")
+                else:
+                    resolved = ("", "fallback: manifest pin — no known-working record")
+            ident = (spec.strategy or "", bool(spec.artifact),
+                     source_registry.norm_remote(self._effective_remote(comp)), resolved)
+            by_path.setdefault(spec.path, []).append((st, comp, ident, resolved))
+        groups, conflicts = [], []
+        for path, members in by_path.items():
+            idents = {m[2] for m in members}
+            if len(idents) > 1:
+                who = ", ".join(f"{st.id}/{c.id}" for st, c, _, _ in members)
+                conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
+                                 "resolve to incompatible source identities (strategy/"
+                                 "remote/known-working) — resolve or re-confirm before "
+                                 "installing/updating")
+                continue
+            st, comp, _, resolved = members[0]
+            groups.append((path, comp, resolved))
+        if conflicts:
+            return None, conflicts
+        return groups, None
+
+    def deps_report(self, stack_id: str) -> dict:
+        """Grouped dependency diagnosis for a stack ({system|build|runtime: [DepItem...]}),
+        read-only and bounded — every unmet system prerequisite carries the exact operator
+        command, clearly marked as NOT executed by LHPC."""
+        from . import deps
+        comp_index = {c.id: c for s in self.stacks() for c in s.components}
+        report = deps.stack_report(self._lifecycle(), self._paths, self.stacks(),
+                                   stack_id, comp_index)
+        return deps.grouped(report)
+
+    def _running_source_consumers(self, paths: set) -> list:
+        """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —
+        a source swap under a running process breaks it (deleted inodes / half-read files), so
+        mutation of these paths is refused until the operator stops them."""
+        consumers = self._source_consumers()
+        affected = set()
+        for p in paths:
+            affected |= consumers.get(p, set())
+        snap = self.build_snapshot()
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        return sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
+                      if cid in affected and st.run_state in up)
+
+    # ---- known-working compositions (operator-confirmed) -------------------
+
+    def _stack_composition_entries(self, stack_id: str) -> dict | None:
+        """The stack's CURRENT coherent composition from the ownership registry (one entry per
+        source component), with a local `git rev-parse` fallback for a pre-registry adoption.
+        Returns None when any source component cannot be resolved — a PARTIAL composition is
+        never captured (coherence over coverage). Mutation-context only (may run local git)."""
+        from . import source_registry
+        stack = self.stack(stack_id)
+        if stack is None:
+            return None
+        consumers = self._source_consumers()
+        entries: dict = {}
+        for c in stack.components:
+            if c.source is None:
+                continue
+            rel = c.source.path
+            rec = source_registry.read_record(self._paths, rel)
+            if rec is None or not rec.resolved_commit:
+                # Pre-registry adoption: origin-verify + BACKFILL a legacy record here in the
+                # mutation path (the same ownership proof update/uninstall require), so the
+                # composition — and the later offer validation — rests on registry truth.
+                dest = self._paths.resolve_source(rel)
+                rec, _why = source_registry.verify_or_backfill(
+                    self._paths, self._system, self.config(), c, dest,
+                    components=tuple(sorted(consumers.get(rel, {c.id}))))
+            if rec is None or not rec.resolved_commit:
+                return None                              # unprovable component -> no composition
+            entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
+                             "remote": rec.remote, "source_rel": rel,
+                             "strategy": rec.strategy}
+        return entries or None
+
+    def _capture_start_composition(self, stack_id: str, band: str) -> None:
+        """Persist the last-start candidate marker after a healthy stack start (best effort —
+        a capture failure never degrades the start result; the confirm button simply does not
+        appear)."""
+        from . import known_working
+        entries = self._stack_composition_entries(stack_id)
+        if entries:
+            known_working.write_candidate(self._paths, stack_id, entries, band or "")
+
+    def known_working_offer(self, stack_id: str, snapshot=None) -> dict | None:
+        """The 'Confirm this stack as working' offer for the stack page (FILE READS ONLY —
+        no git, GET-safe). Present only when ALL hold: a last-start candidate exists; the
+        stack is currently RUNNING (per the supplied/probed snapshot); every candidate entry
+        still equals the CURRENT ownership-registry commit (the sources were not swapped since
+        that start); and the composition is not already recorded."""
+        from . import known_working, source_registry
+        cand = known_working.read_candidate(self._paths, stack_id)
+        if cand is None:
+            return None
+        if cand["hash"] in known_working.hashes(self._paths, stack_id):
+            return None                                  # already recorded -> no button
+        snap = snapshot or self.build_snapshot()
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        stack_running = any(
+            st.run_state in up
+            for ss in snap.stacks if ss.stack.id == stack_id
+            for st in ss.components.values())
+        if not stack_running:
+            return None
+        for entry in cand["entries"].values():
+            rec = source_registry.read_record(self._paths, entry.get("source_rel", ""))
+            if rec is None or rec.resolved_commit != entry.get("commit"):
+                return None                              # sources changed since that start
+        return {"hash": cand["hash"], "started_at": cand.get("started_at", 0),
+                "band": cand.get("band", ""), "components": sorted(cand["entries"])}
+
+    def confirm_known_working(self, stack_id: str) -> ActionResult:
+        """OPERATOR ACTION: record the last-start candidate composition as known-working
+        (dedupe, keep the newest three). Re-validates everything the offer validated —
+        AND, under the stack's SOURCE LOCKS, re-proves every component's CURRENT ownership +
+        identity (leaf kind, HEAD, origin) against its registry record: a manually changed
+        tree is a typed refusal, never a fabricated record."""
+        from . import known_working, reslock, source_registry
+        stack = self.stack(stack_id)
+        if stack is None:
+            return self._unknown_stack(stack_id)
+        cand = known_working.read_candidate(self._paths, stack_id)
+        if cand is None:
+            return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — "
+                                "start the stack first.")
+        offer = self.known_working_offer(stack_id)
+        if offer is None:
+            if cand["hash"] in known_working.hashes(self._paths, stack_id):
+                return ActionResult(True, f"'{stack_id}' is already recorded as known working.")
+            return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not running "
+                                "or its sources changed since that start — start it again "
+                                "and re-confirm.")
+        # SOURCE-LOCKED identity revalidation: nothing may be recorded as known working while
+        # any of its trees drifted from LHPC's registry truth. Runs under the same source-
+        # operation boundary update/uninstall/clean use.
+        consumers = self._source_consumers()
+        src_paths = sorted({e.get("source_rel", "") for e in cand["entries"].values()
+                            if e.get("source_rel")})
+        comp_by_path = {c.source.path: c for c in stack.components if c.source}
+        from . import source_fs
+        handles: dict = {}
+        try:
+            with self._source_operation_guard(src_paths or [stack_id], op="confirm"):
+                # HANDLE-BOUND confirmation: every candidate source leaf is captured
+                # no-follow; ownership/origin/HEAD/link identity and the candidate-marker
+                # commit are verified AGAINST THOSE HANDLES; the same handles are re-proven
+                # immediately before the composition record is written. Any replacement,
+                # mismatch, or capture failure writes NOTHING.
+                for cid, entry in sorted(cand["entries"].items()):
+                    rel = entry.get("source_rel", "")
+                    comp = comp_by_path.get(rel)
+                    if comp is None:
+                        return ActionResult(False, f"Cannot confirm '{stack_id}': candidate "
+                                            f"entry {cid} names an unknown source {rel!r}.")
+                    conflict = self._shared_remote_conflict(rel)
+                    if conflict:
+                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
+                                            f"working: {conflict}")
+                    dest = self._paths.resolve_source(rel)
+                    try:
+                        handles[rel] = source_fs.capture_leaf(self._paths, dest)
+                    except (OSError, PathContainmentError) as exc:
+                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
+                                            f"working: {rel}: leaf not capturable ({exc}).")
+                    rec, why = source_registry.verify_identity(
+                        self._paths, self._system, self.config(), comp, dest,
+                        components=tuple(sorted(consumers.get(rel, {comp.id}))),
+                        handle=handles[rel])
+                    if rec is None:
+                        return ActionResult(False, f"Cannot confirm '{stack_id}' as known "
+                                            f"working: {rel}: {why}")
+                    if rec.resolved_commit and rec.resolved_commit != entry.get("commit"):
+                        return ActionResult(False, f"Cannot confirm '{stack_id}': {cid} no "
+                                            "longer matches the composition captured at start "
+                                            "— start the stack again and re-confirm.")
+                # RE-PROVE every captured handle immediately before persisting.
+                source_fs.race_seam("pre-confirm-record", stack_id)
+                for rel, h in handles.items():
+                    if not source_fs.verify_leaf_path(self._paths,
+                                                      self._paths.resolve_source(rel), h):
+                        return ActionResult(False, f"Cannot confirm '{stack_id}': {rel} was "
+                                            "concurrently replaced — nothing recorded.")
+                validated = {"started_at": cand.get("started_at", 0),
+                             "band": cand.get("band", ""),
+                             "confirmed_at": time.time(),
+                             "evidence": "healthy verified stack start + operator confirmation"}
+                ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
+                                               validated)
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot confirm '{stack_id}': {blocked}")
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot confirm '{stack_id}': another source "
+                                f"operation is in progress ({busy}).")
+        finally:
+            for h in handles.values():
+                h.close()
+        if not ok:
+            return ActionResult(False, f"Could not record '{stack_id}' as known working: {msg}")
+        return ActionResult(True, f"Recorded '{stack_id}' as a known-working composition "
+                            f"({msg}).",
+                            details=[f"  {cid}: {e['commit'][:12]} ({e['selector'] or '?'})"
+                                     for cid, e in sorted(cand["entries"].items())])
+
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned") -> ActionResult:
         """Refresh the managed source(s) from GitHub (version per `source`:
@@ -4741,9 +5254,15 @@ class ControllerService:
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
         # A NAMED component updates exactly itself; a stack (or the empty "all"
-        # target) skips its optional libs/firmware unless one is named directly.
+        # target) skips its optional libs/firmware — EXCEPT hard build dependencies
+        # (`build_requires`, e.g. the daemon's RadioLib), which are updated with their
+        # consumer despite the optional flag.
         is_component = target != "" and self.stack(target) is None
-        items = all_items if is_component else [(s, c) for s, c in all_items if not c.optional]
+        if is_component:
+            items = all_items
+        else:
+            required = {dep for _, c in all_items if not c.optional for dep in c.build_requires}
+            items = [(s, c) for s, c in all_items if not c.optional or c.id in required]
         if not apply:
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
@@ -4759,16 +5278,194 @@ class ControllerService:
                 details=details,
                 next_commands=[f"lhpc update {target} --yes"] if items else [],
                 data={"changes": len(items)})
-        inst = self._installer()
-        out, ok = [], True
-        for _, c in items:
-            r = inst.adopt_source(c, force=True, source=source)
-            out.append(f"  [{r.status}] {c.id}: {r.detail}")
-            if r.status == "failed":
-                ok = False
+        # HARD GATE: an update swaps source trees on disk, so it requires the affected stacks
+        # STOPPED — the target's components AND every other consumer of an affected SHARED
+        # source path (chat running blocks igate's update of src/LoRaHAM_Daemon). Never
+        # silently stops or restarts anything; typed refusal with the exact stop commands.
+        affected = {c.source.path for _, c in items}
+        # CHEAP PREFLIGHT (early typed refusal; NOT the authority — a Start may still land
+        # before the locks). The AUTHORITATIVE recheck runs below with every lock held.
+        running = self._running_source_consumers(affected)
+        if running:
+            owners = sorted({self._owner_stack_id(cid) for cid in running})
+            return ActionResult(
+                False, f"Refusing to update '{target or 'all'}': component(s) using the "
+                "affected source(s) are running.",
+                details=[f"  running: {', '.join(running)} — stop them first "
+                         "(an update never stops or restarts a stack itself)"],
+                next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+        self._op_seam("update-preflight")
+        from . import reslock
+        # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->
+        # source-txn index/recovery -> ALL affected source-path locks (one outer guard,
+        # held through plan + every group mutation + candidate retirement) -> FRESH
+        # runtime-state recheck -> plan -> mutate. A concurrent Start contends on the
+        # same source locks; a concurrent config/remote save waits on config-stable.
+        try:
+            with self._config_stable():
+                with self._source_operation_guard(sorted(affected), op="update"):
+                    self._op_seam("update-locked")
+                    # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
+                    # slipped in after the preflight refuses the update with ZERO candidate/
+                    # journal/source/registry/marker/config mutation.
+                    running = self._running_source_consumers(affected)
+                    if running:
+                        owners = sorted({self._owner_stack_id(cid) for cid in running})
+                        return ActionResult(
+                            False, f"Refusing to update '{target or 'all'}': component(s) "
+                            "using the affected source(s) started while the update was "
+                            "acquiring its locks.",
+                            details=[f"  running: {', '.join(running)} — stop them first"],
+                            next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+                    # ONE effective remote per shared checkout + ONE immutable plan — both
+                    # built UNDER the configuration-stable and source locks (a concurrent
+                    # remote save waits; the plan can never use a stale config snapshot).
+                    conflicts = sorted({c for c in (self._shared_remote_conflict(p)
+                                                    for p in affected) if c})
+                    if conflicts:
+                        return ActionResult(False, f"Refusing to update '{target or 'all'}': "
+                                            "shared-source remote configuration is "
+                                            "inconsistent.",
+                                            details=[f"  {c}" for c in conflicts])
+                    groups, plan_conflicts = self._plan_source_groups(items, source)
+                    if plan_conflicts:
+                        return ActionResult(False, f"Refusing to update '{target or 'all'}': "
+                                            "incompatible source resolutions for a shared "
+                                            "checkout.",
+                                            details=[f"  {c}" for c in plan_conflicts])
+                    inst = self._installer()
+                    out, ok = [], True
+                    mutated_paths = []
+                    for path, c, resolved in groups:
+                        r = inst.adopt_source(c, force=True, source=source,
+                                              pinned_expected=resolved, locked=True)
+                        out.append(f"  [{r.status}] {c.id}: {r.detail}")
+                        if r.status == "failed":
+                            ok = False                    # incl. prior-dirty: NEVER success
+                            if r.detail.startswith("prior-dirty:"):
+                                # the NEW source IS active (record coherent) — its stacks'
+                                # stale candidates must still be retired truthfully
+                                mutated_paths.append(path)
+                        elif r.status == "done":
+                            mutated_paths.append(path)
+                        self._op_seam("update-between-groups")
+                    # Candidate retirement BEFORE the source locks release: a new healthy
+                    # Start (which needs these locks) cannot write a fresh marker between
+                    # the source mutation and this retirement — only stale pre-update
+                    # markers are retired. A clear failure is a truthful INCOMPLETE.
+                    ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
+                                next_commands=["lhpc status"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Update blocked for '{target or 'all'}': {busy}",
+                                next_commands=["lhpc status"])
         return ActionResult(ok, f"Update {'applied' if ok else 'INCOMPLETE'} for "
                             f"'{target or 'all'}'.", details=out,
                             next_commands=["lhpc status --versions"])
+
+    def _remove_source_leaf(self, path: str, comp, consumers: dict, inst,
+                            allow_dirty: bool) -> tuple:
+        """RACE-SAFE destructive removal of one managed source leaf (uninstall / Clean all),
+        under the caller's held source locks. Protocol:
+
+          1. refuse while ORPHANED QUARANTINE evidence from an interrupted removal exists
+             (retained, never auto-deleted — the operator inspects it first);
+          2. CAPTURE the leaf (retained no-follow handle), then prove CURRENT ownership +
+             identity — and cleanliness, unless `allow_dirty` (Clean) — AGAINST THE CAPTURED
+             INODE;
+          3. detach-then-remove via `source_fs.detach_and_remove`: the leaf is atomically
+             detached to a controller-owned quarantine name ONLY while it is still the
+             captured leaf, re-proven after the detach, and only then removed. An external
+             substitution at any point is preserved and reported — never deleted.
+
+        A linked source loses only its verified runtime symlink LEAF; the external target is
+        never modified. Returns (removed, detail-lines)."""
+        from . import source_fs, source_registry
+        conflict = self._shared_remote_conflict(path)
+        if conflict:
+            return False, [f"  [refused] {path}: {conflict}"]
+        dest = self._paths.resolve_source(path)
+        stale = source_fs.quarantine_siblings(self._paths, dest)
+        if stale:
+            return False, [f"  [refused] {path}: quarantine evidence from an interrupted "
+                           f"removal exists ({', '.join(stale)}) — inspect and remove it "
+                           "manually before retrying"]
+        handle = None
+        try:
+            try:
+                handle = source_fs.capture_leaf(self._paths, dest)
+            except (OSError, PathContainmentError) as exc:
+                return False, [f"  [refused] {path}: {exc}"]
+            rec, why = source_registry.verify_identity(
+                self._paths, self._system, self.config(), comp, dest,
+                components=tuple(sorted(consumers.get(path, {comp.id}))), handle=handle)
+            if rec is None:
+                return False, [f"  [refused] {path}: {why}"]
+            final_check = None
+            if rec.strategy != "link" and not allow_dirty:
+                dirty = inst.dirty_report(Path(handle.pinned_path()), path)
+                if dirty:
+                    return False, ([f"  [refused] {path}: local changes present — "
+                                    "not removed (use Clean to remove anyway)"]
+                                   + dirty.lines())
+
+                def final_check(h=handle, p=path):
+                    # FINAL dirty recheck immediately before the irreversible detach —
+                    # a file created after the initial check must preserve the source.
+                    fresh = inst.dirty_report(Path(h.pinned_path()), p)
+                    if fresh:
+                        return ("local changes appeared before removal — source preserved "
+                                "(commit/stash or remove the new files, then retry)")
+                    return ""
+            removed, msg = source_fs.detach_and_remove(self._paths, dest, handle,
+                                                       final_check=final_check)
+            if not removed:
+                return False, [f"  [fail] {path}: {msg}"]
+            # REOCCUPATION recheck: the ownership record may be dropped (and success
+            # reported) only while the original destination is STILL absent — a leaf that
+            # re-appeared during removal is unverified foreign content and must surface as
+            # an incomplete/recovery outcome with truthful evidence, never silent success.
+            try:
+                if source_fs.leaf_kind(self._paths, dest) != "absent":
+                    return False, [f"  [fail] {path}: destination was reoccupied during "
+                                   "removal — ownership record retained; inspect the new "
+                                   "leaf before retrying (recovery required)"]
+            except PathContainmentError as exc:
+                return False, [f"  [fail] {path}: destination unsafe after removal ({exc})"]
+            return True, [f"  [removed] src/{path.split('/')[-1]}"]
+        finally:
+            if handle is not None:
+                handle.close()
+
+    def _classify_uninstall_paths(self, items, target_ids) -> tuple:
+        """Remove / keep-shared / orphan classification for an uninstall — DESCRIPTOR-PROVEN
+        leaf state (never `exists()`), manifest-wide consumers including `build_requires`
+        edges; an ABSENT leaf with a lingering ownership record becomes an ORPHAN-cleanup
+        item. The APPLY path calls this again UNDER the operation locks so the destructive
+        set is derived from post-lock reality, never a stale preflight."""
+        from . import source_fs as _sfs, source_registry as _sreg
+        consumers = self._source_consumers()
+        to_remove: dict = {}
+        kept: list = []
+        orphans: list = []
+        for _, c in items:
+            path = c.source.path
+            try:
+                kind = _sfs.leaf_kind(self._paths, self._paths.resolve_source(path))
+            except PathContainmentError:
+                kind = "special"
+            if kind == "absent":
+                if _sreg.read_record(self._paths, path) is not None and path not in orphans:
+                    orphans.append(path)
+                continue
+            remaining = sorted(consumers.get(path, set()) - target_ids)
+            if remaining:
+                if path not in {p for p, _ in kept}:
+                    kept.append((path, remaining))
+            else:
+                to_remove.setdefault(path, c)
+        return to_remove, kept, orphans, consumers
 
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target
@@ -4790,55 +5487,87 @@ class ControllerService:
                 details=[f"  running: {', '.join(running)} — stop them first"],
                 next_commands=[f"lhpc stack stop {target} --yes"])
 
-        # 2) Every component (manifest-wide) that references each source path.
-        consumers: dict[str, set[str]] = {}
-        for s in self.stacks():
-            for c in s.components:
-                if c.source:
-                    consumers.setdefault(c.source.path, set()).add(c.id)
-
-        # 3) Decide remove vs keep-shared, deduped by source path.
-        to_remove: dict[str, Component] = {}     # path -> a representative component
-        kept: list[tuple[str, list[str]]] = []   # (path, remaining consumers)
-        for _, c in items:
-            path = c.source.path
-            if not self._paths.resolve_source(path).exists():
-                continue
-            remaining = sorted(consumers.get(path, set()) - target_ids)
-            if remaining:
-                if path not in {p for p, _ in kept}:
-                    kept.append((path, remaining))
-            else:
-                to_remove.setdefault(path, c)
+        # 2+3) remove vs keep-shared vs orphan classification (DESCRIPTOR-PROVEN leaf
+        # state; consumers include build_requires edges). Computed here for the PLAN
+        # preview — the APPLY path recomputes it fresh UNDER the operation locks.
+        to_remove, kept, orphans, consumers = self._classify_uninstall_paths(items,
+                                                                             target_ids)
 
         details = [f"  [remove] src/{p.split('/')[-1]} ({c.id})" for p, c in to_remove.items()]
         details += [f"  [keep — shared] src/{p.split('/')[-1]} still used by {', '.join(r)}"
                     for p, r in kept]
+        details += [f"  [cleanup] orphaned ownership record for {p} (source already absent)"
+                    for p in orphans]
         details.append("  (config, secrets and profiles are preserved)")
         if not apply:
             return ActionResult(
                 True, f"Uninstall plan for '{target or 'all'}': remove {len(to_remove)}, "
                 f"keep {len(kept)} shared.", details=details,
-                next_commands=[f"lhpc uninstall {target} --yes"] if to_remove else [],
-                data={"changes": len(to_remove)})
+                next_commands=[f"lhpc uninstall {target} --yes"]
+                if (to_remove or orphans) else [],
+                data={"changes": len(to_remove) + len(orphans)})
 
-        import shutil
-        from . import reslock
+        from . import reslock, source_fs, source_registry
+        inst = self._installer()
         out, ok = [], True
-        # P0.1: ONE atomic guard for the whole uninstall — index→recover→block→source-lock
-        # handoff, holding ALL affected source-path locks (sorted) for the removals. A
-        # linked source is only UNLINKED — its external target is never removed.
-        src_paths = sorted(to_remove.keys())
+        # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->
+        # source-txn index/recovery -> ALL of the target's source-path locks (including
+        # paths KEPT because they are shared — a Start of the target stack needs those
+        # locks, so holding them serializes against it) -> FRESH running recheck ->
+        # fresh remove/keep/orphan classification -> destructive work -> candidate
+        # retirement — all before any lock is released. A concurrent remote/config save
+        # waits on config-stable; nothing here uses a stale configuration snapshot.
+        self._op_seam("uninstall-preflight")
+        all_paths = sorted({c.source.path for _, c in items})
         try:
-            with self._source_operation_guard(src_paths, op="uninstall"):
+            with self._config_stable():
+              with self._source_operation_guard(all_paths, op="uninstall"):
+                self._op_seam("uninstall-locked")
+                # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
+                # slipped in after the preflight refuses with ZERO mutation (no source,
+                # config, log, marker, known-working, or registry change).
+                snap = self.build_snapshot()
+                running = sorted(cid for ss in snap.stacks
+                                 for cid, st in ss.components.items()
+                                 if cid in target_ids and st.run_state in up)
+                if running:
+                    return ActionResult(
+                        False, f"Refusing to uninstall '{target or 'all'}': component(s) "
+                        "started while the uninstall was acquiring its locks.",
+                        details=[f"  running: {', '.join(running)} — stop them first"],
+                        next_commands=[f"lhpc stack stop {target} --yes"])
+                # Recompute the destructive set from POST-LOCK reality.
+                to_remove, kept, orphans, consumers = self._classify_uninstall_paths(
+                    items, target_ids)
+                removed_paths = []
                 for path, c in to_remove.items():
-                    dest = self._paths.resolve_source(path)
-                    try:
-                        dest.unlink() if dest.is_symlink() else shutil.rmtree(dest)
-                        out.append(f"  [removed] src/{path.split('/')[-1]}")
-                    except OSError as exc:
-                        out.append(f"  [fail] {path}: {exc}")
+                    removed, lines = self._remove_source_leaf(path, c, consumers, inst,
+                                                              allow_dirty=False)
+                    out.extend(lines)
+                    if not removed:
                         ok = False
+                        continue
+                    removed_paths.append(path)
+                    if not source_registry.remove_record(self._paths, path):
+                        # Registry-record removal is REQUIRED cleanup: its failure makes the
+                        # uninstall INCOMPLETE (truthful), and the orphan record is retried by
+                        # a later explicit uninstall/clean (the identity verifier refuses to
+                        # let it authorize any future tree at this path).
+                        out.append(f"  [fail] {path}: source removed, but the ownership "
+                                   "record could not be dropped — re-run uninstall to retry")
+                        ok = False
+                for path in orphans:
+                    # Orphaned record at an ABSENT leaf (a prior record-removal failure):
+                    # explicit retry clears it.
+                    if source_registry.remove_record(self._paths, path):
+                        out.append(f"  [cleaned] orphaned ownership record for {path}")
+                    else:
+                        out.append(f"  [fail] {path}: orphaned ownership record could not "
+                                   "be removed")
+                        ok = False
+                # a removed source retires the affected stacks' last-start candidates —
+                # an older composition must not stay eligible for later confirmation
+                ok = self._retire_candidates_for_paths(removed_paths, out) and ok
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {blocked}",
                                 next_commands=["lhpc status"])
@@ -4849,6 +5578,213 @@ class ControllerService:
                 for p, r in kept]
         return ActionResult(ok, f"Uninstall {'applied' if ok else 'incomplete'} for "
                             f"'{target or 'all'}' (config preserved).",
+                            details=out, next_commands=["lhpc status"])
+
+    def clean(self, target: str, apply: bool = False, purge: bool = False) -> ActionResult:
+        """DESTRUCTIVE per-stack purge ("Clean all"): removes every LHPC-OWNED trace of the
+        stack — sources (still ownership-verified + shared-refcounted; DIRTY allowed here,
+        this is the explicit escape hatch), config/stacks/<sid>*, state markers, known-working
+        store, its components' logs + job logs (never an active job's), and registry records.
+        Gates: a STACK target only; refused while anything runs; `apply` additionally requires
+        `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets, and every
+        other stack are untouched. All removal is descriptor-anchored/no-follow; a linked
+        source loses only its runtime symlink leaf."""
+        from . import known_working, reslock, source_fs, source_registry
+        stack = self.stack(target)
+        if stack is None:
+            return self._unknown_stack(target)
+        sid = stack.id
+        comp_ids = {c.id for c in stack.components}
+
+        snap = self.build_snapshot()
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        running = sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
+                         if cid in comp_ids and st.run_state in up)
+        if running:
+            return ActionResult(False, f"Refusing to clean '{sid}': component(s) running.",
+                                details=[f"  running: {', '.join(running)} — stop them first"],
+                                next_commands=[f"lhpc stack stop {sid} --yes"])
+
+        # Removal set (computed up front so the dry-run names EXACTLY what apply removes).
+        consumers = self._source_consumers()
+        from . import source_fs as _sfs, source_registry as _sreg
+        src_remove, src_keep = [], []
+        orphans: list = []                       # absent leaves with a stale ownership record
+        for c in stack.components:
+            if c.source is None:
+                continue
+            path = c.source.path
+            if path in {p for p, _ in src_remove} or path in {p for p, _ in src_keep} \
+                    or path in orphans:
+                continue
+            try:
+                kind = _sfs.leaf_kind(self._paths, self._paths.resolve_source(path))
+            except PathContainmentError:
+                kind = "special"
+            if kind == "absent":
+                if _sreg.read_record(self._paths, path) is not None:
+                    orphans.append(path)         # explicit retry clears the orphan record
+                continue
+            remaining = sorted(consumers.get(path, set()) - comp_ids)
+            (src_keep if remaining else src_remove).append((path, remaining))
+        cfg_dir = self._paths.under("config", "stacks")
+        cfg_files = []
+        try:
+            for name, is_link in runtime_fs.scandir_nofollow(self._paths, cfg_dir):
+                if not is_link and (name == f"{sid}.toml" or name.startswith(f"{sid}@")):
+                    cfg_files.append(name)
+        except PathContainmentError:
+            pass
+        log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
+                             "start", "post") for cid in comp_ids})
+        markers = [self._interactive_marker(sid), self._band_marker(sid),
+                   known_working.candidate_path(self._paths, sid),
+                   self._restart_marker_path(sid),
+                   known_working.store_path(self._paths, sid)]
+
+        details = [f"  [remove] src/{p.split('/')[-1]}" for p, _ in src_remove]
+        details += [f"  [keep — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"
+                    for p, r in src_keep]
+        details += [f"  [cleanup] orphaned ownership record for {p} (source already absent)"
+                    for p in orphans]
+        details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
+        details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
+                    "  [remove] state markers, known-working history, ownership records",
+                    "  (config/local.toml, secrets and other stacks are untouched)"]
+        if not apply:
+            return ActionResult(
+                True, f"CLEAN plan for '{sid}': DESTRUCTIVE — removes sources, config, logs "
+                "and history for this stack.", details=details,
+                next_commands=[f"lhpc clean {sid} --purge --yes"],
+                data={"changes": len(src_remove) + len(orphans) + len(cfg_files) + 1})
+        if not purge:
+            return ActionResult(False, f"Refusing to clean '{sid}': destructive purge "
+                                "requires the explicit purge confirmation.",
+                                next_commands=[f"lhpc clean {sid} --purge --yes"])
+
+        out, ok = [], True
+        self._op_seam("clean-preflight")
+        # SERIALIZATION ORDER (whole applied purge): config-stable shared lock ->
+        # source-txn index/recovery -> ALL of the stack's source-path locks (INCLUDING
+        # kept/shared paths and even a source-less stack — a Start of this stack needs
+        # these locks, so config/log/marker cleanup is serialized against it too) ->
+        # FRESH running recheck -> fresh removal-set recompute -> destructive work.
+        all_paths = sorted({c.source.path for c in stack.components if c.source}
+                           | set(orphans)) or [sid]
+        try:
+            with self._config_stable():
+                with self._source_operation_guard(all_paths, op="clean"):
+                    self._op_seam("clean-locked")
+                    # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
+                    # slipped in after the preflight refuses with ZERO mutation — no
+                    # source, config, log, marker, known-working, or registry cleanup.
+                    snap = self.build_snapshot()
+                    running = sorted(cid for ss in snap.stacks
+                                     for cid, st in ss.components.items()
+                                     if cid in comp_ids and st.run_state in up)
+                    if running:
+                        return ActionResult(
+                            False, f"Refusing to clean '{sid}': component(s) started while "
+                            "the clean was acquiring its locks.",
+                            details=[f"  running: {', '.join(running)} — stop them first"],
+                            next_commands=[f"lhpc stack stop {sid} --yes"])
+                    # Recompute the destructive sets from POST-LOCK reality (the dry-run
+                    # preview above may predate the locks).
+                    consumers = self._source_consumers()
+                    src_remove, src_keep = [], []
+                    orphans = []
+                    for c in stack.components:
+                        if c.source is None:
+                            continue
+                        path = c.source.path
+                        if path in {p for p, _ in src_remove} \
+                                or path in {p for p, _ in src_keep} or path in orphans:
+                            continue
+                        try:
+                            kind = source_fs.leaf_kind(self._paths,
+                                                       self._paths.resolve_source(path))
+                        except PathContainmentError:
+                            kind = "special"
+                        if kind == "absent":
+                            if source_registry.read_record(self._paths, path) is not None:
+                                orphans.append(path)
+                            continue
+                        remaining = sorted(consumers.get(path, set()) - comp_ids)
+                        (src_keep if remaining else src_remove).append((path, remaining))
+                    # 1) sources — race-safe capture/verify/detach removal under the held
+                    # lock; dirty TRACKED/UNTRACKED changes are allowed (explicit purge), but
+                    # a drifted commit/remote/leaf-type still refuses (not LHPC's anymore).
+                    inst = self._installer()
+                    removed_paths = []
+                    for path, _ in src_remove:
+                        comp = next(c for c in stack.components
+                                    if c.source and c.source.path == path)
+                        removed, lines = self._remove_source_leaf(path, comp, consumers, inst,
+                                                                  allow_dirty=True)
+                        out.extend(lines)
+                        if not removed:
+                            ok = False
+                            continue
+                        removed_paths.append(path)
+                        if not source_registry.remove_record(self._paths, path):
+                            out.append(f"  [fail] {path}: source removed, but the ownership "
+                                       "record could not be dropped — re-run clean to retry")
+                            ok = False
+                    ok = self._retire_candidates_for_paths(removed_paths, out) and ok
+                    for path in orphans:
+                        if source_registry.remove_record(self._paths, path):
+                            out.append(f"  [cleaned] orphaned ownership record for {path}")
+                        else:
+                            out.append(f"  [fail] {path}: orphaned ownership record could "
+                                       "not be removed")
+                            ok = False
+                    # 2) per-stack config files
+                    for name in cfg_files:
+                        try:
+                            runtime_fs.unlink(self._paths, cfg_dir / name)
+                            out.append(f"  [removed] config/stacks/{name}")
+                        except (OSError, PathContainmentError) as exc:
+                            out.append(f"  [fail] config/stacks/{name}: {exc}")
+                            ok = False
+                    # 3) markers + known-working history (no-follow unlink; missing = done)
+                    for m in markers:
+                        try:
+                            runtime_fs.unlink(self._paths, m)
+                        except (OSError, PathContainmentError) as exc:
+                            out.append(f"  [fail] {m.name}: {exc}")
+                            ok = False
+                    out.append("  [removed] state markers + known-working history")
+                    # 4) logs (never an active job's — live evidence is preserved)
+                    protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
+                    protected = {f"{n}.log" for n in protected} | protected
+                    removed_logs = 0
+                    try:
+                        entries = runtime_fs.scandir_nofollow(self._paths,
+                                                              self._paths.under("logs"))
+                    except PathContainmentError:
+                        entries = []
+                    for name, is_link in entries:
+                        if is_link or name in protected:
+                            continue
+                        stem = name[:-len(".log")] if name.endswith(".log") else name
+                        if any(stem == p or stem.startswith(p + "-") for p in log_prefixes):
+                            try:
+                                runtime_fs.unlink(self._paths,
+                                                  self._paths.under("logs", name))
+                                removed_logs += 1
+                            except (OSError, PathContainmentError):
+                                ok = False
+                                out.append(f"  [fail] logs/{name}")
+                    out.append(f"  [removed] {removed_logs} log file(s)")
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Clean blocked for '{sid}': {blocked}",
+                                next_commands=["lhpc status"])
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Clean blocked for '{sid}': {busy}",
+                                next_commands=["lhpc status"])
+        out += [f"  [kept — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"
+                for p, r in src_keep]
+        return ActionResult(ok, f"Clean {'applied' if ok else 'INCOMPLETE'} for '{sid}'.",
                             details=out, next_commands=["lhpc status"])
 
     # ---- helpers ---------------------------------------------------------

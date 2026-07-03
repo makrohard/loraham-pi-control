@@ -124,3 +124,29 @@ def test_self_update_busy_cli(capsys, monkeypatch):
                      data={"busy": True}))
     assert main(["self-update", "--apply", "--yes"]) == 1
     assert "already in progress" in capsys.readouterr().out
+
+
+def test_update_source_flag_plumbs_through(monkeypatch, capsys):
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_update(self, target="", apply=False, source="pinned"):
+        seen["source"], seen["apply"] = source, apply
+        return ActionResult(True, "ok", data={"changes": 0})
+    monkeypatch.setattr(ControllerService, "update", fake_update)
+    assert main(["update", "daemon", "--source", "stable", "--yes"]) == 0
+    assert seen["source"] == "stable"
+
+
+def test_clean_requires_purge_and_yes(monkeypatch, capsys):
+    from lhpc.core.services import ControllerService, ActionResult
+    calls = {}
+    def fake_clean(self, target, apply=False, purge=False):
+        calls["apply"], calls["purge"] = apply, purge
+        return ActionResult(purge or not apply, "clean", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "clean", fake_clean)
+    # without --yes: dry-run plan only (interactive confirm declines on closed stdin)
+    assert main(["clean", "kiss", "--purge"]) == 0
+    assert calls["apply"] is False                                   # never applied
+    # with both flags: applied with purge=True
+    assert main(["clean", "kiss", "--purge", "--yes"]) == 0
+    assert calls["apply"] is True and calls["purge"] is True

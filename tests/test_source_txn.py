@@ -23,31 +23,63 @@ def _inst(tmp_path) -> Installer:
     return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
 
 
-def _journal(inst, dest, prev, staging, state):
-    # v2 journal: LOGICAL runtime-relative names only (no trusted absolute paths).
+def _ident_of(p):
+    import os as _os
+    try:
+        st = _os.stat(p, follow_symlinks=False)
+        return [st.st_dev, st.st_ino]
+    except OSError:
+        return None
+
+
+def _journal(inst, dest, prev, staging, state, version=4):
+    # v4 journal with LOGICAL runtime-relative names + leaf-identity evidence computed from
+    # the on-disk leaves the test just created (v2 crafted journals are generation-blocked).
     d = inst.paths.under("state", "source-txn")
     d.mkdir(parents=True, exist_ok=True)
     rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
-    # Identity-bound filename (digest of the full source_rel) + txn_id derived from the
-    # candidate name — the same payload production writes, so recovery accepts it.
     cand_rel = rel(staging)
-    inst._journal_path(dest).write_text(json.dumps({
-        "version": 2, "state": state, "source_rel": rel(dest),
+    payload = {
+        "version": version, "state": state, "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": cand_rel,
-        "txn_id": inst._txn_id(cand_rel)}))
+        "txn_id": inst._txn_id(cand_rel)}
+    if version == 4:
+        payload["meta"] = {"selector": "legacy", "resolved_commit": "", "remote": "",
+                           "strategy": "", "components": [dest.name]}
+        payload["idents"] = {"candidate": _ident_of(staging), "prev": _ident_of(prev)}
+    inst._journal_path(dest).write_text(json.dumps(payload))
 
 
 def _fin(inst, dest, prev, staging):
-    """Open the journal as an OwnedMarker and drive _finish_or_rollback (recovery API)."""
+    """Open the journal as an OwnedMarker and drive _finish_or_rollback (recovery API),
+    supplying v4-style leaf-identity evidence computed from the on-disk leaves."""
     from lhpc.core import runtime_fs
     jf = inst._journal_path(dest); jf.parent.mkdir(parents=True, exist_ok=True)
     if not jf.exists():
         jf.write_text("{}")
     m = runtime_fs.open_existing_marker(inst.paths, jf)
     try:
-        return inst._finish_or_rollback(dest, prev, staging, m)
+        return inst._finish_or_rollback(
+            dest, prev, staging, m,
+            idents={"candidate": _ident_of(staging), "prev": _ident_of(prev)})
     finally:
         m.close()
+
+
+def _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2", ".app.prev"),
+                    plant_dangling=False):
+    """Redirect the failure-injection seam to the ATOMIC promotion primitive
+    (`source_fs._rename_noreplace_at`) the activation now uses instead of os.rename."""
+    import os as _os
+    from lhpc.core import source_fs as _sf
+    real = _sf._rename_noreplace_at
+    def failing(parent_fd, old, new):
+        if any(old.endswith(sfx) for sfx in suffixes):
+            if plant_dangling and old.endswith(".app.candidate-1-2"):
+                _os.symlink("gone", new, dir_fd=parent_fd)   # race: dangling symlink at dest
+            raise OSError("simulated rename failure")
+        return real(parent_fd, old, new)
+    monkeypatch.setattr(_sf, "_rename_noreplace_at", failing)
 
 
 def test_recover_rolls_back_after_prior_archived(tmp_path):
@@ -225,6 +257,7 @@ def test_activate_failed_restore_retains_journal(tmp_path, monkeypatch):
             raise OSError("simulated rename failure")
         return real_rename(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", failing)
+    _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
     assert inst._activate(dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()             # journal RETAINED (recovery-required)
 
@@ -478,6 +511,7 @@ def test_recovery_required_preserves_candidate_and_prior(tmp_path, monkeypatch):
             raise OSError("simulated rename failure")
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", failing)
+    _fail_noreplace(monkeypatch)                          # promotion is atomic NOREPLACE now
     assert inst._activate(dest, staging) == "recovery-required"
     assert staging.is_dir() and (staging / "m").read_text() == "NEW"   # candidate PRESERVED
     assert inst._journal_path(dest).exists()                            # journal retained
@@ -601,7 +635,10 @@ def test_broken_active_symlink_not_treated_as_intact(tmp_path):
     prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("PRIOR")
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")
     assert "intact" not in msg                            # broken symlink != usable source
-    assert dest.is_dir() and (dest / "m").read_text() == "PRIOR"   # rolled back
+    # the INJECTED occupant is never deleted to continue: retained as evidence, prior kept
+    assert "recovery-required" in msg and "occupied" in msg
+    assert dest.is_symlink()                              # injected leaf UNTOUCHED
+    assert (prev / "m").read_text() == "PRIOR"            # prior retained at .prev
 
 
 def test_failed_journal_unlink_is_recovery_required(tmp_path, monkeypatch):
@@ -624,7 +661,7 @@ def test_failed_prev_cleanup_after_activation_retains_journal(tmp_path, monkeypa
     prev = src / ".app.prev"; prev.mkdir()
     jf = inst._journal_path(dest); jf.parent.mkdir(parents=True, exist_ok=True); jf.write_text("{}")
     monkeypatch.setattr(type(inst), "_prev_cleanup_ok",
-                        lambda self, txn, prev: False)          # prev removal "fails"
+                        lambda self, txn, prev, ident=None: False)   # prev removal "fails"
     msg = _fin(inst, dest, prev, src / ".app.candidate-1-2")
     assert "recovery-required" in msg and "prior could not be removed" in msg
     assert jf.exists() and prev.exists()                  # journal + prior retained
@@ -690,10 +727,14 @@ def test_activate_failed_rename_leaving_dangling_dest_restores_prior(tmp_path, m
             raise OSError("simulated activation failure")
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
+    _fail_noreplace(monkeypatch, suffixes=(".app.candidate-1-2",), plant_dangling=True)
     outcome = inst._activate(dest, staging)
-    assert dest.is_dir() and (dest / "m").read_text() == "LIVE"   # prior restored, usable
-    assert outcome == "failed-clean"
-    assert not inst._journal_path(dest).exists()
+    # the injected dangling symlink is NEVER deleted to continue: evidence retained,
+    # prior stays archived at .prev, journal retained for recovery
+    assert outcome == "recovery-required"
+    assert dest.is_symlink()                                      # injected leaf UNTOUCHED
+    assert (src / ".app.prev" / "m").read_text() == "LIVE"        # prior safe at .prev
+    assert inst._journal_path(dest).exists()
 
 
 def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypatch):
@@ -712,6 +753,7 @@ def test_activate_dangling_dest_unrestorable_retains_journal(tmp_path, monkeypat
             raise OSError("restore failed")
         return real(a, b, *args, **kw)
     monkeypatch.setattr("lhpc.core.install.os.rename", fake_rename)
+    _fail_noreplace(monkeypatch, plant_dangling=True)
     assert inst._activate(dest, staging) == "recovery-required"
     assert inst._journal_path(dest).exists()           # journal retained (recovery route)
 
@@ -725,8 +767,10 @@ def test_activation_prev_cleanup_failure_recovery_required_then_recoverable(tmp_
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     real = type(inst)._prev_cleanup_ok
     fail = {"on": True}
-    monkeypatch.setattr(type(inst), "_prev_cleanup_ok",
-                        lambda self, txn, prev: False if fail["on"] else real(self, txn, prev))
+    monkeypatch.setattr(
+        type(inst), "_prev_cleanup_ok",
+        lambda self, txn, prev, ident=None: False if fail["on"]
+        else real(self, txn, prev, ident))
     # Activation succeeds, but the .prev cleanup fails -> recovery-required (typed).
     assert inst._activate(dest, staging) == "recovery-required"
     assert dest.is_dir() and (dest / "m").read_text() == "NEW"   # active source usable
@@ -827,6 +871,25 @@ def test_adopt_reports_mutable_dev_provenance(tmp_path):
     assert action.status == "done" and action.provenance == "mutable-dev"
 
 
+
+def _register_tree(inst, dest, comp, remote=""):
+    """Make an EXISTING tree pass the current-identity gate: turn it into a committed git
+    repo and write a matching ownership record (HEAD + remote + strategy '')."""
+    import subprocess, time as _t
+    from lhpc.core import source_registry
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin"}
+    subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True, env=env)
+    subprocess.run(["git", "-C", str(dest), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(dest), "commit", "-qm", "prior"], check=True,
+                   capture_output=True, env=env)
+    head = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True, env=env).stdout.strip()
+    rel = str(dest.relative_to(inst.paths.runtime_root))
+    assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
+        rel, remote, "legacy", head, _t.time(), "", "", (comp.id,)))
+    return head
+
 def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch):
     # §4: a not-ok provenance result BLOCKS activation BEFORE the active source is touched.
     from lhpc.core import provenance
@@ -837,6 +900,7 @@ def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src",
                                        strategy="link", pin_commit=head))
+    _register_tree(inst, active, comp)                   # identity gate passes -> reaches provenance
     monkeypatch.setattr(provenance, "evaluate", lambda *a, **k: provenance.ProvenanceResult(
         provenance.UNVERIFIED_BLOCKED, False, False, "forced block"))
     action = inst.adopt_source(comp, source="pinned", force=True)
@@ -955,9 +1019,10 @@ def test_post_activation_provenance_mismatch_restores_prior(tmp_path, monkeypatc
     (active / "OLD").write_text("PRIOR")                 # a prior active source
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
+    _register_tree(inst, active, comp)                   # identity gate passes -> reaches provenance
     calls = {"n": 0}
     real = provenance.evaluate
-    def fake(runner, path, spec, source, trusted):
+    def fake(runner, path, spec, source, trusted, expected_commit=""):
         calls["n"] += 1
         if calls["n"] >= 2:                              # #1 = pre-gate (ok); later = post -> fail
             return provenance.ProvenanceResult(provenance.UNVERIFIED_BLOCKED, False, False, "forced")
@@ -966,7 +1031,9 @@ def test_post_activation_provenance_mismatch_restores_prior(tmp_path, monkeypatc
     action = inst.adopt_source(comp, source="pinned", force=True)
     assert action.status == "failed" and "rolled back" in action.detail
     assert (active / "OLD").read_text() == "PRIOR"       # prior RESTORED via held-FD rollback
-    assert inst._journal_path(active).exists()           # journal RETAINED (evidence)
+    # a PROVEN rollback leaves a coherent state -> the journal is CLEARED (it is retained
+    # only when rollback/record completion cannot be proven)
+    assert not inst._journal_path(active).exists()
 
 
 def test_successful_adopt_clears_journal_only_after_provenance(tmp_path):
@@ -1240,3 +1307,31 @@ def test_failed_staging_cleans_controller_candidate(tmp_path):
     leftovers = [p.name for p in src.iterdir() if p.name.startswith(".app.candidate")] \
         if src.exists() else []
     assert leftovers == []                                     # intact candidate cleaned up
+
+
+# --- FINAL: v2/v3 journals are generation-blocked, leaves retained ----------------------------
+
+def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path):
+    # A structurally-valid v3 journal — even with substituted candidate/dest/prev leaves —
+    # triggers NO automatic promotion/restore/cleanup: typed recovery-required, everything
+    # retained, further mutation blocked.
+    inst = _inst(tmp_path)
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"; dest.mkdir(); (dest / "m").write_text("SUBSTITUTED DEST")
+    prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("SUBSTITUTED PRIOR")
+    staging = src / ".app.candidate-1-2"; staging.mkdir()
+    (staging / "m").write_text("SUBSTITUTED CANDIDATE")
+    rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
+    inst._journal_path(dest).parent.mkdir(parents=True, exist_ok=True)
+    inst._journal_path(dest).write_text(json.dumps({
+        "version": 3, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "dev", "resolved_commit": "a" * 40, "remote": "",
+                 "strategy": "", "components": ["app"]}}))
+    msgs = inst.recover_source_activations()
+    assert any("generation" in m and "recovery-required" in m for m in msgs)
+    assert (dest / "m").read_text() == "SUBSTITUTED DEST"       # nothing touched
+    assert (prev / "m").read_text() == "SUBSTITUTED PRIOR"
+    assert (staging / "m").read_text() == "SUBSTITUTED CANDIDATE"
+    assert inst._journal_path(dest).exists()                    # journal retained

@@ -121,6 +121,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive,
+            # Durable restart-required flags (file reads only): a yellow "Restart now"
+            # action per flagged stack.
+            restart_required=service.restart_required_stacks(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -258,6 +261,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             conflicts=[c for c in service.observed_conflicts(snapshot)   # band-aware (no false 433/868)
                        if any(h in member_ids for h in c.holders)],
             system_deps=service.system_deps(stack_id),
+            # Grouped dependency diagnosis (system / build / runtime) — read-only, no network.
+            deps=service.deps_report(stack_id),
             # Components installed but whose compiled binary is missing (e.g. dropped
             # by a fresh clone) -> they need a Build before they can run.
             needs_build=[c.id for c in stack_status.stack.components
@@ -269,7 +274,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # component-scoped run/file params, source remotes, autostart, band switch + live radio.
             view=service.config_view(stack_id, request.args.get("band", "")),
             config_groups=service.config_param_groups(stack_id, request.args.get("band", "")),
+            # Yellow "Confirm this stack as working" offer — FILE READS ONLY (candidate marker
+            # + known-working store + the snapshot above); shown after a healthy start of a
+            # composition that is not yet operator-confirmed.
+            kw_offer=service.known_working_offer(stack_id, snapshot),
+            # Durable restart-required flag (file read only): yellow "Restart now" action.
+            restart_required=service.restart_required(stack_id),
         )
+
+    @app.post("/stacks/<stack_id>/known-working/confirm")
+    def known_working_confirm(stack_id: str):  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        if service.stack(stack_id) is None:
+            abort(404)
+        res = service.confirm_known_working(stack_id)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("stack_detail", stack_id=stack_id))
 
     @app.post("/interactive/<stack_id>/dismiss")
     def interactive_dismiss(stack_id: str):  # noqa: ANN202
@@ -521,6 +542,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Stage 1: show the dry-run plan, options and a confirmation form.
             return _render_confirm(op, target, band, params, file_over, source, frm)
         # Stage 2: apply.
+        # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
+        # a mismatch re-renders the confirm with ZERO mutation.
+        purge = False
+        if op == "clean":
+            typed = (request.form.get("confirm_text") or "").strip()
+            if typed != target:
+                flash(f"Clean not applied: type the stack id '{target}' exactly to confirm "
+                      "the destructive purge.", "warn")
+                return _render_confirm(op, target, band, params, file_over, source, frm)
+            purge = True
         # install/build/test run as detached jobs streaming to a log -> show it live.
         if op in ("install", "build", "test"):
             # Gate install/build on system dependencies: never proceed while a
@@ -556,7 +587,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                        enforce_field=id_field)
         result = service.run_action(op, target, apply=True, params=params, source=source,
                                     stop_owners=stop_owners, cascade=cascade, band=band,
-                                    daemon_overrides=daemon_overrides, file_overrides=file_over)
+                                    daemon_overrides=daemon_overrides, file_overrides=file_over,
+                                    purge=purge)
         # An interactive/systemd start whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
         # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
         ok_flash = result.ok or manual_required_only(result.results)

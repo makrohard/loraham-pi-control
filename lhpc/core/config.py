@@ -3,7 +3,7 @@
 Five concerns, kept strictly separate (see docs/operations.md):
 
   1. tracked defaults        lhpc/data/defaults.toml        (shipped package data)
-  2. known-good profiles     lhpc/data/profiles.example.toml (catalogue; runtime: profiles/)
+  2. known-working compositions  runtime profiles/known-working/ (operator-confirmed)
   3. local operator overrides <runtime>/config/local.toml   (git-ignored, operator settings + callsign)
   4. local secrets           <runtime>/config/secrets.toml  (git-ignored, mode 0600)
   5. generated runtime state  <runtime>/state/              (never sole source of truth)
@@ -352,15 +352,26 @@ def save_component_remote(paths: Paths, component_id: str, url: str) -> Path:
     """Override a component's GitHub remote in the runtime-local layer. An empty
     url clears the override. The URL is validated to a safe remote policy BEFORE
     any file change (raises ValidationError on an unsafe/option-like value)."""
+    return save_component_remotes(paths, {component_id: url})
+
+
+def save_component_remotes(paths: Paths, updates: dict) -> Path:
+    """Override (or clear, for an empty url) SEVERAL components' remotes in ONE atomic
+    locked write — the shared-source propagation path: every consumer of one checkout gets
+    the identical remote in the same transaction, so per-component divergence can never be
+    left behind by a partial save."""
     from . import validators
-    cid = validators.path_component(component_id, field="component id")
-    clean = validators.remote_url(url, field="remote")
+    patch = {}
+    for component_id, url in updates.items():
+        cid = validators.path_component(component_id, field="component id")
+        clean = validators.remote_url(url, field="remote")
+        patch[cid] = clean or None                     # None clears the override
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
-        # Patch ONLY this component's key (None clears it), preserving every other remote. A
-        # non-table `remotes` value is rejected inside the patch (ConfigError), never a raw
+        # Patch ONLY these component keys, preserving every other remote. A non-table
+        # `remotes` value is rejected inside the patch (ConfigError), never a raw
         # `dict("string")` ValueError.
-        return _write_local_tables(paths, path, {"remotes": {cid: clean or None}})
+        return _write_local_tables(paths, path, {"remotes": patch})
 
 
 def render_local_tables(data: dict) -> str:
@@ -406,7 +417,7 @@ _JOURNAL_VERSION = 1
 # Only these logical config targets may ever appear in a transaction journal. Recovery
 # maps a logical kind + a validated runtime-relative path through the safe path API —
 # it never trusts or touches an arbitrary absolute path from journal content.
-_ALLOWED_KINDS = {"local", "stack"}
+_ALLOWED_KINDS = {"local", "stack", "state"}
 
 
 def _resolve_journal_target(paths: Paths, rec) -> Path:
@@ -427,6 +438,11 @@ def _resolve_journal_target(paths: Paths, rec) -> Path:
     if kind == "stack" and (len(parts) != 3 or parts[:2] != ["config", "stacks"]
                             or not parts[2].endswith(".toml")):
         raise ConfigError("stack journal target must be config/stacks/<name>.toml")
+    if kind == "state" and (len(parts) != 3 or parts[:2] != ["state", "restart-required"]
+                            or not parts[2].endswith(".json")):
+        # The ONLY state marker written through the config transaction: the durable
+        # restart-required flag, atomic WITH the config change that caused it.
+        raise ConfigError("state journal target must be state/restart-required/<name>.json")
     try:
         p = paths.under(*parts)        # lexical + symlink-parent containment
     except PathContainmentError as exc:

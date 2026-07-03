@@ -159,11 +159,14 @@ class StatusProber:
         return probe_source(self._system, comp.source, abs_path)
 
     def _profile_state(self, comp: Component, src) -> ProfileState:
-        # confirmed-working only when a profile exists AND the source is clean and
-        # at exactly the profile's commit. A dirty/diverged tree is never confirmed.
-        profile = self._profiles.get(comp.id)
-        if (profile and src.state is SourceState.MATCH
-                and src.head and src.head == profile.commit):
+        # confirmed-working only when the CLEAN source's HEAD appears in an operator-confirmed
+        # known-working composition of its stack (`self._profiles` = {comp_id: {commits}},
+        # built by `build_snapshot` from the known-working store). MATCH (at the pin) and
+        # DIFFERS (clean at another exact commit, e.g. a confirmed stable update) both
+        # qualify; a DIRTY tree is never confirmed.
+        commits = self._profiles.get(comp.id) or ()
+        if (src.head and src.head in commits
+                and src.state in (SourceState.MATCH, SourceState.DIFFERS)):
             return ProfileState.CONFIRMED_WORKING
         return _profile_from_source(src.state)
 

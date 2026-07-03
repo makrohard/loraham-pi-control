@@ -280,3 +280,6 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .header-wrap { padding-top: 0; padding-bottom: 0; }
 .pill-light { background: rgba(255, 255, 255, .15); color: #fff; border-color: transparent; }
 .details-link { margin: .6rem 0 0; }
+/* Yellow operator-action buttons (Confirm known-working, Restart required) ----- */
+.warnbtn { background: #fff3cd; color: #7a5200; border: 1px solid #e0b64f; font-weight: 600; }
+.warnbtn:hover { background: var(--warn); color: #fff; }

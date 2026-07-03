@@ -7,7 +7,7 @@ runtime dependencies) into the `model` dataclasses.
 
 Configuration layering (see docs/architecture.md):
   1. tracked defaults        -> lhpc/data/manifest.example.toml (shipped package data)
-  2. known-good profiles     -> lhpc/data/profiles.example.toml
+  2. known-working compositions -> runtime profiles/known-working/ (operator-confirmed)
   3. generated runtime state -> under the runtime root
   4. user-local overrides    -> <runtime>/config/local.toml   (git-ignored)
   5. secrets                 -> <runtime>/config/secrets.toml (git-ignored)
@@ -226,6 +226,15 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
                 raise ManifestError(f"component {cid!r} depends on itself")
             if dep not in comp_of:
                 raise ManifestError(f"component {cid!r} depends on unknown component {dep!r}")
+        for dep in c.build_requires:                   # build deps: known SOURCE components
+            if dep == cid:
+                raise ManifestError(f"component {cid!r} build_requires itself")
+            if dep not in comp_of:
+                raise ManifestError(f"component {cid!r} build_requires unknown "
+                                    f"component {dep!r}")
+            if comp_of[dep].source is None:
+                raise ManifestError(f"component {cid!r} build_requires {dep!r}, which "
+                                    "declares no source checkout")
 
     WHITE, GRAY, BLACK = 0, 1, 2                        # cycle detection with evidence
     color = {cid: WHITE for cid in comp_of}
@@ -249,6 +258,25 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
             if b and b not in ALLOWED_BANDS:
                 raise ManifestError(f"component {cid!r} declares unknown band {b!r} "
                                     f"(allowed: {', '.join(ALLOWED_BANDS)})")
+
+    # SHARED-SOURCE COHERENCE: every component consuming ONE checkout dir (same source.path)
+    # must declare the IDENTICAL source spec — selector resolution, the ownership registry and
+    # uninstall refcounting all key on the path, so disagreeing pins/remotes/branches/artifact
+    # flags would make "the version of src/X" ambiguous. Fail at load, never at mutation time.
+    by_path: dict[str, tuple] = {}
+    for cid, c in comp_of.items():
+        if not c.source or not c.source.path:
+            continue
+        ident = (c.source.artifact, c.source.pin_commit, c.source.pin_tag,
+                 c.source.branch, c.source.remote, c.source.strategy)
+        prev = by_path.get(c.source.path)
+        if prev is None:
+            by_path[c.source.path] = (cid, ident)
+        elif prev[1] != ident:
+            raise ManifestError(
+                f"components {prev[0]!r} and {cid!r} share source path "
+                f"{c.source.path!r} but declare different source specs "
+                "(pin/tag/branch/remote/strategy/artifact must be identical)")
 
 
 def parse_manifest(data: dict) -> tuple[Stack, ...]:
@@ -330,6 +358,7 @@ def _parse_component(raw: dict) -> Component:
         process=_parse_process(raw.get("process")),
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
+        build_requires=tuple(raw.get("build_requires", [])),
         source=_parse_source(raw.get("source")),
         log_paths=tuple(raw.get("log_paths", [])),
         start_order=raw.get("start_order"),
@@ -427,4 +456,5 @@ def _parse_source(raw: dict | None) -> SourceSpec | None:
         branch=raw.get("branch", ""),
         local_dir=raw.get("local_dir", ""),
         strategy=raw.get("strategy", ""),
+        artifact=bool(raw.get("artifact", False)),
     )

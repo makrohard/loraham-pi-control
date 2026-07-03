@@ -37,6 +37,10 @@ main = "loraham-daemon"
   run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "{param:debug}", "--tx-mode-433", "{param:tx_433}", "--tx-mode-868", "{param:tx_868}", "--cad-monitor-433", "{param:cadmon_433}", "--cad-monitor-868", "{param:cadmon_868}", "--cad-rssi-433", "{param:cadrssi_433}", "--cad-rssi-868", "{param:cadrssi_868}"]
   run_cwd = "{source}"
   run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham" }
+  # build.sh consumes the RadioLib checkout as the sibling src/RadioLib — a hard BUILD-time
+  # dependency (not "optional"): update includes it, uninstall refuses to remove it while
+  # the daemon source is installed.
+  build_requires = ["radiolib"]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/loraham", mode = "700" } ]
   readiness = "daemon-band"
   bin = "loraham_daemon/loraham_daemon"
@@ -161,8 +165,10 @@ main = "loraham-daemon"
   id = "radiolib"
   name = "RadioLib"
   kind = "library"
-  purpose = "C++ radio library; build-time dependency of the daemon."
+  purpose = "C++ radio library; REQUIRED build-time dependency of the daemon (build_requires)."
   tx_capable = false
+  # `optional` here means "not runnable / not started with the stack" — the daemon's
+  # build_requires edge makes it a hard install/update/uninstall reference.
   optional = true
 
     [stack.component.source]
@@ -194,6 +200,7 @@ operator_box = false   # callsign lives in the app's own config file (CALL); no 
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   build = "gcc lorachat_ncurses_113.c -o loraham_chat -lncurses -lpthread"
+  bin = "loraham_chat"
   # Run from the runtime config dir so the TUI reads the lhpc-seeded lorachat.conf
   # (and its in-app Ctrl-K saves persist there too) — never written into the repo.
   run = 'cd "{runtime}/config/files" && exec "{source}/loraham_chat"'
@@ -211,6 +218,9 @@ operator_box = false   # callsign lives in the app's own config file (CALL); no 
     path = "src/LoRaHAM_Daemon"
     remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
     local_dir = "LoRaHAM_Daemon"
+    # Single-file artifact source: every selector (Known working / Development /
+    # Latest stable) resolves to the same declared artifact (default-branch HEAD).
+    artifact = true
 
     # Seeded into {runtime}/config/files/lorachat.conf (KEY=VALUE, split on '=').
     [stack.component.config_file]
@@ -270,6 +280,7 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   build = "gcc -Wall -o loraham_igate loraham_iGate_106.c"
+  bin = "loraham_igate"
   # No `-d` (double-fork daemonize) — LHPC owns the foreground session leader; see
   # the daemon note above.
   run = "./loraham_igate {call} {tx_freq} {rx_freq} {lat} {lon} {symbol} {digipeat} {is_interval} {rf_interval} {filter_lat} {filter_lon} {filter_radius} {relay} {repeater}"
@@ -279,6 +290,9 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
     path = "src/LoRaHAM_Daemon"
     remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
     local_dir = "LoRaHAM_Daemon"
+    # Single-file artifact source: every selector (Known working / Development /
+    # Latest stable) resolves to the same declared artifact (default-branch HEAD).
+    artifact = true
 
     [stack.component.process]
     exec_name = "loraham_igate"
@@ -409,6 +423,7 @@ main = "loraham-voice"
   # daemon must transmit immediately: DIRECT (the app provides its own waitr behaviour).
   requires_daemon_tx = "DIRECT"
   build = "gcc -o loraham_voice loraham_voice_v107.c `pkg-config --cflags --libs gtk+-3.0` -lcodec2 -lasound -lncurses -lpthread -lm"
+  bin = "loraham_voice"
   # voice reads loraham_voice.conf from dirname(argv0), NOT the CWD — so we run it
   # via a symlink in the runtime config dir (where lhpc seeds the conf), keeping the
   # conf out of the repo. GUI app: lhpc Start/Stops it; opens on the Pi display.
@@ -443,6 +458,7 @@ main = "loraham-voice"
     path = "src/LoRaHAM_Voice"
     remote = "https://github.com/LoRaHAM/LoRaHAM_Voice.git"
     local_dir = "LoRaHAM_Voice"
+    artifact = true
 
     [stack.component.process]
     exec_name = "loraham_voice"
@@ -793,6 +809,7 @@ main = "meshtastic"
     path = "src/LoRaHAM_Pi"
     remote = "https://github.com/LoRaHAM/LoRaHAM_Pi.git"
     local_dir = "LoRaHAM_Pi"
+    artifact = true
     branch = "main"
 
     [stack.component.process]

@@ -5,16 +5,26 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 
 ## Selections
 
-| `--source` | Meaning | Production-safe? |
-|---|---|---|
-| `pinned` *(default)* | Check out the manifest's pinned known-good commit and verify `HEAD == pin`. | ✅ (immutable) |
-| `dev` | The operator's mutable dev branch/tree. Explicit opt-in. | ❌ mutable |
-| `stable` | The latest release tag. Explicit opt-in. | ❌ mutable |
+| `--source` | Web label | Meaning | Production-safe? |
+|---|---|---|---|
+| `pinned` *(default)* | Known working | The newest operator-confirmed known-working composition entry for the stack; else the manifest pin (clearly labelled `fallback`). `HEAD ==` the expected commit is verified either way. | ✅ (immutable) |
+| `dev` | Development | The configured development branch tip. Never silently another ref — an unobtainable branch is a typed "selector unavailable". Explicit opt-in. | ❌ mutable |
+| `stable` | Latest stable | Git-only: newest version-shaped tag ("release"), else newest tag, else the default-branch HEAD. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
-a missing pin or signature. A **linked external tree** (`strategy = "link"`) is inherently an
-explicit mutable dev checkout (a symlink can't be pinned) and stays read-only to lhpc.
+a missing pin or signature. An **artifact** source (`artifact = true`: chat, igate, voice,
+meshtastic base) resolves every selector to the same declared artifact (`artifact-head`).
+A **linked external tree** (`strategy = "link"`) is inherently an explicit mutable dev
+checkout (a symlink can't be pinned) and stays read-only to lhpc.
+
+Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
+resolved commit, transaction id — written inside the activation transaction (journal v3),
+completable by recovery. Update/uninstall/clean require ownership (a pre-registry tree must
+origin-match its configured remote to be backfilled); update also requires the affected
+stacks stopped and refuses dirty trees (tracked or non-ignored untracked changes).
+`lhpc clean <stack> --purge` is the explicit destructive escape hatch (typed confirm on
+the web); normal uninstall retains config, logs and history.
 
 ## Verification status (truthful)
 

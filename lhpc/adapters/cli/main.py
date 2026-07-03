@@ -32,10 +32,11 @@ _TOPICS = {
         "current owner and the stop/status commands to resolve it."
     ),
     "profiles": (
-        "Confirmed-working profiles: the controller tracks the last known-good\n"
-        "state per stack (commits, daemon version/TX profile, config schema,\n"
-        "tests, live-test date). A failed candidate never overwrites a confirmed\n"
-        "profile; reinstall or update to change a managed source."
+        "Known-working compositions: after a healthy stack start, confirm it\n"
+        "('Confirm this stack as working' on the stack page). The newest three\n"
+        "operator-confirmed compositions (exact commits per component) are kept\n"
+        "per stack; the 'Known working' install/update selector resolves to the\n"
+        "newest one, falling back to the manifest pin (clearly labelled)."
     ),
 }
 
@@ -164,6 +165,16 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=f"{name.capitalize()} a stack/component")
         sp.add_argument("target", nargs="?", default="", help="Stack/component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
+        if name == "update":
+            sp.add_argument("--source", choices=("pinned", "dev", "stable"), default="pinned",
+                            help="Version to fetch: latest dev / latest stable / pinned")
+
+    p_clean = sub.add_parser("clean", help="DESTRUCTIVE: purge a stack (sources, config, "
+                             "logs, history)")
+    p_clean.add_argument("target", help="Stack id")
+    p_clean.add_argument("--purge", action="store_true",
+                         help="Required: confirm the destructive purge")
+    p_clean.add_argument("--yes", action="store_true", help="Apply without interactive confirm")
 
     p_test = sub.add_parser("test", help="Run host tests, or a bounded TX test with --tx")
     p_test.add_argument("target", help="Stack/component id")
@@ -247,9 +258,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return _render_daemon(svc.daemon_view(args.band))
     if args.command == "update":
-        return _apply_flow(lambda a: svc.update(args.target, apply=a), yes=args.yes)
+        return _apply_flow(lambda a: svc.update(args.target, apply=a, source=args.source),
+                           yes=args.yes)
     if args.command == "uninstall":
         return _apply_flow(lambda a: svc.uninstall(args.target, apply=a), yes=args.yes)
+    if args.command == "clean":
+        # DESTRUCTIVE: both --purge AND (--yes or interactive confirm) are required.
+        return _apply_flow(lambda a: svc.clean(args.target, apply=a, purge=args.purge),
+                           yes=args.yes)
     if args.command == "test":
         return _apply_flow(
             lambda a: svc.test(args.target, tx=args.tx, apply=a),

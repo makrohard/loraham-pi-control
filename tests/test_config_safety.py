@@ -80,17 +80,17 @@ def test_save_operator_config_refuses_symlinked_local(tmp_path):
     assert outside.read_text() == ""                            # never written through
 
 
-def test_save_profile_is_contained(tmp_path):
+def test_known_working_record_is_contained(tmp_path):
     import os
-    from lhpc.core import profiles
-    from lhpc.core.paths import PathContainmentError
-    d = profiles.profiles_dir(Paths(runtime_root=tmp_path)); d.mkdir(parents=True)
-    outside = tmp_path / "p.toml"; outside.write_text("orig")
-    os.symlink(outside, d / "loraham-daemon.toml")
-    from lhpc.core.profiles import ConfirmedProfile
-    prof = ConfirmedProfile(component_id="loraham-daemon")
-    with pytest.raises((OSError, PathContainmentError)):
-        profiles.save_profile(Paths(runtime_root=tmp_path), prof)
+    from lhpc.core import known_working
+    paths = Paths(runtime_root=tmp_path)
+    sp = known_working.store_path(paths, "s"); sp.parent.mkdir(parents=True)
+    outside = tmp_path / "p.json"; outside.write_text("orig")
+    os.symlink(outside, sp)                          # symlinked store leaf
+    ok, msg = known_working.record(
+        paths, "s", {"c": {"commit": "a" * 40, "selector": "dev", "remote": "",
+                           "source_rel": "src/c"}}, {"confirmed_at": 1.0})
+    assert not ok                                    # refused, never through the symlink
     assert outside.read_text() == "orig"
 
 

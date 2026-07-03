@@ -35,10 +35,34 @@ RUNTIME_SUBDIRS = (
     "bin", "src", "build", "start", "config", "profiles", "systemd", "state", "logs", "docs",
 )
 
-# Heavy, regenerable directories we skip when adopting a local checkout.
-_ADOPT_IGNORE = shutil.ignore_patterns(
+# Heavy, regenerable directories we skip when adopting a local checkout — and that never
+# count as "local changes" in the destructive-operation dirty check (they are build/runtime
+# artifacts LHPC itself regenerates).
+_ADOPT_IGNORE_NAMES = (
     ".pio", ".venv", "build", ".work", ".run", "__pycache__", "node_modules",
 )
+_ADOPT_IGNORE = shutil.ignore_patterns(*_ADOPT_IGNORE_NAMES)
+
+
+@dataclass(frozen=True)
+class DirtyReport:
+    """Local changes that a destructive source operation would discard. `tracked` =
+    modified/staged/deleted tracked files; `untracked` = non-ignored untracked files EXCLUDING
+    LHPC-regenerable artifacts (`_ADOPT_IGNORE_NAMES` + every consumer component's declared
+    built binary). Either list non-empty => the tree is dirty for update/uninstall purposes."""
+    tracked: tuple = ()
+    untracked: tuple = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.tracked or self.untracked)
+
+    def lines(self, limit: int = 8) -> list:
+        out = [f"    modified: {p}" for p in self.tracked[:limit]]
+        out += [f"    untracked: {p}" for p in self.untracked[:limit]]
+        hidden = max(0, len(self.tracked) - limit) + max(0, len(self.untracked) - limit)
+        if hidden:
+            out.append(f"    … and {hidden} more")
+        return out
 
 
 class _Substituted(Exception):
@@ -215,6 +239,7 @@ class Installer:
     # -- source adoption ---------------------------------------------------
 
     def plan_install(self, stack_id: str | None = None) -> Plan:
+        from . import source_fs
         plan = Plan(title="Install (adopt/verify sources)")
         for stack in self.stacks:
             if stack_id and stack.id != stack_id:
@@ -223,20 +248,30 @@ class Installer:
                 if comp.source is None:
                     continue
                 dest = self.paths.resolve_source(comp.source.path)
-                if dest.exists():
+                try:
+                    kind = source_fs.leaf_kind(self.paths, dest)   # no-follow, never exists()
+                except PathContainmentError:
+                    kind = "special"                               # unsafe parent -> not adoptable
+                if kind in ("dir", "symlink"):
                     probe = probe_source(self.system, comp.source, str(dest))
                     plan.actions.append(PlanAction(
                         "verify", str(dest),
                         f"{comp.id}: source present ({probe.state.value})",
                         status="exists", detail=probe.state.value))
-                else:
+                elif kind == "absent":
                     plan.actions.append(PlanAction(
                         "adopt", str(dest),
                         f"{comp.id}: adopt {comp.source.adopt_dir} -> {comp.source.path}"))
+                else:
+                    plan.actions.append(PlanAction(
+                        "verify", str(dest),
+                        f"{comp.id}: destination is a {kind} leaf — not an installable "
+                        "destination (resolve manually)", status="failed", detail=kind))
         return plan
 
     def adopt_source(self, comp: Component, *, force: bool = False,
-                     source: str = "pinned") -> PlanAction:
+                     source: str = "pinned", pinned_expected: tuple = None,
+                     locked: bool = False) -> PlanAction:
         """Install a component's source. `source` selects the version:
           * "dev"    — newest commit on the remote branch (default);
           * "stable" — the latest release tag;
@@ -249,7 +284,21 @@ class Installer:
         spec = comp.source
         dest = self.paths.resolve_source(spec.path)
         action = PlanAction("adopt", str(dest), f"adopt {comp.id}")
-        from . import reslock
+        from . import reslock, source_fs
+        # HARD PREREQUISITE: the atomic no-clobber rename primitive. Without it the
+        # activation protocol cannot exclude clobbering races — refuse BEFORE any journal,
+        # candidate, source, or registry change (no check-then-plain-rename fallback).
+        unavailable = source_fs.require_atomic_rename()
+        if unavailable:
+            action.status, action.detail = "failed", unavailable
+            return action
+        if locked:
+            # OUTER-HELD OPERATION: the caller's source-operation guard already performed the
+            # index-lock -> recovery -> journal-block -> source-path-lock handoff and STILL
+            # HOLDS the index-successor source locks for every affected path — re-acquiring
+            # them here would self-contend. Mutate directly under the caller's boundary.
+            return self._adopt_locked(comp, spec, dest, action, force, source,
+                                      pinned_expected)
         # P0.2: ONE operation boundary, deadlock-free order (index THEN source path).
         # Recovery runs under the INDEX lock ONLY — the per-source locks it takes must
         # NOT self-contend with a source lock adopt itself holds, so adopt acquires the
@@ -268,52 +317,146 @@ class Installer:
                     return action
                 with reslock.operation_lock(self.paths, self._source_lock_key(spec.path),
                                             "update", comp.id):
-                    return self._adopt_locked(comp, spec, dest, action, force, source)
+                    return self._adopt_locked(comp, spec, dest, action, force, source,
+                                              pinned_expected)
         except reslock.ResourceBusy as busy:
             action.status, action.detail = "failed", f"another source operation is in progress: {busy}"
             return action
 
-    def _adopt_locked(self, comp, spec, dest, action, force, source):
+    def _adopt_locked(self, comp, spec, dest, action, force, source,
+                      pinned_expected: tuple = None):
         # Index + target source-path locks are held by the caller. Recovery + the global
         # blocking decision already ran under the index lock.
-        if dest.exists() and not force:
-            action.status, action.detail = "skipped", "destination already exists"
-            return action
-        # Never overwrite a working tree with local modifications, or a linked dev
-        # tree, on update — staging into it would be silent data loss.
-        if dest.exists() and force:
-            if dest.is_symlink():
-                action.status, action.detail = "skipped", "linked dev tree — left as-is"
-                return action
-            if self._is_dirty(dest):
-                action.status, action.detail = "failed", "local modifications present — not overwritten"
-                return action
+        from . import runtime_fs, source_fs, source_registry
+        # DESCRIPTOR-PROVEN destination state: only a no-follow-proven ABSENT leaf is an
+        # installable empty destination. `Path.exists()` (which follows symlinks) is never a
+        # mutation authority here.
         try:
-            from . import runtime_fs
             runtime_fs.ensure_dir(self.paths, dest.parent)   # descriptor-anchored, no-follow
+            kind = source_fs.leaf_kind(self.paths, dest)
         except (OSError, PathContainmentError) as exc:
             action.status, action.detail = "failed", str(exc)
             return action
+        # RUNTIME-PROBED atomic-rename capability for THIS source parent's filesystem —
+        # a libc symbol alone is not a precondition. Refused BEFORE candidate/journal/
+        # source/registry mutation; never a plain-rename fallback.
+        unavailable = source_fs.require_atomic_rename(self.paths, dest.parent)
+        if unavailable:
+            action.status, action.detail = "failed", unavailable
+            return action
+        had_prior = kind != "absent"
+        if kind == "symlink":
+            # A symlink leaf is legitimate ONLY for the declared link strategy — and a linked
+            # source is never updated in place (skip). Any other symlink (dangling, unknown,
+            # injected) is NOT an installable destination: refuse with zero mutation.
+            if (spec.strategy or "") == "link":
+                action.status, action.detail = "skipped", "linked dev tree — left as-is"
+                return action
+            action.status = "failed"
+            action.detail = ("destination is an unexpected symlink leaf — not an LHPC "
+                             "adoption; refusing (nothing renamed or deleted)")
+            return action
+        if kind in ("file", "special"):
+            # A regular or special file at a managed source destination is never installable
+            # and never LHPC's to remove.
+            action.status = "failed"
+            action.detail = (f"destination is a {kind} leaf, not a managed source directory — "
+                             "refusing (nothing renamed or deleted)")
+            return action
+        if kind == "dir" and not force:
+            action.status, action.detail = "skipped", "destination already exists"
+            return action
+        prior = None
+        try:
+            if kind == "dir" and force:
+                # UPDATE of an existing source: CAPTURE the leaf first (retained no-follow
+                # fd), then prove CURRENT ownership + identity and cleanliness AGAINST THE
+                # CAPTURED INODE (fd-pinned path) — so the leaf later archived at the
+                # irreversible rename is exactly the leaf that was verified; an external
+                # substitution in between is detected, never archived or destroyed.
+                try:
+                    prior = source_fs.capture_leaf(self.paths, dest)
+                except (OSError, PathContainmentError) as exc:
+                    action.status, action.detail = "failed", f"could not capture leaf: {exc}"
+                    return action
+                rec, why = source_registry.verify_identity(
+                    self.paths, self.system, self.config, comp, dest,
+                    components=self._path_consumers(spec.path), handle=prior)
+                if rec is None:
+                    action.status = "failed"
+                    action.detail = f"ownership/identity not proven — not overwritten: {why}"
+                    return action
+                # Never overwrite a working tree with local modifications — TRACKED changes
+                # AND non-ignored, non-artifact UNTRACKED files: staging into it would be
+                # silent data loss. Checked on the CAPTURED inode.
+                dirty = self.dirty_report(Path(prior.pinned_path()), spec.path)
+                if dirty:
+                    action.status = "failed"
+                    action.detail = ("local modifications present — not overwritten:\n"
+                                     + "\n".join(dirty.lines()))
+                    return action
 
-        search = Path(self.config.get("install", "adopt_search_root", "~/src")).expanduser()
-        local = search / spec.adopt_dir
-        strategy = spec.strategy or self.config.get("install", "source_strategy", "adopt")
-        # The INDEX + SOURCE-PATH locks are already held by adopt_source across candidate
-        # creation, verification, activation, and cleanup.
-        return self._stage_and_activate(comp, source, action, dest, spec, local, strategy)
+            search = Path(self.config.get("install", "adopt_search_root", "~/src")).expanduser()
+            local = search / spec.adopt_dir
+            strategy = spec.strategy or self.config.get("install", "source_strategy", "adopt")
+            # The INDEX + SOURCE-PATH locks are already held by adopt_source across candidate
+            # creation, verification, activation, and cleanup.
+            return self._stage_and_activate(comp, source, action, dest, spec, local, strategy,
+                                            had_prior=had_prior, prior=prior,
+                                            pinned_expected=pinned_expected)
+        finally:
+            if prior is not None:
+                prior.close()
+
+    def _pinned_expected(self, comp) -> tuple:
+        """What the 'Known working' (pinned) selector must resolve this component to:
+        `(commit, label)`. Resolution is STACK-LEVEL: the single newest COMPLETE composition
+        compatible with the current manifest/config identity (`compatible_composition`)
+        supplies the commit for EVERY component of the stack; when none qualifies, every
+        component takes `("", "fallback…")` — the manifest pin, clearly labelled, never a
+        mix of known-working and fallback commits."""
+        from . import known_working
+        spec = comp.source
+        if spec is None or spec.artifact:
+            return "", ""
+        stack = next((s for s in self.stacks for c in s.components if c.id == comp.id), None)
+        entries = None
+        if stack is not None:
+            entries = known_working.compatible_composition(
+                self.paths, stack,
+                lambda c: self.config.remotes.get(c.id) or (c.source.remote if c.source
+                                                            else "") or "")
+        if entries and comp.id in entries:
+            return (entries[comp.id]["commit"],
+                    "known working (operator-confirmed composition)")
+        return "", "fallback: manifest pin — no known-working record"
 
     def _stage_and_activate(self, comp: Component, source: str, action: "PlanAction",
-                            dest: Path, spec, local: Path, strategy: str) -> "PlanAction":
+                            dest: Path, spec, local: Path, strategy: str,
+                            had_prior: bool = False, prior=None,
+                            pinned_expected: tuple = None) -> "PlanAction":
         """Create, verify, and atomically activate a candidate under ONE held source-parent
         FD spanning journal preflight → exclusive candidate creation → staging → candidate
         provenance → activation → active-source provenance → rollback/cleanup. The active
         source is touched only at the final rename, so any failure leaves it untouched. Git,
         copy, and provenance receive ONLY the controller-pinned `/proc/<pid>/fd/<held>/<name>`
-        path — never a runtime pathname that a parent swap could redirect."""
+        path — never a runtime pathname that a parent swap could redirect. `had_prior`
+        (descriptor-proven by the caller) rides in the journal so RECOVERY can distinguish
+        an update (roll back to `.prev`) from a fresh install (remove the candidate) when the
+        ownership record cannot be persisted."""
         import time as _time
         from . import source_fs, provenance
         staging = dest.with_name(f".{dest.name}.candidate-{os.getpid()}-{_time.monotonic_ns()}")
         trusted, signer_diags = provenance.load_trusted_signers(self.config)
+        # 'Known working' resolution: a FROZEN per-operation plan value when the caller
+        # planned the whole install/update up front (`pinned_expected`) — a concurrent
+        # operator confirmation cannot alter an already-planned operation — else resolved
+        # here (single-component adoption).
+        if source == "pinned":
+            expected, kw_label = (pinned_expected if pinned_expected is not None
+                                  else self._pinned_expected(comp))
+        else:
+            expected, kw_label = "", ""
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                 # (1) Journal preflight: only an ABSENT journal may begin a new transaction;
@@ -325,7 +468,8 @@ class Installer:
                     return action
                 # (2-3) Exclusive candidate creation + staging, all through the held FD.
                 desc, handle = self._stage_candidate(txn, comp, source, dest, staging, spec,
-                                                     local, strategy, action)
+                                                     local, strategy, action,
+                                                     expected_pin=expected)
                 if desc is None:
                     return action          # `_stage_candidate` recorded the typed failure
                 # Provenance path per handle type:
@@ -350,7 +494,8 @@ class Installer:
                         "recovery-required: link staging leaf identity could not be proven "
                         "(evidence retained)")
                     return action
-                pre = provenance.evaluate(self.system.runner, pre_pinned, spec, source, trusted)
+                pre = provenance.evaluate(self.system.runner, pre_pinned, spec, source, trusted,
+                                          expected_commit=expected)
                 if not pre.ok:
                     # Handle-safe cleanup: a candidate/link substituted during provenance is
                     # retained as evidence, never deleted. dest untouched either way.
@@ -364,16 +509,78 @@ class Installer:
                 def _post_ok() -> bool:
                     p = _prov_path(dest.name)
                     return p is not None and provenance.evaluate(
-                        self.system.runner, p, spec, source, trusted).ok
+                        self.system.runner, p, spec, source, trusted,
+                        expected_commit=expected).ok
+                # Ownership metadata rides in the journal (v3) so the registry record is part
+                # of the SAME durable transaction: written after the activation rename, and
+                # completable by recovery from the journal alone.
+                meta = self._txn_meta(comp, spec, source, strategy, pre_pinned)
+                meta["had_prior"] = bool(had_prior)
+                if is_link:
+                    # durable link identity: the EXACT runtime symlink target
+                    meta["link_target"] = handle.target
+                # FINAL dirty recheck, run immediately before the prior is archived: a
+                # tracked or non-ignored untracked file created AFTER the initial check
+                # (e.g. while the candidate was cloning/building) must block the archive.
+                final_dirty = (
+                    (lambda: self.dirty_report(Path(prior.pinned_path()), spec.path))
+                    if prior is not None and prior.kind == "dir" else None)
                 outcome = self._activate_held(txn, dest, staging, verify_active=_post_ok,
-                                              handle=handle)
+                                              handle=handle, meta=meta, prior=prior,
+                                              final_dirty=final_dirty)
+                if outcome == "substituted":
+                    # An EXTERNAL process replaced the destination leaf between verification
+                    # and the irreversible step: nothing of the substitute was archived,
+                    # replaced, or deleted — the staging candidate (ours) was discarded.
+                    self._cleanup_owned_staging(txn, handle, staging.name)
+                    action.status = "failed"
+                    action.detail = ("destination was concurrently replaced — refusing "
+                                     "(the substituted content is untouched; re-run the "
+                                     "update after inspecting it)")
+                    return action
+                if outcome == "injected":
+                    # A leaf APPEARED at the destination after absence was observed (fresh
+                    # install) or after the prior was archived (update): never overwritten.
+                    self._cleanup_owned_staging(txn, handle, staging.name)
+                    action.status = "failed"
+                    action.detail = ("a leaf appeared at the destination during activation — "
+                                     "refusing to overwrite it (injected content untouched)")
+                    return action
+                if outcome == "prior-dirty":
+                    # The NEW source IS active and its ownership record is coherent — but
+                    # the archived prior gained late local changes and is RETAINED with the
+                    # journal (operator recovery required; never auto-deleted).
+                    action.status = "failed"
+                    action.provenance = ""
+                    action.detail = (
+                        "prior-dirty: the update activated the new source, but the archived "
+                        f"prior at {self._source_rel(dest.with_name('.' + dest.name + '.prev'))} "
+                        "gained late local changes — it is RETAINED with the transaction "
+                        "journal (inspect/salvage, then remove the .prev directory and the "
+                        "journal manually; automatic recovery will not delete it)")
+                    return action
+                if outcome == "dirty":
+                    # The owned candidate is discarded ONLY through its bound identity.
+                    self._cleanup_owned_staging(txn, handle, staging.name)
+                    action.status = "failed"
+                    action.detail = ("local modifications appeared during staging — the "
+                                     "prior source is intact at its original path (nothing "
+                                     "was overwritten); commit/stash or remove the new "
+                                     "files and retry")
+                    return action
                 if outcome == "provenance-blocked":
                     post = provenance.evaluate(self.system.runner,
                                                txn.child_pinned_path(dest.name), spec, source,
-                                               trusted)
+                                               trusted, expected_commit=expected)
                     action.status, action.provenance = "failed", post.status
-                    action.detail = ("post-activation provenance mismatch — rolled back to the "
-                                     "prior source (journal retained); the new version was NOT adopted")
+                    action.detail = ("post-activation provenance mismatch — rolled back; "
+                                     "the new version was NOT adopted")
+                    return action
+                if outcome == "registry-blocked":
+                    action.status = "failed"
+                    action.detail = ("ownership record could not be persisted — rolled back "
+                                     "(prior source and its record intact; a fresh install was "
+                                     "fully undone); the new version was NOT adopted")
                     return action
                 if outcome == "recovery-required":
                     action.status = "failed"
@@ -384,7 +591,8 @@ class Installer:
                     self._cleanup_owned_staging(txn, handle, staging.name)   # handle-safe
                     action.status, action.detail = "failed", "activation failed — active source untouched"
                     return action
-                return self._adopt_done(action, spec, dest, desc, source, signer_diags)
+                return self._adopt_done(action, spec, dest, desc, source, signer_diags,
+                                        expected=expected, kw_label=kw_label)
         except PathContainmentError:
             action.status, action.detail = "failed", (
                 "managed source parent is unsafe (symlinked/swapped) — active source untouched")
@@ -395,18 +603,22 @@ class Installer:
         still matches its `CandidateHandle`/`LinkHandle`; a substituted replacement is RETAINED
         as evidence, never recursively deleted merely because it kept the expected name. Returns
         'removed' | 'absent' | 'identity-lost'."""
+        from . import source_fs
         if txn.leaf_kind(staging_name) == "absent":
             return "absent"
         if not self._verify_staged(txn, handle, staging_name):
             return "identity-lost"                    # substituted -> retain, never delete
-        try:
-            txn.rmtree(staging_name)
-        except (OSError, PathContainmentError):
+        if handle is None:
+            return "identity-lost"                    # no identity evidence -> retain
+        source_fs.race_seam("pre-staging-delete", staging_name)
+        ok, _why = source_fs.remove_bound(txn.fd, staging_name,
+                                          [handle.st_dev, handle.st_ino])
+        if not ok:
             return "identity-lost"                    # removal not provable -> retain
         return "removed"
 
     def _stage_candidate(self, txn, comp, source: str, dest: Path, staging: Path, spec,
-                         local: Path, strategy: str, action):
+                         local: Path, strategy: str, action, expected_pin: str = ""):
         """Stage the candidate through the held transaction. Returns `(desc, handle)` — a
         description plus the `CandidateHandle` (a retained FD on the candidate dir; None for
         the link strategy, whose leaf is a symlink). On failure returns `(None, None)` with a
@@ -418,7 +630,7 @@ class Installer:
                 return None, None
             # A linked checkout must STILL satisfy the requested version (same policy as
             # copy/clone) — never report a version-selected adoption it cannot prove.
-            if not self._fallback_satisfies(spec, local, source):
+            if not self._fallback_satisfies(spec, local, source, expected_pin):
                 action.status, action.detail = "failed", (
                     f"linked checkout does not satisfy the requested {source} version "
                     "(link strategy cannot prove it) — active source untouched")
@@ -434,7 +646,8 @@ class Installer:
         # candidate FD-pinned path — Git/copy never re-resolve the leaf by name.
         remote = self.config.remotes.get(comp.id) or spec.remote
         handle = txn.create_candidate(staging.name)
-        if remote and self._clone(spec, Path(handle.pinned_path()), source, remote):
+        if remote and self._clone(spec, Path(handle.pinned_path()), source, remote,
+                                  expected_pin=expected_pin):
             return f"GitHub {source}", handle
         # Clone failed (or no remote) -> reset the (intact controller-owned) candidate via the
         # held FD, then try the local fallback. If the candidate was SUBSTITUTED, do NOT delete
@@ -444,12 +657,22 @@ class Installer:
                 "recovery-required: staging candidate was substituted (evidence retained)")
             return None, None
         handle = txn.create_candidate(staging.name)
+
+        def _unavailable(why: str) -> str:
+            # `dev` NEVER silently uses a different ref: when the configured branch cannot be
+            # obtained (clone failed, local fallback not on it), the SELECTOR is unavailable.
+            if source == "dev" and spec.branch and not spec.artifact:
+                return (f"selector unavailable: branch {spec.branch!r} could not be obtained "
+                        f"({why}) — active source untouched")
+            return f"{why} — active source untouched"
+
         if local.is_dir():
-            if not self._fallback_satisfies(spec, local, source):
+            if not self._fallback_satisfies(spec, local, source, expected_pin):
                 self._cleanup_owned_staging(txn, handle, staging.name)   # drop empty candidate
-                action.status, action.detail = "failed", (
+                action.status = "failed"
+                action.detail = _unavailable(
                     "GitHub clone failed and the local checkout does not satisfy the "
-                    f"requested {source} version — active source untouched")
+                    f"requested {source} version")
                 return None, None
             try:
                 self._copy_into_candidate(local, handle.pinned_path())
@@ -459,8 +682,8 @@ class Installer:
                 return None, None
             return "local fallback", handle
         self._cleanup_owned_staging(txn, handle, staging.name)           # drop empty candidate
-        action.status, action.detail = "failed", (
-            "GitHub clone failed and no local checkout — active source untouched")
+        action.status = "failed"
+        action.detail = _unavailable("GitHub clone failed and no local checkout")
         return None, None
 
     @staticmethod
@@ -482,21 +705,29 @@ class Installer:
             else:
                 shutil.copy2(s, d, follow_symlinks=False)
 
-    def _fallback_satisfies(self, spec, local: Path, source: str) -> bool:
+    def _fallback_satisfies(self, spec, local: Path, source: str,
+                            expected_pin: str = "") -> bool:
         """A local-fallback / linked checkout may activate only if it PROVABLY satisfies
         the requested version — fail closed:
-          * `pinned` REQUIRES a configured exact pin AND HEAD == that pin;
-          * `stable` REQUIRES a configured tag AND the checkout is exactly at that tag;
+          * an ARTIFACT source is the same declared artifact for every selector — any local
+            copy of it satisfies (there are no version semantics to prove);
+          * `pinned` REQUIRES an exact expected commit (the known-working composition entry
+            when one exists, else the configured manifest pin) AND HEAD == it;
+          * `stable` REQUIRES a configured tag AND the checkout is exactly at that tag
+            ("newest" cannot be proven offline — documented conservative fallback);
           * `dev` requires the configured branch if one is set; with no branch this is the
             documented permissive policy (dev = whatever the operator's tree is on).
         A version-selected request whose selector is not configured can never be proven,
         so it is rejected rather than reported as a successful selected adoption."""
         run = self.system.runner.run
+        if spec.artifact:
+            return True
         if source == "pinned":
-            if not spec.pin_commit:               # no configured pin -> cannot prove
+            pin = expected_pin or spec.pin_commit
+            if not pin:                           # no provable expectation -> cannot prove
                 return False
             head = run(["git", "-C", str(local), "rev-parse", "HEAD"], 5.0)
-            return head.returncode == 0 and head.stdout.strip() == spec.pin_commit
+            return head.returncode == 0 and head.stdout.strip() == pin
         if source == "stable":
             if not spec.pin_tag:                  # no configured tag -> cannot prove
                 return False
@@ -514,6 +745,116 @@ class Installer:
                                      "--untracked-files=no"], 5.0)
         return r.returncode == 0 and bool(r.stdout.strip())
 
+    def _path_bins(self, source_path: str) -> set:
+        """Every consumer component's declared built-binary path inside `source_path` — these
+        are LHPC-regenerated artifacts, never operator changes."""
+        return {c.bin for stack in self.stacks for c in stack.components
+                if c.source and c.source.path == source_path and c.bin}
+
+    def dirty_report(self, dest: Path, source_path: str) -> DirtyReport:
+        """Local changes a destructive operation (update overwrite / uninstall) would discard:
+        TRACKED modifications AND non-ignored UNTRACKED files — `--untracked-files=normal`
+        honours .gitignore, and LHPC-regenerable artifacts (`_ADOPT_IGNORE_NAMES` dirs + every
+        consumer's declared `bin`) are excluded so a built tree stays updatable. A tree that is
+        not a git checkout reports clean here (ownership verification handles unknown trees).
+        A FAILED git status reports the failure as a tracked entry — fail toward dirty, never
+        silently clean."""
+        if not (dest / ".git").exists():
+            return DirtyReport()
+        # NUL-SAFE, ENTRY-EXACT status: `-z` terminates every path with NUL (no quoting, so
+        # newline/quote-containing names parse exactly), and `--untracked-files=all`
+        # enumerates every INDIVIDUAL untracked file — git never collapses a directory, so
+        # the generated-binary carve-out can only ever match the exact declared leaf, never
+        # a parent directory that also shelters unknown sibling/nested files.
+        r = self.system.runner.run(["git", "-C", str(dest), "status", "--porcelain", "-z",
+                                     "--untracked-files=all"], 10.0)
+        if r.returncode != 0:
+            return DirtyReport(tracked=("(git status failed — treating as dirty)",))
+        bins = self._path_bins(source_path)
+
+        def _is_artifact(path: str) -> bool:
+            # regenerable dirs (build/, .pio/, …) by first segment, or the EXACT declared
+            # generated leaf — nothing else (siblings/nested files under bin's parent block)
+            return path.split("/", 1)[0] in _ADOPT_IGNORE_NAMES or path in bins
+
+        tracked, untracked = [], []
+        fields = (r.stdout or "").split("\0")
+        i = 0
+        while i < len(fields):
+            entry = fields[i]
+            i += 1
+            if len(entry) < 4:
+                continue
+            status, path = entry[:2], entry[3:]
+            if status[0] in ("R", "C"):
+                i += 1                                     # rename/copy carries a second field
+            if status == "??":
+                if _is_artifact(path):
+                    continue                               # regenerable artifact — not a change
+                untracked.append(path)
+            else:
+                tracked.append(path)
+        return DirtyReport(tracked=tuple(tracked), untracked=tuple(untracked))
+
+    # -- source ownership registry (transactional with activation) ----------
+
+    def _path_consumers(self, source_path: str) -> tuple:
+        """Every manifest component id consuming `source_path` (the shared-checkout set)."""
+        out = []
+        for stack in self.stacks:
+            for c in stack.components:
+                if c.source and c.source.path == source_path:
+                    out.append(c.id)
+        return tuple(out)
+
+    def _txn_meta(self, comp, spec, source: str, strategy: str, git_path: str) -> dict:
+        """The ownership metadata carried by the v3 journal — the AUTHORITY recovery uses to
+        complete the registry record. `git_path` points at the staged tree (candidate FD-pinned
+        path, or a link's external target)."""
+        head = self.system.runner.run(["git", "-C", git_path, "rev-parse", "HEAD"], 5.0)
+        return {
+            "selector": source,
+            "resolved_commit": (head.stdout or "").strip() if head.returncode == 0 else "",
+            "remote": self.config.remotes.get(comp.id) or spec.remote or "",
+            "strategy": strategy if strategy == "link" else (spec.strategy or ""),
+            "components": list(self._path_consumers(spec.path)),
+            "link_target": "",           # set by the caller for link-strategy staging
+        }
+
+    @staticmethod
+    def _valid_meta(meta) -> bool:
+        """Strict validation of a v3 journal's ownership metadata (untrusted persisted input).
+        `had_prior` (update vs fresh-install evidence for recovery rollback) must be a bool
+        when present; an older v3 journal without it stays valid (recovery then treats the
+        transaction conservatively, as an update)."""
+        if not isinstance(meta, dict):
+            return False
+        for f in ("selector", "resolved_commit", "remote", "strategy"):
+            if not isinstance(meta.get(f), str):
+                return False
+        if meta["selector"] not in ("pinned", "dev", "stable", "legacy"):
+            return False
+        if "had_prior" in meta and not isinstance(meta["had_prior"], bool):
+            return False
+        if "link_target" in meta and not isinstance(meta["link_target"], str):
+            return False
+        comps = meta.get("components")
+        return isinstance(comps, list) and all(isinstance(c, str) and c for c in comps)
+
+    def _write_registry_record(self, dest: Path, meta: dict, txn_id: str) -> bool:
+        """Persist the ownership record for an activated source from journal metadata.
+        Called INSIDE the activation transaction (before journal removal) and again by
+        RECOVERY when completing an interrupted activation. Returns False on failure —
+        the caller must then RETAIN the journal (never report an un-owned activation)."""
+        import time as _time
+        from . import source_registry
+        return source_registry.write_record(self.paths, source_registry.RegistryRecord(
+            source_rel=self._source_rel(dest), remote=meta["remote"],
+            selector=meta["selector"], resolved_commit=meta["resolved_commit"],
+            adopted_at=_time.time(), txn_id=txn_id, strategy=meta["strategy"],
+            components=tuple(meta["components"]),
+            link_target=meta.get("link_target", "")))
+
     # -- source activation transaction (durable + recoverable) -------------
 
     # -- source activation transaction (durable, strictly-trusted journal) --
@@ -524,7 +865,7 @@ class Installer:
     # controller's candidate/prior naming patterns. An invalid journal is RETAINED and
     # blocks the affected source — it is never followed or deleted blindly.
 
-    _VALID_STATES = ("planned", "prior-archived", "activated")
+    _VALID_STATES = ("planned", "prior-archived", "activated", "prior-dirty-retained")
 
     def _txn_dir(self) -> Path:
         return self.paths.under("state", "source-txn")
@@ -580,31 +921,48 @@ class Installer:
             re.fullmatch(rf"\.{re.escape(dest.name)}\.candidate-\d+-\d+", cand.name))
 
     def _journal_payload(self, dest: Path, prev: Path, staging: Path, state: str,
-                         txn_id: str) -> str:
+                         txn_id: str, meta: dict | None = None,
+                         idents: dict | None = None) -> str:
+        """v4 journal: carries the OWNERSHIP metadata (`meta`) AND strict leaf-identity
+        evidence (`idents`: no-follow [dev, ino] for the CANDIDATE and the archived PRIOR),
+        so crash recovery can re-prove the exact leaves before any destructive step —
+        candidate promotion, prior restore, and prior cleanup all verify identity first.
+        `meta=None` renders a v2-shaped payload; meta-without-idents renders v3 (both are
+        still recoverable, with the older journals' destructive steps degraded to the
+        pre-identity checks — never an unsafe automatic cleanup)."""
         import json
-        return json.dumps({
-            "version": 2, "state": state,
+        version = 2 if meta is None else (4 if idents is not None else 3)
+        payload = {
+            "version": version, "state": state,
             "source_rel": self._source_rel(dest),
             "prev_rel": self._source_rel(prev),
             "candidate_rel": self._source_rel(staging),
             "txn_id": txn_id,
-        })
+        }
+        if meta is not None:
+            payload["meta"] = meta
+        if idents is not None:
+            payload["idents"] = idents
+        return json.dumps(payload)
 
-    def _create_journal(self, dest: Path, prev: Path, staging: Path):
+    def _create_journal(self, dest: Path, prev: Path, staging: Path, meta: dict | None = None,
+                        idents: dict | None = None):
         """EXCLUSIVELY create the initial (`planned`) journal (`O_CREAT|O_EXCL|O_NOFOLLOW`,
         fsync'd) and RETAIN its file + parent fds. Returns a journal handle
-        `{marker: OwnedMarker, txn_id, path}`, or None if ANY journal leaf already exists
-        (injected after preflight, or stale) — the caller then returns recovery-required
-        WITHOUT touching candidate/dest/`.prev`. The caller MUST close the handle."""
+        `{marker: OwnedMarker, txn_id, path, meta, idents}`, or None if ANY journal leaf
+        already exists (injected after preflight, or stale) — the caller then returns
+        recovery-required WITHOUT touching candidate/dest/`.prev`. The caller MUST close it."""
         from . import runtime_fs
         jp = self._journal_path(dest)
         txn_id = self._txn_id(self._source_rel(staging))
         try:
             marker = runtime_fs.open_marker_excl(
-                self.paths, jp, self._journal_payload(dest, prev, staging, "planned", txn_id))
+                self.paths, jp,
+                self._journal_payload(dest, prev, staging, "planned", txn_id, meta, idents))
         except (FileExistsError, OSError, PathContainmentError):
             return None
-        return {"marker": marker, "txn_id": txn_id, "path": jp}
+        return {"marker": marker, "txn_id": txn_id, "path": jp, "meta": meta,
+                "idents": idents}
 
     @staticmethod
     def _close_journal(jh) -> None:
@@ -617,7 +975,22 @@ class Installer:
         False if ownership was lost (a leaf swap) — the caller then rolls back and retains
         the replacement evidence."""
         return jh["marker"].rewrite(
-            self._journal_payload(dest, prev, staging, state, jh["txn_id"]))
+            self._journal_payload(dest, prev, staging, state, jh["txn_id"], jh.get("meta"),
+                                  jh.get("idents")))
+
+    @staticmethod
+    def _valid_idents(idents) -> bool:
+        """Strict validation of v4 leaf-identity evidence (untrusted persisted input)."""
+        if not isinstance(idents, dict):
+            return False
+        for key in ("candidate", "prev"):
+            v = idents.get(key)
+            if v is None:
+                continue
+            if (not isinstance(v, list) or len(v) != 2
+                    or not all(isinstance(x, int) and not isinstance(x, bool) for x in v)):
+                return False
+        return True
 
     def _managed_source_dests(self) -> set:
         """The EXACT set of resolved managed-source destination paths from the loaded
@@ -706,8 +1079,17 @@ class Installer:
         try:
             try:
                 j = json.loads(marker.read())                  # read THROUGH the retained fd
-                if j.get("version") != 2 or j.get("state") not in self._VALID_STATES:
+                if j.get("version") not in (2, 3, 4) or j.get("state") not in self._VALID_STATES:
                     raise ValueError("bad version/state")
+                meta = None
+                idents = None
+                if j.get("version") == 4:
+                    meta = j.get("meta")
+                    if not self._valid_meta(meta):
+                        raise ValueError("bad ownership metadata")
+                    idents = j.get("idents")
+                    if not self._valid_idents(idents):
+                        raise ValueError("bad leaf-identity evidence")
                 dest = self._resolve_rel(j["source_rel"])
                 prev = self._resolve_rel(j["prev_rel"])
                 staging = self._resolve_rel(j["candidate_rel"])
@@ -729,69 +1111,251 @@ class Installer:
             if j.get("txn_id") != self._txn_id(j["candidate_rel"]):
                 return (f"recovery-required: journal {jf.name} transaction id missing/"
                         "mismatched (retained)")
+            # PRIOR-DIRTY RETENTION: a transaction explicitly marked prior-dirty-retained
+            # holds an archived `.prev` containing LATE LOCAL CHANGES. Automatic recovery
+            # NEVER retries its deletion — the journal and `.prev` stay until the operator
+            # inspects/salvages the changes and removes them manually.
+            if j.get("state") == "prior-dirty-retained":
+                return (f"recovery-required: {self._source_rel(dest)} finished activating, "
+                        f"but its archived prior at {self._source_rel(prev)} contains late "
+                        "local changes — retained for the OPERATOR (inspect/salvage, then "
+                        "remove the .prev directory and this journal manually); automatic "
+                        "recovery will not delete it")
+            # GENERATIONAL FAIL-CLOSED: only a v4 journal carries the complete, current
+            # leaf-identity evidence automatic recovery requires. Structurally-valid v2/v3
+            # journals are NEVER silently upgraded into authority for destructive work —
+            # every leaf and the journal are retained with a truthful operator diagnostic.
+            if j.get("version") in (2, 3):
+                return (f"recovery-required: journal {jf.name} is generation "
+                        f"v{j['version']} (no leaf-identity evidence) — automatic recovery "
+                        "refused; all leaves and the journal are retained. Inspect "
+                        f"{self._source_rel(dest)} and its .prev/candidate siblings "
+                        "manually, then remove the journal and re-adopt/update the source.")
             try:
                 with reslock.operation_lock(self.paths,
                                             self._source_lock_key(self._source_rel(dest)),
                                             "recover", dest.name):
-                    return self._finish_or_rollback(dest, prev, staging, marker)
+                    return self._finish_or_rollback(dest, prev, staging, marker,
+                                                    meta=meta, txn_id=j["txn_id"],
+                                                    idents=idents)
             except reslock.ResourceBusy:
                 return f"recovery-required: source {dest.name} is busy (retained)"
         finally:
             marker.close()
 
-    def _prev_cleanup_ok(self, txn, prev: Path) -> bool:
-        """Remove the archived `.prev` via the HELD FD and CONFIRM it is gone (never silently
-        'succeed' on a removal that left it behind)."""
+    def _prev_dirty_scan(self, txn, dest: Path, prev: Path, prev_ident=None):
+        """FINAL dirty scan of the archived prior, BOUND to its leaf: capture the `.prev`
+        leaf no-follow, prove its identity (v4 evidence when available), and scan through
+        the captured fd-pinned path. Returns True (dirty — late tracked/non-ignored
+        untracked changes), False (clean / not dirty-capable), or None (unprovable —
+        the caller retains everything)."""
+        from . import source_fs
         try:
-            txn.rmtree(prev.name)
+            if txn.leaf_kind(prev.name) != "dir":
+                return False                       # symlink/absent prior: nothing scannable
+            h = txn.capture_leaf(prev.name)
         except (OSError, PathContainmentError):
-            return False
+            return None
+        try:
+            if prev_ident is not None and [h.st_dev, h.st_ino] != list(prev_ident):
+                return None                        # substituted -> existing retention path
+            return bool(self.dirty_report(Path(h.pinned_path()), self._source_rel(dest)))
+        finally:
+            h.close()
+
+    def _prev_cleanup_ok(self, txn, prev: Path, ident=None) -> bool:
+        """Remove the archived `.prev` — IDENT-BOUND ONLY. `.prev` is the transaction's own
+        quarantine (atomically detached from dest with identity proof at archive time); its
+        deletion binds to the recorded (dev, ino) through content removal and re-proves it
+        before the final rmdir. WITHOUT identity evidence nothing is deleted (the caller
+        retains `.prev` + journal); an ABSENT `.prev` is already-clean; a substituted one
+        is retained untouched."""
+        from . import source_fs
+        if txn.leaf_kind(prev.name) == "absent":
+            return True
+        if ident is None:
+            return False                           # no identity evidence -> RETAIN
+        source_fs.race_seam("pre-prev-delete", prev.name)
+        ok, _why = source_fs.remove_bound(txn.fd, prev.name, ident)
+        if not ok:
+            return False                           # substituted/unprovable -> RETAIN
         return txn.leaf_kind(prev.name) == "absent"
 
-    def _finish_or_rollback(self, dest: Path, prev: Path, staging: Path, marker) -> str:
+    def _finish_or_rollback(self, dest: Path, prev: Path, staging: Path, marker,
+                            meta: dict | None = None, txn_id: str = "",
+                            idents: dict | None = None) -> str:
         """Resolve one validated journal under ONE held source-parent FD across verification,
         rename, and cleanup. The journal is removed (via the OWNED `marker`, identity re-
-        verified) ONLY once the active source is proven USABLE (via the held FD) and the
-        archived prior is proven removed. Any uncertainty — including a journal replaced after
-        validation but before removal — RETAINS the journal + candidate/prior evidence and
-        yields recovery-required."""
+        verified) ONLY once the active source is proven USABLE (via the held FD), the archived
+        prior is proven removed, AND — for a v3 journal — the OWNERSHIP RECORD is completed.
+        Any uncertainty — including a journal replaced after validation but before removal —
+        RETAINS the journal + candidate/prior evidence and yields recovery-required."""
         from . import source_fs
 
         def _cleared(kind: str) -> str:
             return (f"recovered {dest.name}: {kind}" if marker.remove()
                     else f"recovery-required for {dest.name}: journal could not be removed (retained)")
+
+        def _head_state() -> object:
+            """Whether dest is THIS transaction's tree: True (HEAD == journal commit),
+            False (a DIFFERENT tree — rolled-back prior or a foreign occupant), or
+            None (v2 journal / unprovable — no judgement possible)."""
+            if meta is None or not meta.get("resolved_commit"):
+                return None
+            head = self.system.runner.run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
+            actual = (head.stdout or "").strip() if head.returncode == 0 else ""
+            return actual == meta["resolved_commit"]
+
+        def _record_ok(ours) -> bool:
+            """Complete the ownership record for a PROVEN-completed activation. The journal's
+            resolved_commit is the AUTHORITY: only a dest whose actual HEAD equals it gets the
+            record (a ROLLED-BACK prior — restored by an in-process rollback that retained the
+            journal — must never be re-registered under the new transaction's metadata; the
+            prior's own older record still describes it). A v2 journal or an unprovable tree
+            writes nothing (ownership is later provable via the legacy backfill path)."""
+            if ours is not True:
+                return True                       # rolled-back / v2 -> no new record
+            return self._write_registry_record(dest, meta, txn_id)
+
+        def _rollback_record_failure(txn) -> str:
+            """The record could STILL not be persisted after the recovery retry: perform the
+            same safe rollback the in-process path does, so the new tree is never left active
+            under old/absent metadata. Identity proof for the destructive step: the journal is
+            txn-bound + dest-validated, its state is `activated`, and `_record_ok` just proved
+            the actual HEAD equals the journal's resolved commit — dest IS this transaction's
+            tree. An UPDATE (`.prev` present) restores the prior (whose own record was never
+            touched); a FRESH INSTALL (journal `had_prior` false) removes the candidate; an
+            ambiguous state retains the journal (fail closed)."""
+            had_prior = (meta or {}).get("had_prior", None)
+            cand_ident = (idents or {}).get("candidate")
+            prev_ident = (idents or {}).get("prev")
+
+            try:
+                if txn.leaf_kind(prev.name) != "absent":
+                    if prev_ident is not None and not source_fs.ident_matches(
+                            txn.fd, prev.name, prev_ident):
+                        return (f"recovery-required for {dest.name}: archived prior was "
+                                "substituted (everything retained)")
+                    # IDENT-BOUND destructive step: the recorded candidate identity is
+                    # REQUIRED (recovery runs only for v4 journals) and stays bound
+                    # through the deletion.
+                    source_fs.race_seam("pre-recovery-rollback-delete", dest.name)
+                    ok, _w = source_fs.remove_bound(txn.fd, dest.name, cand_ident)
+                    if not ok:
+                        return (f"recovery-required for {dest.name}: active leaf is not the "
+                                "recorded candidate (everything retained)")
+                    txn.rename_noreplace(prev.name, dest.name)
+                    txn.fsync()
+                    if not txn.usable(dest.name):
+                        return (f"recovery-required for {dest.name}: rollback restore not "
+                                "usable (journal retained)")
+                    return _cleared("rolled back — ownership record could not be persisted; "
+                                    "prior source and its record intact")
+                if had_prior is False:                   # PROVEN fresh install -> full undo
+                    source_fs.race_seam("pre-recovery-rollback-delete", dest.name)
+                    ok, _w = source_fs.remove_bound(txn.fd, dest.name, cand_ident)
+                    if not ok:
+                        return (f"recovery-required for {dest.name}: active leaf is not the "
+                                "recorded candidate (everything retained)")
+                    txn.fsync()
+                    if txn.leaf_kind(dest.name) != "absent":
+                        return (f"recovery-required for {dest.name}: fresh-install rollback "
+                                "not proven (journal retained)")
+                    return _cleared("rolled back fresh install — ownership record could not "
+                                    "be persisted; no active source remains")
+            except (OSError, PathContainmentError):
+                pass
+            return (f"recovery-required for {dest.name}: ownership record could not be "
+                    "persisted and rollback is not provable (journal retained)")
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
                 if txn.usable(dest.name):
-                    # Completed activation: the archived prior must be PROVEN removed (held FD)
-                    # before the journal is cleared — a failed prev removal retains the journal.
-                    if not self._prev_cleanup_ok(txn, prev):
-                        return (f"recovery-required for {dest.name}: archived prior could not be "
-                                "removed (journal + prior retained)")
+                    # Completed activation: the ownership record must be completed (ONE retry —
+                    # this call) and the archived prior PROVEN removed (held FD) before the
+                    # journal is cleared. A still-failing record write rolls the activation
+                    # back rather than leaving the new tree active under old/absent metadata.
+                    # A dest PROVEN to be a DIFFERENT tree while an archived prior still
+                    # exists is a FOREIGN occupant: retain journal + prior + occupant as
+                    # evidence — never delete the archived prior underneath it.
+                    ours = _head_state()
+                    if ours is False and txn.leaf_kind(prev.name) != "absent":
+                        return (f"recovery-required for {dest.name}: the active leaf is not "
+                                "this transaction's tree while its archived prior still "
+                                "exists — everything retained (unverified occupant)")
+                    if not _record_ok(ours):
+                        return _rollback_record_failure(txn)
+                    if txn.leaf_kind(prev.name) != "absent":
+                        source_fs.race_seam("pre-prev-cleanup", str(dest))
+                        dirty = self._prev_dirty_scan(txn, dest, prev,
+                                                      (idents or {}).get("prev"))
+                        if dirty is None:
+                            return (f"recovery-required for {dest.name}: archived prior "
+                                    "could not be proven (journal + prior retained)")
+                        if dirty:
+                            # LATE LOCAL CHANGES inside the archived prior: mark the
+                            # transaction operator-only so no automatic recovery ever
+                            # deletes it; the active source + its record stay coherent.
+                            marker.rewrite(self._journal_payload(
+                                dest, prev, staging, "prior-dirty-retained", txn_id,
+                                meta, idents))
+                            return (f"recovery-required for {dest.name}: activation is "
+                                    f"complete, but the archived prior at "
+                                    f"{self._source_rel(prev)} contains late local changes "
+                                    "— retained for the operator (never auto-deleted)")
+                        if not self._prev_cleanup_ok(txn, prev, (idents or {}).get("prev")):
+                            return (f"recovery-required for {dest.name}: archived prior "
+                                    "could not be removed or was substituted (journal + "
+                                    "prior retained)")
                     return _cleared("active source intact")
                 if txn.leaf_kind(staging.name) != "absent" and txn.leaf_kind(dest.name) == "absent":
+                    cand_ident = (idents or {}).get("candidate")
+                    if cand_ident is None:
+                        return (f"recovery-required for {dest.name}: no candidate identity "
+                                "evidence — automatic promotion refused (retained)")
+                    if not source_fs.ident_matches(txn.fd, staging.name, cand_ident):
+                        return (f"recovery-required for {dest.name}: staged candidate was "
+                                "substituted (everything retained)")
+                    source_fs.race_seam("pre-recovery-promote", str(dest))
                     try:                                # died before staging->dest
-                        txn.rename(staging.name, dest.name)
+                        txn.rename_noreplace(staging.name, dest.name)
                         txn.fsync()
                     except (OSError, PathContainmentError):
                         pass                            # fall through to prior restore
                     else:
+                        # POST-promotion re-proof: the destination must STILL be the
+                        # recorded candidate (a swap immediately after the rename is
+                        # detected; everything retained).
+                        if not source_fs.ident_matches(txn.fd, dest.name, cand_ident):
+                            return (f"recovery-required for {dest.name}: destination is no "
+                                    "longer the recorded candidate after promotion "
+                                    "(everything retained)")
                         if txn.usable(dest.name):
+                            if not _record_ok(_head_state()):
+                                return _rollback_record_failure(txn)
                             return _cleared("completed interrupted activation")
                 if txn.leaf_kind(prev.name) != "absent":     # died after dest->prev: roll back
-                    # Free the dest slot if it holds only a dangling symlink (not usable).
-                    if txn.leaf_kind(dest.name) == "symlink" and not txn.usable(dest.name):
-                        try:
-                            txn.rmtree(dest.name)
-                        except PathContainmentError:
-                            return (f"recovery-required for {dest.name}: dest slot unsafe "
-                                    "(journal retained)")
+                    # An OCCUPIED dest slot (dangling symlink, file, injected dir, special
+                    # leaf) is NEVER deleted to continue — retain it + `.prev` + journal.
+                    if txn.leaf_kind(dest.name) != "absent":
+                        return (f"recovery-required for {dest.name}: destination is occupied "
+                                "by an unverified leaf (everything retained)")
+                    prev_ident = (idents or {}).get("prev")
+                    if prev_ident is None:
+                        return (f"recovery-required for {dest.name}: no prior identity "
+                                "evidence — automatic restore refused (retained)")
+                    if not source_fs.ident_matches(txn.fd, prev.name, prev_ident):
+                        return (f"recovery-required for {dest.name}: archived prior was "
+                                "substituted (everything retained)")
                     try:
-                        txn.rename(prev.name, dest.name)
+                        txn.rename_noreplace(prev.name, dest.name)
                         txn.fsync()
                     except (OSError, PathContainmentError):
                         return (f"recovery-required for {dest.name}: could not restore prior "
                                 "(journal + candidate/prior retained)")
+                    # POST-restore re-proof: the destination must be the restored prior.
+                    if not source_fs.ident_matches(txn.fd, dest.name, prev_ident):
+                        return (f"recovery-required for {dest.name}: destination is not the "
+                                "restored prior (everything retained)")
                     if not txn.usable(dest.name):
                         return (f"recovery-required for {dest.name}: restored prior is not "
                                 "usable (journal retained)")
@@ -813,37 +1377,68 @@ class Installer:
         is retained. The journal is cleared only after the active source is proven usable AND
         (if checked) provenance-verified."""
         from . import source_fs
+        prior = cand = None
         try:
             with source_fs.ManagedSourceTransaction(self.paths, dest.parent) as txn:
-                return self._activate_held(txn, dest, staging, verify_active)
+                # Synthesize the v4 evidence (minimal valid meta + leaf idents) so even this
+                # low-level entry produces journals current recovery can act on — there is
+                # no journal generation without identity evidence anymore.
+                meta = {"selector": "legacy", "resolved_commit": "", "remote": "",
+                        "strategy": "", "components": [dest.name or "src"],
+                        "had_prior": txn.leaf_kind(dest.name) != "absent"}
+                try:
+                    if txn.leaf_kind(dest.name) == "dir":
+                        prior = txn.capture_leaf(dest.name)
+                    if txn.leaf_kind(staging.name) == "dir":
+                        cand = txn.capture_leaf(staging.name)
+                except (OSError, PathContainmentError):
+                    return "recovery-required"
+                return self._activate_held(txn, dest, staging, verify_active,
+                                           handle=cand, meta=meta, prior=prior)
         except PathContainmentError:
             return "recovery-required"          # unsafe/swapped source parent -> fail closed
+        finally:
+            for h in (prior, cand):
+                if h is not None:
+                    h.close()
 
     def _rollback_bad_active(self, txn, dest: Path, prev: Path, handle=None) -> str:
-        """Post-activation provenance failed: undo the activation via the held FD. `dest` is
-        removed ONLY after re-proving it is still our captured candidate/link handle — never a
-        pathname-only `rmtree(dest.name)` of an unverified replacement. On identity loss the
-        destination, `.prev`, and journal are RETAINED and the outcome is recovery-required.
-        Returns 'provenance-blocked' on a proven rollback, else 'recovery-required'."""
-        # The active `dest` must still be our captured leaf before we destroy it.
+        """Undo a just-completed activation (post-activation provenance failure, or an
+        ownership-record persistence failure) via the held FD. `dest` is removed ONLY after
+        re-proving it is still our captured candidate/link handle — never a pathname-only
+        `rmtree(dest.name)` of an unverified replacement. On identity loss the destination,
+        `.prev`, and journal are RETAINED. Returns a PROVEN outcome:
+          * 'restored-prior' — the archived prior is back in place and usable;
+          * 'removed-fresh'  — a fresh install's candidate was removed (no active source);
+          * 'recovery-required' — rollback could not be proven (evidence retained)."""
+        # The active `dest` must still be our captured leaf before we destroy it — and the
+        # destruction itself stays BOUND to that identity (never a name-only rmtree).
+        from . import source_fs
         dest_is_ours = self._verify_staged(txn, handle, dest.name)
+        dest_ident = ([handle.st_dev, handle.st_ino] if handle is not None else None)
         try:
             if txn.leaf_kind(prev.name) != "absent":
                 if txn.leaf_kind(dest.name) != "absent":
                     if not dest_is_ours:
                         return "recovery-required"       # unverified active leaf -> RETAIN it
-                    txn.rmtree(dest.name)                # drop the (verified) bad candidate
-                txn.rename(prev.name, dest.name)         # restore the prior
+                    source_fs.race_seam("pre-rollback-delete", dest.name)
+                    ok, _w = source_fs.remove_bound(txn.fd, dest.name, dest_ident)
+                    if not ok:
+                        return "recovery-required"       # substituted mid-removal -> retain
+                txn.rename_noreplace(prev.name, dest.name)   # restore into the FREED slot only
                 txn.fsync()
-                return "provenance-blocked" if txn.usable(dest.name) else "recovery-required"
+                return "restored-prior" if txn.usable(dest.name) else "recovery-required"
             # Fresh install (no prior to restore): drop the bad candidate ONLY if it is still
             # ours; otherwise retain the unverified destination + journal.
             if txn.leaf_kind(dest.name) != "absent":
                 if not dest_is_ours:
                     return "recovery-required"
-                txn.rmtree(dest.name)
+                source_fs.race_seam("pre-rollback-delete", dest.name)
+                ok, _w = source_fs.remove_bound(txn.fd, dest.name, dest_ident)
+                if not ok:
+                    return "recovery-required"
             txn.fsync()
-            return "recovery-required"
+            return "removed-fresh"
         except (OSError, PathContainmentError):
             return "recovery-required"                   # rollback unproven -> retain everything
 
@@ -856,7 +1451,9 @@ class Installer:
             return txn.verify_link(handle, name)
         return txn.verify_candidate(handle, name)
 
-    def _activate_held(self, txn, dest: Path, staging: Path, verify_active=None, handle=None) -> str:
+    def _activate_held(self, txn, dest: Path, staging: Path, verify_active=None, handle=None,
+                       meta: dict | None = None, prior=None, final_dirty=None) -> str:
+        from . import source_fs
         prev = dest.with_name(f".{dest.name}.prev")
         # A pre-existing `.prev` is an UNOWNED orphan (the journal is created EXCLUSIVELY just
         # below, so none exists yet): block rather than blind-remove a prior run's artifact.
@@ -866,7 +1463,12 @@ class Installer:
         # and its parent, RETAINING the journal file + parent fds. A journal INJECTED after the
         # absent-preflight (regular/symlink/special/stale) makes the create fail -> block BEFORE
         # any candidate/dest/`.prev` mutation; the injected leaf is preserved for recovery.
-        jh = self._create_journal(dest, prev, staging)
+        idents = None
+        if meta is not None:
+            idents = {"candidate": ([handle.st_dev, handle.st_ino] if handle is not None
+                                    else None),
+                      "prev": ([prior.st_dev, prior.st_ino] if prior is not None else None)}
+        jh = self._create_journal(dest, prev, staging, meta, idents)
         if jh is None:
             return "recovery-required"
         try:
@@ -877,18 +1479,86 @@ class Installer:
                 if not self._verify_staged(txn, handle, staging.name):
                     raise _Substituted()
                 # (2) dest -> .prev ; (3) fsync parent ; (4) journal 'prior-archived'.
+                # RACE-SAFE ARCHIVE: the leaf renamed to `.prev` must be exactly the CAPTURED
+                # verified prior — proven immediately before AND immediately after the rename
+                # (the retained handle identifies the inode through the rename). A mismatch
+                # means an EXTERNAL process substituted the destination: nothing of the
+                # substitute is archived or destroyed.
                 if txn.leaf_kind(dest.name) != "absent":
-                    txn.rename(dest.name, prev.name)
+                    source_fs.race_seam("pre-archive", str(dest))
+                    if prior is not None and not txn.verify_leaf(prior, dest.name):
+                        if jh["marker"].remove():
+                            return "substituted"        # nothing mutated; substitute untouched
+                        return "recovery-required"
+                    # FINAL dirty recheck against the CAPTURED prior — new local changes
+                    # since the initial check block the archive with zero mutation.
+                    if final_dirty is not None and final_dirty():
+                        if jh["marker"].remove():
+                            return "dirty"
+                        return "recovery-required"
+                    try:
+                        txn.rename_noreplace(dest.name, prev.name)
+                    except FileExistsError:
+                        # a leaf was INJECTED at `.prev` after the preflight: nothing mutated;
+                        # retain the injected leaf, drop the journal (clean refusal)
+                        if jh["marker"].remove():
+                            return "injected"
+                        return "recovery-required"
+                    if prior is not None and not txn.verify_leaf(prior, prev.name):
+                        # The rename raced a substitution: what landed at `.prev` is NOT the
+                        # verified prior. Put it back (NOREPLACE — dest was just freed) and
+                        # refuse; if the slot was re-occupied, retain everything as evidence.
+                        try:
+                            txn.rename_noreplace(prev.name, dest.name)
+                        except (OSError, PathContainmentError):
+                            return "recovery-required"   # quarantined at .prev + journal
+                        txn.fsync()
+                        if jh["marker"].remove():
+                            return "substituted"
+                        return "recovery-required"
                     archived = True                     # the prior IS archived now — set BEFORE
                     txn.fsync()                         # the journal write, so a later failure
                     if not self._update_journal(jh, dest, prev, staging, "prior-archived"):
                         raise _JournalLost()
+                    # SECOND dirty scan THROUGH THE CAPTURED PRIOR HANDLE, after the archive
+                    # and before promotion: a file created INSIDE the unchanged directory
+                    # after the pre-archive check (pathname-based writer) is caught here.
+                    # If dirty: no promotion — restore `.prev` no-clobber, re-prove its
+                    # identity at the destination, and refuse truthfully (the candidate is
+                    # discarded by the caller through its bound identity; the prior source
+                    # and its registry record stay authoritative and consistent).
+                    source_fs.race_seam("post-archive", str(dest))
+                    if final_dirty is not None and final_dirty():
+                        try:
+                            txn.rename_noreplace(prev.name, dest.name)
+                        except (OSError, PathContainmentError):
+                            return "recovery-required"   # slot reoccupied -> retain evidence
+                        txn.fsync()
+                        if prior is not None and not txn.verify_leaf(prior, dest.name):
+                            return "recovery-required"   # unproven restore -> retain journal
+                        if jh["marker"].remove():
+                            return "dirty"               # truthful refusal; prior restored
+                        return "recovery-required"
                 # TIGHT re-check IMMEDIATELY before promotion (bounded only by kernel rename
                 # atomicity): a substituted candidate/link leaf is never promoted.
                 if not self._verify_staged(txn, handle, staging.name):
                     raise _Substituted()
-                # (5) candidate -> dest ; (6) fsync parent ; (7) journal 'activated'.
-                txn.rename(staging.name, dest.name)
+                # (5) candidate -> dest, ATOMICALLY refusing to replace an injected leaf
+                # (renameat2 RENAME_NOREPLACE — plain rename would silently replace an
+                # injected EMPTY directory); (6) fsync parent ; (7) journal 'activated'.
+                source_fs.race_seam("pre-promote", str(dest))
+                try:
+                    txn.rename_noreplace(staging.name, dest.name)
+                except FileExistsError:
+                    # A leaf APPEARED at dest after absence was observed. Fresh install: drop
+                    # our candidate, clear the journal, refuse — the injected leaf untouched.
+                    # Update: restore the archived prior to its slot first (NOREPLACE cannot —
+                    # the slot is occupied), so retain journal + .prev as evidence.
+                    if not archived:
+                        if jh["marker"].remove():
+                            return "injected"
+                        return "recovery-required"
+                    return "recovery-required"           # .prev + journal retained (evidence)
                 txn.fsync()
                 if not self._update_journal(jh, dest, prev, staging, "activated"):
                     raise _JournalLost()
@@ -901,27 +1571,27 @@ class Installer:
                 # a slot was freed. recovery-required.
                 if archived and txn.leaf_kind(dest.name) == "absent":
                     try:
-                        txn.rename(prev.name, dest.name)     # dest freed -> restore original
+                        # NOREPLACE: never clobber a leaf injected into the freed slot
+                        txn.rename_noreplace(prev.name, dest.name)
                         txn.fsync()
                     except (OSError, PathContainmentError):
                         pass                                 # unproven restore -> retain all
                 return "recovery-required"
             except (OSError, PathContainmentError):
-                # Generic activation/journal failure. Restore the prior if we archived one and
-                # the dest slot is a NON-usable occupant (e.g. a dangling symlink).
-                if archived and not txn.usable(dest.name):
-                    if txn.leaf_kind(dest.name) != "absent" and not txn.usable(dest.name):
-                        try:
-                            txn.rmtree(dest.name)
-                        except PathContainmentError:
-                            return "recovery-required"
+                # Generic activation/journal failure. Restore the prior ONLY into a freed
+                # slot (NOREPLACE) — an injected occupant (dangling symlink, file, directory,
+                # special leaf) is NEVER deleted to continue: retain it + `.prev` + journal
+                # as evidence (recovery-required).
+                if archived:
+                    if txn.leaf_kind(dest.name) != "absent":
+                        return "recovery-required"       # foreign occupant retained
                     try:
-                        txn.rename(prev.name, dest.name)
+                        txn.rename_noreplace(prev.name, dest.name)
                         txn.fsync()
                     except (OSError, PathContainmentError):
                         return "recovery-required"
-                if archived and not txn.usable(dest.name):
-                    return "recovery-required"
+                    if not txn.usable(dest.name):
+                        return "recovery-required"
                 return "failed-clean" if jh["marker"].remove() else "recovery-required"
             # (8) confirm the active source is a USABLE DIRECTORY (held FD), then verify final
             # provenance — which can take time, so a candidate/link swap can occur DURING it.
@@ -929,24 +1599,86 @@ class Installer:
                 return "recovery-required"
             if verify_active is not None and not verify_active():
                 # Provenance FAILED -> destructive rollback, but only after re-proving `dest`
-                # is still our captured handle (never rmtree an unverified replacement).
-                return self._rollback_bad_active(txn, dest, prev, handle)
+                # is still our captured handle (never rmtree an unverified replacement). After
+                # a PROVEN rollback the state is coherent (prior restored with its own record,
+                # or a fresh install fully undone) -> the journal is removed; only an unproven
+                # rollback retains it.
+                rb = self._rollback_bad_active(txn, dest, prev, handle)
+                if rb in ("restored-prior", "removed-fresh"):
+                    return "provenance-blocked" if jh["marker"].remove() else "recovery-required"
+                return "recovery-required"
             # Provenance SUCCEEDED, but re-verify the ACTIVE leaf is STILL our captured
             # candidate/link (a swap during provenance evaluation) BEFORE any `.prev`/journal
             # removal. On mismatch: retain journal + `.prev` + substituted active leaf.
             if not self._verify_staged(txn, handle, dest.name):
                 return "recovery-required"
-            # (9) remove `.prev` (held FD, re-verified) + fsync parent ; (10) remove the journal
-            # (owned-handle: identity re-verified, then parent fsync) ONLY after cleanup.
-            if txn.leaf_kind(prev.name) != "absent" and not self._prev_cleanup_ok(txn, prev):
+            # (8b) OWNERSHIP RECORD — transactional: the durable registry record is written from
+            # the journal metadata BEFORE any `.prev`/journal cleanup. A write FAILURE must not
+            # leave the new tree active under old/absent metadata: roll back to the verified
+            # `.prev` (its prior record was never touched, so it still matches), or fully remove
+            # a fresh install's candidate. Only an UNPROVEN rollback retains the journal —
+            # recovery then retries the record once and performs the same rollback.
+            if meta is not None and not self._write_registry_record(dest, meta, jh["txn_id"]):
+                rb = self._rollback_bad_active(txn, dest, prev, handle)
+                if rb in ("restored-prior", "removed-fresh"):
+                    return "registry-blocked" if jh["marker"].remove() else "recovery-required"
                 return "recovery-required"
+            # (9) remove `.prev` — IDENT-BOUND to the captured prior handle (never a
+            # name-only rmtree); a substituted `.prev` is retained + journal kept.
+            # FINAL PRIOR DIRTY SCAN first: a pathname-based writer that created a file
+            # inside the (unchanged) archived prior after the post-archive recheck must
+            # never lose it to the cleanup — the transaction is marked
+            # `prior-dirty-retained` (automatic recovery never retries the deletion), the
+            # ACTIVE NEW SOURCE stays (its registry record is already coherent), and the
+            # result is a truthful incomplete naming the retained `.prev`.
+            # (10) remove the journal ONLY after cleanup.
+            prior_ident = ([prior.st_dev, prior.st_ino] if prior is not None else None)
+            if txn.leaf_kind(prev.name) != "absent":
+                source_fs.race_seam("pre-prev-cleanup", str(dest))
+                dirty = self._prev_dirty_scan(txn, dest, prev, prior_ident)
+                if dirty is None:
+                    return "recovery-required"
+                if dirty:
+                    self._update_journal(jh, dest, prev, staging, "prior-dirty-retained")
+                    return "prior-dirty"
+                if not self._prev_cleanup_ok(txn, prev, prior_ident):
+                    return "recovery-required"
             txn.fsync()
             return "activated" if jh["marker"].remove() else "recovery-required"
         finally:
             self._close_journal(jh)
 
 
-    def _clone(self, spec, dest: Path, source: str, remote: str | None = None) -> bool:
+    # A "release" for the git-only Latest-stable resolution: a version-shaped tag.
+    _VERSION_TAG = re.compile(r"^v?(\d+(?:\.\d+)+)")
+
+    def _resolve_stable_tag(self, dest: str) -> str:
+        """Git-only Latest-stable tag selection in a FULL clone at `dest`:
+          * the newest VERSION-SHAPED tag (v?X.Y[.Z…], highest by numeric version sort) —
+            the published-release form;
+          * else the newest tag by creation date (a "suitable tag");
+          * else "" — the caller stays on the default-branch HEAD (latest main commit)."""
+        run = self.system.runner.run
+        tags = run(["git", "-C", dest, "tag", "--list"], 10.0)
+        names = [t.strip() for t in (tags.stdout or "").splitlines() if t.strip()] \
+            if tags.returncode == 0 else []
+        versioned = []
+        for name in names:
+            m = self._VERSION_TAG.match(name)
+            if m:
+                versioned.append((tuple(int(x) for x in m.group(1).split(".")), name))
+        if versioned:
+            return max(versioned)[1]
+        newest = run(["git", "-C", dest, "for-each-ref", "--sort=-creatordate",
+                      "--format=%(refname:short)", "refs/tags"], 10.0)
+        if newest.returncode == 0:
+            for line in (newest.stdout or "").splitlines():
+                if line.strip():
+                    return line.strip()
+        return ""
+
+    def _clone(self, spec, dest: Path, source: str, remote: str | None = None,
+               expected_pin: str = "") -> bool:
         from . import validators
         run = self.system.runner.run
         remote = remote or spec.remote
@@ -960,7 +1692,14 @@ class Installer:
         if not remote:
             return False
         ok = False
-        if source == "dev":
+        if spec.artifact:
+            # Declared artifact source: EVERY selector resolves to the same declared artifact
+            # (the maintainer's default branch) — no pin/branch/tag semantics are invented.
+            ok = (run(["git", "clone", "--depth", "1", remote, str(dest)],
+                      timeout=120.0).returncode == 0 and dest.exists())
+        elif source == "dev":
+            # STRICT branch semantics: with a configured branch, `--branch` makes git fail
+            # when it does not exist — dev NEVER silently falls back to another ref.
             argv = ["git", "clone", "--depth", "1"]
             if spec.branch:
                 argv += ["--branch", spec.branch]
@@ -971,25 +1710,26 @@ class Installer:
             if run(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
                     and dest.exists():
                 if source == "pinned":
-                    # P0.5: `pinned` REQUIRES a configured pin and must resolve EXACTLY to
-                    # it — never a silent "pinned" adoption of the default branch.
-                    if not spec.pin_commit:
+                    # P0.5: 'Known working' REQUIRES an exact expected commit — the newest
+                    # operator-confirmed composition entry when one exists, else the manifest
+                    # pin — and must resolve EXACTLY to it; never a silent adoption of the
+                    # default branch.
+                    pin = expected_pin or spec.pin_commit
+                    if not pin:
                         ok = False
                     else:
-                        ok = run(["git", "-C", str(dest), "checkout", spec.pin_commit],
+                        ok = run(["git", "-C", str(dest), "checkout", pin],
                                  30.0).returncode == 0
                         if ok:
                             head = run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
-                            ok = head.returncode == 0 and head.stdout.strip() == spec.pin_commit
+                            ok = head.returncode == 0 and head.stdout.strip() == pin
                 elif source == "stable":
-                    # The configured tag, else the latest tag (an independently selected
-                    # tag). With NO verifiable tag at all, `stable` fails closed.
-                    tag = spec.pin_tag
+                    # Latest stable, GIT-ONLY: newest version-shaped tag ("release") ->
+                    # newest tag -> default-branch HEAD (latest main commit). The resolved
+                    # commit is recorded by the ownership registry either way.
+                    tag = self._resolve_stable_tag(str(dest))
                     if not tag:
-                        desc = run(["git", "-C", str(dest), "describe", "--tags", "--abbrev=0"], 10.0)
-                        tag = desc.stdout.strip() if desc.returncode == 0 else ""
-                    if not tag:
-                        ok = False
+                        ok = True                      # no tags at all -> default-branch HEAD
                     else:
                         ok = run(["git", "-C", str(dest), "checkout", tag], 30.0).returncode == 0
                         if ok:
@@ -1008,7 +1748,7 @@ class Installer:
         return ok
 
     def _adopt_done(self, action, spec, dest, source_desc: str, source: str = "pinned",
-                    signer_diags=()) -> PlanAction:
+                    signer_diags=(), expected: str = "", kw_label: str = "") -> PlanAction:
         probe = probe_source(self.system, spec, str(dest))
         version = probe.version or probe.head[:12]
         # DISPLAY-ONLY provenance status: enforcement already happened INSIDE the durable
@@ -1018,10 +1758,14 @@ class Installer:
         # be after `.prev`/journal were already cleared, with no rollback evidence left).
         from . import provenance
         trusted, _diags = provenance.load_trusted_signers(self.config)
-        post = provenance.evaluate(self.system.runner, str(dest), spec, source, trusted)
+        post = provenance.evaluate(self.system.runner, str(dest), spec, source, trusted,
+                                   expected_commit=expected)
         action.provenance = post.status
         action.status = "done"
         action.detail = f"{source_desc}: {probe.state.value} (version {version}) [provenance: {post.status}]"
+        if source == "pinned" and kw_label:
+            # 'Known working' truthfulness: composition-resolved vs manifest-pin FALLBACK.
+            action.detail += f" [{kw_label}]"
         if signer_diags:
             action.detail += " | signer-config: " + "; ".join(signer_diags)
         return action

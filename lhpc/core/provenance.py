@@ -59,6 +59,7 @@ SIGNATURE_UNAVAILABLE = "signature-unavailable"
 MUTABLE_DEV = "mutable-dev"
 MUTABLE_STABLE = "mutable-stable"
 UNVERIFIED_BLOCKED = "unverified-blocked"
+ARTIFACT_HEAD = "artifact-head"
 
 
 
@@ -102,18 +103,29 @@ def verify_signature(runner, dest: str, ref: str, trusted_fingerprints,
 
 
 def evaluate(runner, dest: str, spec, source: str,
-             trusted_fingerprints=()) -> ProvenanceResult:
+             trusted_fingerprints=(), expected_commit: str = "") -> ProvenanceResult:
     """Truthful provenance of the activated source at `dest` for the requested `source`
     selection ('pinned' | 'dev' | 'stable'). `spec` is the component's source spec
-    (with `pin_commit` / `pin_tag`)."""
+    (with `pin_commit` / `pin_tag`). `expected_commit`, when given, overrides the manifest
+    pin for the 'pinned' check (the Known-working composition resolution)."""
+    if getattr(spec, "artifact", False):
+        # A declared single-file/artifact-style source: EVERY selector resolves to the same
+        # declared artifact (the maintainer's default branch) — truthfully labelled, never
+        # blocked as unverified, never claimed production-safe.
+        return ProvenanceResult(ARTIFACT_HEAD, True, False,
+                                "declared artifact source — installs the maintainer's "
+                                "current default branch (same for every selector)")
     if source == "dev":
         return ProvenanceResult(MUTABLE_DEV, True, False,
                                 "explicit mutable dev branch — NOT production-safe")
     if source == "stable":
         return ProvenanceResult(MUTABLE_STABLE, True, False,
                                 "explicit mutable stable branch — NOT production-safe")
-    # 'pinned' (the production-safe default): require a configured pin AND HEAD==pin.
-    pin = getattr(spec, "pin_commit", "") if spec else ""
+    # 'pinned' — the "Known working" selector: the expected commit is the newest
+    # operator-confirmed composition entry when the caller resolved one (`expected_commit`),
+    # else the manifest pin. Either way HEAD must equal it EXACTLY.
+    pin = expected_commit or (getattr(spec, "pin_commit", "") if spec else "")
+    label = "known-working commit" if expected_commit else "pinned commit"
     if not pin:
         return ProvenanceResult(UNVERIFIED_BLOCKED, False, False,
                                 "no configured pin commit — not production-safe; choose "
@@ -121,15 +133,17 @@ def evaluate(runner, dest: str, spec, source: str,
     head = _head_commit(runner, dest)
     if head != pin:
         return ProvenanceResult(UNVERIFIED_BLOCKED, False, False,
-                                f"HEAD {head or '?'} != pinned {pin} (not at the pin)")
+                                f"HEAD {head or '?'} != {label} {pin} (not at the pin)")
     if not trusted_fingerprints:
         return ProvenanceResult(PINNED_VERIFIED, True, True,
-                                f"at pinned commit {pin[:12]} (no trusted signer configured)")
-    tag = getattr(spec, "pin_tag", "") if spec else ""
+                                f"at {label} {pin[:12]} (no trusted signer configured)")
+    # Signature verification anchors to the MANIFEST pin's tag/commit only — an
+    # operator-confirmed composition commit has no configured signed ref.
+    tag = "" if expected_commit else (getattr(spec, "pin_tag", "") if spec else "")
     signed, why = verify_signature(runner, dest, tag or pin, trusted_fingerprints,
                                    is_tag=bool(tag))
     if signed:
         return ProvenanceResult(SIGNATURE_VERIFIED, True, True,
-                                f"at pinned commit {pin[:12]}; {why}")
+                                f"at {label} {pin[:12]}; {why}")
     return ProvenanceResult(SIGNATURE_UNAVAILABLE, True, True,
-                            f"at pinned commit {pin[:12]}; signature NOT verified ({why})")
+                            f"at {label} {pin[:12]}; signature NOT verified ({why})")

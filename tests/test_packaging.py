@@ -7,7 +7,7 @@ from lhpc.core.manifest import default_manifest_path, load_manifest
 
 
 def test_data_assets_resolve():
-    for name in ("manifest.example.toml", "defaults.toml", "profiles.example.toml",
+    for name in ("manifest.example.toml", "defaults.toml",
                  "local.example.toml", "secrets.example.toml"):
         assert asset_path(name).exists(), name
     assert "[[stack]]" in asset_text("manifest.example.toml")

@@ -274,6 +274,9 @@ class SourceSpec:
     branch: str = ""
     local_dir: str = ""          # dir name under the adopt search root (defaults to basename(path))
     strategy: str = ""           # "" (use config default), "copy", or "link" (symlink in place)
+    artifact: bool = False       # single-file/artifact-style source: EVERY selector resolves to
+                                 # the same declared artifact (default-branch HEAD); no fake
+                                 # pin/branch/tag semantics are invented for it
 
     @property
     def adopt_dir(self) -> str:
@@ -296,6 +299,9 @@ class Component:
     process: ProcessSpec | None = None
     endpoints: tuple[EndpointSpec, ...] = ()
     depends_on: tuple[str, ...] = ()     # component ids this one needs at runtime
+    build_requires: tuple[str, ...] = ()  # source component ids whose CHECKOUT this one's
+                                          # build consumes (e.g. daemon -> radiolib); enforced
+                                          # for update inclusion + uninstall refcounting
     source: SourceSpec | None = None
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None
@@ -404,21 +410,5 @@ class ResourceConflict:
     message: str = ""
 
 
-@dataclass
-class ConfirmedProfile:
-    """A pinned known-good profile for a component (recovery target).
-
-    A failed candidate build/test must never overwrite this. Restoration is
-    explicit and auditable — never a destructive source reset.
-    """
-
-    component_id: str
-    commit: str = ""
-    daemon_version: str = ""
-    daemon_tx_profile: str = ""
-    config_schema_version: str = ""
-    artifact_id: str = ""
-    tests_passed: tuple[str, ...] = ()
-    live_test_status: str = ""
-    compatibility: str = ""
-    limitations: str = ""
+# NOTE: the per-component ConfirmedProfile schema (dead code — nothing ever wrote it) was
+# replaced by OPERATOR-CONFIRMED per-stack known-working COMPOSITIONS (core/known_working.py).

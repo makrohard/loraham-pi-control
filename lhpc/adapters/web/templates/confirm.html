@@ -36,6 +36,16 @@
           <input type="hidden" name="confirmed" value="yes">
           {% if band %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
+          {% if op == 'clean' %}
+            <p class="flash flash-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's
+              sources, per-stack configuration, logs, known-working history and state. Retained
+              diagnostics are gone. config/local.toml, secrets and other stacks are untouched.
+              Type the stack id <strong>{{ target }}</strong> to confirm:</p>
+            <label>confirm
+              <input type="text" name="confirm_text" autocomplete="off" placeholder="{{ target }}">
+            </label>
+            <br>
+          {% endif %}
           {% if stop_deps %}
             <p class="flash flash-warn"><strong>Other running stacks depend on this:</strong>
               {{ stop_deps|join(', ') }}. They will be <strong>stopped too</strong>.</p>
@@ -57,10 +67,13 @@
               <select name="source">
                 {% for ch in source_choices %}
                   <option value="{{ ch }}" {% if source==ch %}selected{% endif %}>
-                    {{ {'dev':'latest dev','stable':'latest stable','pinned':'pinned known-good'}[ch] }}</option>
+                    {{ {'dev':'Development','stable':'Latest stable','pinned':'Known working'}[ch] }}</option>
                 {% endfor %}
               </select>
             </label>
+            <span class="muted">Known working = last operator-confirmed composition (falls back
+              to the manifest pin) · Development = configured branch tip · Latest stable =
+              newest release tag, else newest tag, else main</span>
             <br>
           {% endif %}
           {% if op == 'start' %}<input type="hidden" name="_params" value="1">{% endif %}
