@@ -25,7 +25,7 @@ def _real_app(tmp_path, manifest=None):
     return create_app(service_factory=factory).test_client()
 
 
-def _csrf(client, path="/stacks/daemon/config"):
+def _csrf(client, path="/stacks/daemon"):
     import re
     body = client.get(path).get_data(as_text=True)
     m = re.search(r'name="_csrf" value="([^"]+)"', body)
@@ -149,7 +149,7 @@ def test_get_routes_make_no_network_calls(tmp_path):
         return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
     client = create_app(service_factory=factory).test_client()
-    for path in ("/", "/stacks", "/stacks/daemon", "/stacks/daemon/config", "/config",
+    for path in ("/", "/stacks", "/stacks/daemon",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
                  "/api/dash-signature", "/api/logs/loraham-daemon"):
         client.get(path)
@@ -177,11 +177,24 @@ def test_radio_dashboard_has_two_band_columns(tmp_path):
     assert "Radio config" in body or "daemon offline" in body
 
 
-def test_menu_has_dash_apps_config(tmp_path):
+def test_header_nav_home_and_apps(tmp_path):
     body = _client(tmp_path).get("/").get_data(as_text=True)
-    assert 'class="topnav"' in body
-    assert ">Dash<" in body and ">Apps<" in body and ">Config<" in body
-    assert ">Monitor<" not in body          # Monitor page deleted
+    # The header title itself is the Dash/home button; "Apps" is a same-style link in the header
+    # line. The old Dash/Apps button bar (topnav) is gone.
+    assert 'class="topnav"' not in body and ">Dash<" not in body
+    assert 'class="home"' in body               # title is the clickable home/dashboard link
+    assert 'class="apps-link"' in body and '>Apps</a>' in body
+    assert ">Config<" not in body           # Config page merged into per-stack Settings, menu removed
+    assert ">Monitor<" not in body          # Monitor page deleted (dashboard monitor needs a live daemon)
+
+
+def test_config_page_route_gone_content_on_stack(tmp_path):
+    # The standalone Config page (menu hub + per-stack GET) moved into the stack Settings section.
+    c = _client(tmp_path)
+    assert c.get("/config").status_code == 404                         # config hub page gone
+    assert c.get("/stacks/igate/config").status_code == 405            # GET config page gone (POST save remains)
+    body = c.get("/stacks/igate").get_data(as_text=True)               # content now on the stack page
+    assert 'id="stack-settings"' in body and ">Settings<" in body
 
 
 def test_stack_detail_has_panels_and_evidence(tmp_path):
@@ -215,7 +228,7 @@ def _daemon_client(tmp_path, guard=False):
 
 def test_daemon_config_page_has_live_settings(tmp_path):
     # Live daemon settings now live on the daemon's config page (Monitor page deleted).
-    body = _daemon_client(tmp_path).get("/stacks/daemon/config").get_data(as_text=True)
+    body = _daemon_client(tmp_path).get("/stacks/daemon").get_data(as_text=True)
     assert "Live radio settings" in body and 'name="_csrf"' in body
     assert "<select name=\"value\">" in body          # enum -> dropdown
     assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
@@ -268,22 +281,17 @@ def test_config_path_cannot_escape_via_band_or_id(tmp_path):
 
 def test_get_daemon_config_is_read_only(tmp_path):
     # daemon_set is in _MUTATING; a GET of the config page must never call it.
-    assert _daemon_client(tmp_path, guard=True).get("/stacks/daemon/config").status_code == 200
+    assert _daemon_client(tmp_path, guard=True).get("/stacks/daemon").status_code == 200
 
 
 def test_multi_band_config_stored_per_band(tmp_path):
     c = _real_app(tmp_path)
-    token = _csrf(c, "/stacks/kiss/config?band=868")     # kiss stays multi-band
+    token = _csrf(c, "/stacks/kiss?band=868")     # kiss stays multi-band
     c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
                                         "c_tx_freq": "869.525"})
-    assert "869.525" in c.get("/stacks/kiss/config?band=868").get_data(as_text=True)
-    assert "433.900" in c.get("/stacks/kiss/config?band=433").get_data(as_text=True)  # 433 untouched
+    assert "869.525" in c.get("/stacks/kiss?band=868").get_data(as_text=True)
+    assert "433.900" in c.get("/stacks/kiss?band=433").get_data(as_text=True)  # 433 untouched
 
-
-def test_config_index_lists_stacks(tmp_path):
-    body = _client(tmp_path).get("/config").get_data(as_text=True)
-    assert "Configuration" in body and ">Configure" in body
-    assert "daemon" in body and "igate" in body
 
 
 def test_stack_page_has_action_controls(tmp_path):
@@ -924,7 +932,7 @@ def test_config_page_distinct_collision_fields_and_values(tmp_path):
                             paths=Paths(runtime_root=tmp_path))
     assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
                                                      "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
-    body = c.get("/stacks/ostack2/config").get_data(as_text=True)
+    body = c.get("/stacks/ostack2").get_data(as_text=True)
     assert 'name="c_tgt__rp"' in body and 'name="c_dep__rp"' in body        # distinct run fields
     assert 'name="f_tgt__fp"' in body and 'name="f_dep__fp"' in body        # distinct file fields
     assert 'name="c_rp"' not in body and 'name="f_fp"' not in body          # no shared bare field
@@ -936,7 +944,7 @@ def test_config_page_distinct_collision_fields_and_values(tmp_path):
 def test_config_page_post_persists_scoped_and_reloads(tmp_path):
     from lhpc.core import config as cfgmod
     m, c = _collide_app(tmp_path)
-    tok = _csrf(c, "/stacks/ostack2/config")
+    tok = _csrf(c, "/stacks/ostack2")
     r = c.post("/stacks/ostack2/config",
                data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                      "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
@@ -945,14 +953,14 @@ def test_config_page_post_persists_scoped_and_reloads(tmp_path):
     assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"    # scoped run keys
     assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"    # scoped file keys
     assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
-    body = c.get("/stacks/ostack2/config").get_data(as_text=True)             # reloads correctly
+    body = c.get("/stacks/ostack2").get_data(as_text=True)             # reloads correctly
     assert 'value="RP-T"' in body and 'value="RP-D"' in body
 
 
 def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     m, c = _collide_app(tmp_path)
-    tok = _csrf(c, "/stacks/ostack2/config")
+    tok = _csrf(c, "/stacks/ostack2")
     c.post("/stacks/ostack2/config",
            data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                  "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
@@ -968,3 +976,160 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
     assert "FP=FP-T" in (files / "tgt.conf").read_text()                     # own generated file config
     assert "FP=FP-D" in (files / "dep.conf").read_text()
     assert not (files / "sib.conf").exists()
+
+
+def test_apps_list_has_inline_settings_after_deps(tmp_path):
+    # The per-stack Settings section (former Config page) is rendered inline in the Apps stacklist,
+    # after each stack's dependency-components table, with a per-stack id (not the detail page's one).
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert ">Settings<" in body
+    assert 'id="stack-settings-meshcom"' in body and 'id="stack-settings-igate"' in body
+    assert 'id="stack-settings"' not in body                    # unique per-stack ids only here
+    assert body.index("Dependency component") < body.index('id="stack-settings-meshcom"')
+
+
+def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path):
+    c = _daemon_client(tmp_path)                       # 433 CONF socket reachable
+    j = c.get("/api/daemon/433/socket").get_json()
+    assert j["band"] == "433" and j["reachable"] is True
+    assert j["line"].startswith("STATUS")              # one raw, sanitised status line
+    # 868 has no reply -> fail-closed, not reachable
+    assert c.get("/api/daemon/868/socket").get_json() == {"band": "868", "line": "", "reachable": False}
+    assert c.get("/api/daemon/999/socket").status_code == 404       # band validated -> no arbitrary path
+    assert c.post("/api/daemon/433/socket").status_code == 405       # read-only (GET only)
+
+
+def test_daemon_socket_line_sanitises_and_bounds(tmp_path):
+    from lhpc.core.services import ControllerService
+    # ANSI colour + a control char (0x07) + a non-ASCII byte + a second line -> stripped to one
+    # printable-ASCII first line (a hostile/garbled socket can never emit control chars or extra data).
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+                                    b"\x1b[31mSTATUS RSSI=-95\x07\xff CAD=1\nEVIL\n"})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    assert svc.daemon_socket_line("433") == "STATUS RSSI=-95 CAD=1"
+    assert svc.daemon_socket_line("868") == ""          # unreachable -> fail-closed
+    assert svc.daemon_socket_line("evil") == ""         # invalid band -> never builds a socket path
+
+
+def test_daemon_settings_has_view_socket_control(tmp_path):
+    body = _daemon_client(tmp_path).get("/stacks/daemon?cfg=1").get_data(as_text=True)
+    assert '>View Socket</button>' in body and 'class="socketbtn"' in body
+    assert 'id="socketout-433"' in body and 'id="socketout-body-433"' in body   # 22-line window
+    assert 'socketclose' in body                        # ✕ closes window + disconnects
+
+
+def test_daemon_settings_has_tx_viewer_and_fixed_height_panes(tmp_path):
+    body = _daemon_client(tmp_path).get("/stacks/daemon?cfg=1").get_data(as_text=True)
+    # 4th button: RX/TX View (reuses the dashboard RX/TX feed), closable 22-line window
+    assert '>RX/TX View</button>' in body and 'class="txbtn"' in body
+    assert 'id="txout-433"' in body and 'id="txout-body-433"' in body and 'txclose' in body
+    # every output pane (STATUS/STATS, View Socket, TX-Viewer) is the FIXED 22-line window
+    assert body.count('liveout-body stream22') == 3
+    assert 'socketstream' not in body                   # the old growing pane is gone
+
+
+# --- Restored shared Settings partial (_stack_settings.html): render, placement, regression ---
+
+def test_settings_partial_pages_render_200(tmp_path):                        # (1)
+    c = _client(tmp_path)
+    assert c.get("/stacks").status_code == 200                # Apps overview include site
+    assert c.get("/stacks/daemon").status_code == 200         # detail context WITH daemon_params
+    assert c.get("/stacks/igate").status_code == 200          # non-daemon detail
+
+
+def test_settings_ids_and_config_fields(tmp_path):                           # (2)
+    c = _client(tmp_path)
+    detail = c.get("/stacks/igate").get_data(as_text=True)
+    assert 'id="stack-settings"' in detail and '<summary>Settings</summary>' in detail
+    assert 'name="c_call"' in detail                          # component-aware config field
+    assert 'name="_csrf"' in detail                           # CSRF preserved
+    assert "Reset to defaults" in detail                      # exact wording preserved
+    assert 'id="stack-settings-igate"' in c.get("/stacks").get_data(as_text=True)   # per-stack id
+
+
+def test_settings_apps_ids_unique(tmp_path):                                 # (3)
+    import re
+    apps = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    ids = re.findall(r'id="(stack-settings-[a-z0-9-]+)"', apps)
+    assert len(ids) >= 2 and len(ids) == len(set(ids))        # one unique id per stack
+    assert 'id="stack-settings"' not in apps                  # never the bare detail id here
+
+
+def test_settings_cfg_query_opens(tmp_path):                                 # (4)
+    c = _client(tmp_path)
+    opened = '<details class="advcfg settings" id="stack-settings" open>'
+    assert opened in c.get("/stacks/igate?cfg=1").get_data(as_text=True)     # ?cfg=1 opens it
+    assert opened not in c.get("/stacks/igate").get_data(as_text=True)       # collapsed by default
+
+
+def test_settings_embedded_post_persists(tmp_path):                          # (5)
+    from lhpc.core.services import ControllerService
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks/igate")
+    r = c.post("/stacks/igate/config", data={"_csrf": tok, "band": "", "c_call": "DJ0CHE-7"})
+    assert r.status_code in (200, 302)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.stack_config("igate").get("call") == "DJ0CHE-7"   # embedded form persists (unique->flat)
+
+
+def test_settings_old_config_routes_stay_removed(tmp_path):                  # (6)
+    c = _client(tmp_path)
+    assert c.get("/config").status_code == 404                # config hub gone
+    assert c.get("/stacks/igate/config").status_code == 405   # GET config page gone (POST remains)
+
+
+def test_settings_partial_loads_and_renders(tmp_path):                       # (7)
+    # Regression guard: the shared partial must exist and render standalone with the data both
+    # include sites pass — a missing file raises TemplateNotFound here.
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.services import ControllerService
+    def factory():
+        return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    app = create_app(service_factory=factory)
+    svc = factory()
+    with app.test_request_context("/stacks/igate?cfg=1"):
+        tmpl = app.jinja_env.get_template("_stack_settings.html")   # TemplateNotFound if absent
+        html = tmpl.render(stack=svc.stack("igate"), view=svc.config_view("igate"),
+                           config_groups=svc.config_param_groups("igate"),
+                           settings_id="stack-settings")
+    assert '<summary>Settings</summary>' in html and 'id="stack-settings"' in html
+    assert 'name="c_call"' in html                            # component-aware field rendered
+
+
+# --- Settings reset button: exact "Reset to defaults" text for every stack/band --------------
+
+def test_daemon_settings_reset_button_exact_text_both_bands(tmp_path):        # (1)
+    c = _daemon_client(tmp_path)
+    for q in ("?cfg=1", "?band=868&cfg=1"):                    # 433 (default) and 868
+        body = c.get("/stacks/daemon" + q).get_data(as_text=True)
+        assert '>Reset to defaults</button>' in body
+        assert 'Reset 433 to defaults' not in body and 'Reset 868 to defaults' not in body
+
+
+def test_multiband_stack_reset_button_exact_text_each_band(tmp_path):         # (2)
+    c = _client(tmp_path)
+    for band in ("433", "868"):                               # kiss is a multi-band non-daemon stack
+        body = c.get(f"/stacks/kiss?band={band}&cfg=1").get_data(as_text=True)
+        assert '>Reset to defaults</button>' in body
+        assert f'Reset {band} to defaults' not in body
+
+
+def test_reset_post_submits_band_and_redirects_to_settings(tmp_path):         # (3)
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks/kiss?band=868&cfg=1")             # selected-band reset semantics preserved
+    r = c.post("/stacks/kiss/config/reset", data={"_csrf": tok, "band": "868"})
+    assert r.status_code in (302, 303)
+    loc = r.headers["Location"]
+    assert "/stacks/kiss" in loc and "band=868" in loc and "cfg=1" in loc
+    assert loc.endswith("#stack-settings")                   # back to the opened Settings section
+    # CSRF still enforced on the reset route
+    assert c.post("/stacks/kiss/config/reset", data={"band": "868"}).status_code == 400
+
+
+def test_no_page_shows_banded_reset_text(tmp_path):                          # (4)
+    c = _daemon_client(tmp_path)
+    for p in ("/stacks", "/stacks/daemon?cfg=1", "/stacks/daemon?band=868&cfg=1",
+              "/stacks/kiss?band=433&cfg=1", "/stacks/kiss?band=868&cfg=1", "/stacks/igate?cfg=1"):
+        body = c.get(p).get_data(as_text=True)
+        assert 'Reset 433 to defaults' not in body and 'Reset 868 to defaults' not in body
+        assert '>Reset to defaults</button>' in body          # the exact-text button is present

@@ -45,6 +45,7 @@
             {% endif %}
 
             {% if g.deps %}
+              <hr class="sep">
               <table class="deps">
                 <thead><tr><th>Dependency component</th><th>Run</th><th>Install</th><th>Version</th><th>Logs</th></tr></thead>
                 <tbody>
@@ -61,10 +62,17 @@
               </table>
             {% endif %}
 
+            {# Per-stack Settings (the former Config page), inline after the dependency components,
+               bracketed by horizontal rules to separate it from the deps and the footer links. #}
+            <hr class="sep">
+            {% with stack = g.stack, view = g.view, config_groups = g.config_groups,
+                    settings_id = 'stack-settings-' ~ g.stack.id %}
+              {% include "_stack_settings.html" %}
+            {% endwith %}
+            <hr class="sep">
+
             <p class="links">
               <a href="{{ url_for('stack_detail', stack_id=g.stack.id) }}">Open details &rarr;</a>
-              · <a href="{{ url_for('stack_config_view', stack_id=g.stack.id) }}">config</a>
-              {% if g.bands %} · <a href="{{ url_for('stack_config_view', stack_id='daemon') }}">radio cfg</a>{% endif %}
             </p>
           </div>
         </details>

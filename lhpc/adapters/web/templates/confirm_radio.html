@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}confirm live setting — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('stack_config_view', stack_id='daemon') }}">&larr; back</a></p>
+  <p><a href="{{ url_for('stack_detail', stack_id='daemon', cfg=1) ~ '#stack-settings' }}">&larr; back</a></p>
   <div class="card">
     <header><h2>Confirm live daemon setting <span class="pill">{{ band }} MHz</span></h2></header>
     <div class="body">

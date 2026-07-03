@@ -149,6 +149,30 @@ def _query(system: System, band: str, command: bytes, prefix: str) -> dict[str, 
     return out
 
 
+def read_socket_line(system: System, band: str, command: bytes = b"GET STATUS\n") -> str:
+    """One RAW, bounded, sanitised line from the daemon CONF socket — for the live 'View Socket'
+    monitor. READ-ONLY (a `GET ` command only) and FAIL-CLOSED: returns '' on an invalid band, a
+    transport error, an empty/oversized reply, or an over-long first line, so a hostile or garbled
+    socket can never make us return unbounded data, hang, or emit control characters. The band is
+    validated (never an arbitrary socket path) and the line is stripped to printable ASCII. Same
+    bounds as `_query`."""
+    if not is_valid_band(band):
+        return ""
+    if not command.startswith(b"GET "):          # defence in depth: this monitor never writes
+        return ""
+    try:
+        raw = system.unix.request(conf_socket(band), command, _READ_TIMEOUT, _MAX)
+    except OSError:
+        return ""
+    if not raw or len(raw) >= _MAX:               # empty, or hit the read cap -> untrusted
+        return ""
+    first = raw.split(b"\n", 1)[0]
+    if len(first) > _MAX_LINE:                    # first line implausibly long -> reject
+        return ""
+    line = re.sub(r"\x1b\[[0-9;]*m", "", first.decode("ascii", "replace"))
+    return "".join(c for c in line if 32 <= ord(c) < 127).strip()   # printable ASCII only
+
+
 def read_view(system: System, band: str) -> DaemonView:
     """Read STATUS + STATS + CHANNEL for a band (read-only, bounded)."""
     view = DaemonView(band=band, reachable=False)

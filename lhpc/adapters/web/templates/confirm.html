@@ -95,9 +95,11 @@
               {% include "_daemon_params.html" %}
             {% endfor %}
           {% endif %}
+          <hr class="sep">
           <button type="submit">{% if blockers %}Stop owner(s) &amp; Run{% elif stop_deps %}Stop dependents &amp; {{ target }}{% else %}Apply {{ op }}{% endif %}</button>
         </form>
         {% if commands %}
+          <hr class="sep">
           <div class="flash flash-warn">
             <strong>Then run these yourself in a terminal</strong> (the controller never starts them):
             {% for cmd in commands %}{{ cmdbox('runcmd-' ~ loop.index0, cmd) }}{% endfor %}

@@ -21,7 +21,7 @@
 
           {# --- radio config (only when the daemon serves this band) --- #}
           {% if r.daemon.reachable %}
-            <h4>Radio config
+            <h4><a href="{{ url_for('stack_detail', stack_id='daemon', cfg=1) ~ '#stack-settings' }}">Radio config</a>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="stop">
@@ -31,6 +31,9 @@
                 <button type="submit">Stop daemon ({{ r.band }})</button>
               </form>
             </h4>
+            <p class="links">
+              <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
+            </p>
             <details class="monitor" open>
               <summary>Monitor</summary>
               <table class="monrssi">
@@ -86,7 +89,7 @@
                   {% for c in s.components %}
                     <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
-                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stack_config_view', stack_id=s.id) }}#cfg-{{ c.id }}">config</a>{% endif %}
+                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stack_detail', stack_id=s.id, cfg=1) }}#stack-settings">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}">log</a>{% endif %}
                       {% for itf in c.interfaces %}
                         {% if itf.link %}
@@ -184,12 +187,11 @@
             </form>
           {% endif %}
 
-          <p class="links">
-            <a href="{{ url_for('stack_config_view', stack_id='daemon') }}">Radio config &amp; live tuning &rarr;</a>
-            {% if r.daemon.reachable or r.daemon.process_up %}
-              · <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
-            {% endif %}
-          </p>
+          {% if r.daemon.process_up and not r.daemon.reachable %}
+            <p class="links">
+              <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
+            </p>
+          {% endif %}
         </div>
       </div>
     {% endfor %}

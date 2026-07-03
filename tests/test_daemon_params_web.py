@@ -21,7 +21,7 @@ def _csrf(client, path):
 
 
 def test_meshcom_config_shows_daemon_params_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks/meshcom/config").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks/meshcom").get_data(as_text=True)
     assert "Daemon radio parameters (433 MHz)" in body       # meshcom runs on 433
     assert 'value="28"' in body                              # meshcom CADIDLE default = 28
     assert 'name="dp_SF"' in body and 'value="10"' in body   # every param editable (SF too)
@@ -29,7 +29,7 @@ def test_meshcom_config_shows_daemon_params_panel(tmp_path):
 
 
 def test_txmode_renders_as_dropdown(tmp_path):
-    body = _app(tmp_path).get("/stacks/voice/config").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks/voice").get_data(as_text=True)
     assert '<select name="dp_TXMODE"' in body                 # dropdown, not a text input
     assert 'name="dp_TXMODE" value=' not in body              # ...so no text input for it
     assert '<option value="DIRECT" selected>' in body         # voice default = DIRECT preselected
@@ -37,7 +37,7 @@ def test_txmode_renders_as_dropdown(tmp_path):
 
 
 def test_new_params_use_correct_widgets(tmp_path):
-    body = _app(tmp_path).get("/stacks/daemon/config").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks/daemon").get_data(as_text=True)
     for enum in ("MODE", "CRC", "LDRO", "TXQUEUE", "CADMONITOR", "CADTXAFTERTIMEOUT", "SF", "BW", "CR"):
         assert f'<select name="dp_{enum}"' in body                # enums/small ranges -> dropdown
     for num in ("FREQ", "POWER", "PREAMBLE", "CADWAIT", "CADIDLE"):
@@ -58,7 +58,7 @@ def test_server_side_validation_rejects_bad_values(tmp_path):
 def test_live_mode_fsk_confirm_warns(tmp_path):
     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon/config")
+    tok = _csrf(c, "/stacks/daemon")
     body = c.post("/radio/433/set",
                   data={"_csrf": tok, "key": "MODE", "value": "FSK"}).get_data(as_text=True)
     assert "MODE=FSK" in body and "break LoRa" in body        # FSK warning present
@@ -71,8 +71,8 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
 def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
     c = _app(tmp_path)
     disabled = 'disabled title="Available only while the stack is running"'
-    assert disabled in c.get("/stacks/meshcom/config").get_data(as_text=True)     # app, not running
-    assert disabled not in c.get("/stacks/daemon/config").get_data(as_text=True)  # daemon: always on
+    assert disabled in c.get("/stacks/meshcom").get_data(as_text=True)     # app, not running
+    assert disabled not in c.get("/stacks/daemon").get_data(as_text=True)  # daemon: always on
 
 
 def test_apply_live_rejected_server_side_when_not_running(tmp_path):
@@ -82,57 +82,57 @@ def test_apply_live_rejected_server_side_when_not_running(tmp_path):
 
 
 def test_meshtastic_has_no_daemon_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks/meshtastic/config").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks/meshtastic").get_data(as_text=True)
     assert "Daemon radio parameters" not in body             # direct-SPI: no daemon panel
 
 
 def test_daemon_panel_follows_upper_band_switch(tmp_path):
     c = _app(tmp_path)
-    assert "(433 MHz)" in c.get("/stacks/daemon/config").get_data(as_text=True)          # default
-    assert "(868 MHz)" in c.get("/stacks/daemon/config?band=868").get_data(as_text=True)  # switched
+    assert "(433 MHz)" in c.get("/stacks/daemon").get_data(as_text=True)          # default
+    assert "(868 MHz)" in c.get("/stacks/daemon?band=868").get_data(as_text=True)  # switched
 
 
 def test_apply_live_saves_then_reports(tmp_path):
     # Daemon unreachable in tests: Apply persists the values, then reports it can't reach it.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom/config")
+    tok = _csrf(c, "/stacks/meshcom")
     r = c.post("/stacks/meshcom/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "33"})
     assert r.status_code in (302, 303)
-    assert 'value="33"' in c.get("/stacks/meshcom/config").get_data(as_text=True)  # saved
+    assert 'value="33"' in c.get("/stacks/meshcom").get_data(as_text=True)  # saved
 
 
 def test_save_then_reset_daemon_params(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom/config")
+    tok = _csrf(c, "/stacks/meshcom")
     r = c.post("/stacks/meshcom/daemon-params",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
     assert r.status_code in (302, 303)
-    body = c.get("/stacks/meshcom/config").get_data(as_text=True)
+    body = c.get("/stacks/meshcom").get_data(as_text=True)
     assert 'value="40"' in body                              # override persisted + shown
     c.post("/stacks/meshcom/daemon-params/reset", data={"_csrf": tok, "band": "433"})
-    body = c.get("/stacks/meshcom/config").get_data(as_text=True)
+    body = c.get("/stacks/meshcom").get_data(as_text=True)
     assert 'value="28"' in body and 'value="40"' not in body  # back to default
 
 
 def test_panel_stays_open_after_save(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom/config")
+    tok = _csrf(c, "/stacks/meshcom")
     r = c.post("/stacks/meshcom/daemon-params",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "next": "/stacks/meshcom/config"})
+               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "next": "/stacks/meshcom"})
     assert r.status_code in (302, 303) and "dp=1" in r.headers["Location"]   # redirect keeps it open
     body = c.get(r.headers["Location"]).get_data(as_text=True)
     assert '<details class="advcfg dparams" open>' in body                   # panel expanded
     assert '<details class="advcfg dparams">' in c.get(              # ...but collapsed by default
-        "/stacks/meshcom/config").get_data(as_text=True)
+        "/stacks/meshcom").get_data(as_text=True)
 
 
 def test_save_rejects_out_of_range(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom/config")
+    tok = _csrf(c, "/stacks/meshcom")
     c.post("/stacks/meshcom/daemon-params",
            data={"_csrf": tok, "band": "433", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
-    body = c.get("/stacks/meshcom/config").get_data(as_text=True)
+    body = c.get("/stacks/meshcom").get_data(as_text=True)
     assert 'value="99999"' not in body                       # rejected, not stored
 
 
@@ -198,7 +198,7 @@ def test_apply_live_reports_confirmed_vs_sent_unconfirmed(tmp_path):
 def test_apply_live_failure_flashes_warning(tmp_path):
     # Daemon unreachable in _app: save persists, apply fails -> the flash is a warning, not green.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon/config")
+    tok = _csrf(c, "/stacks/daemon")
     r = c.post("/stacks/daemon/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
     body = c.get(r.headers["Location"]).get_data(as_text=True)
@@ -275,7 +275,7 @@ def test_apply_live_other_band_not_blocked(tmp_path):
 def test_cadrssi_in_daemon_params_panel(tmp_path):
     from lhpc.core import daemon_params as dp, daemon_control as dc
     assert "CADRSSI" in dp.ALL_PARAMS and dc.validate_set("CADRSSI", dp.default_value("daemon", "433", "CADRSSI")) is None
-    body = _app(tmp_path).get("/stacks/daemon/config").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks/daemon").get_data(as_text=True)
     assert '<input type="number" name="dp_CADRSSI"' in body   # editable number input in the panel
 
 
@@ -304,9 +304,9 @@ def test_lowercase_enum_canonicalized(tmp_path):
 
 def test_lowercase_fsk_displays_as_fsk_in_panel(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon/config")
+    tok = _csrf(c, "/stacks/daemon")
     c.post("/stacks/daemon/daemon-params", data={"_csrf": tok, "band": "433", "dp_MODE": "fsk"})
-    body = c.get("/stacks/daemon/config").get_data(as_text=True)
+    body = c.get("/stacks/daemon").get_data(as_text=True)
     assert '<option value="FSK" selected>' in body       # canonical FSK preselected
 
 
@@ -437,7 +437,7 @@ def test_confirm_mode_selectors_carry_fsk_warn_attribute(tmp_path):
                                     "p_radio": "both"}).get_data(as_text=True)
     assert body.count("data-mode-warn") == 2                                    # one per band panel
     # config page (saved-profile Save/Apply) also carries the warn attribute
-    cfg = c.get("/stacks/daemon/config").get_data(as_text=True)
+    cfg = c.get("/stacks/daemon").get_data(as_text=True)
     assert "data-mode-warn" in cfg
 
 

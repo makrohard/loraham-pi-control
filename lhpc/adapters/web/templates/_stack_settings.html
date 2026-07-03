@@ -1,0 +1,223 @@
+{# Per-stack Settings section (the former Config page). Shared by the stack-detail page and the
+   Apps (/stacks) list. Requires `stack`, `view`, `config_groups`; optional `settings_id` (default
+   'stack-settings' — pass a per-stack id when several are rendered on one page). Collapsed by
+   default; opens on `?cfg=1` only when THIS section's id is the page's single 'stack-settings'. #}
+{% from "_macros.html" import action_btn %}
+{% set _sid = settings_id | default('stack-settings') %}
+<details class="advcfg settings" id="{{ _sid }}"{% if _sid == 'stack-settings' and request.args.get('cfg') %} open{% endif %}>
+  <summary>Settings</summary>
+  <div class="body">
+    {% if view.bands %}
+      <p><strong>Band:</strong>
+        <span class="bandswitch">
+          {% for b in view.bands %}
+            <a class="{{ 'sel' if b == view.band else '' }}"
+               href="{{ url_for('stack_detail', stack_id=stack.id, band=b, cfg=1) }}#stack-settings">{{ b }} MHz</a>
+          {% endfor %}
+        </span>
+        {% if view.live_band %}
+          <span class="muted">— select the band to tune live below</span>
+        {% else %}
+          <span class="muted">— each band has its own config (frequencies, pins…)</span>
+        {% endif %}</p>
+    {% endif %}
+
+    {% if view.radios %}
+      <section class="cfgsec">
+        {% for radio in view.radios %}
+          <h4>{{ radio.band }} MHz
+            <span class="badge badge-{{ 'running' if radio.reachable else 'stopped' }}">
+              {{ 'live' if radio.reachable else 'offline' }}</span></h4>
+          {% if not radio.reachable %}
+            <p class="muted">Daemon not serving {{ radio.band }} MHz — start it to tune live.</p>
+          {% else %}
+            <details class="advcfg" open>
+              <summary>Monitor</summary>
+            <p class="livequery">
+              <button type="button" class="livebtn" data-band="{{ radio.band }}" data-kind="status">Get STATUS</button>
+              <button type="button" class="livebtn" data-band="{{ radio.band }}" data-kind="stats">Get STATS</button>
+              <button type="button" class="socketbtn" data-band="{{ radio.band }}">View Socket</button>
+              <button type="button" class="txbtn" data-band="{{ radio.band }}">RX/TX View</button>
+              <span class="muted">live request on the config socket</span>
+            </p>
+            {# All output panes are a FIXED 22-line-tall window (`stream22`) — they never grow as
+               lines arrive; long history scrolls inside. #}
+            <div class="liveout-wrap" id="liveout-{{ radio.band }}" hidden>
+              <hr class="sep">
+              <button type="button" class="liveclose" data-band="{{ radio.band }}"
+                      aria-label="Close" title="Close">✕</button>
+              <pre class="next liveout-body stream22" id="liveout-body-{{ radio.band }}"></pre>
+            </div>
+            {# Live 'View Socket' monitor: a rolling 22-line window streamed from the CONF socket
+               (client-side polling of the read-only /api/daemon/<band>/socket endpoint). The ✕
+               closes the window AND stops the polling (disconnects). #}
+            <div class="liveout-wrap" id="socketout-{{ radio.band }}" hidden>
+              <hr class="sep">
+              <button type="button" class="liveclose socketclose" data-band="{{ radio.band }}"
+                      aria-label="Close and disconnect" title="Close &amp; disconnect">✕</button>
+              <pre class="next liveout-body stream22" id="socketout-body-{{ radio.band }}"></pre>
+            </div>
+            {# 'TX-Viewer': the same RX/TX activity feed as the dashboard, in a closable 22-line
+               window (read-only /api/daemon/<band> feed). #}
+            <div class="liveout-wrap" id="txout-{{ radio.band }}" hidden>
+              <hr class="sep">
+              <button type="button" class="liveclose txclose" data-band="{{ radio.band }}"
+                      aria-label="Close" title="Close">✕</button>
+              <pre class="next liveout-body stream22" id="txout-body-{{ radio.band }}"></pre>
+            </div>
+            </details>
+            <details class="advcfg">
+              <summary>Live radio settings</summary>
+              <p class="muted">Applied immediately to the running daemon via its config socket
+                (non-RF tuning; enabling a TX mode does not itself transmit). Live RSSI / CAD /
+                RX-TX monitoring is on the <a href="{{ url_for('dashboard') }}">dashboard</a>.</p>
+            <div class="settingsgrid">
+              {% for key, spec in view.live_settings.items() %}
+                <div class="setcell">
+                  <span class="setkey">{{ key }}</span>
+                  <form method="post" action="{{ url_for('radio_set', band=radio.band) }}" class="setform">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="key" value="{{ key }}">
+                    {% set cur = radio.status.get(key) or radio.config.get(key) %}
+                    {% if spec.type == 'enum' %}
+                      <select name="value">
+                        {% for ch in spec.choices %}
+                          <option value="{{ ch }}" {% if cur==ch %}selected{% endif %}>{{ ch }}</option>
+                        {% endfor %}
+                      </select>
+                    {% elif spec.type == 'int' %}
+                      <input type="number" name="value" value="{{ cur or spec.min }}"
+                             min="{{ spec.min }}" max="{{ spec.max }}" required>
+                      <span class="muted">{{ spec.min }}..{{ spec.max }}</span>
+                    {% else %}
+                      <input type="text" name="value" value="{{ cur or '' }}"
+                             autocomplete="off" required>
+                      <span class="muted">{{ spec.hint }}</span>
+                    {% endif %}
+                    <button type="submit">Apply</button>
+                  </form>
+                </div>
+              {% endfor %}
+            </div>
+            </details>
+          {% endif %}
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    {% if view.live_band %}<details class="advcfg"><summary>Repository &amp; RadioLib (applies to both bands)</summary>{% endif %}
+    <form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="band" value="{{ view.band }}">
+
+      {% if view.operator %}
+        <section class="cfgsec">
+          <h3>Operator</h3>
+          <table class="paramgrid">
+            <tr><th>Callsign</th>
+              <td><input type="text" name="op_callsign" value="{{ view.operator.callsign }}"
+                         placeholder="e.g. N0CALL-10" autocomplete="off"></td></tr>
+            <tr><th>Locator</th>
+              <td><input type="text" name="op_locator" value="{{ view.operator.locator }}"
+                         placeholder="e.g. AA00aa" autocomplete="off"></td></tr>
+          </table>
+          <p class="muted">Used by this stack; stored locally only (never the repo).</p>
+        </section>
+      {% endif %}
+
+      {% if config_groups %}
+        <section class="cfgsec">
+          <table class="paramgrid dptab">
+            {% for g in config_groups %}
+              {% if g.rule_before %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
+              <tr class="spgroup"><th colspan="3">{{ g.name }}</th></tr>
+              {% for r in g.rows %}
+                <tr class="{% if r.advanced %}advrow{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
+                  <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
+                  <td>
+                    {% if r.kind == 'flag' %}
+                      <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}>
+                    {% elif r.choices %}
+                      <select name="{{ r.field }}">
+                        {% for ch in r.choices %}
+                          <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>
+                        {% endfor %}
+                      </select>
+                    {% elif r.kind in ('int','float') %}
+                      <input type="number" name="{{ r.field }}" value="{{ r.value }}"
+                             {% if r.min is not none %}min="{{ r.min }}"{% endif %}
+                             {% if r.max is not none %}max="{{ r.max }}"{% endif %} step="any"
+                             autocomplete="off" placeholder="{{ r.default }}">
+                    {% else %}
+                      <input type="text" name="{{ r.field }}" value="{{ r.value }}" autocomplete="off"
+                             placeholder="{{ r.default }}">
+                    {% endif %}
+                  </td>
+                  <td class="dphelp muted">{{ r.label }}</td>
+                </tr>
+              {% endfor %}
+              {% if g.rule_after %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      {% if view.sources %}
+        <section class="cfgsec">
+          <h3>Source remotes (GitHub)</h3>
+          <p class="muted">Override per component where install/update clones from.
+            Blank reverts to the manifest default. Stored locally only.</p>
+          <table class="paramgrid">
+            {% for src in view.sources %}
+              <tr><th>{{ src.name }}{% if src.overridden %} <span class="pill">override</span>{% endif %}</th>
+                <td><input type="text" name="remote_{{ src.id }}" value="{{ src.remote }}"
+                     placeholder="{{ src.default }}" autocomplete="off" class="wide"></td></tr>
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      {% if view.optional %}
+        <section class="cfgsec">
+          <h3>Optional components</h3>
+          <p class="muted">Tick to auto-start with the stack; otherwise run them on demand below.</p>
+          <table class="paramgrid">
+            {% for opt in view.optional %}
+              <tr>
+                <th>{{ opt.name }}
+                  <span class="badge badge-{{ 'running' if opt.running else 'stopped' }}">{{ 'running' if opt.running else 'stopped' }}</span>
+                </th>
+                <td><label><input type="checkbox" name="c_autostart_{{ opt.id }}" value="on"
+                     {% if opt.autostart %}checked{% endif %}> auto-start</label></td>
+              </tr>
+            {% endfor %}
+          </table>
+        </section>
+      {% endif %}
+
+      <button type="submit">Save configuration</button>
+    </form>
+
+    <form method="post" action="{{ url_for('stack_config_reset', stack_id=stack.id) }}" class="act cfgreset">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="band" value="{{ view.band }}">
+      <button type="submit">Reset to defaults</button>
+    </form>
+
+    {% if view.optional %}
+      <section class="cfgsec">
+        <h4>Run an optional component now</h4>
+        <div class="actrow">
+          {% for opt in view.optional %}
+            <span class="actgroup">
+              <span class="grouplabel">{{ opt.name }}</span>
+              {{ action_btn('start', opt.id, 'Run') }}
+              {{ action_btn('stop', opt.id, 'Stop') }}
+            </span>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+    {% if view.live_band %}</details>{% endif %}
+  </div>
+</details>

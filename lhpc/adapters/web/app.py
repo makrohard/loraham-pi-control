@@ -15,7 +15,6 @@ Security posture:
 
 from __future__ import annotations
 
-import re
 import secrets as _secrets
 from typing import Callable
 
@@ -89,25 +88,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     app.jinja_env.globals["csrf_token"] = _csrf_token
 
-    def _param_layout(run_params):
-        """Group params: globals one-per-row; *_433/*_868 ones into band columns."""
-        bands, groups, globals_ = [], {}, []
-        for p in run_params:
-            for b in ("433", "868"):
-                if p.name.endswith("_" + b):
-                    base = p.name[: -len(b) - 1]
-                    label = re.sub(r"\s*(433|868)\s*", " ", p.label or base).strip()
-                    groups.setdefault(base, {"label": label, "byband": {}})
-                    groups[base]["byband"][b] = p
-                    if b not in bands:
-                        bands.append(b)
-                    break
-            else:
-                globals_.append(p)
-        return {"globals": globals_, "bands": sorted(bands), "groups": list(groups.values())}
-
-    app.jinja_env.globals["param_layout"] = _param_layout
-
     @app.after_request
     def _set_headers(response):  # noqa: ANN001
         for key, value in _SECURITY_HEADERS.items():
@@ -138,7 +118,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return jsonify(sig=service.dash_signature())
 
     def _stack_groups():
-        """Per-stack overview rows shared by the Stacks page and the Config page."""
+        """Per-stack overview rows for the Stacks page."""
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
@@ -178,6 +158,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "bands": sorted({c.band for c in stack.components if c.band}),
                 "interactive": interactive,
                 "command": service.manual_start_command(main) if interactive else "",
+                # Per-stack Settings section rendered inline on the Apps list (same data the
+                # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
+                "view": service.config_view(stack.id),
+                "config_groups": service.config_param_groups(stack.id),
             })
         jobs_by_stack = {}
         for job in service.active_jobs():
@@ -233,6 +217,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                          and not service.is_built(c)],
             # Collapsed daemon-parameter panel, pre-populated from the config file.
             daemon_params=service.daemon_params_view(stack_id, request.args.get("band", "")),
+            # Collapsed Settings section (the former per-stack Config page, moved here): operator,
+            # component-scoped run/file params, source remotes, autostart, band switch + live radio.
+            view=service.config_view(stack_id, request.args.get("band", "")),
+            config_groups=service.config_param_groups(stack_id, request.args.get("band", "")),
         )
 
     @app.post("/interactive/<stack_id>/dismiss")
@@ -244,13 +232,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         service.dismiss_interactive(stack_id)
         return redirect(url_for("dashboard"))
 
-    @app.get("/config")
-    def config_index():  # noqa: ANN202
-        # Config hub: the same per-stack list as the Stacks page, linking to config.
-        groups, _ = _stack_groups()
-        return render_template("config_index.html", version=__version__,
-                               runtime_root=_runtime_root(), groups=groups)
-
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):  # noqa: ANN202
         if band not in ("433", "868"):
@@ -260,6 +241,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                        radio_state=view.radio_state, status=view.status,
                        stats=view.stats, channel=view.channel,
                        feed=service.daemon_feed(band, 40))
+
+    @app.get("/api/daemon/<band>/socket")
+    def daemon_socket_api(band: str):  # noqa: ANN202
+        # READ-ONLY live poll of the CONF socket for the "View Socket" monitor: one bounded,
+        # sanitised status line per request (band validated -> never an arbitrary socket path;
+        # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
+        if band not in ("433", "868"):
+            abort(404)
+        line = service.daemon_socket_line(band)
+        return jsonify(band=band, line=line, reachable=bool(line))
 
     @app.post("/radio/<band>/set")
     def radio_set(band: str):  # noqa: ANN202
@@ -285,7 +276,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # not report back — an unconfirmed SET is flashed as a warning, not success.
         confirmed = bool(result.data.get("confirmed")) if result.data else False
         flash(result.summary, "ok" if (result.ok and confirmed) else "warn")
-        return redirect(url_for("stack_config_view", stack_id="daemon"))
+        return redirect(url_for("stack_detail", stack_id="daemon", cfg=1) + "#stack-settings")
 
     def _redirect_for(target: str):
         # Actions launched from the dashboard return to the dashboard; otherwise
@@ -554,16 +545,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return jsonify(target=target, path=path, lines=lines,
                        running=service.log_running(target, job))
 
-    @app.get("/stacks/<stack_id>/config")
-    def stack_config_view(stack_id: str):  # noqa: ANN202
-        if service.stack(stack_id) is None:
-            abort(404)
-        return render_template("config.html", version=__version__,
-                               runtime_root=_runtime_root(), stack_id=stack_id,
-                               view=service.config_view(stack_id, request.args.get("band", "")),
-                               daemon_params=service.daemon_params_view(
-                                   stack_id, request.args.get("band", "")))
-
     @app.post("/stacks/<stack_id>/config")
     def stack_config_save(stack_id: str):  # noqa: ANN202
         if service.stack(stack_id) is None:
@@ -602,7 +583,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             locator=request.form.get("op_locator"), band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None))
+        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1) + "#stack-settings")
 
     def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
         from lhpc.core import daemon_params as _dp
@@ -614,7 +595,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt:
             sep = "&" if "?" in nxt else "?"                  # keep the panel expanded (dp=1)
             return redirect(nxt + sep + "dp=1")               # open-redirect-safe local path
-        return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None, dp=1))
+        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1, dp=1) + "#stack-settings")
 
     @app.post("/stacks/<stack_id>/daemon-params")
     def daemon_params_save(stack_id: str):  # noqa: ANN202
@@ -666,7 +647,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = request.form.get("band", "")
         result = service.reset_config(stack_id, band)
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stack_config_view", stack_id=stack_id, band=band or None))
+        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1) + "#stack-settings")
 
     @app.get("/healthz")
     def healthz():  # noqa: ANN202

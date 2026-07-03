@@ -2916,6 +2916,43 @@ class ControllerService:
                     "default": p.default})
         return out
 
+    def config_param_groups(self, target: str, band: str = "") -> list[dict]:
+        """Per-component Config rows (run THEN file params) for the settings-page 3-col panel — each
+        row carries its OWN component-aware field (`c_`/`f_` scheme), API key, and component-scoped
+        value (never masked by a same-named sibling). A group is flagged `is_dep` when it is not the
+        stack's MAIN component, so the UI can rule a line before/after the dependency components.
+        [] for a daemon target (its radio params are the separate daemon-parameter panel)."""
+        if self._is_daemon_target(target):
+            return []
+        s = self.stack(target)
+        main_id = s.main if s is not None else None
+        idf = self._identity_field(target)
+        cfg_band = self._config_band(target, band)
+        groups: list[dict] = []
+        for c in self._target_components(target):
+            rows = []
+            for kind, p in ([("run", p) for p in c.run_params]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
+                               if not getattr(p, "hidden", False)]):
+                default = self._op_subst(dict(p.band_defaults).get(cfg_band or band, p.default))
+                value = self._resolved_param_value(target, kind, c.id, p.name, cfg_band)
+                field = self._config_field(target, kind, c.id, p.name)
+                key = self._param_key(target, kind, c.id, p.name)
+                is_id = bool(idf and idf["comp"] == c.id and idf["name"] == p.name
+                             and idf["kind"] == kind)
+                rows.append(self._param_row(p, field, kind, value, value, default, is_id,
+                                            c.name, key, c.id))
+            if rows:
+                groups.append({"id": c.id, "name": c.name, "is_dep": c.id != main_id,
+                               "rule_before": False, "rule_after": False, "rows": rows})
+        # Rule a horizontal line BEFORE the first dependency-component group and AFTER the last one,
+        # so the dependency components are visually bracketed off from the stack's main component.
+        dep_idx = [i for i, g in enumerate(groups) if g["is_dep"]]
+        if dep_idx:
+            groups[dep_idx[0]]["rule_before"] = True
+            groups[dep_idx[-1]]["rule_after"] = True
+        return groups
+
     def _param_ref(self, target: str, kind: str, key: str):
         """Resolve an API/CLI override key to (component, param, err). A `component_id.name` key is
         component-qualified; a bare key is the NAME and must be UNIQUE within the target's scope — a
@@ -4211,6 +4248,11 @@ class ControllerService:
     def daemon_view(self, band: str) -> daemon_control.DaemonView:
         """Read-only STATUS/STATS/CHANNEL for a band (RSSI bars, counters)."""
         return daemon_control.read_view(self._system, band)
+
+    def daemon_socket_line(self, band: str) -> str:
+        """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor
+        ('' when the band is invalid or the socket is unreachable). Read-only, fail-closed."""
+        return daemon_control.read_socket_line(self._system, band)
 
     def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
         """Bounded tail of the daemon log filtered to RX/TX activity."""

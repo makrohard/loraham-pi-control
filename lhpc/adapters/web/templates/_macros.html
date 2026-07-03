@@ -19,7 +19,7 @@
 {% if installed %}
   <div class="actline">
     <span class="grouplabel">Setup</span>
-    <span class="act"><a href="{{ url_for('stack_config_view', stack_id=stack_id) }}"><button type="button">Configure</button></a></span>
+    <span class="act"><a href="{{ url_for('stack_detail', stack_id=stack_id, cfg=1) ~ '#stack-settings' }}"><button type="button">Configure</button></a></span>
     {{ action_btn('build', stack_id, 'Build') }}
     {{ action_btn('test', stack_id, 'Test') }}
   </div>
@@ -31,7 +31,7 @@
 </div>
 {% endmacro %}
 
-{# Compact one-line stack summary used on the Stacks and Config lists. #}
+{# Compact one-line stack summary used on the Stacks list. #}
 {% macro stack_summary(g) %}
 <span class="ss-name">{{ g.stack.name }}</span>
 <span class="pill">{{ g.stack.id }}</span>
@@ -68,26 +68,6 @@
       {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ ch }}</option>{% endfor %}
     </select>
   {% endif %}
-{% endmacro %}
-
-{# Grid of run parameters: globals one per row; per-band ones as band columns. #}
-{% macro param_grid(layout, values, fields) %}
-<table class="paramgrid">
-  {% for p in layout.globals %}
-    <tr><th>{{ p.label or p.name }}</th>
-        <td{% if layout.bands %} colspan="{{ layout.bands|length }}"{% endif %}>{{ param_input(p, values.get(p.name), fields[p.name]) }}</td></tr>
-  {% endfor %}
-  {% if layout.groups %}
-    <tr><th></th>{% for b in layout.bands %}<th class="bandhead" data-band="{{ b }}">{{ b }}</th>{% endfor %}</tr>
-    {% for g in layout.groups %}
-      <tr><th>{{ g.label }}</th>
-        {% for b in layout.bands %}
-          <td data-band="{{ b }}">{% if g.byband.get(b) %}{{ param_input(g.byband[b], values.get(g.byband[b].name), fields[g.byband[b].name]) }}{% endif %}</td>
-        {% endfor %}
-      </tr>
-    {% endfor %}
-  {% endif %}
-</table>
 {% endmacro %}
 
 {# Dual status: running state + install/source state + version. #}

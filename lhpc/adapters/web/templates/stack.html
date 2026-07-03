@@ -26,7 +26,6 @@
       {% endif %}
       <h4>Stack actions</h4>
       {{ stack_actions(stack.id, installed, has_source) }}
-      <p class="links"><a href="{{ url_for('stack_config_view', stack_id=stack.id) }}">Config &rarr;</a></p>
 
       <h4>System dependencies</h4>
       {% if system_deps %}
@@ -48,6 +47,9 @@
       {% endif %}
     </div>
   </div>
+
+  {# Settings — the former per-stack Config page, moved here (collapsed by default). #}
+  <div class="card">{% include "_stack_settings.html" %}</div>
 
   {% for comp in stack.components %}
     {% set st = statuses[comp.id] %}
@@ -116,7 +118,7 @@
           {% if comp.build_cmd %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
           {% if comp.test_cmd %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
           {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
-          {% if comp.band %}<a class="act" href="{{ url_for('stack_config_view', stack_id='daemon') }}"><button type="button">Radio config</button></a>{% endif %}
+          {% if comp.band %}<a class="act" href="{{ url_for('stack_detail', stack_id='daemon', cfg=1) }}#stack-settings"><button type="button">Radio config</button></a>{% endif %}
           <a class="act" href="{{ url_for('logs_view', target=comp.id) }}"><button type="button">Logs</button></a>
         </div>
       </div>
