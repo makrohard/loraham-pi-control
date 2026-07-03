@@ -48,7 +48,7 @@ def _repos(tmp: Path):
     _git(tmp, "init", "--bare", "-b", "main", str(origin))
     _git(tmp, "clone", str(origin), str(work))
     _git(work, "checkout", "-b", "main")
-    _seed(work, "0.1.1")
+    _seed(work, selfupdate.__version__)
     _git(tmp, "clone", str(origin), str(up))
     return origin, work, up
 
@@ -89,7 +89,7 @@ def test_check_upstream_up_to_date(env):
     up = selfupdate.check_upstream(env["sys"])
     local = selfupdate.local_state(env["sys"])
     assert up["ok"] and up["upstream_head"] == local["head"]
-    assert up["upstream_version"] == "0.1.1" and up["deps_changed"] is False
+    assert up["upstream_version"] == selfupdate.__version__ and up["deps_changed"] is False
 
 
 def test_status_up_to_date_is_green(env):
@@ -120,7 +120,7 @@ def test_status_version_ahead_is_red(env):
 def test_status_view_no_check_is_grey(env):
     v = selfupdate.status_view(env["paths"])                  # never refreshed
     assert v["ver_color"] == "grey" and v["commit_color"] == "grey"
-    assert v["update_available"] is False and v["version"] == "0.1.1"
+    assert v["update_available"] is False and v["version"] == selfupdate.__version__
 
 
 # --- apply ------------------------------------------------------------------------------------

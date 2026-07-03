@@ -41,7 +41,7 @@ lhpc install daemon --yes   # adopt + verify a stack's source …
 lhpc build daemon           # … then build it
 ```
 
-Set your callsign once on the web Config page; until then HAM apps default to
+Set your callsign once in a stack's web **Settings**; until then HAM apps default to
 `N0CALL`. Secrets (passwords, HMAC keys) live only in
 `~/loraham-pi-control/config/secrets.toml`.
 
@@ -79,7 +79,7 @@ lhpc web                     # http://127.0.0.1:8770/  (loopback only)
 - **Stack pages** — Install / Build / Start / Stop / Test / Update / Uninstall,
   each with a plan and confirmation. Interactive (TUI) apps show the
   command to run yourself; GUI/headless apps start and stop directly.
-- **Config pages** — per-stack settings (callsign, frequencies, presets …)
+- **Settings** — per-stack settings (callsign, frequencies, presets …)
   written into each app's own config file.
 
 Loopback-only bind, POST actions are CSRF-protected, `Content-Security-Policy:

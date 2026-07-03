@@ -42,7 +42,7 @@ render the returned `ActionResult`. The web adapter calls the service directly
   1. tracked defaults (`lhpc/data/defaults.toml`) + the manifest;
   2. operator overrides — `~/loraham-pi-control/config/local.toml` (callsign, remotes);
   3. secrets — `config/secrets.toml`, mode `0600` (never tracked, never in output);
-  4. per-stack settings — `config/stacks/<id>[@band].toml`, written from the Config page.
+  4. per-stack settings — `config/stacks/<id>[@band].toml`, written from a stack's Settings.
 - The config file each app reads is generated from its `config_file` params
   (`{callsign}`/`{band}`/`{runtime}`/`{source}` substituted; callsign defaults to `N0CALL`).
 
@@ -89,7 +89,7 @@ signalling only an LHPC-owned session leader whose pid/start-time/pgid/sid/exec/
 still match (the daemon/iGate run foreground, no `-d`). `resolve_source` confines source
 dirs lexically (links allowed, observe-only, never built/tested into); `under` adds
 symlink-escape rejection for mutable runtime paths, and atomic writes / log opens refuse
-a pre-existing symlink leaf (`O_NOFOLLOW`). The Config page is one validate-first,
+a pre-existing symlink leaf (`O_NOFOLLOW`). A per-stack Settings save is one validate-first,
 all-or-recoverable bundle transaction; its journal uses logical target kinds + an
 allowlist and blocks fail-closed on any malformed/malicious journal. Lifecycle stop is
 typed (`core/outcomes.py`): a verified stop requires process cessation AND ready-endpoint
