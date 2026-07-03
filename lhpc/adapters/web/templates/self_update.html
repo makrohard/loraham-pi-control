@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "_macros.html" import cmdbox %}
+{% block title %}Self-Update — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('stacks_overview') }}">&larr; Apps</a></p>
+  <div class="card">
+    <header><h2>Self-Update <span class="pill">LoRaHAM Pi Control</span></h2></header>
+    <div class="body">
+
+      {% if not st.available %}
+        <p class="flash flash-warn">Self-update is unavailable — lhpc is not running from a git
+          checkout. Reinstall from a git clone to enable it.</p>
+      {% else %}
+
+        <table class="paramgrid">
+          <tr><th></th><th>Installed (local)</th><th>Upstream</th></tr>
+          <tr><th>Version</th>
+            <td><span class="ver ver-{{ st.ver_color }}">v{{ st.version }}</span></td>
+            <td>{{ ('v' ~ st.upstream_version) if st.upstream_version else '—' }}</td></tr>
+          <tr><th>Commit</th>
+            <td><span class="ver ver-{{ st.commit_color }}">@{{ st.head_short or '?' }}</span>{% if st.dirty %} <span class="pill">dirty</span>{% endif %}</td>
+            <td class="mono">{{ st.upstream_head_short or '—' }}</td></tr>
+          <tr><th>Branch</th><td class="mono">{{ st.branch or '—' }}</td><td></td></tr>
+        </table>
+        <p class="muted">
+          {% if not st.have_upstream %}Upstream not checked yet{% if st.upstream_error %} ({{ st.upstream_error }}){% endif %} — click <strong>Check for updates</strong>.
+          {% elif st.update_available %}An update is available.
+          {% else %}Up to date.{% endif %}
+        </p>
+
+        {# Live-apply result (after a confirmed Update) — restart instructions + truthful migration /
+           cleanup reporting. #}
+        {% if result %}
+          {% if not result.ok and apply_data.dirty %}
+            {# dirty refusal (default) -> offer an explicit overwrite #}
+            <section class="cfgsec">
+              <p class="flash flash-warn">{{ result.summary }}</p>
+              <form method="post" action="{{ url_for('self_update_apply') }}">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="confirmed" value="yes">
+                <input type="hidden" name="overwrite" value="yes">
+                <button type="submit">Overwrite local changes &amp; update</button>
+              </form>
+            </section>
+          {% elif not result.ok and not apply_data.cleanup_failed %}
+            {# genuine failure: fetch/diverged/blocked — nothing was applied #}
+            <p class="flash flash-warn">{{ result.summary }}</p>
+          {% else %}
+            {# success, OR a cleanup-failed partial — in both cases the checkout was advanced #}
+            <section class="cfgsec">
+              <p class="flash {{ 'flash-ok' if result.ok else 'flash-warn' }}"><strong>{{ result.summary }}</strong></p>
+              {% if apply_data.cleanup_error %}<p class="muted mono">{{ apply_data.cleanup_error }}</p>{% endif %}
+              {% if not apply_data.already %}
+                <p class="muted">The running console still serves the <em>old</em> code. Restart it to
+                  load the new version{% if apply_data.deps_changed %} (dependencies changed — reinstall first){% endif %}:</p>
+                {% for cmd in apply_data.restart.commands %}{{ cmdbox('rst-' ~ loop.index0, cmd) }}{% endfor %}
+              {% endif %}
+              {% if apply_data.migrated %}
+                <p class="muted">{{ apply_data.migrated }} legacy configuration default(s) migrated to the new defaults.</p>
+              {% endif %}
+              {% if apply_data.pending_migrations %}
+                <p class="flash flash-warn">{{ apply_data.pending_migrations }} configuration default
+                  migration(s) could not be completed and will be retried automatically on the next
+                  self-update.</p>
+              {% endif %}
+            </section>
+          {% endif %}
+        {% endif %}
+
+        {# Stage-1 confirm: warn about the console restart and (if dirty) overwrite. #}
+        {% if confirm %}
+          <section class="cfgsec">
+            <p class="flash flash-warn">Applying the update will fast-forward this checkout and then
+              <strong>the web console must be restarted</strong> to load the new code.</p>
+            <form method="post" action="{{ url_for('self_update_apply') }}">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="confirmed" value="yes">
+              {% if confirm.dirty %}
+                <p class="flash flash-warn"><strong>Local changes are present (modified or untracked
+                  files).</strong> By default they are kept and the update is refused. Tick below to
+                  discard modified <em>and</em> non-ignored untracked files (ignored artifacts such as
+                  a <code>.venv/</code> are left untouched).</p>
+                <label><input type="checkbox" name="overwrite" value="yes"> Overwrite (discard) local changes</label>
+                <p></p>
+              {% endif %}
+              <button type="submit">Apply update</button>
+              <a class="act" href="{{ url_for('self_update_page') }}"><button type="button">Cancel</button></a>
+            </form>
+          </section>
+        {% endif %}
+
+        {% if jobs %}
+          <p class="flash flash-warn">An lhpc job is running ({{ jobs|length }}) — updates are blocked
+            until it finishes.</p>
+        {% endif %}
+
+        {# Actions. #}
+        {% if not confirm and not result %}
+          <div class="actrow">
+            <form method="post" action="{{ url_for('self_update_check') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button type="submit">Check for updates</button>
+            </form>
+            {% if st.update_available and not jobs %}
+              <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <button type="submit">Update now</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% endblock %}

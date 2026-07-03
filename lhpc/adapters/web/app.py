@@ -88,6 +88,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     app.jinja_env.globals["csrf_token"] = _csrf_token
 
+    @app.context_processor
+    def _inject_selfupdate():  # noqa: ANN202
+        # Footer version/head indicator, on EVERY page. Reads the cached state marker ONLY — no git,
+        # no network, no subprocess — so it never violates the no-network-GET rule. Fail-safe.
+        try:
+            return {"selfupdate": service.self_update_status()}
+        except Exception:
+            return {"selfupdate": {"version": __version__, "head_short": "", "available": False,
+                                   "ver_color": "grey", "commit_color": "grey",
+                                   "update_available": False}}
+
     @app.after_request
     def _set_headers(response):  # noqa: ANN001
         for key, value in _SECURITY_HEADERS.items():
@@ -183,6 +194,43 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             groups=groups,
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware (no false 433/868)
         )
+
+    @app.get("/self-update")
+    def self_update_page():  # noqa: ANN202
+        # Read-only: cached status marker + local job list. No network, no git.
+        return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
+                               st=service.self_update_status(), jobs=service.active_jobs(),
+                               confirm=None, result=None, apply_data=None)
+
+    @app.post("/self-update/check")
+    def self_update_check():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        res = service.self_update_check()          # NETWORK (explicit): git fetch, refresh cache
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("self_update_page"))
+
+    @app.post("/self-update/apply")
+    def self_update_apply():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        st = service.self_update_status()
+        jobs = service.active_jobs()
+        force = request.form.get("overwrite") == "yes"
+        if request.form.get("confirmed") != "yes":
+            # Stage 1 — plan/confirm: warn that applying restarts the console (and, if the tree is
+            # dirty, that local changes would be overwritten). A running job blocks the button.
+            return render_template("self_update.html", version=__version__,
+                                   runtime_root=_runtime_root(), st=st, jobs=jobs, result=None,
+                                   apply_data=None,
+                                   confirm={"dirty": st.get("dirty"),
+                                            "update_available": st.get("update_available")})
+        # Stage 2 — apply (blocked if a job is active; dirty refused unless overwrite chosen).
+        res = service.self_update_apply(force=force)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
+                               st=service.self_update_status(), jobs=service.active_jobs(),
+                               confirm=None, result=res, apply_data=res.data)
 
     @app.get("/stacks/<stack_id>")
     def stack_detail(stack_id: str):  # noqa: ANN202
@@ -691,6 +739,18 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
         )
         return 1
     app = create_app()
+    # Best-effort, NON-BLOCKING upstream freshness check at startup (this is process startup, NOT a
+    # GET route) so the footer's version/head indicator becomes meaningful shortly after boot. Any
+    # failure is swallowed — the footer simply stays grey/"unknown".
+    import threading
+
+    def _startup_selfcheck():
+        try:
+            ControllerService().self_update_check()
+        except Exception:
+            pass
+
+    threading.Thread(target=_startup_selfcheck, name="lhpc-selfcheck", daemon=True).start()
     print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
     print("     Loopback-only. Press Ctrl-C to stop.")
     # Supported deployment uses a production-capable WSGI server (waitress): one process,

@@ -374,6 +374,32 @@ def read_text(paths: Paths, path: Path) -> str:
     return read_bytes(paths, path).decode("utf-8")
 
 
+def read_text_regular(paths: Paths, path: Path, *, max_bytes: int = 1 << 20) -> str:
+    """Descriptor-safe read of a runtime leaf that MUST be a REGULAR file — the inspection primitive
+    for untrusted state markers. It distinguishes a safely-ABSENT leaf (raises `FileNotFoundError`)
+    from a present-but-UNSAFE one (symlink, FIFO/device, directory, escaped/unsafe parent — raises
+    `OSError`/`PathContainmentError`), WITHOUT any check-then-open or path-following existence probe:
+    the parent is descended `O_NOFOLLOW` and the leaf opened `O_RDONLY|O_NOFOLLOW|O_NONBLOCK` (never
+    follows a symlink, never blocks on a FIFO), then `fstat`-verified as a regular file before reading.
+    Bounded to `max_bytes`."""
+    with _walk_parent(paths, path, create=False) as (parent_fd, name):
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(f"refusing to read a non-regular runtime leaf: {path}")
+            chunks: list[bytes] = []
+            got = 0
+            while got < max_bytes:
+                b = os.read(fd, min(65536, max_bytes - got))
+                if not b:
+                    break
+                chunks.append(b)
+                got += len(b)
+            return b"".join(chunks).decode("utf-8", "replace")
+        finally:
+            os.close(fd)
+
+
 def tail(paths: Paths, path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> list[str]:
     """Bounded NO-FOLLOW, descriptor-anchored tail read of a contained runtime log. A
     missing leaf, a symlinked leaf/parent, or an escape returns []."""

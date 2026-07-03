@@ -675,6 +675,27 @@ def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
     return current
 
 
+def conditional_clear_stack_config(paths: Paths, stack_id: str, band: str, expected: dict,
+                                   matches) -> int:
+    """Race-safe removal of legacy default-equal keys under ONE config lock. Re-reads the LATEST
+    config, and for each key in `expected` removes it ONLY if `matches(key, str(current[key]),
+    expected[key])` is True — i.e. the stored value is STILL semantically the pre-update default
+    captured for that key. A value a concurrent save changed to a genuine override (or an intentional
+    empty override) therefore fails the predicate and survives untouched; there is no stale
+    snapshot-to-delete window. Returns the number removed; the write is atomic, so a write failure
+    raises (ConfigError/OSError) and removes nothing (the caller keeps the candidates pending)."""
+    path = _stack_config_path(paths, stack_id, band)
+    with config_lock(paths):
+        current = dict(_load_runtime_toml(paths, path))
+        to_del = [k for k, exp in expected.items()
+                  if k in current and matches(k, str(current[k]), exp)]
+        if to_del:
+            for k in to_del:
+                del current[k]
+            _atomic_write(paths, path, _render_stack_config(stack_id, current), mode=0o644)
+        return len(to_del)
+
+
 def update_stack_config(paths: Paths, stack_id: str, updates: dict, band: str = "",
                         clear_empty: bool = True) -> Path:
     """Locked read-merge-write of a stack's config under ONE lock: read the LATEST config, merge

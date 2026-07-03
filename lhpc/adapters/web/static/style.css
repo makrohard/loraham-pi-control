@@ -67,6 +67,13 @@ code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas,
 }
 .site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem; }
 .site-footer .sub { margin-top: .4rem; opacity: .85; }
+/* Footer version/head freshness indicator. */
+.ver { font-weight: 600; }
+.ver-green { color: var(--ok); }
+.ver-yellow { color: var(--warn); }
+.ver-red { color: var(--bad); }
+.ver-grey { color: var(--muted); }
+.update-link { font-weight: 700; }
 
 /* Overview tiles -------------------------------------------------------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }

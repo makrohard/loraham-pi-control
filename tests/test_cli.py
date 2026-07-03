@@ -84,3 +84,43 @@ def test_install_requires_bootstrap_first(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "absent"))
     assert main(["install", "--check"]) == 1
     assert "bootstrap" in capsys.readouterr().out.lower()
+
+
+def test_self_update_check_cli(capsys, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_check",
+                        lambda self: ActionResult(True, "Update available — upstream abc123 (v9.9)."))
+    assert main(["self-update"]) == 0
+    assert "Update available" in capsys.readouterr().out
+
+
+def test_self_update_apply_cli_yes(capsys, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_apply(self, *, force=False):
+        seen["force"] = force
+        return ActionResult(True, "Update applied — restart the web console to load it.",
+                            next_commands=["stop the console (Ctrl-C) and re-run:  lhpc web"])
+    monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    assert main(["self-update", "--apply", "--overwrite", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "Update applied" in out and "lhpc web" in out and seen["force"] is True
+
+
+def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
+    # non-interactive stdin -> _confirm returns False -> aborts, never calls apply
+    from lhpc.core.services import ControllerService
+    called = {"apply": False}
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: called.__setitem__("apply", True))
+    assert main(["self-update", "--apply"]) == 0
+    assert "Aborted." in capsys.readouterr().out and called["apply"] is False
+
+
+def test_self_update_busy_cli(capsys, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        ActionResult(False, "A self-update is already in progress — try again shortly.",
+                     data={"busy": True}))
+    assert main(["self-update", "--apply", "--yes"]) == 1
+    assert "already in progress" in capsys.readouterr().out

@@ -26,6 +26,7 @@ from .config import (
     Config,
     ConfigError,
     apply_config_transaction,
+    conditional_clear_stack_config,
     merge_stack_values,
     _patch_local_table,
     render_local_tables,
@@ -3008,6 +3009,186 @@ class ControllerService:
         bd = dict(p.band_defaults).get(cfg_band or band, p.default) if p is not None else ""
         return self._op_subst(bd)
 
+    def _param_default_canon(self, p, cfg_band: str, band: str) -> str:
+        """The canonical (validated, operator-substituted) DEFAULT for a run/file param on a band —
+        used by `save_config_bundle` to store OVERRIDES ONLY (a submitted value equal to this is not
+        persisted, so it always follows the current/updated manifest default). Fail-soft: a
+        non-validating default is compared as its raw substituted string."""
+        eff = self._op_subst(dict(p.band_defaults).get(cfg_band or band, p.default))
+        if p.kind == "int" and eff.strip() == "":
+            return ""                                   # an unset optional int
+        try:
+            return str(validators.validate_param(p, eff))
+        except validators.ValidationError:
+            return eff
+
+    # -- legacy-default migration (self-update) --------------------------------------------------
+    # Pre-feature LHPC stored a run/file value verbatim under EVERY valid representation: the
+    # component-SCOPED key (`__r__/__f__<comp>__<name>`, written even for a unique name saved through a
+    # direct-component target) and, when the name is UNIQUE at owner-stack scope, the FLAT legacy key
+    # (`name` / `file_<name>`). After a successful self-update, a value still equal to its canonical
+    # PRE-UPDATE default must be removed so it adopts the new default — but only under the config lock,
+    # conditionally, so a concurrent genuine override survives. Ambiguous flat names, `dp_*`, autostart
+    # and manual scalars are never touched.
+
+    @staticmethod
+    def _canon_value(p, raw: str) -> str:
+        """A stored value in canonical form for comparison against a canonical default; a value that
+        fails validation compares as its raw string (fail-soft)."""
+        try:
+            return str(validators.validate_param(p, raw))
+        except validators.ValidationError:
+            return raw
+
+    def _migration_candidates(self) -> list:
+        """Snapshot every persisted run/file value that is SEMANTICALLY EQUAL to its canonical
+        pre-update default, across all stacks/bands, in EVERY valid legacy representation (scoped for
+        each component + unique flat). Each candidate carries enough to re-check + remove it safely
+        later: {stack, band, key, kind, comp, name, expected(=canonical default)}. Genuine overrides
+        (including intentional empty ones) are excluded; ambiguous flat names are skipped."""
+        out: list = []
+        for stack in self.stacks():
+            run_counts, file_counts = self._owner_param_counts(stack)
+            for band in (self.stack_bands(stack.id) or ("",)):
+                cfg_band = self._config_band(stack.id, band)
+                stored = load_stack_config(self._paths, stack.id, cfg_band)
+                if not stored:
+                    continue
+                for c in stack.components:
+                    items = ([("r", p) for p in c.run_params]
+                             + [("f", p) for p in (c.config_file.params if c.config_file else ())])
+                    for kind, p in items:
+                        default = self._param_default_canon(p, cfg_band, band)
+                        keys = [self._scoped_key(kind, c.id, p.name)]     # scoped: valid for any comp
+                        counts = run_counts if kind == "r" else file_counts
+                        if counts.get(p.name, 0) <= 1:                    # unique -> flat legacy too
+                            keys.append(p.name if kind == "r" else f"file_{p.name}")
+                        for key in keys:
+                            if key in stored and self._canon_value(p, str(stored[key])) == default:
+                                out.append({"stack": stack.id, "band": cfg_band, "key": key,
+                                            "kind": kind, "comp": c.id, "name": p.name,
+                                            "expected": default})
+        return out
+
+    @staticmethod
+    def _stamp(candidates: list, from_head: str) -> list:
+        """Attach the live transition's `from_head` provenance to freshly-snapshotted candidates so
+        their pre-update default can later be proven from source."""
+        return [{**c, "from_head": from_head} for c in candidates]
+
+    def _prove_candidate(self, cand: dict, from_head: str):
+        """Prove `cand` against a PROVEN transition whose pre-update source is at `from_head` — the
+        TRANSITION RECORD's from_head (validated against the actual checkout by the classifier), NEVER
+        the candidate's own `from_head` field, which must not independently select a manifest. Returns
+        `(old_param, old_default_canon)` derived from the OLD (pre-update) manifest — used for BOTH
+        sides of the old-default comparison — or None (→ keep pending, never delete) when the
+        transition manifest is untracked/unreadable OR the parameter/band is not still safely
+        identifiable + owned in the CURRENT manifest (current metadata is a safety gate only)."""
+        import tomllib
+        from pathlib import Path
+        from . import selfupdate, manifest as manifest_mod
+        root = selfupdate.repo_root()
+        if root is None:
+            return None
+        man = self._manifest_path or manifest_mod.default_manifest_path()
+        try:
+            rel = Path(man).resolve().relative_to(root.resolve())        # manifest must be tracked here
+        except (ValueError, OSError):
+            return None
+        kind, name = cand["kind"], cand["name"]
+
+        def _params(comp):
+            return comp.run_params if kind == "r" else (comp.config_file.params if comp.config_file else ())
+
+        def _param_in(stacks, comp_id):
+            st = next((s for s in stacks if s.id == cand["stack"]), None)
+            comp = next((c for c in st.components if c.id == comp_id), None) if st else None
+            return (st, comp, next((p for p in _params(comp) if p.name == name), None) if comp else None)
+
+        # Current-manifest SAFETY gate — a FRESH parse of the POST-UPDATE source tree (NEVER
+        # `self._stacks`, which may have been populated before the transition). The parameter must be
+        # still safely identifiable + owned + its band still valid in the current manifest, else the
+        # candidate is retained pending (removed / renamed / unreconcilable -> never delete).
+        try:
+            with open(man, "rb") as fh:
+                cur_stacks = manifest_mod.parse_manifest(tomllib.load(fh))
+        except Exception:
+            return None
+        cur_stack, _cur_comp, cur_p = _param_in(cur_stacks, cand["comp"])
+        if cur_stack is None or cur_p is None:
+            return None
+        cur_bands = next((c.bands for c in cur_stack.components if c.bands), ())
+        if cand["band"] not in (set(cur_bands) | {""}):
+            return None
+
+        # Authoritative OLD manifest at the proven `from_head` — used for old-default SEMANTICS.
+        r = self._system.runner.run(["git", "-C", str(root), "show",
+                                     f"{from_head}:{rel.as_posix()}"], timeout=5.0)
+        if getattr(r, "not_found", False) or r.returncode != 0:
+            return None
+        try:
+            old_stack = next((s for s in manifest_mod.parse_manifest(tomllib.loads(r.stdout))
+                              if s.id == cand["stack"]), None)
+        except Exception:
+            return None
+        if old_stack is None:
+            return None
+        # OLD-manifest key eligibility (mirrors legacy candidate generation):
+        #  * a SCOPED key must map to that EXACT old component + parameter;
+        #  * a FLAT key is eligible ONLY when the name was UNIQUE for its kind across the OLD owner
+        #    stack — an ambiguous/absent flat name is never proven (kept pending).
+        is_flat = cand["key"] == (name if kind == "r" else f"file_{name}")
+        if is_flat:
+            run_counts, file_counts = self._owner_param_counts(old_stack)
+            if (run_counts if kind == "r" else file_counts).get(name, 0) != 1:
+                return None                                              # ambiguous / absent flat name
+            old_comp = next((c for c in old_stack.components if any(p.name == name for p in _params(c))), None)
+            if old_comp is None or old_comp.id != cand["comp"]:          # comp must be the unique declarer
+                return None
+        else:
+            old_comp = next((c for c in old_stack.components if c.id == cand["comp"]), None)
+            if old_comp is None:
+                return None
+        old_p = next((p for p in _params(old_comp) if p.name == name), None)
+        if old_p is None:
+            return None
+        return old_p, self._param_default_canon(old_p, cand["band"], cand["band"])
+
+    def _run_migration(self, candidates: list, from_head: str) -> tuple:
+        """Migrate one PROVEN transition's candidates race-safely. `from_head` is the TRANSITION
+        record's pre-update commit; a key is deleted ONLY when its current stored value — canonicalised
+        with the OLD (pre-update) parameter definition — equals that param's OLD default, both parsed
+        from the manifest at `from_head` (`_prove_candidate`). The candidate's own `from_head`/`expected`
+        never select the manifest or authorise deletion. Returns (migrated_count, remaining_candidates);
+        an unprovable candidate is kept pending (never raw-value-deleted); a file whose write FAILS
+        keeps all its candidates for retry."""
+        from collections import defaultdict
+        from .paths import PathContainmentError
+        by_file: dict = defaultdict(dict)                                # (stack, band) -> {key: old_default}
+        meta: dict = {}                                                  # (stack, band, key) -> (cand, old_param)
+        remaining: list = []
+        for cand in candidates:
+            proven = self._prove_candidate(cand, from_head)
+            if proven is None:
+                remaining.append(cand)                                   # unprovable -> keep pending, never delete
+                continue
+            old_param, old_default = proven
+            by_file[(cand["stack"], cand["band"])][cand["key"]] = old_default
+            meta[(cand["stack"], cand["band"], cand["key"])] = (cand, old_param)
+        migrated = 0
+        for (stack_id, cfg_band), expected in by_file.items():
+            def _matches(key, raw, exp, _s=stack_id, _b=cfg_band):
+                _cand, old_param = meta[(_s, _b, key)]
+                return self._canon_value(old_param, raw) == exp          # BOTH sides: OLD param semantics
+            try:
+                migrated += conditional_clear_stack_config(self._paths, stack_id, cfg_band,
+                                                           expected, _matches)
+            except (OSError, ConfigError, PathContainmentError, ValueError):
+                remaining.extend(meta[(stack_id, cfg_band, k)][0] for k in expected)   # keep pending
+        if migrated:
+            self._invalidate_config()
+        return migrated, remaining
+
     def _config_ambiguity(self, target: str, order, band: str = ""):
         """A message naming the first AMBIGUOUS legacy value a started component would rely on — a
         run/file param name declared by >= 2 owner-stack components, stored as a flat legacy value,
@@ -3637,24 +3818,43 @@ class ControllerService:
         modes = {p.apply_mode for kind, c, p, v in clean_params
                  if kind == "r"
                  and self._resolved_param_value(target, "run", c.id, p.name, band) != str(v)}
-        # Persisted keys: a DIRECT component target, or a DUPLICATED stack-target name, is written
-        # COMPONENT-SCOPED (`__r__/__f__<comp>__<name>`) so colliding components never share a key; a
-        # UNIQUE name on a stack target keeps its FLAT legacy key (backward compatible). Autostart
-        # (stack-only) stays flat.
+        # OVERRIDES-ONLY persistence: a value equal to its CURRENT default is NOT stored, so it always
+        # follows the current/updated manifest default (and a self-update that changes a default takes
+        # effect for values still at the old default) — exactly what daemon params already do. A value
+        # that DIFFERS from the default is stored (even if empty — a genuine "unset" override).
+        # Persisted-key form: a DIRECT component target, or a DUPLICATED stack-target name, is stored
+        # COMPONENT-SCOPED (`__r__/__f__<comp>__<name>`); a UNIQUE stack-target name keeps its FLAT
+        # legacy key. Autostart (stack-only): "on" is an override; "" (off) is the default -> cleared.
         dup_run, dup_file = self._dup_names(target)
-        clean: dict = dict(clean_auto)
-        for kind, c, p, v in clean_params:
-            dup = (dup_run if kind == "r" else dup_file)
+
+        def _store_key(kind, c, p):
+            dup = dup_run if kind == "r" else dup_file
             if is_stack_target and p.name not in dup:
-                clean[p.name if kind == "r" else f"file_{p.name}"] = v      # unique -> flat legacy
+                return p.name if kind == "r" else f"file_{p.name}"          # unique -> flat legacy
+            return self._scoped_key(kind, c.id, p.name)                     # scoped
+
+        to_set: dict = {}
+        to_remove: set = set()
+        for k, av in clean_auto.items():                                     # autostart
+            if av == "on":
+                to_set[k] = av
             else:
-                clean[self._scoped_key(kind, c.id, p.name)] = v             # scoped
-        # The stack file is written as a MERGE rendered INSIDE the transaction lock: read the
-        # latest config, overlay the submitted keys, keep daemon-profile dp_* + unrelated
-        # manual scalars. A raise here (unsupported manual value) rolls the whole transaction back.
-        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band),
-                        lambda p, tgt=sid, b=cfg_band, cl=clean: render_stack_config(
-                            tgt, merge_stack_values(p, tgt, b, cl, clear_empty=False)), 0o644))
+                to_remove.add(k)
+        for kind, c, p, v in clean_params:
+            key = _store_key(kind, c, p)
+            if str(v) == self._param_default_canon(p, cfg_band, band):
+                to_remove.add(key)                                          # at default -> not persisted
+            else:
+                to_set[key] = v                                             # override -> persisted
+        # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
+        # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
+        # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
+        def _render_stack(pth, tgt=sid, b=cfg_band, setv=to_set, rmv=to_remove):
+            merged = merge_stack_values(pth, tgt, b, setv, clear_empty=False)
+            for k in rmv:
+                merged.pop(k, None)
+            return render_stack_config(tgt, merged)
+        targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
         try:
             apply_config_transaction(self._paths, targets)
         except ConfigError as exc:
@@ -4253,6 +4453,222 @@ class ControllerService:
         """One raw, bounded, sanitised CONF-socket status line for the live 'View Socket' monitor
         ('' when the band is invalid or the socket is unreachable). Read-only, fail-closed."""
         return daemon_control.read_socket_line(self._system, band)
+
+    # ---- self-update (lhpc's own version/head/upstream) ----------------------
+
+    def self_update_status(self) -> dict:
+        """Cached, NETWORK-FREE self-update view for the footer/pages (reads the state marker only —
+        never git, never network, safe for GET)."""
+        from . import selfupdate
+        return selfupdate.status_view(self._paths)
+
+    def self_update_check(self) -> ActionResult:
+        """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so
+        the footer/pages reflect it. Serialized with apply through the self-update lock: if an apply is
+        in progress it DEFERS (nonfatal) with the last cached status instead of racing its refs/cache.
+        Under the lock it applies the SAME pure recovery-state gate as apply (`classify_journal`)
+        BEFORE `refresh_cache`/`check_upstream`/fetch/cache write: an unreadable/corrupt/unsafe OR
+        recovery-blocked journal blocks the check with NO fetch and NO cache/journal/config/source
+        mutation. Fail-soft."""
+        from . import selfupdate
+        try:
+            with selfupdate.update_lock(self._paths):
+                status, _env, _head = selfupdate.classify_journal(self._paths, self._system)  # BEFORE any fetch
+                if status == "blocked":
+                    return ActionResult(False, "Self-update check blocked: the migration journal is "
+                                        "unreadable, corrupt or unsafe. No upstream check was made — "
+                                        "recovery needed (inspect state/selfupdate-migrate.json).",
+                                        data={"journal_corrupt": True,
+                                              **selfupdate.status_view(self._paths)})
+                if status == "recovery_required":
+                    return ActionResult(False, "Self-update check blocked: the checkout is at an "
+                                        "unexpected commit for a recorded migration transition. No "
+                                        "upstream check was made — recovery required (inspect "
+                                        "state/selfupdate-migrate.json).",
+                                        data={"recovery_required": True,
+                                              **selfupdate.status_view(self._paths)})
+                view = selfupdate.refresh_cache(self._system, self._paths)
+        except selfupdate.SelfUpdateBusy:
+            view = selfupdate.status_view(self._paths)        # no fetch, no cache write
+            return ActionResult(True, "A self-update is in progress — showing the last known status.",
+                                data={**view, "deferred": True})
+        except selfupdate.UpdateLockError:
+            return ActionResult(False, "Could not check upstream (unsafe runtime state).",
+                                data=selfupdate.status_view(self._paths))
+        if not view["is_git"]:
+            return ActionResult(False, "Self-update is unavailable (lhpc is not a git checkout).",
+                                data=view)
+        if not view["have_upstream"]:
+            return ActionResult(False, f"Could not reach upstream: {view.get('upstream_error', '')}.",
+                                data=view)
+        if view["update_available"]:
+            return ActionResult(True, f"Update available — upstream {view['upstream_head_short']}"
+                                f" (v{view['upstream_version'] or '?'}).", data=view)
+        return ActionResult(True, "Up to date.", data=view)
+
+    def self_update_apply(self, *, force: bool = False) -> ActionResult:
+        """Apply the update as ONE serialized, fail-closed transaction (the interprocess self-update
+        lock covers candidate capture, journal persistence, fetch/ref resolution, merge/reset/clean,
+        cache writes, config migration and journal finalization). BLOCKED while an lhpc job is active;
+        a concurrent apply returns 'busy' with zero mutation. A DIRTY tree is refused unless
+        `force=True`. Legacy default-equal config is migrated to the new defaults only when the source
+        transition it was captured against actually completed — recorded DURABLY before source changes
+        and recovered from the journal after a crash. Cleanup failure on force is a truthful partial."""
+        from . import selfupdate
+        jobs = self.active_jobs()
+        if jobs:
+            return ActionResult(False, "An lhpc job is still running — finish it before self-updating.",
+                                details=tuple(f"  {j.get('op', 'job')} {j.get('target', '')}"
+                                              for j in jobs),
+                                data={"blocked_by_jobs": True})
+        try:
+            with selfupdate.update_lock(self._paths):
+                return self._self_update_locked(force)
+        except selfupdate.SelfUpdateBusy:
+            return ActionResult(False, "A self-update is already in progress — try again shortly.",
+                                data={"busy": True})
+        except selfupdate.UpdateLockError:
+            return ActionResult(False, "Could not acquire the self-update lock (unsafe runtime state) "
+                                "— aborting without changes.", data={"lock_error": True})
+
+    def _self_update_locked(self, force: bool) -> ActionResult:
+        from . import selfupdate
+        # 1. PURE classification of the untrusted envelope against the ACTUAL head (shared with the
+        #    freshness check). A blocked/recovery-required state stops here BEFORE any fetch / source /
+        #    cache / config / journal mutation.
+        status, env, head_now = selfupdate.classify_journal(self._paths, self._system)
+        if status == "blocked":
+            return ActionResult(False, "Self-update blocked: the migration journal is missing-but-"
+                                "present-unreadable, corrupt or unsafe. No changes were made — recovery "
+                                "needed (inspect / remove state/selfupdate-migrate.json).",
+                                data={"journal_corrupt": True})
+        if status == "recovery_required":
+            return ActionResult(False, "Self-update blocked: the checkout is at an unexpected commit for "
+                                "a recorded migration transition. No changes were made — recovery "
+                                "required (inspect state/selfupdate-migrate.json).",
+                                data={"recovery_required": True})
+        completed = env.get("completed") if env else None
+        prepared = env.get("prepared") if env else None
+
+        # 2. Reconcile a prior PREPARED attempt (classifier verified its ANCHOR + endpoint): its to_head
+        #    reached -> promote (carrying the anchor txid); still at from_head -> the git never happened,
+        #    so delete its anchor and drop it, keeping the prior completed intact.
+        if prepared:
+            if head_now == prepared["to_head"]:
+                completed = self._promote(completed, prepared)          # keep the anchor for the completed slot
+                self._write_envelope(completed, None)
+            elif selfupdate.clear_migration_journal(self._paths):       # git never happened -> drop stale
+                selfupdate.delete_anchor(self._system, prepared.get("txid"))   # prepared + its anchor
+
+        # 3. Migrate the PRIOR completed transition FIRST, obtaining AUTHORITATIVE from_head + candidate
+        #    payload from its durable ANCHOR (never the journal fields alone). The journal/anchor are
+        #    IMMUTABLE while pending — migration is idempotent (already-removed keys no-op) — and are
+        #    cleared only once fully resolved; otherwise the update is DEFERRED.
+        migrated = 0
+        if completed and completed["pending"]:
+            anchor = selfupdate.anchored_record(self._system, completed)
+            if anchor is None:                                           # defensive (classifier verified)
+                return ActionResult(False, "Self-update blocked: the recorded migration transition is "
+                                    "not authorised by a matching durable anchor. No changes were made "
+                                    "— recovery required.", data={"recovery_required": True})
+            m, remaining = self._run_migration(anchor["pending"], anchor["from_head"])
+            migrated += m
+            if remaining:
+                return ActionResult(True, "Prior config migration is incomplete — deferring the update "
+                                    "until it completes; it will be retried on the next self-update.",
+                                    data={"migrated": migrated, "pending_migrations": len(remaining),
+                                          "deferred_recovery": True})
+            if selfupdate.clear_migration_journal(self._paths):         # clear FIRST; drop anchor only if
+                selfupdate.delete_anchor(self._system, completed.get("txid"))   # the journal is really gone
+
+        # 4. Attempt a NEW update. Fail-closed PREPARE hook creates the durable git ANCHOR, then the
+        #    runtime journal referencing it, BOTH atomically BEFORE the checkout is advanced.
+        new_candidates = self._migration_candidates()
+        hook = {"written": False, "from": "", "to": "", "branch": "", "intent": [], "txid": ""}
+
+        def _before_mutation(from_head, to_head, branch, _deps):
+            intent = self._stamp(new_candidates, from_head)
+            hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
+            if not intent:
+                return
+            txid = selfupdate.new_txid()
+            payload = {"from_head": from_head, "to_head": to_head, "branch": branch, "pending": intent}
+            if not selfupdate.create_anchor(self._system, txid, payload):     # durable provenance FIRST
+                raise selfupdate.JournalPersistError()
+            rec = {**payload, "txid": txid}
+            if not selfupdate.write_migration_journal(self._paths, {"completed": None, "prepared": rec}):
+                selfupdate.delete_anchor(self._system, txid)
+                raise selfupdate.JournalPersistError()
+            hook.update(written=True, txid=txid)
+
+        try:
+            res = selfupdate.apply_update(self._system, self._paths, force=force,
+                                          before_mutation=_before_mutation)
+        except selfupdate.JournalPersistError:
+            return ActionResult(False, "Refusing to self-update: could not durably record the config-"
+                                "migration intent before changing source. No changes were made.",
+                                data={"journal_write_failed": True})
+
+        # 5. On a REAL advance WITH candidates (hook.written -> a valid anchor + journal exist), promote
+        #    the prepared transition to `completed` (keeping the anchor), then migrate. Fully resolved ->
+        #    clear journal + delete anchor; else keep for retry. A NO-CANDIDATE advance wrote no anchor
+        #    and no journal, so there is nothing to promote (never write a record with an empty txid).
+        #    Failed/refused leaves config untouched and drops the fresh anchor + journal.
+        remaining: list = []
+        if res.get("ok") and not res.get("already") and hook["written"]:
+            rec = {"from_head": hook["from"], "to_head": hook["to"], "branch": hook["branch"],
+                   "pending": hook["intent"], "txid": hook["txid"]}
+            self._write_envelope(rec, None)                              # promote prepared -> completed
+            m, remaining = self._run_migration(hook["intent"], hook["from"])
+            migrated += m
+            if not remaining and selfupdate.clear_migration_journal(self._paths):
+                selfupdate.delete_anchor(self._system, hook["txid"])
+        elif not res.get("ok") and hook["written"]:          # git failed after prepare -> drop anchor+journal
+            if selfupdate.clear_migration_journal(self._paths):
+                selfupdate.delete_anchor(self._system, hook["txid"])
+
+        instr = selfupdate.restart_instructions(res.get("deps_changed", False))
+        data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining)}
+        migrated_note = f"{migrated} legacy default(s) migrated to the new defaults." if migrated else ""
+        pending_note = (f"{len(remaining)} config default migration(s) could NOT be completed and will "
+                        "be retried on the next self-update.") if remaining else ""
+
+        if not res["ok"]:                                    # git failure: dirty refusal / diverged / fetch
+            return ActionResult(False, res["message"], data=data)
+        if res.get("cleanup_failed"):                        # updated, but untracked cleanup failed -> partial
+            details = [res.get("cleanup_error", ""), "Restart the web console after cleaning up:"]
+            details += ["  " + c for c in instr["commands"]]
+            details += [n for n in (migrated_note, pending_note) if n]
+            return ActionResult(False, res["message"], data=data,
+                                details=tuple(d for d in details if d))
+        if res.get("already"):                               # nothing to update; may have recovered pending
+            details = tuple(n for n in (migrated_note, pending_note) if n)
+            return ActionResult(True, res["message"], data=data, details=details)
+        details = ["Restart the web console to load the new version:"]
+        details += ["  " + c for c in instr["commands"]]
+        details += [n for n in (migrated_note, pending_note) if n]
+        return ActionResult(True, res["message"], data=data, details=tuple(details),
+                            next_commands=list(instr["commands"]))
+
+    def _write_envelope(self, completed, prepared) -> None:
+        """Persist the two-slot envelope (or clear it when both slots are empty). Best-effort at
+        finalization: a failed write is self-healed on the next invocation's prepared-reconciliation,
+        so a still-pending `completed` is never silently lost."""
+        from . import selfupdate
+        if not completed and not prepared:
+            selfupdate.clear_migration_journal(self._paths)
+        else:
+            selfupdate.write_migration_journal(self._paths, {"completed": completed,
+                                                             "prepared": prepared})
+
+    @staticmethod
+    def _promote(completed, prepared) -> dict:
+        """Promote a prepared transition whose git DID complete (head reached its to_head) into the
+        completed slot, carrying its durable-anchor `txid` and its (immutable, anchor-matched) pending
+        payload. The classifier's invariant guarantees no prior completed pending coexists."""
+        return {"from_head": prepared["from_head"], "to_head": prepared["to_head"],
+                "branch": prepared["branch"], "pending": prepared["pending"],
+                "txid": prepared.get("txid")}
 
     def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
         """Bounded tail of the daemon log filtered to RX/TX activity."""

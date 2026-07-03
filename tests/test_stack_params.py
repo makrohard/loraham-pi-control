@@ -889,3 +889,70 @@ def test_save_stack_config_rejects_unqualified_dup_and_unknown(tmp_path):
     assert cfgmod.load_stack_config(svc._paths, "ostack2") == {}     # NO mutation on rejection
     assert svc.save_stack_config("ostack2", {"tgt.rp": "RP-T"}).ok  # valid qualified persists scoped
     assert cfgmod.load_stack_config(svc._paths, "ostack2").get("__r__tgt__rp") == "RP-T"
+
+
+# --- overrides-only config storage (enables automatic self-update config preservation) ------
+
+def test_config_stores_overrides_only(tmp_path):
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    p = next(pp for pp in svc.run_params_for("igate") if pp.name == "tx_freq")
+    default = svc._param_default_canon(p, "", "")
+    # saving the current default persists NOTHING, yet the effective value is still the default
+    assert svc.save_config_bundle("igate", values={"tx_freq": default}).ok
+    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "igate")
+    assert svc.stack_config("igate")["tx_freq"] == default
+    # saving a real override persists it and survives reload
+    assert svc.save_config_bundle("igate", values={"tx_freq": "434.500"}).ok
+    assert cfgmod.load_stack_config(svc._paths, "igate").get("tx_freq") == "434.500"
+    assert svc.stack_config("igate")["tx_freq"] == "434.500"
+    # saving it back to the default clears the stored override again
+    assert svc.save_config_bundle("igate", values={"tx_freq": default}).ok
+    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "igate")
+
+
+def test_value_at_old_default_follows_new_default(tmp_path):
+    # Simulate a self-update that changes a manifest default: a value stored while it equalled the
+    # OLD default must resolve to the NEW default; a genuine override must be preserved.
+    from lhpc.core import config as cfgmod
+    man = tmp_path / "m.toml"
+    man.write_text(
+        '[[stack]]\nid="s"\nname="S"\nmain="c"\n'
+        '[[stack.component]]\nid="c"\nname="C"\nkind="service"\nrun="true"\nreadiness="process"\n'
+        '  [[stack.component.param]]\n  name="opt"\n  kind="str"\n  default="OLD"\n'
+    )
+    svc = ControllerService(manifest_path=man, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    # user leaves it at the (old) default -> nothing stored
+    assert svc.save_config_bundle("s", values={"opt": "OLD"}).ok
+    assert cfgmod.load_stack_config(svc._paths, "s") == {}
+    # "update" to a manifest whose default changed OLD -> NEW
+    man.write_text(man.read_text().replace('default="OLD"', 'default="NEW"'))
+    svc2 = ControllerService(manifest_path=man, system=FakeSystem().system,
+                             paths=Paths(runtime_root=tmp_path))
+    assert svc2.stack_config("s")["opt"] == "NEW"                 # at-old-default -> follows new default
+    # a genuine override is preserved across the same update
+    assert svc2.save_config_bundle("s", values={"opt": "MINE"}).ok
+    man.write_text(man.read_text().replace('default="NEW"', 'default="NEWER"'))
+    svc3 = ControllerService(manifest_path=man, system=FakeSystem().system,
+                             paths=Paths(runtime_root=tmp_path))
+    assert svc3.stack_config("s")["opt"] == "MINE"               # override preserved
+
+
+def test_empty_non_default_override_is_kept(tmp_path):
+    # A value that DIFFERS from a non-empty default but is empty ("unset") is a genuine override and
+    # must still persist (two-phase write must not drop it).
+    from lhpc.core import config as cfgmod
+    man = tmp_path / "m.toml"
+    man.write_text(
+        '[[stack]]\nid="s"\nname="S"\nmain="c"\n'
+        '[[stack.component]]\nid="c"\nname="C"\nkind="service"\nrun="true"\nreadiness="process"\n'
+        '  [[stack.component.param]]\n  name="opt"\n  kind="str"\n  default="D"\n'
+    )
+    svc = ControllerService(manifest_path=man, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    assert svc.save_config_bundle("s", values={"opt": ""}).ok
+    assert cfgmod.load_stack_config(svc._paths, "s").get("opt") == ""   # empty override persisted
+    assert svc.stack_config("s")["opt"] == ""

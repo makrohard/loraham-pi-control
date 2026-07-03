@@ -149,7 +149,7 @@ def test_get_routes_make_no_network_calls(tmp_path):
         return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
     client = create_app(service_factory=factory).test_client()
-    for path in ("/", "/stacks", "/stacks/daemon",
+    for path in ("/", "/stacks", "/stacks/daemon", "/self-update",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
                  "/api/dash-signature", "/api/logs/loraham-daemon"):
         client.get(path)
@@ -1133,3 +1133,159 @@ def test_no_page_shows_banded_reset_text(tmp_path):                          # (
         body = c.get(p).get_data(as_text=True)
         assert 'Reset 433 to defaults' not in body and 'Reset 868 to defaults' not in body
         assert '>Reset to defaults</button>' in body          # the exact-text button is present
+
+
+# --- Self-Update: footer indicator, page, apply flow, Apps entry -----------------------------
+
+def _write_selfcache(tmp_path, local, upstream):
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path),
+                           {"local": local, "upstream": upstream, "checked_at": 1})
+
+
+def test_footer_grey_before_any_check(tmp_path):
+    b = _client(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="ver ver-grey">v' in b and "update-link" not in b   # local version, no upstream yet
+
+
+def test_footer_up_to_date_is_green_no_link(tmp_path):
+    from lhpc.version import __version__
+    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
+                     {"ok": True, "upstream_version": __version__,
+                      "upstream_head": "a" * 40, "upstream_head_short": "aaaaaaaaa"})
+    b = _client(tmp_path).get("/").get_data(as_text=True)
+    assert "ver-green" in b and "ver-red" not in b and "ver-yellow" not in b
+    assert "update-link" not in b
+
+
+def test_footer_commit_ahead_same_version_is_yellow(tmp_path):
+    from lhpc.version import __version__
+    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
+                     {"ok": True, "upstream_version": __version__,
+                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
+    b = _client(tmp_path).get("/").get_data(as_text=True)
+    assert "ver-green" in b and "ver-yellow" in b   # version green, commit yellow
+    assert "update-link" in b and "Self-Update" in b
+
+
+def test_footer_version_ahead_is_red_with_link(tmp_path):
+    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
+                     {"ok": True, "upstream_version": "99.0.0",
+                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
+    b = _client(tmp_path).get("/").get_data(as_text=True)
+    assert "ver-red" in b and "update-link" in b
+
+
+def test_apps_has_self_entry_first(tmp_path):
+    b = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert 'id="self-stack"' in b and ">LoRaHAM Pi Control<" in b and "/self-update" in b
+    assert b.index('id="self-stack"') < b.index('class="stackrow"', b.index('id="self-stack"') + 20)
+
+
+def test_self_update_page_renders(tmp_path):
+    body = _client(tmp_path).get("/self-update").get_data(as_text=True)
+    assert body.count("Self-Update") and "Check for updates" in body   # git checkout -> available
+
+
+def test_self_update_check_post_csrf(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_check", lambda self: ActionResult(True, "Up to date."))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    assert c.post("/self-update/check", data={"_csrf": tok}).status_code in (302, 303)
+    assert c.post("/self-update/check").status_code == 400          # CSRF enforced
+
+
+def test_self_update_apply_confirm_then_restart_instructions(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    # stage 1: no `confirmed` -> a confirm page warning about the restart
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "Apply update" in r1 and "restarted" in r1
+    # stage 2: confirmed -> apply (stubbed, no git/network) shows restart instructions
+    seen = {}
+    def fake_apply(self, *, force=False):
+        seen["force"] = force
+        return ActionResult(True, "Update applied — restart the web console to load it.",
+                            data={"restart": {"commands": ["stop the console (Ctrl-C) and re-run:  lhpc web"]},
+                                  "deps_changed": False, "already": False})
+    monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    r2 = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "load the new version" in r2 and "lhpc web" in r2 and seen["force"] is False
+    assert c.post("/self-update/apply", data={"confirmed": "yes"}).status_code == 400   # CSRF
+
+
+def test_self_update_apply_blocked_by_active_job(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "active_jobs", lambda self: [{"op": "build", "target": "x"}])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "still running" in body                     # blocked, no git/network touched
+
+
+def test_self_update_apply_dirty_offers_overwrite(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(False, "Local uncommitted changes present.",
+                                                                  data={"dirty": True}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "Overwrite local changes" in body           # opt-in to discard is offered
+
+
+def test_self_update_cleanup_failure_renders_partial(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        ActionResult(False, "Update aligned to upstream, but some untracked files could NOT be removed "
+                     "— delete them manually, then restart the console.",
+                     details=("cannot unlink 'x': Permission denied", "Restart the web console after cleaning up:",
+                              "  stop the console (Ctrl-C) and re-run:  lhpc web"),
+                     data={"ok": True, "cleanup_failed": True, "cleanup_error": "cannot unlink 'x': Permission denied",
+                           "already": False, "restart": {"commands": ["stop the console (Ctrl-C) and re-run:  lhpc web"]},
+                           "deps_changed": False, "migrated": 0, "pending_migrations": 0}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"}).get_data(as_text=True)
+    assert "could NOT be removed" in body and "Permission denied" in body   # truthful partial
+    assert "lhpc web" in body                                                # still tells them to restart
+
+
+def test_self_update_pending_migration_warns_in_view(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        ActionResult(True, "Update applied — restart the web console to load it.",
+                     data={"ok": True, "already": False, "deps_changed": False, "migrated": 3,
+                           "pending_migrations": 2, "restart": {"commands": ["lhpc web"]}}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "3 legacy configuration default(s) migrated" in body
+    assert "2 configuration default" in body and "retried automatically" in body   # truthful incomplete
+
+
+def test_self_update_busy_renders_truthfully(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        ActionResult(False, "A self-update is already in progress — try again shortly.",
+                     data={"busy": True}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "already in progress" in body
+
+
+def test_self_update_journal_corrupt_renders_recovery_message(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
+        ActionResult(False, "Self-update blocked: the migration journal is corrupt or unsafe. "
+                     "No changes were made — recovery needed (inspect / remove "
+                     "state/selfupdate-migrate.json).", data={"journal_corrupt": True}))
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/self-update")
+    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
+    assert "migration journal is corrupt" in body and "recovery needed" in body

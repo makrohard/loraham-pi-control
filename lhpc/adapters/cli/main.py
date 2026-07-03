@@ -170,6 +170,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_test.add_argument("--tx", action="store_true", help="TX-capable test (real RF, dummy loads)")
     p_test.add_argument("--yes", action="store_true", help="Non-interactive confirm")
 
+    p_su = sub.add_parser("self-update", help="Check for / apply lhpc's own update")
+    p_su.add_argument("--apply", action="store_true",
+                      help="Apply the update (fast-forward); restart the console afterwards")
+    p_su.add_argument("--overwrite", action="store_true",
+                      help="Discard local changes (modified + non-ignored untracked files) if dirty")
+    p_su.add_argument("--yes", action="store_true", help="Apply without an interactive confirm")
+
     p_web = sub.add_parser("web", help="Start the local operator web console")
     p_web.add_argument("--host", default="127.0.0.1", help="Bind host (loopback only)")
     p_web.add_argument("--port", type=int, default=8770, help="Bind port")
@@ -247,6 +254,15 @@ def main(argv: list[str] | None = None) -> int:
         return _apply_flow(
             lambda a: svc.test(args.target, tx=args.tx, apply=a),
             yes=args.yes)
+    if args.command == "self-update":
+        if not args.apply:
+            return _render(svc.self_update_check())          # explicit upstream check + status
+        if not args.yes and not _confirm(
+                "This fast-forwards lhpc to the upstream version and then the web console must be "
+                "restarted to load it. Proceed? [y/N] "):
+            print("Aborted.")
+            return 0
+        return _render(svc.self_update_apply(force=args.overwrite))
     if args.command == "web":
         from lhpc.adapters.web.app import run_server
 
