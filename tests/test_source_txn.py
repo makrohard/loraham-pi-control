@@ -14,7 +14,7 @@ from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
 
 
 def _inst(tmp_path) -> Installer:
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path)}})
+    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")}})
     # Declare src/app as a MANAGED source so recovery accepts its journal (§1: recovery
     # only ever operates on manifest-declared managed-source destinations).
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
@@ -155,7 +155,7 @@ def test_shared_source_serializes_on_one_lock(tmp_path):
     inst = _inst(tmp_path)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     inst.paths.under("src", "app").mkdir(parents=True)               # overwrite target
     with reslock.operation_lock(inst.paths, inst._source_lock_key("src/app"), "update", "x"):
         action = inst.adopt_source(comp, force=True)
@@ -173,7 +173,7 @@ def _git(repo, *args):
 
 def _local_repo(tmp_path, name):
     import subprocess
-    repo = tmp_path / name; repo.mkdir(parents=True)
+    repo = tmp_path / "rt" / name; repo.mkdir(parents=True)
     _git(repo, "init", "-q"); (repo / "f").write_text("x"); _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "c")
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -237,7 +237,7 @@ def test_adopt_blocks_when_recovery_required(tmp_path):
         "source_rel": "../escape", "prev_rel": "../escape", "candidate_rel": "../escape"}))
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
     assert (d / "app.json").exists()                  # journal retained, source untouched
@@ -275,7 +275,7 @@ def test_adopt_blocked_by_filename_mismatch_journal(tmp_path):
         "candidate_rel": "src/.other.candidate-1-2"}))
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
 
@@ -416,7 +416,7 @@ def test_malformed_journal_blocks_unrelated_source(tmp_path):
     (d / "garbage.json").write_text("{ not valid json")          # unparseable -> retained
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
     assert (d / "garbage.json").exists()                         # retained, not discarded
@@ -428,7 +428,7 @@ def test_adopt_blocked_while_index_lock_held(tmp_path):
     inst.paths.under("src", "app").mkdir(parents=True)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     with reslock.operation_lock(inst.paths, inst._index_key(), "recover", "x"):
         action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "in progress" in action.detail
@@ -473,7 +473,7 @@ def test_valid_target_journal_recovered_through_adopt(tmp_path):
     _journal(inst, dest, src / ".app.prev", staging, "prior-archived")   # interrupted activation
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=False)
     # Recovery COMPLETED the interrupted activation under the index lock, then adopt
     # proceeded — it did NOT become permanently "busy"/"recovery-required".
@@ -491,7 +491,7 @@ def test_adopt_target_does_not_self_contend(tmp_path):
     _journal(inst, dest, src / ".app.prev", src / ".app.candidate-1-2", "prior-archived")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
-    (tmp_path / "app-src").mkdir()
+    (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status != "failed" or "in progress" not in action.detail
     assert not inst._journal_path(dest).exists()
@@ -916,7 +916,7 @@ def test_signer_config_diagnostics_reach_result(tmp_path):
     _, head = _local_repo(tmp_path, "app-src")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src", pin_commit=head))
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path)},
+    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")},
                          "provenance": {"trusted_signers": ["not-a-fingerprint"]}})
     stacks = (Stack(id="s", name="s", main="app", components=(comp,)),)
     inst = Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())

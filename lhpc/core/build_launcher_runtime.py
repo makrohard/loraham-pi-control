@@ -82,6 +82,13 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float) -> int:
     """Run one step in its OWN session; on timeout, terminate the whole tree via the shared
     proctree session-token helper. Output is inherited -> streamed to the job log, not held
     in memory."""
+    # LIVE log streaming: PYTHONUNBUFFERED un-buffers python tools (pip, PlatformIO) —
+    # the dominant chunkiness source. Deliberately NO stdbuf/LD_PRELOAD wrapping: this
+    # launcher also runs HOST-TEST steps, and an inherited LD_PRELOAD alters the pipe
+    # buffering of the programs UNDER TEST (the daemon suite's single-read capture then
+    # races line-buffered output and fails under load). glibc tools keep their own
+    # ~4 KB block flushes — still live via the fd redirect, just coarser.
+    env = {**env, "PYTHONUNBUFFERED": "1"}
     p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, start_new_session=True)
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:

@@ -91,6 +91,16 @@
               {% endfor %}
             </table>
           {% endif %}
+          {% if optional_starts %}
+            <hr class="sep">
+            <p><strong>Optional components</strong>
+              <span class="muted">(saved as the auto-start option for this stack)</span></p>
+            {% for o in optional_starts %}
+              <p><label><input type="checkbox" name="opt_start_{{ o.id }}" value="on"
+                  {% if o.autostart %}checked{% endif %}>
+                Start {{ o.name }}</label></p>
+            {% endfor %}
+          {% endif %}
           {# All editable stack config params (run + config-file) for THIS start — collapsed,
              above the daemon panel. #}
           {% if stack_param_groups %}

@@ -39,14 +39,15 @@ main = "loraham-daemon"
   run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham" }
   # build.sh consumes the RadioLib checkout as the sibling src/RadioLib — a hard BUILD-time
   # dependency (not "optional"): update includes it, uninstall refuses to remove it while
-  # the daemon source is installed.
+  # the daemon source is installed. RADIOLIB_DIR pins the build to the MANAGED in-root
+  # clone (CONTAINMENT: without it, build.sh's discovery falls back to ~/src/RadioLib).
+  build_steps = [ { argv = ["loraham_daemon/build.sh"], env = { RADIOLIB_DIR = "{runtime}/src/RadioLib" } } ]
   build_requires = ["radiolib"]
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/loraham", mode = "700" } ]
   readiness = "daemon-band"
   bin = "loraham_daemon/loraham_daemon"
   test = "loraham_daemon/run_tests.sh"
   pre = 'export LORAHAM_RUNTIME_DIR="{runtime}/state/loraham"; mkdir -p "$LORAHAM_RUNTIME_DIR"; chmod 700 "$LORAHAM_RUNTIME_DIR"'
-  log_paths = ["/tmp/lora_daemon.log"]
 
     [[stack.component.param]]
     name = "radio"
@@ -167,6 +168,9 @@ main = "loraham-daemon"
   kind = "library"
   purpose = "C++ radio library; REQUIRED build-time dependency of the daemon (build_requires)."
   tx_capable = false
+  # Self-sufficient in-root build: produces build/libRadioLib.a, which the daemon's
+  # build.sh consumes via RADIOLIB_DIR (all deps live and build under <root>/src).
+  build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build", "-j", "2"] } ]
   # `optional` here means "not runnable / not started with the stack" — the daemon's
   # build_requires edge makes it a hard install/update/uninstall reference.
   optional = true
@@ -724,8 +728,8 @@ main = "loraham-kiss-tnc"
   optional = true
   depends_on = ["loraham-kiss-tnc"]
   start_order = 2
-  run_argv = ["socat", "-d", "-d", "PTY,link=/tmp/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:8001"]
-  note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes /tmp/loraham_kiss. Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
+  run_argv = ["socat", "-d", "-d", "PTY,link={runtime}/state/loraham_kiss,raw,echo=0,waitslave,mode=666", "TCP:127.0.0.1:8001"]
+  note = "Optional socat PTY <-> KISS/TCP(127.0.0.1:8001) bridge; exposes <runtime>/state/loraham_kiss (in-root; point external tools there). Runs socat DIRECTLY (not the wrapper script, which traps SIGTERM and respawns socat) so lhpc owns the socat process and stops it cleanly. Needs socat."
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
@@ -743,7 +747,7 @@ main = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
     kind = "path"
-    address = "/tmp/loraham_kiss"
+    address = "state/loraham_kiss"
     role = "provider"
     description = "Serial KISS PTY (socat)"
     client = true
@@ -776,13 +780,13 @@ main = "meshtastic"
   # After meshtasticd is listening on the API, set the LoRa region (TX stays
   # disabled while region is UNSET). Idempotent; runs detached. Tries the local
   # meshtastic CLI then PATH.
-  post_start = 'sleep 12; M="$HOME/.local/bin/meshtastic"; [ -x "$M" ] || M=meshtastic; "$M" --host 127.0.0.1 --set lora.region {region}; "$M" --host 127.0.0.1 --set-owner "{node_name}" --set-owner-short "{node_short}"'
+  post_start = 'sleep 12; meshtastic --host 127.0.0.1 --set lora.region {region}; meshtastic --host 127.0.0.1 --set-owner "{node_name}" --set-owner-short "{node_short}"'
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
   readiness = "endpoint"
   post_steps = [
     { kind = "delay", seconds = 12 },
-    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/../.local/bin/meshtastic"], optional = true },
-    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/../.local/bin/meshtastic"], optional = true },
+    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], optional = true },
+    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], optional = true },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). You are already in the spi+gpio groups, so lhpc runs/stops it WITHOUT root. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
@@ -1023,7 +1027,6 @@ main = "meshcom-qemu"
     pin_tag = "fe85c79"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
-    strategy = "link"
 
     [stack.component.process]
     exec_name = "meshcom-loraham-bridge"
@@ -1082,7 +1085,6 @@ main = "meshcom-qemu"
     pin_tag = "f16a456"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
-    strategy = "link"
 
     [stack.component.process]
     exec_name = "python3"
@@ -1099,14 +1101,22 @@ main = "meshcom-qemu"
   start_order = 3
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
-  start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then (best viewed from another machine), and its callsign switches to yours once the node finishes booting."
+  start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
   # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
   # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
   # is empty and the build fails. 10.0.2.2 = QEMU user-net gateway -> host; 7000 =
   # the meshcom-bridge default port; password (if any) from /tmp/xr_pw.
-  build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat /tmp/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
-  build_steps = [ { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file:/tmp/xr_pw" } } ]
+  build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat {runtime}/config/secrets/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
+  # SELF-SUFFICIENT fresh clone: the workspace (.work/ MeshCom firmware + overlay +
+  # OpenETH vendor) is prepared by the repo's own pinned setup scripts before build.sh —
+  # a linked dev tree used to carry a pre-built .work/, a managed clone must not.
+  build_steps = [
+    { argv = ["scripts/setup.sh"] },
+    { argv = ["scripts/apply-overlay.sh"] },
+    { argv = ["scripts/prepare-openeth.sh"] },
+    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
+  ]
   readiness = "endpoint"
   run = "scripts/run.sh {env} {qemu}"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
@@ -1119,7 +1129,11 @@ main = "meshcom-qemu"
   # --setcall for an empty / N0CALL callsign (the structured equivalent of the old shell guard).
   post_steps = [
     { kind = "tcp_wait", port = 12323, timeout = 180 },
-    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # ACK-AWARE + IDEMPOTENT (live finding: 17 blind connects starved the node's heap
+    # and killed its web UI): probe `--info` first and SKIP when the callsign is already
+    # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
+    # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
+    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call:{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
@@ -1155,7 +1169,6 @@ main = "meshcom-qemu"
     pin_tag = "f16a456"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
-    strategy = "link"
 
     [stack.component.process]
     exec_name = "qemu-system-xtensa"
@@ -1220,6 +1233,17 @@ main = "meshcore-pi"
   start_order = 1
   run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
   test = ".venv/bin/python -m pytest tests/"
+  # Self-sufficient managed clone: the venv is built IN-TREE by `lhpc build`. Upstream has
+  # no requirements file — deps enumerated from its README (an upstream requirements.txt
+  # would make this declarative).
+  # --system-site-packages: the Pi OS already ships the GPIO/SPI bindings
+  # (python3-rpi.gpio, python3-lgpio, python3-spidev) — reusing them avoids compiling
+  # lgpio from source (which needs swig); pip adds only what the OS lacks.
+  build_steps = [
+    { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
+    { argv = [".venv/bin/pip", "install", "pycryptodome", "aiotools", "pyserial_asyncio",
+              "typing-extensions", "LoRaRF", "scapy==2.5.0", "pytest"] },
+  ]
 
     # meshcore-pi has no CLI flags — all settings live in the TOML. The controller
     # generates the runtime config from the in-repo config-loraham868.toml base,
@@ -1227,7 +1251,7 @@ main = "meshcore-pi"
     [stack.component.config_file]
     path = "{runtime}/config/files/meshcore-pi.toml"
     fmt = "toml-update"
-    base = "config-loraham868.toml"
+    base = "{runtime}/config/files/meshcore-pi-base.toml"
       [[stack.component.config_file.param]]
       name = "preset"
       key = "preset"
@@ -1256,19 +1280,20 @@ main = "meshcore-pi"
       key = "txpower"
       section = "interface.loraham868"
       kind = "int"
-      default = ""
+      default = "14"
       min = 0
       max = 20
-      label = "TX power dBm (blank = preset)"
+      label = "TX power dBm"
       advanced = true
       [[stack.component.config_file.param]]
       name = "frequency"
-      validator = "freq"
       key = "frequency"
       section = "interface.loraham868"
-      kind = "str"
-      default = ""
-      label = "Frequency Hz (blank = preset)"
+      kind = "int"
+      default = "869525000"
+      min = 430000000
+      max = 950000000
+      label = "Frequency Hz"
       advanced = true
       [[stack.component.config_file.param]]
       name = "airtime"
@@ -1285,9 +1310,8 @@ main = "meshcore-pi"
     path = "src/meshcore-pi"
     pin_commit = "ec31446ede4528dece45bd6f8254bc7a01478f62"
     pin_tag = "ec31446"
-    remote = "git@github.com:makrohard/meshcore-pi.git"
+    remote = "https://github.com/makrohard/meshcore-pi.git"
     branch = "loraham-daemon-interface"
-    strategy = "link"
 
     [stack.component.process]
     exec_name = "python"
@@ -1328,6 +1352,10 @@ main = "meshcore-pi"
   # display (DISPLAY inherited, else :0).
   run = 'env DISPLAY="${DISPLAY:-:0}" .venv/bin/python main.py'
   run_argv = [".venv/bin/python", "main.py"]
+  build_steps = [
+    { argv = ["python3", "-m", "venv", ".venv"] },
+    { argv = [".venv/bin/pip", "install", "-r", "requirements.txt"] },
+  ]
   run_cwd = "{source}"
   run_env = { DISPLAY = "@env:DISPLAY=:0" }
   readiness = "process"
@@ -1342,9 +1370,8 @@ main = "meshcore-pi"
     path = "src/meshcore-node-manager"
     pin_commit = "ddafd42ca9d46f85756c7e37f0607059f1eb546f"
     pin_tag = "v1.2.0-13-gddafd42"
-    remote = "git@github.com:makrohard/meshcore-node-manager.git"
+    remote = "https://github.com/makrohard/meshcore-node-manager.git"
     branch = "meshcore-api-compat"
-    strategy = "link"
 
   [[stack.component]]
   id = "meshcore-cli"
@@ -1357,6 +1384,10 @@ main = "meshcore-pi"
   interactive = true
   depends_on = ["meshcore-pi"]
   run = ".venv/bin/meshcli {host} {port} {json} {debug}"
+  build_steps = [
+    { argv = ["python3", "-m", "venv", ".venv"] },
+    { argv = [".venv/bin/pip", "install", "."] },
+  ]
 
     [stack.component.process]
     exec_name = "meshcli"
@@ -1395,19 +1426,3 @@ main = "meshcore-pi"
     pin_commit = "e4228354cb77f273c54f0ebef21c5ac25272694e"
     pin_tag = "v1.5.0-14-ge422835"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
-    strategy = "link"
-
-  [[stack.component]]
-  id = "meshcore-firmware"
-  name = "MeshCore firmware"
-  kind = "firmware"
-  purpose = "Device firmware (flashed to nodes); not run on the Pi."
-  tx_capable = true
-  optional = true
-
-    [stack.component.source]
-    path = "src/meshcore"
-    pin_commit = "c940ea5f305df87c4ea215d74e522b64c22c66e9"
-    pin_tag = "room-server-v1.15.0-14-gc940ea5f"
-    remote = "https://github.com/meshcore-dev/MeshCore.git"
-    branch = "main"

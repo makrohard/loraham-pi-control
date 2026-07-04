@@ -14,7 +14,7 @@ locator  = "JO00aa"        # <- optional Maidenhead locator
 
 [install]
 # source_strategy = "adopt"     # or "clone"
-# adopt_search_root = "~/src"
+# adopt_search_root = ""   # optional in-root fallback dir; outside-root values are refused
 
 # Per-component source overrides, e.g. pin a different local path or branch:
 # [sources.loraham-daemon-433]

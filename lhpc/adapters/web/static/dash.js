@@ -70,6 +70,15 @@
   // (and the monitor windows don't flash) every tick. Live fields (RSSI/feed/…)
   // already update in place above. Poll faster while an interactive app is pending
   // so it flips to "running" quickly after the operator starts it in a terminal.
+  try {
+    var saved = JSON.parse(sessionStorage.getItem("dashDetails") || "null");
+    sessionStorage.removeItem("dashDetails");
+    if (Array.isArray(saved)) {
+      document.querySelectorAll("details").forEach(function (el, i) {
+        if (typeof saved[i] === "number") el.open = saved[i] === 1;
+      });
+    }
+  } catch (e) { /* ignore */ }
   var grid = document.querySelector(".radiogrid");
   if (grid) {
     var sig = grid.getAttribute("data-dash-sig");
@@ -81,10 +90,23 @@
         .then(function (d) {
           if (!d || d.sig === sig) return;          // nothing structural changed
           var a = document.activeElement;
-          var busy = a && /^(SELECT|INPUT|TEXTAREA|BUTTON|OPTION)$/.test(a.tagName);
-          var open = document.querySelector("details[open]");
+          // Only genuine text-entry defers the reload. A clicked BUTTON keeps focus
+          // long after the click and would veto every tick (stale badges for 30s+).
+          var busy = a && /^(SELECT|INPUT|TEXTAREA)$/.test(a.tagName);
           var selecting = window.getSelection && String(window.getSelection()).length > 0;
-          if (!busy && !open && !selecting) location.reload();
+          // An OPEN <details> (e.g. the always-open daemon Monitor) must NOT veto the
+          // reload — that froze stale badges (a booting node never turned green while
+          // a panel was open). Open/closed states are preserved across the reload.
+          if (!busy && !selecting) {
+            try {
+              var states = [];
+              document.querySelectorAll("details").forEach(function (el) {
+                states.push(el.open ? 1 : 0);
+              });
+              sessionStorage.setItem("dashDetails", JSON.stringify(states));
+            } catch (e) { /* private mode etc. */ }
+            location.reload();
+          }
         })
         .catch(function () { /* transient */ });
     }, pending ? 2000 : 4000);

@@ -40,7 +40,7 @@ def _comp(path="src/app", local_dir="app", remote="", pin="", branch=""):
 
 
 def _inst(tmp_path, comp, extra=()):
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "local")}})
+    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}})
     stacks = (Stack(id="s", name="s", main=comp.id, components=(comp, *extra)),)
     return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
 
@@ -95,7 +95,7 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
 # --- transactional write on adoption ------------------------------------------------------
 
 def test_adopt_writes_registry_record(tmp_path):
-    head = _make_repo(tmp_path / "local" / "app")
+    head = _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     action = inst.adopt_source(comp, source="dev")                      # local fallback, no remote
@@ -109,7 +109,7 @@ def test_adopt_writes_registry_record(tmp_path):
 
 
 def test_shared_source_record_lists_all_consumers(tmp_path):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     sibling = Component(id="app2", name="app2", kind=ComponentKind.SERVICE,
                         source=SourceSpec(path="src/app", local_dir="app"))
@@ -127,7 +127,7 @@ def test_failed_adoption_writes_no_record(tmp_path):
 
 
 def test_pinned_adopt_records_pin_commit(tmp_path):
-    head = _make_repo(tmp_path / "local" / "app")
+    head = _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp(pin=head)
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="pinned").status == "done"
@@ -138,17 +138,17 @@ def test_pinned_adopt_records_pin_commit(tmp_path):
 # --- record-write failure is recovery-required, then recovered from the journal ------------
 
 def _advance_local(tmp_path, text="v2\n"):
-    (tmp_path / "local" / "app" / "file.txt").write_text(text)
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
-    return _git(tmp_path / "local" / "app", "rev-parse", "HEAD")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text(text)
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    return _git(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
 
 
 def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypatch):
     # A registry-write failure during an UPDATE must not leave the new tree active under
     # old metadata: the activation ROLLS BACK to the verified `.prev`, the prior record
     # (never touched) still matches, and the journal is cleared (proven rollback).
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
@@ -170,7 +170,7 @@ def test_record_write_failure_on_update_rolls_back_in_process(tmp_path, monkeypa
 def test_record_write_failure_on_fresh_install_undoes_in_process(tmp_path, monkeypatch):
     # Fresh install + persistent record-write failure: the promoted candidate is removed —
     # no active source, no record, no journal, never a success.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     monkeypatch.setattr(Installer, "_write_registry_record", lambda *a, **k: False)
@@ -193,7 +193,7 @@ def _crash_state_after_activation(tmp_path, inst, had_prior: bool, text="v2\n"):
         dest.rename(dest.with_name(".app.prev"))                        # archive the prior
     else:
         shutil.rmtree(dest, ignore_errors=True)
-    shutil.copytree(tmp_path / "local" / "app", dest, symlinks=True)    # the NEW tree at dest
+    shutil.copytree(tmp_path / "rt" / "local" / "app", dest, symlinks=True)    # the NEW tree at dest
     rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
     staging = dest.with_name(".app.candidate-1-2")
     cand_rel = rel(staging)
@@ -219,7 +219,7 @@ def _crash_state_after_activation(tmp_path, inst, had_prior: bool, text="v2\n"):
 def test_recovery_restores_prior_when_record_still_unwritable(tmp_path, monkeypatch):
     # CRASH between activation and record write, and the record STILL cannot persist during
     # recovery (one retry): recovery rolls back to `.prev`; the prior record still matches.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
@@ -243,7 +243,7 @@ def test_recovery_restores_prior_when_record_still_unwritable(tmp_path, monkeypa
 def test_recovery_undoes_fresh_install_when_record_still_unwritable(tmp_path, monkeypatch):
     # CRASH after a FRESH install's activation; record write keeps failing: recovery removes
     # the tree — no active source, no record, no falsely successful state.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -261,7 +261,7 @@ def test_recovery_undoes_fresh_install_when_record_still_unwritable(tmp_path, mo
 def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
     # dest holds the (restored) PRIOR tree; a retained v3 journal claims a DIFFERENT commit.
     # Recovery must clear the journal WITHOUT re-registering the prior under the new metadata.
-    head = _make_repo(tmp_path / "local" / "app")
+    head = _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -284,7 +284,7 @@ def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
 
 
 def test_v3_journal_with_invalid_meta_is_retained(tmp_path):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -306,7 +306,7 @@ def test_v2_journal_recovery_is_generation_blocked(tmp_path):
     # Legacy v2 journal (no identity evidence): automatic recovery REFUSES — nothing is
     # promoted, restored, or cleaned; the journal is retained with an operator diagnostic,
     # and further source mutation stays blocked.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     dest = inst.paths.under("src", "app")
@@ -421,7 +421,7 @@ def test_backfill_linked_source(tmp_path):
 # --- M2: dirty_report — untracked counts, with the regenerable-artifact carve-out -----------
 
 def test_dirty_report_untracked_blocks_but_artifacts_do_not(tmp_path):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="out/app.bin",
                      source=SourceSpec(path="src/app", local_dir="app"))
     inst = _inst(tmp_path, comp)
@@ -454,7 +454,7 @@ def test_dirty_report_untracked_blocks_but_artifacts_do_not(tmp_path):
 
 
 def test_update_overwrite_refuses_untracked_changes(tmp_path):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -520,13 +520,14 @@ def test_stable_falls_back_to_newest_tag_then_head(tmp_path):
 def test_artifact_source_same_for_every_selector(tmp_path):
     # An artifact source adopts the SAME declared artifact for pinned/dev/stable — including
     # `pinned` with NO configured pin (no unverified-blocked for artifacts).
-    head = _make_repo(tmp_path / "local" / "app")
+    head = _make_repo(tmp_path / "rt" / "local" / "app")
     for sel in ("pinned", "dev", "stable"):
         comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                          source=SourceSpec(path="src/app", local_dir="app", artifact=True))
         inst = _inst(tmp_path / sel, comp)
-        (tmp_path / sel / "local").mkdir(parents=True, exist_ok=True)
-        (tmp_path / sel / "local" / "app").symlink_to(tmp_path / "local" / "app")
+        (tmp_path / sel / "rt" / "local").mkdir(parents=True, exist_ok=True)
+        (tmp_path / sel / "rt" / "local" / "app").symlink_to(
+            tmp_path / "rt" / "local" / "app")
         action = inst.adopt_source(comp, source=sel)
         assert action.status == "done", f"{sel}: {action.detail}"
         assert action.provenance == "artifact-head"
@@ -536,7 +537,7 @@ def test_artifact_source_same_for_every_selector(tmp_path):
 def test_dev_unavailable_branch_is_typed(tmp_path):
     # dev with a configured branch the local fallback is NOT on: the SELECTOR is unavailable —
     # never a silent adoption of a different ref.
-    _make_repo(tmp_path / "local" / "app")             # on master/main, not 'feature/x'
+    _make_repo(tmp_path / "rt" / "local" / "app")             # on master/main, not 'feature/x'
     comp = _comp(branch="feature/x")
     inst = _inst(tmp_path, comp)
     action = inst.adopt_source(comp, source="dev")
@@ -572,7 +573,7 @@ def test_shared_path_coherence_check(tmp_path):
 def test_update_refuses_unknown_non_git_tree(tmp_path):
     # An existing CLEAN tree that is not a git checkout (and unregistered) is unknown —
     # update refuses and changes nothing.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     dest = inst.paths.under("src", "app")
@@ -586,7 +587,7 @@ def test_update_refuses_unknown_non_git_tree(tmp_path):
 def test_update_refuses_wrong_origin(tmp_path):
     # An existing clean git tree whose origin differs from the configured remote is not
     # LHPC's adoption — update refuses, tree unchanged.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp(remote="https://github.com/x/y.git")
     inst = _inst(tmp_path, comp)
     dest = inst.paths.under("src", "app")
@@ -600,7 +601,7 @@ def test_update_refuses_wrong_origin(tmp_path):
 
 def test_update_refuses_registered_source_at_drifted_commit(tmp_path):
     # A registered source manually moved to a different CLEAN commit: update refuses.
-    head1 = _make_repo(tmp_path / "local" / "app")
+    head1 = _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -615,7 +616,7 @@ def test_update_refuses_registered_source_at_drifted_commit(tmp_path):
 def test_install_and_update_refuse_hostile_destination_leaves(tmp_path):
     # A dangling symlink, a regular file, or a special leaf at the destination is NOT an
     # installable empty destination: refuse with ZERO rename/cleanup/deletion.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     for maker, label in (
         (lambda d: os.symlink("does-not-exist", d), "dangling symlink"),
@@ -629,7 +630,7 @@ def test_install_and_update_refuse_hostile_destination_leaves(tmp_path):
         from lhpc.core.config import Config as _C
         from lhpc.core.probes import RealSystem as _RS
         inst = Installer(_P(runtime_root=root / "rt"), inst.stacks,
-                         _C(values={"install": {"adopt_search_root": str(tmp_path / "local")}}),
+                         _C(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
                          _RS())
         dest = inst.paths.under("src", "app")
         dest.parent.mkdir(parents=True)
@@ -674,7 +675,7 @@ def test_unsafe_registry_states_block_everything(tmp_path):
         shapes.append("inaccessible")
     for shape in shapes:
         root = tmp_path / shape
-        head = _make_repo(root / "local" / "app")
+        head = _make_repo(root / "rt" / "local" / "app")
         comp = _comp()
         inst = _inst(root, comp)
         assert inst.adopt_source(comp, source="dev").status == "done"    # genuine install
@@ -783,7 +784,7 @@ def test_non_git_directory_is_never_destructively_authorized(tmp_path):
 def test_dirty_carveout_is_exact_leaf_only(tmp_path):
     # Only the EXACT declared generated binary is ignorable; sibling/nested/unusual
     # untracked files — including newline-containing names — block. NUL-safe parsing.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, bin="out/app.bin",
                      source=SourceSpec(path="src/app", local_dir="app"))
     inst = _inst(tmp_path, comp)

@@ -15,8 +15,9 @@ An **unpinned** component cannot be installed as `pinned` — with no configured
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
 a missing pin or signature. An **artifact** source (`artifact = true`: chat, igate, voice,
 meshtastic base) resolves every selector to the same declared artifact (`artifact-head`).
-A **linked external tree** (`strategy = "link"`) is inherently an explicit mutable dev
-checkout (a symlink can't be pinned) and stays read-only to lhpc.
+`strategy = "link"` is NO LONGER ACCEPTED at manifest load (containment: every source lives
+under the runtime root as a managed clone). The link machinery is retained so a LEGACY
+runtime symlink leaf is still recognized and refused safely.
 
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
 resolved commit, transaction id — written inside the activation transaction (journal v3),

@@ -283,3 +283,12 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 /* Yellow operator-action buttons (Confirm known-working, Restart required) ----- */
 .warnbtn { background: #fff3cd; color: #7a5200; border: 1px solid #e0b64f; font-weight: 600; }
 .warnbtn:hover { background: var(--warn); color: #fff; }
+
+/* bulk install-all run view */
+.logbox-tall { max-height: 44rem; }
+.logbox-half { max-height: 22rem; }
+.tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }
+.tasklist th, .tasklist td { text-align: left; padding: 0.25rem 0.6rem 0.25rem 0; }
+.badge-ok { background: #e7f6ec; color: var(--ok); border-color: #b7e3c4; }
+.badge-failed { background: #fdecec; color: var(--bad); border-color: #f3c1c1; }
+.inline { display: inline; }

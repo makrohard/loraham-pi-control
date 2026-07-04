@@ -108,19 +108,44 @@ def evaluate(runner, dest: str, spec, source: str,
     selection ('pinned' | 'dev' | 'stable'). `spec` is the component's source spec
     (with `pin_commit` / `pin_tag`). `expected_commit`, when given, overrides the manifest
     pin for the 'pinned' check (the Known-working composition resolution)."""
+    frozen_note = ""
+    if expected_commit and (getattr(spec, "artifact", False) or source in ("dev",
+                                                                           "stable")):
+        # FROZEN BULK IDENTITY: the plan's exact commit is authoritative for EVERY
+        # selector — branch membership, tag names, or artifact status never substitute
+        # for commit equality. A tree without a verifiable Git identity cannot comply.
+        head = runner.run(["git", "-C", dest, "rev-parse", "HEAD"], 5.0)
+        if head.returncode != 0 or not head.stdout.strip():
+            return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
+                                    "no verifiable immutable identity (not a Git "
+                                    "checkout) — refusing under a frozen bulk plan")
+        if head.stdout.strip() != expected_commit:
+            return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
+                                    f"HEAD {head.stdout.strip()[:9]} differs from the "
+                                    f"bulk-frozen commit {expected_commit[:9]} — "
+                                    "refusing (frozen plan is authoritative)")
+        frozen_note = (f"; exact bulk-frozen commit {expected_commit[:9]} verified")
     if getattr(spec, "artifact", False):
         # A declared single-file/artifact-style source: EVERY selector resolves to the same
         # declared artifact (the maintainer's default branch) — truthfully labelled, never
         # blocked as unverified, never claimed production-safe.
+        if frozen_note:
+            # FROZEN bulk plan: what is installed is the PLAN-TIME commit — never claim
+            # "current default branch" for a frozen adoption.
+            return ProvenanceResult(ARTIFACT_HEAD, True, False,
+                                    "declared artifact default-branch commit FROZEN for "
+                                    f"this bulk run ({expected_commit[:9]})")
         return ProvenanceResult(ARTIFACT_HEAD, True, False,
                                 "declared artifact source — installs the maintainer's "
                                 "current default branch (same for every selector)")
     if source == "dev":
         return ProvenanceResult(MUTABLE_DEV, True, False,
-                                "explicit mutable dev branch — NOT production-safe")
+                                "explicit mutable dev branch — NOT production-safe"
+                                + frozen_note)
     if source == "stable":
         return ProvenanceResult(MUTABLE_STABLE, True, False,
-                                "explicit mutable stable branch — NOT production-safe")
+                                "explicit mutable stable branch — NOT production-safe"
+                                + frozen_note)
     # 'pinned' — the "Known working" selector: the expected commit is the newest
     # operator-confirmed composition entry when the caller resolved one (`expected_commit`),
     # else the manifest pin. Either way HEAD must equal it EXACTLY.

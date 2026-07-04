@@ -16,6 +16,7 @@ Security posture:
 from __future__ import annotations
 
 import secrets as _secrets
+import time
 from typing import Callable
 
 from flask import (
@@ -124,12 +125,181 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Durable restart-required flags (file reads only): a yellow "Restart now"
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
+            welcome=service.bulk_welcome(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
     def dash_signature_api():  # noqa: ANN202
         # Cheap structural-state signature; the dashboard reloads only when it changes.
         return jsonify(sig=service.dash_signature())
+
+    _SRC_LABELS = (("pinned", "Known working"), ("dev", "Development"),
+                   ("stable", "Latest stable"))
+
+    def bulk_mod2_run_id_re():
+        from lhpc.core import bulk as bulk_mod
+        return bulk_mod.RUN_ID_RE
+
+    def bulk_mod_terminal_ok():
+        from lhpc.core import bulk as bulk_mod
+        return bulk_mod.TERMINAL_OK
+
+    @app.get("/install-all")
+    def install_all_page():  # noqa: ANN202
+        st = service.bulk_status()
+        mode = service.bulk_mode()
+        running = service.bulk_running()
+        # A JUST-SPAWNED run: reservation live but the driver hasn't written its marker
+        # yet — show a 'starting' card immediately (never a blank page after the POST).
+        starting = False
+        starting_run = ""
+        # ... including when the previous run's TERMINAL marker is still on disk (a new
+        # run may start over it without acknowledgement) and during the brief "spawning"
+        # phase — the POST redirect lands within milliseconds of the spawn.
+        if st is None or (not st.get("unsafe")
+                          and st.get("state") in bulk_mod_terminal_ok()):
+            from lhpc.core import bulk as bulk_mod, procident
+            rstate, res = bulk_mod.read_reservation(service._paths)
+            if (rstate == "valid"
+                    and res.get("phase") in ("spawning", "spawned", "claimed")
+                    and res.get("run_id") != (st or {}).get("run_id")
+                    and procident.identity_matches(res.get("ident", {}),
+                                                   res.get("pid", -1))):
+                starting = True
+                starting_run = res.get("run_id", "")
+        # A spawned run that ended BEFORE claiming (typed preflight refusal): show its
+        # actual output instead of silently falling back to the old run's card.
+        spawn_failed = ""
+        spawn_arg = request.args.get("spawn", "")
+        if (spawn_arg and bulk_mod2_run_id_re().match(spawn_arg)
+                and (st is None or st.get("run_id") != spawn_arg)):
+            chunk = service.bulk_log_chunk(spawn_arg, 0)
+            if chunk.get("data"):
+                spawn_failed = chunk["data"][-4000:]
+        gate = service._bulk_gate()
+        recovery = service.bulk_recovery_reason()
+        needs_ack = bool(recovery)
+        orphan_risk = "ORPHAN RISK" in recovery
+        chunk = {"offset": 0, "data": ""}
+        if st and not st.get("unsafe"):
+            chunk = service.bulk_log_chunk(st["run_id"], 0)
+        return render_template(
+            "install_all.html", version=__version__, runtime_root=_runtime_root(),
+            st=st, mode=mode, running=running, gate=gate, needs_ack=needs_ack,
+            recovery=recovery, orphan_risk=orphan_risk, starting=starting, starting_run=starting_run,
+            spawn_failed=spawn_failed,
+            log_seed=chunk.get("data", ""), src_labels=_SRC_LABELS)
+
+    _TX_CONFIRM_TTL_S = 300.0
+
+    def _stage_tx_confirmation(source: str, tests: bool) -> str:
+        """SERVER-SIDE single-use RF confirmation: session-bound token tied to the exact
+        source/tests/TX choices, the CSRF context, and a short expiry. Consumed atomically
+        by the confirming POST — hidden-field values are never trusted on their own."""
+        token = _secrets.token_hex(16)
+        session["_bulk_tx_confirm"] = {"token": token, "source": source,
+                                       "tests": bool(tests), "tx": True,
+                                       "csrf": session.get("_csrf", ""),
+                                       "exp": time.time() + _TX_CONFIRM_TTL_S}
+        return token
+
+    def _consume_tx_confirmation(token: str, source: str, tests: bool) -> str:
+        """Validate + CONSUME the staged confirmation in one step (popped before any
+        spawn — replay-proof). Returns "" when valid, else the typed refusal."""
+        staged = session.pop("_bulk_tx_confirm", None)          # single-use: always consumed
+        if not isinstance(staged, dict):
+            return "no valid RF confirmation is staged — start again from the form"
+        try:
+            if not (isinstance(staged.get("token"), str) and staged["token"]
+                    and isinstance(staged.get("exp"), (int, float))):
+                return "the staged RF confirmation is malformed — start again"
+            if time.time() > staged["exp"]:
+                return "the RF confirmation has expired — start again"
+            if not (token and _secrets.compare_digest(token, staged["token"])):
+                return "the RF confirmation token does not match — start again"
+            if not _secrets.compare_digest(session.get("_csrf", ""),
+                                           staged.get("csrf", "")):
+                return "the RF confirmation belongs to a different session — start again"
+            if staged.get("source") != source or staged.get("tests") != bool(tests)                     or staged.get("tx") is not True:
+                return ("the confirmed choices (version/tests/TX) changed after "
+                        "confirmation — start again")
+        except (TypeError, KeyError):
+            return "the staged RF confirmation is malformed — start again"
+        return ""
+
+    @app.post("/install-all/start")
+    def install_all_start():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        source = request.form.get("source", "")
+        tests = request.form.get("tests") == "yes"
+        tx = request.form.get("tx") == "yes"
+        if source not in service.SOURCE_CHOICES:
+            flash("Unknown source choice.", "warn")
+            return redirect(url_for("install_all_page"))
+        if tx and not tests:
+            flash("The TX test requires host tests to be enabled.", "warn")
+            return redirect(url_for("install_all_page"))
+        if tx:
+            token = request.form.get("confirm_token", "")
+            if not token:
+                # FIRST TX-enabled POST: stage the server-side confirmation and render
+                # the second page carrying the bound choices + one-time token.
+                token = _stage_tx_confirmation(source, tests)
+                return render_template(
+                    "install_all_confirm.html", version=__version__,
+                    runtime_root=_runtime_root(), source=source, tests=tests,
+                    confirm_token=token,
+                    src_label=dict(_SRC_LABELS).get(source, source))
+            why = _consume_tx_confirmation(token, source, tests)
+            if why:
+                flash(f"RF confirmation refused: {why}.", "warn")
+                return redirect(url_for("install_all_page"))
+        job, err = service.spawn_bulk_job(source, tests, tx)
+        if err:
+            flash(err, "warn")
+        else:
+            flash("Bulk run started — this can take several minutes.", "ok")
+        return redirect(url_for("install_all_page"))
+
+    @app.post("/install-all/ack")
+    def install_all_ack():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        res = service.bulk_ack(
+            confirm_orphan=request.form.get("confirm_orphan") == "yes")
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("install_all_page"))
+
+    @app.get("/api/install-all")
+    def install_all_api():  # noqa: ANN202
+        st = service.bulk_status()
+        out = {"state": st if st is not None else {"absent": True},
+               "running": service.bulk_running(), "run_id": "", "log": {}}
+        try:
+            offset = int(request.args.get("offset", "0"))
+        except ValueError:
+            offset = -1
+        # Whether a spawn reservation is LIVE (spawning/spawned/claimed, identity
+        # proven): the starting card uses this to detect a child that ended BEFORE
+        # writing its marker (e.g. the running-components preflight refusal).
+        from lhpc.core import bulk as bulk_mod, procident
+        rstate, res = bulk_mod.read_reservation(service._paths)
+        out["spawn_live"] = bool(
+            rstate == "valid"
+            and res.get("phase") in ("spawning", "spawned", "claimed")
+            and procident.identity_matches(res.get("ident", {}), res.get("pid", -1)))
+        if st and not st.get("unsafe"):
+            out["run_id"] = st["run_id"]
+            out["log"] = service.bulk_log_chunk(st["run_id"], offset)
+            # Second window: the sequential per-component build/test log stream.
+            try:
+                ci = int(request.args.get("ci", "0"))
+                co = int(request.args.get("co", "0"))
+            except ValueError:
+                ci, co = 0, 0
+            out["complog"] = service.bulk_component_log_chunk(st["run_id"], ci, co)
+        return jsonify(**out)
 
     def _stack_groups():
         """Per-stack overview rows for the Stacks page."""
@@ -195,6 +365,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             snapshot=snapshot,
             summary=summarize(snapshot),
             groups=groups,
+            bulk_mode=service.bulk_mode(),
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware (no false 433/868)
         )
 
@@ -443,6 +614,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                           if op in ("install", "build") else None),
             daemon_panels=(service.daemon_start_panels(target, params, band, _dp_display)
                            if op == "start" else None),
+            optional_starts=(service.optional_start_components(target)
+                             if op == "start" else None),
             frm=frm,
             source_choices=service.SOURCE_CHOICES if op in ("install", "update") else None)
 
@@ -462,7 +635,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Source version selector (only meaningful for install/update). A MISSING selector
         # defaults to the production-safe 'pinned' — never 'dev'. An INVALID selector is
         # rejected by run_action (never rewritten to dev).
-        source = request.form.get("source", "pinned")
+        source = request.form.get("source", "dev")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
@@ -542,6 +715,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Stage 1: show the dry-run plan, options and a confirmation form.
             return _render_confirm(op, target, band, params, file_over, source, frm)
         # Stage 2: apply.
+        # Optional-component start choices (KISS Serial, GPS relay, …): the checkbox IS
+        # the durable auto-start config option — persist a CHANGED choice before the
+        # start, so `_run_order` includes/excludes the component for this and every
+        # later run. A failed save blocks the start (never a silently ignored choice).
+        if op == "start" and service.stack(target) is not None:
+            opts = service.optional_start_components(target)
+            changed = {f"autostart_{o['id']}":
+                       ("on" if request.form.get(f"opt_start_{o['id']}") == "on" else "")
+                       for o in opts
+                       if (request.form.get(f"opt_start_{o['id']}") == "on")
+                       != o["autostart"]}
+            if changed:
+                saved = service.save_config_bundle(target, values=changed)
+                if not saved.ok:
+                    flash(f"Not started — the optional-component choice could not be "
+                          f"saved: {saved.summary}", "warn")
+                    return _render_confirm(op, target, band, params, file_over, source,
+                                           frm)
         # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
         # a mismatch re-renders the confirm with ZERO mutation.
         purge = False
@@ -594,11 +785,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         ok_flash = result.ok or manual_required_only(result.results)
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if ok_flash else "warn")
-        # Transient green note(s) for a just-started component (e.g. how to connect a
-        # launched GUI to its node) — auto-hidden on the dashboard.
+        # Start note(s) for a just-started component (boot expectations, connect hints):
+        # YELLOW and LONG-LIVED (30 s) — a 1–2 min boot warning must outlast the quick
+        # green flashes.
         if op == "start":
             for note in service.start_notes(result):
-                flash(note, "ok transient")
+                flash(note, "warn transient-long")
         return _redirect_for(target)
 
     def _safe_job(value):

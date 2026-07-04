@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Confirm TX — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('install_all_page') }}">&larr; back (cancel)</a></p>
+  <div class="card">
+    <header><h2>Confirm: bulk run WITH RF transmission</h2></header>
+    <div class="body">
+      <p class="flash flash-warn"><strong>This run will TRANSMIT.</strong> After
+        installing, building and host-testing all stacks, LHPC will start the LoRaHAM
+        daemon <strong>temporarily</strong>, transmit ONE bounded test frame per
+        configured band on the real radios, verify the TX counter, and stop the daemon
+        again. Attach dummy loads or intend the transmission.</p>
+      <p class="muted">Version: <strong>{{ src_label }}</strong> · host tests:
+        <strong>on</strong> · TX test: <strong>on</strong> — these three choices are
+        bound into this one confirmation.</p>
+      <form method="post" action="{{ url_for('install_all_start') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="source" value="{{ source }}">
+        <input type="hidden" name="tests" value="yes">
+        <input type="hidden" name="tx" value="yes">
+        <input type="hidden" name="confirm_token" value="{{ confirm_token }}">
+        <p><button class="warnbtn" type="submit">Yes — run everything and transmit</button></p>
+      </form>
+    </div>
+  </div>
+{% endblock %}

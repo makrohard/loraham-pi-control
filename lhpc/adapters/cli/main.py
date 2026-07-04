@@ -132,8 +132,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("stack", nargs="?", help="Limit to one stack")
     p_install.add_argument("--check", action="store_true", help="Dry run (plan only)")
     p_install.add_argument("--yes", action="store_true", help="Apply without confirmation")
-    p_install.add_argument("--source", choices=("pinned", "dev", "stable"), default="pinned",
+    p_install.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
                            help="Version to clone: latest dev / latest stable / pinned")
+
+    p_ia = sub.add_parser("install-all",
+                          help="Install/update, build and test ALL stacks in one guided "
+                               "run (this can take several minutes)")
+    p_ia.add_argument("--yes", action="store_true", help="Apply without confirmation")
+    p_ia.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
+                      help="Version to clone (default: dev — latest development)")
+    p_ia.add_argument("--no-tests", action="store_true", help="Skip host tests")
+    p_ia.add_argument("--tx", action="store_true",
+                      help="After the run, start the daemon TEMPORARILY and transmit ONE "
+                           "bounded test frame per ready band (REAL RF — dummy loads!)")
+    p_ia.add_argument("--run-id", default="", help=argparse.SUPPRESS)
 
     p_help = sub.add_parser("help", help="Detailed help on a topic")
     p_help.add_argument("topic", nargs="?", help="safety | resources | profiles")
@@ -166,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("target", nargs="?", default="", help="Stack/component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
         if name == "update":
-            sp.add_argument("--source", choices=("pinned", "dev", "stable"), default="pinned",
+            sp.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
                             help="Version to fetch: latest dev / latest stable / pinned")
 
     p_clean = sub.add_parser("clean", help="DESTRUCTIVE: purge a stack (sources, config, "
@@ -222,6 +234,24 @@ def main(argv: list[str] | None = None) -> int:
             return _render(svc.install(args.stack, apply=False, source=args.source))
         return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),
                            yes=args.yes)
+    if args.command == "install-all":
+        if args.tx and args.no_tests:
+            print("Refusing: --tx requires host tests (drop --no-tests).")
+            return 2
+        plan = svc.install_all(source=args.source, tests=not args.no_tests, tx=args.tx,
+                               apply=False)
+        rc = _render(plan)
+        if not plan.ok or plan.data.get("changes", 0) == 0:
+            return rc
+        if not args.yes and not _confirm(
+                "\nRun the full install/build"
+                + ("" if args.no_tests else "/test")
+                + (" + TX test (REAL RF — dummy loads!)" if args.tx else "")
+                + " sequence for ALL stacks? [y/N] "):
+            print("Aborted.")
+            return 0
+        return _render(svc.install_all(source=args.source, tests=not args.no_tests,
+                                       tx=args.tx, run_id=args.run_id, apply=True))
     if args.command == "help":
         if not args.topic:
             print("Topics: " + ", ".join(_TOPICS))

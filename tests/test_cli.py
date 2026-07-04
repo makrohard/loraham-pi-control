@@ -150,3 +150,49 @@ def test_clean_requires_purge_and_yes(monkeypatch, capsys):
     # with both flags: applied with purge=True
     assert main(["clean", "kiss", "--purge", "--yes"]) == 0
     assert calls["apply"] is True and calls["purge"] is True
+
+
+def test_install_all_verb_tx_requires_tests(capsys):
+    from lhpc.adapters.cli.main import main
+    rc = main(["install-all", "--tx", "--no-tests", "--yes"])
+    assert rc == 2
+    assert "requires host tests" in capsys.readouterr().out
+
+
+def test_install_all_verb_plumbs_flags(monkeypatch, tmp_path, capsys):
+    from lhpc.adapters.cli import main as cli_main
+    from lhpc.core.services import ActionResult, ControllerService
+    seen = []
+    def fake(self, source="pinned", tests=True, tx=False, run_id="", apply=False,
+             emit=print):
+        seen.append((source, tests, tx, run_id, apply))
+        return ActionResult(True, "plan", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "install_all", fake)
+    rc = cli_main.main(["install-all", "--yes", "--source", "stable", "--no-tests",
+                        "--run-id", "a" * 32])
+    assert rc == 0
+    assert seen[0] == ("stable", False, False, "", False)        # dry-run first
+    assert seen[1] == ("stable", False, False, "a" * 32, True)   # then apply, bound run_id
+
+
+def test_install_all_unbootstrapped_cli_refuses(tmp_path, monkeypatch, capsys):
+    import lhpc.core.paths as paths_mod
+    from lhpc.adapters.cli.main import main
+    absent = tmp_path / "absent-root"
+    monkeypatch.setenv(paths_mod.ENV_RUNTIME_ROOT, str(absent))
+    rc = main(["install-all", "--yes"])
+    out = capsys.readouterr().out
+    assert rc != 0 and "not bootstrapped" in out
+    assert not absent.exists()
+
+
+def test_install_all_default_source_is_dev(monkeypatch, capsys):
+    from lhpc.adapters.cli import main as cli_main
+    from lhpc.core.services import ActionResult, ControllerService
+    seen = []
+    monkeypatch.setattr(ControllerService, "install_all",
+                        lambda self, source="x", tests=True, tx=False, run_id="",
+                        apply=False, emit=print:
+                        (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
+    cli_main.main(["install-all", "--yes"])
+    assert seen and seen[0] == "dev"

@@ -254,3 +254,135 @@ def test_stale_record_never_authorizes_a_future_tree(tmp_path):
     assert not res.ok
     assert any("identity drift" in d or "refused" in d for d in res.details)
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "new.txt").exists() # tree untouched
+
+
+# --- shared-source LIVE membership accounting (chat/igate leaf, user-reported) ----------------
+
+def _seed_shared(tmp_path):
+    from lhpc.core import source_registry
+    import time as _t
+    dest = tmp_path / "src" / "LoRaHAM_Daemon"
+    dest.mkdir(parents=True)
+    (dest / "app.c").write_text("x")
+    assert source_registry.write_record(
+        Paths(runtime_root=tmp_path),
+        source_registry.RegistryRecord("src/LoRaHAM_Daemon", "", "legacy", "", _t.time(),
+                                       "", "", ("loraham-chat", "loraham-igate")))
+    return dest
+
+
+def _members(tmp_path):
+    from lhpc.core import source_registry
+    rec = source_registry.read_record(Paths(runtime_root=tmp_path), "src/LoRaHAM_Daemon")
+    return tuple(rec.components) if rec else None
+
+
+_APPS_REMOTE = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+
+
+def _shared_svc(tmp_path):
+    return _bind_identity(_svc(tmp_path), tmp_path / "src" / "LoRaHAM_Daemon",
+                          _APPS_REMOTE)
+
+
+def test_sequential_uninstall_removes_shared_leaf(tmp_path):
+    # igate departs (kept + membership decremented); chat's uninstall then REMOVES the
+    # leaf — the user-reported "kept forever" accounting bug.
+    dest = _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    r1 = svc.uninstall("igate", apply=True)
+    assert r1.ok, r1.details
+    assert dest.exists()                                         # kept for chat
+    assert _members(tmp_path) == ("loraham-chat",)               # igate departed
+    assert any("departed" in d for d in r1.details)
+    r2 = svc.uninstall("chat", apply=True)
+    assert r2.ok, r2.details
+    assert not dest.exists()                                     # LAST sharer -> removed
+    assert _members(tmp_path) is None                            # record dropped
+    assert not svc.is_installed("chat") and not svc.is_installed("igate")
+
+
+def test_sequential_clean_removes_shared_leaf(tmp_path):
+    dest = _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    assert svc.clean("chat", apply=True, purge=True).ok
+    assert dest.exists() and _members(tmp_path) == ("loraham-igate",)
+    assert svc.clean("igate", apply=True, purge=True).ok
+    assert not dest.exists()
+
+
+def test_mixed_clean_then_uninstall_removes_shared_leaf(tmp_path):
+    dest = _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    assert svc.clean("igate", apply=True, purge=True).ok
+    assert dest.exists()
+    assert svc.uninstall("chat", apply=True).ok
+    assert not dest.exists()
+
+
+def test_departure_rewrite_failure_is_truthful_incomplete(tmp_path, monkeypatch):
+    from lhpc.core import source_registry
+    dest = _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    monkeypatch.setattr(source_registry, "update_components", lambda *a: False)
+    r = svc.uninstall("igate", apply=True)
+    assert not r.ok                                              # INCOMPLETE, not silent
+    assert any("could not be updated" in d for d in r.details)
+    assert dest.exists() and _members(tmp_path) == ("loraham-chat", "loraham-igate")
+    monkeypatch.undo()
+    assert svc.uninstall("igate", apply=True).ok                 # retry converges
+    assert _members(tmp_path) == ("loraham-chat",)
+
+
+def test_install_skip_rejoins_shared_membership(tmp_path):
+    # chat departs, then chat is INSTALLED again (healthy-dir skip): its membership is
+    # restored, so a later igate departure keeps the leaf for chat.
+    dest = _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    assert svc.uninstall("chat", apply=True).ok
+    assert _members(tmp_path) == ("loraham-igate",)
+    ri = svc.install("chat", apply=True)
+    assert set(_members(tmp_path)) == {"loraham-chat", "loraham-igate"}   # re-joined
+    r2 = svc.uninstall("igate", apply=True)
+    assert r2.ok and dest.exists()                               # kept for chat again
+    assert _members(tmp_path) == ("loraham-chat",)
+
+
+def test_recordless_leaf_keeps_manifest_fallback(tmp_path):
+    # No ownership record (legacy/unowned): keep-decisions stay manifest-driven and the
+    # ownership gates refuse removal exactly as before — never a surprise deletion.
+    dest = tmp_path / "src" / "LoRaHAM_Daemon"
+    dest.mkdir(parents=True)
+    svc = _svc(tmp_path)
+    r = svc.uninstall("igate", apply=True)
+    assert dest.exists()                                         # kept (manifest fallback)
+    r2 = svc.uninstall("chat", apply=True)
+    assert dest.exists()                                         # manifest fallback: kept
+    assert any("kept" in d for d in r2.details)                  # never a surprise removal
+
+
+def test_adopt_over_shrunk_record_restores_manifest_membership(tmp_path):
+    # A genuine re-adopt (update/bulk) of the shared checkout refreshes it for EVERY
+    # declared consumer: membership = record ∪ manifest declarers again.
+    from lhpc.core.install import Installer
+    from lhpc.core.config import Config
+    _seed_shared(tmp_path)
+    svc = _shared_svc(tmp_path)
+    assert svc.uninstall("igate", apply=True).ok
+    assert _members(tmp_path) == ("loraham-chat",)
+    comp = next(c for s in svc.stacks() if s.id == "chat"
+                for c in s.components if c.id == "loraham-chat")
+    inst = Installer(svc._paths, svc.stacks(), Config(values={}), svc._system)
+    meta = inst._txn_meta(comp, comp.source, "pinned", "", str(tmp_path))
+    assert set(meta["components"]) >= {"loraham-chat", "loraham-igate"}  # merged back
+
+
+def test_bulk_reconcile_absent_leaf_never_reports_dirty(tmp_path):
+    # Addendum regression: an ABSENT source leaf can never yield the "local changes
+    # present" row text (the user saw a HISTORICAL run's rows; the card now shows its
+    # started/finished time).
+    svc = _svc(tmp_path)
+    comp = next(c for s in svc.stacks() if s.id == "voice"
+                for c in s.components if c.id == "loraham-voice")
+    action, why = svc._reconcile_group("src/LoRaHAM_Voice", comp)
+    assert action == "install" and "local changes" not in why

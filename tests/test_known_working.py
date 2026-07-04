@@ -201,7 +201,7 @@ def test_pinned_selector_resolves_composition_commit(tmp_path):
         return subprocess.run(["git", "-C", str(repo), *args], check=True,
                               capture_output=True, text=True, env=env).stdout.strip()
 
-    local = tmp_path / "local" / "app"
+    local = tmp_path / "rt" / "local" / "app"
     local.mkdir(parents=True)
     git(local, "init", "-q")
     (local / "f").write_text("1\n")
@@ -221,11 +221,11 @@ def test_pinned_selector_resolves_composition_commit(tmp_path):
                                   "source_rel": "src/app", "strategy": ""}},
                          {"confirmed_at": 1.0})
     inst = Installer(paths, stacks,
-                     Config(values={"install": {"adopt_search_root": str(tmp_path / "nope")}}),
+                     Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "nope")}}),
                      RealSystem())
     # local fallback tree is at HEAD (2nd commit) != composition commit -> pinned FAILS closed
     inst2 = Installer(paths, stacks,
-                      Config(values={"install": {"adopt_search_root": str(tmp_path / "local")}}),
+                      Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
                       RealSystem())
     action = inst2.adopt_source(comp, source="pinned")
     assert action.status == "failed"                              # cannot prove composition commit
@@ -247,7 +247,7 @@ def test_pinned_selector_fallback_is_labelled(tmp_path):
 
     env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    local = tmp_path / "local" / "app"
+    local = tmp_path / "rt" / "local" / "app"
     local.mkdir(parents=True)
     subprocess.run(["git", "-C", str(local), "init", "-q"], check=True, env=env)
     (local / "f").write_text("1\n")
@@ -261,7 +261,7 @@ def test_pinned_selector_fallback_is_labelled(tmp_path):
                      source=SourceSpec(path="src/app", local_dir="app", pin_commit=head))
     stacks = (Stack(id="s", name="s", main="app", components=(comp,)),)
     inst = Installer(Paths(runtime_root=tmp_path / "rt"), stacks,
-                     Config(values={"install": {"adopt_search_root": str(tmp_path / "local")}}),
+                     Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
                      RealSystem())
     action = inst.adopt_source(comp, source="pinned")             # NO composition exists
     assert action.status == "done", action.detail

@@ -78,16 +78,36 @@ def run_job(
                          tail=[f"job log could not be created safely: {exc}"])
 
     try:
-        result = runner.run(argv, timeout=timeout, cwd=cwd, env=env)
-        output = (result.stdout or "") + (result.stderr or "")
-        try:
-            log_fh.write(output)
-            log_fh.flush()
-            os.fsync(log_fh.fileno())
-        except OSError as exc:
-            return JobResult(name=name, state=JobState.FAILED, returncode=126,
-                             log_path=str(log_path),
-                             tail=[f"job output could not be persisted: {exc}"])
+        # LIVE log: when the runner supports fd streaming (real system), the child's
+        # output goes DIRECTLY into the log file as it runs — the web run view streams
+        # it in near-realtime instead of receiving one big chunk at completion. Runners
+        # without the capability (fakes) keep the buffered write-at-end path.
+        run_streaming = getattr(runner, "run_streaming", None)
+        if run_streaming is not None:
+            # NO stdbuf here (LIVE FINDING): run_job also executes HOST TESTS, and
+            # stdbuf's LD_PRELOAD propagates into the programs under test — the daemon
+            # suite's single-read pipe capture then races line-buffered output and
+            # fails under load ("CLI accepts --radio help"). The log still streams
+            # (fd redirect); only the tools' own block buffering remains.
+            result = run_streaming(argv, timeout=timeout, log_fh=log_fh,
+                                   cwd=cwd, env={**(env or {}), "PYTHONUNBUFFERED": "1"})
+            try:
+                log_fh.flush()
+                os.fsync(log_fh.fileno())
+            except OSError:
+                pass
+            output = "\n".join(tail_log(log_path, lines=DEFAULT_MAX_TAIL))
+        else:
+            result = runner.run(argv, timeout=timeout, cwd=cwd, env=env)
+            output = (result.stdout or "") + (result.stderr or "")
+            try:
+                log_fh.write(output)
+                log_fh.flush()
+                os.fsync(log_fh.fileno())
+            except OSError as exc:
+                return JobResult(name=name, state=JobState.FAILED, returncode=126,
+                                 log_path=str(log_path),
+                                 tail=[f"job output could not be persisted: {exc}"])
     finally:
         try:
             log_fh.close()
@@ -109,7 +129,8 @@ def run_job(
 def tail_log(log_path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> list[str]:
     """Bounded TAIL read of a log, opened with O_NOFOLLOW so a swapped-in symlink leaf is
     refused (never followed). Reads at most the last `max_bytes`, returns the last
-    `lines` lines. Used for EXTERNAL logs (e.g. the daemon's /tmp log); runtime-owned logs
+    `lines` lines. Kept for manifest-declared `log_paths` reads (none in the shipped
+    manifest — LHPC reads no external logs); runtime-owned logs
     tail through `runtime_fs.tail` (containment-checked)."""
     try:
         fd = os.open(str(log_path), os.O_RDONLY | os.O_NOFOLLOW)

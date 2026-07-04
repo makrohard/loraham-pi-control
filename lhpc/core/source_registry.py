@@ -133,6 +133,18 @@ def read_record(paths: Paths, source_rel: str) -> RegistryRecord | None:
     return rec if state == "valid" else None
 
 
+def update_components(paths: Paths, source_rel: str, components) -> bool:
+    """Rewrite ONLY the record's live consumer membership (departure decrement / install
+    re-join). Refuses an empty membership — the caller removes the leaf+record instead.
+    Returns False when the record is absent/unsafe or the write fails."""
+    state, rec, _why = record_state(paths, source_rel)
+    if state != "valid" or not components:
+        return False
+    import dataclasses
+    return write_record(paths, dataclasses.replace(
+        rec, components=tuple(sorted(set(components)))))
+
+
 def remove_record(paths: Paths, source_rel: str) -> bool:
     """Remove the record for an uninstalled source (no-follow; missing is success)."""
     try:

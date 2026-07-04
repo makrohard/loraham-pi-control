@@ -63,6 +63,18 @@ class StatusProber:
         self._paths = paths
         self._profiles = profiles or {}
 
+    def _resolve_addr(self, address: str) -> str:
+        """A RELATIVE unix/path endpoint address is runtime-root-relative (contained by
+        construction); absolute addresses (the external daemon's own /tmp sockets) pass
+        through untouched — LHPC only connects to those as a client."""
+        from pathlib import Path as _P
+        if address and not _P(address).is_absolute():
+            try:
+                return str(self._paths.under(*_P(address).parts))
+            except Exception:                    # containment refusal -> probe "absent"
+                return address
+        return address
+
     # -- whole-snapshot ----------------------------------------------------
 
     def assess_stacks(self, stacks: tuple[Stack, ...]) -> Snapshot:
@@ -189,11 +201,12 @@ class StatusProber:
                 obs.owner_incomplete = owner_incomplete
                 obs.detail = detail
             elif spec.kind == "unix":
-                sock = probe_socket(self._system, spec.address)
+                sock = probe_socket(self._system, self._resolve_addr(spec.address))
                 obs.present = sock.is_socket
                 obs.detail = "socket present" if sock.is_socket else "absent"
                 if sock.is_socket and spec.readiness == "daemon-status":
-                    ds = probe_daemon_status(self._system, spec.address)
+                    ds = probe_daemon_status(self._system,
+                                             self._resolve_addr(spec.address))
                     if ds.reachable:
                         obs.detail = f"RADIO={ds.radio or '?'}"
                         if ds.tx_mode:
@@ -204,7 +217,7 @@ class StatusProber:
                         obs.present = False
                         obs.detail = ds.evidence.get("error", "status unreadable")
             elif spec.kind == "path":
-                present = self._system.fs.exists(spec.address)
+                present = self._system.fs.exists(self._resolve_addr(spec.address))
                 obs.present = present
                 obs.detail = "present" if present else "absent"
             observations.append(obs)

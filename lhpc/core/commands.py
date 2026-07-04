@@ -95,12 +95,26 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
     that file's first line (used for the MeshCom HMAC password) — no `$(cat)`.
 
     FAIL-CLOSED: a missing/unreadable/empty `@file:` secret raises CommandError
-    (which blocks the launch/build) — it never silently becomes an empty string."""
+    (which blocks the launch/build) — it never silently becomes an empty string.
+    `@file?:PATH` is the OPTIONAL form: an absent/empty file yields "" (matches the
+    legacy `$(cat … 2>/dev/null)` semantics for optional secrets like the MeshCom
+    HMAC); an UNREADABLE present file still fails closed."""
     env: dict[str, str] = {}
     for key, value in (env_items or ()):
         if not _ENV_NAME_RE.fullmatch(key):
             raise CommandError(f"invalid environment variable name: {key!r}")
         v = str(value)
+        if v.startswith("@file?:"):
+            path = _paths_subst(v[len("@file?:"):], runtime, source, band)
+            try:
+                lines = Path(path).read_text(encoding="utf-8").splitlines()
+                env[key] = lines[0].strip() if lines else ""
+            except FileNotFoundError:
+                env[key] = ""                    # optional secret: absent -> disabled
+            except OSError as exc:
+                raise CommandError(
+                    f"optional secret file for {key} is unreadable: {exc}")
+            continue
         if v.startswith("@file:"):
             path = _paths_subst(v[len("@file:"):], runtime, source, band)
             try:
@@ -298,6 +312,17 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 # metadata is a typed render failure — fail-closed, never a silent clamp.
                 d["repeat"] = _post_repeat(step.get("repeat", 1))
                 d["interval"] = _post_interval(step.get("interval", 0))
+                # ACKNOWLEDGEMENT-AWARE sending (live finding: 17 blind --setcall
+                # connects starved the MeshCom node's heap and killed its web UI):
+                #  * stop_on: read the reply after each send; a match STOPS the repeats
+                #    (one acknowledged send instead of the full blind window);
+                #  * probe/probe_stop_on: query first and SKIP every send when the
+                #    device already has the desired state (idempotent across restarts —
+                #    NVS-persisted settings never get re-pushed).
+                for fld in ("stop_on", "probe", "probe_stop_on"):
+                    if step.get(fld):
+                        d[fld] = _post_data(str(step[fld]), comp, params, op, runtime,
+                                            source, band)
             resolved.append(d)
         else:
             raise CommandError(f"unknown post-step kind {kind!r}")
@@ -383,20 +408,65 @@ for s in STEPS:
         elif k == "tcp_send":
             reps = s.get("repeat", 1)
             sent = 0
+            def _reply(conn, budget=3.0):
+                conn.settimeout(0.6)
+                buf = b""
+                end2 = time.time() + budget
+                while time.time() < end2 and len(buf) < 4096:
+                    try:
+                        chunk = conn.recv(1024)
+                    except socket.timeout:
+                        break
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    buf += chunk
+                return buf.decode("utf-8", "replace")
+            probing = bool(s.get("probe") and s.get("probe_stop_on"))
+            skipped = False
             for i in range(reps):
                 if not _main_ok():
                     sys.stderr.write("tcp_send %s:%s: bound main gone/replaced -> stop (no send)\\n"
                                      % (s["host"], s["port"]))
                     sys.exit(0)          # exit WITHOUT sending — never hit a restarted main
+                acked = False
                 try:
+                    if probing:
+                        # READINESS-GATED (live finding: 18 buffered callsign-push replays
+                        # per start): the guest accepts connects long before its console
+                        # is alive, and it serves ONE exchange per connection. Probe on
+                        # its OWN connection; NO REPLY = still booting -> retry WITHOUT
+                        # sending; a matching reply = already set -> ZERO sends, ever.
+                        with socket.create_connection((s["host"], s["port"]), 2) as pc:
+                            pc.sendall(s["probe"].encode())
+                            r = _reply(pc)
+                        if not r.strip():
+                            sys.stderr.write("tcp_send %s:%s: console not ready "
+                                             "(attempt %d/%d) -> no send\\n"
+                                             % (s["host"], s["port"], i + 1, reps))
+                            raise OSError("console deaf")
+                        if s["probe_stop_on"] in r:
+                            sys.stderr.write("tcp_send %s:%s: probe matched -> already "
+                                             "set, skipping\\n" % (s["host"], s["port"]))
+                            skipped = True
+                            break
                     with socket.create_connection((s["host"], s["port"]), 2) as c:
                         c.sendall(s["data"].encode())
+                        if s.get("stop_on"):
+                            acked = s["stop_on"] in _reply(c)
                     sent += 1                # one complete connect + sendall succeeded
                 except OSError as e:
                     sys.stderr.write("tcp_send %s:%s attempt %d/%d failed: %s\\n"
                                      % (s["host"], s["port"], i + 1, reps, e))
+                if acked:
+                    sys.stderr.write("tcp_send %s:%s: acknowledged on attempt %d\\n"
+                                     % (s["host"], s["port"], i + 1))
+                    break                # ACK received: no further blind repeats
                 if i + 1 < reps and s.get("interval", 0):
                     time.sleep(s["interval"])
+            if skipped:
+                continue                 # desired state already present
             # Truthful: a REQUIRED send fails only if EVERY attempt failed (one success is enough,
             # even if later idempotent repeats fail). An OPTIONAL send never gates the start.
             if sent == 0 and not s.get("optional", True):

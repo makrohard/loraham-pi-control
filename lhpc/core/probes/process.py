@@ -11,6 +11,7 @@ two arguments.
 from __future__ import annotations
 
 import posixpath
+import re
 from dataclasses import dataclass
 
 from ..model import ProcessSpec
@@ -28,12 +29,22 @@ def _token_contains(argv: list[str], pattern: str) -> bool:
     return any(pattern in token for token in argv)
 
 
+_PY_INTERP = re.compile(r"^python[0-9.]*$")
+
+
 def matches(spec: ProcessSpec, argv: list[str]) -> bool:
     if not argv:
         return False
     exec_basename = posixpath.basename(argv[0])
     if exec_basename != spec.exec_name:
-        return False
+        # CONSOLE-SCRIPT form: a pip entry point named `exec_name` executes as
+        # "<venv>/bin/pythonX.Y <venv>/bin/<exec_name> …" (the shebang interpreter
+        # becomes argv[0]). Accept it only when argv[0] IS a python interpreter and
+        # the SCRIPT token (argv[1]) has exactly the expected basename — still a
+        # structured identity match, never a substring guess.
+        if not (_PY_INTERP.match(exec_basename) and len(argv) >= 2
+                and posixpath.basename(argv[1]) == spec.exec_name):
+            return False
     if not all(_token_contains(argv, p) for p in spec.all_args):
         return False
     if spec.any_args and not any(_token_contains(argv, p) for p in spec.any_args):

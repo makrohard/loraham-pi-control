@@ -155,6 +155,12 @@ def _validate_endpoint(cid: str, e) -> None:
 
 def _validate_component(comp) -> None:
     cid = comp.id
+    if comp.source and (comp.source.strategy or "") == "link":
+        # CONTAINMENT: external link sources are not permitted — every source lives
+        # under the runtime root as a managed clone. (The link machinery stays in code
+        # so a LEGACY runtime symlink leaf is still recognized and refused safely.)
+        raise ManifestError(f'{cid}: strategy="link" (external link source) is not '
+                            "permitted — every source lives under the runtime root")
     runnable = bool(comp.run_argv)
     if comp.readiness and comp.readiness not in _READINESS:
         raise ManifestError(f"{cid}: unknown readiness {comp.readiness!r} "

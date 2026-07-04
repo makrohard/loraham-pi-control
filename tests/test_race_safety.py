@@ -43,7 +43,7 @@ def _comp():
 
 
 def _inst(tmp_path, comp):
-    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "local")}})
+    cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}})
     stacks = (Stack(id="s", name="s", main=comp.id, components=(comp,)),)
     return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
 
@@ -62,7 +62,7 @@ def _seam(monkeypatch, point: str, action):
 # --- update: substitution between identity proof and the archive rename ----------------------
 
 def test_update_refuses_substituted_dir_at_archive(tmp_path, monkeypatch):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"       # v1 active + recorded
@@ -84,7 +84,7 @@ def test_update_refuses_substituted_dir_at_archive(tmp_path, monkeypatch):
 
 
 def test_update_refuses_substituted_symlink_at_archive(tmp_path, monkeypatch):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -108,7 +108,7 @@ def test_update_refuses_substituted_symlink_at_archive(tmp_path, monkeypatch):
 def test_fresh_install_refuses_injected_empty_dir(tmp_path, monkeypatch):
     # plain rename(2) silently REPLACES an empty directory — the atomic NOREPLACE promotion
     # must refuse instead, leaving the injected directory exactly in place.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     dest = inst.paths.under("src", "app")
@@ -126,7 +126,7 @@ def test_fresh_install_refuses_injected_empty_dir(tmp_path, monkeypatch):
 
 
 def test_fresh_install_refuses_injected_symlink(tmp_path, monkeypatch):
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     dest = inst.paths.under("src", "app")
@@ -146,13 +146,13 @@ def test_fresh_install_refuses_injected_symlink(tmp_path, monkeypatch):
 
 def test_unchanged_update_and_install_still_succeed(tmp_path):
     # The protocols must not break legitimate operation: fresh install then a clean update.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     action = inst.adopt_source(comp, force=True, source="dev")
     assert action.status == "done", action.detail
     dest = inst.paths.under("src", "app")
@@ -260,7 +260,7 @@ def test_orphan_quarantine_evidence_blocks_and_is_retained(tmp_path):
 def test_unavailable_renameat2_refuses_before_any_mutation(tmp_path, monkeypatch):
     # Without the atomic no-clobber primitive, source lifecycle mutation refuses TYPED —
     # no journal, candidate, source, or registry change; and NO check-then-rename fallback.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     monkeypatch.setattr(source_fs, "_renameat2_fn", None)
@@ -281,7 +281,7 @@ def test_unavailable_renameat2_refuses_before_any_mutation(tmp_path, monkeypatch
 def test_injected_prev_at_archive_blocks_with_zero_mutation(tmp_path, monkeypatch):
     # A leaf injected at `.prev` between the preflight and the archive rename: the NOREPLACE
     # archive refuses — nothing renamed, injected leaf + active source untouched.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -304,7 +304,7 @@ def test_recovery_retains_occupied_dest_and_substituted_prev(tmp_path):
     # prior-archived crash state: an OCCUPIED destination (injected dir) is never deleted to
     # restore the prior; a SUBSTITUTED `.prev` (v4 ident mismatch) is never restored/removed.
     import json
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     src = inst.paths.under("src"); src.mkdir(parents=True)
@@ -346,7 +346,7 @@ def test_v4_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch
     # The candidate is swapped between the recovery pre-rename ident proof and the rename:
     # the POST-promotion re-proof detects it — no foreign promotion, no cleanup, retained.
     import json
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     src = inst.paths.under("src"); src.mkdir(parents=True)
@@ -386,13 +386,13 @@ def _substitute_dir(path):
 def test_substitution_at_prev_delete_is_retained(tmp_path, monkeypatch):
     # Normal activation: `.prev` swapped between its final proof point and deletion —
     # the ident-bound remove refuses; journal retained (recovery-required), prior safe.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     prev = inst.paths.under("src", ".app.prev")
     fired = _seam(monkeypatch, "pre-prev-delete", lambda _p: _substitute_dir(prev))
     action = inst.adopt_source(comp, force=True, source="dev")
@@ -422,7 +422,7 @@ def test_substitution_at_quarantine_delete_is_retained(tmp_path, monkeypatch):
 def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch):
     # The libc symbol exists but the PROBE on the actual filesystem fails: refusal before
     # any candidate/journal/source/registry mutation.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     real = source_fs._rename_noreplace_at
@@ -443,13 +443,13 @@ def test_probe_level_renameat2_unsupported_refuses(tmp_path, monkeypatch):
 def test_dirty_file_created_during_staging_blocks_archive(tmp_path, monkeypatch):
     # A non-ignored untracked file appears AFTER the initial dirty check (during staging):
     # the FINAL recheck before the archive preserves the source and refuses.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     fired = _seam(monkeypatch, "pre-archive",
                   lambda _p: (dest / "new-user-file.txt").write_text("late"))
@@ -490,14 +490,14 @@ def test_update_dirty_after_archive_restores_prior(tmp_path, monkeypatch):
     # dirty check, once it is already archived at `.prev`: the post-archive rescan through
     # the captured handle catches it — no promotion, prior restored no-clobber at its
     # original path, the new file survives, registry/journal state stays consistent.
-    head1 = _make_repo(tmp_path / "local" / "app")
+    head1 = _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
     rec_before = source_registry.read_record(inst.paths, "src/app")
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
 
@@ -520,13 +520,13 @@ def test_update_dirty_after_archive_restores_prior(tmp_path, monkeypatch):
 def test_update_dirty_after_archive_unprovable_restore_is_recovery(tmp_path, monkeypatch):
     # Same window, but the freed destination slot is REOCCUPIED before the restore: the
     # no-clobber restore cannot land — journal + `.prev` + injected leaf are all retained.
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
     dest = inst.paths.under("src", "app")
     prev = dest.with_name(".app.prev")
 
@@ -618,14 +618,14 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
 
 def _v2_update_env(tmp_path):
     """Installed v1, local advanced to v2 — ready for a force update."""
-    _make_repo(tmp_path / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
-    (tmp_path / "local" / "app" / "file.txt").write_text("v2\n")
-    _git(tmp_path / "local" / "app", "add", "-A")
-    _git(tmp_path / "local" / "app", "commit", "-qm", "v2")
-    v2_head = _git(tmp_path / "local" / "app", "rev-parse", "HEAD")
+    (tmp_path / "rt" / "local" / "app" / "file.txt").write_text("v2\n")
+    _git(tmp_path / "rt" / "local" / "app", "add", "-A")
+    _git(tmp_path / "rt" / "local" / "app", "commit", "-qm", "v2")
+    v2_head = _git(tmp_path / "rt" / "local" / "app", "rev-parse", "HEAD")
     return comp, inst, inst.paths.under("src", "app"), v2_head
 
 
@@ -675,7 +675,7 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
     # needed interruption point — record written, .prev still archived — is crafted):
     # dest = the NEW v2 tree, .prev = the archived v1 prior, journal v4 'activated'.
     shutil.move(str(dest), str(prev))                      # archive the v1 prior
-    shutil.copytree(str(tmp_path / "local" / "app"), str(dest), symlinks=True)
+    shutil.copytree(str(tmp_path / "rt" / "local" / "app"), str(dest), symlinks=True)
     rel = lambda q: str(q.relative_to(inst.paths.runtime_root))
     staging_rel = rel(dest.with_name(".app.candidate-1-2"))
 

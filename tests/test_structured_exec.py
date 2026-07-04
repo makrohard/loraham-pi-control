@@ -211,3 +211,129 @@ def test_build_launcher_pkgconfig_failure_exits_nonzero(tmp_path):
     f.write_text(script)
     rc = subprocess.run([sys.executable, str(f)], capture_output=True, text=True, timeout=20)
     assert rc.returncode != 0 and "pkg-config failed" in rc.stderr
+
+
+# --- readiness-gated, ack-aware tcp_send (MeshCom setcall live finding) -----------------------
+
+def _mk_comp_with_post(post):
+    from lhpc.core.model import Component, ComponentKind, RunParam
+    return Component(id="c", name="c", kind=ComponentKind.SERVICE,
+                     run_params=(RunParam(name="mc_callsign", kind="str",
+                                          validator="callsign", default="OE1ABC"),),
+                     post_steps=tuple(post))
+
+
+def _render(post, params=None):
+    from lhpc.core import commands
+
+    class _Op:
+        callsign = "OE1ABC"
+        locator = "JN88"
+    comp = _mk_comp_with_post(post)
+    return commands.render_post_launcher(list(post), comp, params or {}, _Op(),
+                                         "/rt", "/rt/src", "")
+
+
+def test_tcp_send_probe_fields_are_rendered_and_param_expanded():
+    code = _render([{"kind": "tcp_send", "port": 1, "data": "--setcall {param:mc_callsign}\n",
+                     "probe": "--info\n", "probe_stop_on": "Call:{param:mc_callsign}",
+                     "stop_on": "Call:{param:mc_callsign}"}])
+    assert "'probe': '--info\\n'" in code
+    assert "Call:OE1ABC" in code                                 # {param} expanded
+    compile(code, "<launcher>", "exec")                          # valid python
+
+
+def _serve(behavior):
+    """Tiny TCP server thread: behavior(list_of_received_payload_lines) -> reply per
+    connection based on a mutable state; returns (port, received, stop)."""
+    import socket, threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    port = srv.getsockname()[1]
+    received = []
+    stopped = {"v": False}
+    def loop():
+        srv.settimeout(0.3)
+        while not stopped["v"]:
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            with conn:
+                conn.settimeout(0.5)
+                try:
+                    data = conn.recv(4096).decode()
+                except OSError:
+                    data = ""
+                reply = behavior(received, data)
+                received.append(data)
+                if reply:
+                    try:
+                        conn.sendall(reply.encode())
+                    except OSError:
+                        pass
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    def stop():
+        stopped["v"] = True
+        srv.close()
+    return port, received, stop
+
+
+def _run_launcher(code):
+    import subprocess, sys
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          timeout=60)
+
+
+def test_deaf_console_gets_no_payload_then_one_acked_send():
+    # The console accepts connects but stays SILENT for the first 2 probes (booting):
+    # NO payload may be sent. Once it replies (without the desired state), exactly ONE
+    # payload lands and the ACK stops the repeats.
+    state = {"n": 0}
+    def behavior(received, data):
+        if data.startswith("--info"):
+            state["n"] += 1
+            if state["n"] <= 2:
+                return ""                                        # booting: deaf
+            return "Call:N0CALL Short:N0C set\n"                 # alive, wrong call
+        if data.startswith("--setcall"):
+            return "Call:OE1ABC Short:OE1 set\n"                 # ACK
+        return ""
+    port, received, stop = _serve(behavior)
+    try:
+        code = _render([{"kind": "tcp_send", "port": port,
+                         "data": "--setcall {param:mc_callsign}\n",
+                         "probe": "--info\n",
+                         "probe_stop_on": "Call:{param:mc_callsign}",
+                         "stop_on": "Call:{param:mc_callsign}",
+                         "repeat": 10, "interval": 0.1}])
+        r = _run_launcher(code)
+        payloads = [d for d in received if d.startswith("--setcall")]
+        assert len(payloads) == 1, received                      # exactly ONE send, ever
+        assert "console not ready" in r.stderr
+        assert "acknowledged on attempt" in r.stderr
+    finally:
+        stop()
+
+
+def test_probe_match_skips_all_sends():
+    # NVS-persisted setting already present: the probe matches -> ZERO payload sends.
+    def behavior(received, data):
+        if data.startswith("--info"):
+            return "Call:OE1ABC Short:OE1 set\n"                 # already ours
+        return "Call:OE1ABC Short:OE1 set\n"
+    port, received, stop = _serve(behavior)
+    try:
+        code = _render([{"kind": "tcp_send", "port": port,
+                         "data": "--setcall {param:mc_callsign}\n",
+                         "probe": "--info\n",
+                         "probe_stop_on": "Call:{param:mc_callsign}",
+                         "stop_on": "Call:{param:mc_callsign}",
+                         "repeat": 5, "interval": 0.1}])
+        r = _run_launcher(code)
+        assert not [d for d in received if d.startswith("--setcall")]
+        assert "probe matched" in r.stderr
+    finally:
+        stop()

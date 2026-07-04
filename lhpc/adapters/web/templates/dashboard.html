@@ -2,6 +2,19 @@
 {% from "_macros.html" import cmdbox %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+  {% if welcome and welcome.fresh %}
+  <div class="flash flash-ok">
+    <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
+    guided run:
+    <a href="{{ url_for('install_all_page') }}"><button type="button">Install and Build
+      all Stacks</button></a>
+  </div>
+  {% elif welcome and not welcome.fresh %}
+  <div class="flash flash-warn">
+    Nothing is installed, but the runtime state needs attention before a fresh install:
+    {{ welcome.recovery }}
+  </div>
+  {% endif %}
   {% if restart_required %}
     {# Durable restart-required flags: yellow, explicit — the action opens the normal
        controlled restart confirm (never restarts anything by itself). #}

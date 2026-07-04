@@ -7,6 +7,17 @@ the runtime root is `~/loraham-pi-control` by default and overridable via the
 
 This module only resolves paths; `bootstrap` creates the runtime root. When it is
 absent, source probes report components as not-installed rather than erroring.
+
+CONTAINMENT: LHPC never reads or writes outside the runtime root. Exactly two
+deliberate boundary crossings exist and are allowlisted:
+  1. the `~` expansion of the runtime-root setting itself (below) — it DEFINES the
+     root, so it is in-root by definition;
+  2. CLIENT connects to the external LoRaHAM daemon's own /tmp IPC sockets
+     (daemon_control/lifecycle) — the daemon creates and owns those; LHPC performs
+     no file operation there.
+Everything else — sources, builds, venvs, configs, secrets, logs, markers, the
+socat PTY — lives under the runtime root; a configured adopt_search_root must lie
+inside it or adoption is refused typed.
 """
 
 from __future__ import annotations

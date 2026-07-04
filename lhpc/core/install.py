@@ -33,6 +33,7 @@ from .probes.source import probe_source
 
 RUNTIME_SUBDIRS = (
     "bin", "src", "build", "start", "config", "profiles", "systemd", "state", "logs", "docs",
+    "config/secrets",
 )
 
 # Heavy, regenerable directories we skip when adopting a local checkout — and that never
@@ -350,6 +351,24 @@ class Installer:
             # source is never updated in place (skip). Any other symlink (dangling, unknown,
             # injected) is NOT an installable destination: refuse with zero mutation.
             if (spec.strategy or "") == "link":
+                # FROZEN BULK IDENTITY: even the leave-as-is skip must prove the linked
+                # tree is exactly at the frozen commit — a moved external checkout is a
+                # refusal, never a silent success under a frozen plan.
+                if pinned_expected is not None and pinned_expected[0]:
+                    head = self.system.runner.run(
+                        ["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
+                    if head.returncode != 0 or \
+                            head.stdout.strip() != pinned_expected[0]:
+                        action.status = "failed"
+                        action.detail = (
+                            "linked tree is not at the bulk-frozen commit "
+                            f"{pinned_expected[0][:9]} — refusing (frozen plan is "
+                            "authoritative; update the external checkout)")
+                        return action
+                    action.status, action.detail = "skipped", (
+                        "linked dev tree — left as-is (exact bulk-frozen commit "
+                        f"{pinned_expected[0][:9]} verified)")
+                    return action
                 action.status, action.detail = "skipped", "linked dev tree — left as-is"
                 return action
             action.status = "failed"
@@ -396,8 +415,19 @@ class Installer:
                                      + "\n".join(dirty.lines()))
                     return action
 
-            search = Path(self.config.get("install", "adopt_search_root", "~/src")).expanduser()
-            local = search / spec.adopt_dir
+            # CONTAINMENT: the local-adoption fallback is DISABLED unless configured,
+            # and a configured root must lie INSIDE the runtime root — LHPC never reads
+            # an outside-root tree. `local=None` means "no fallback exists at all".
+            raw_search = str(self.config.get("install", "adopt_search_root", "")).strip()
+            local = None
+            if raw_search:
+                search = Path(raw_search).expanduser()
+                if not self.paths.contains(search):
+                    action.status, action.detail = "failed", (
+                        f"adopt_search_root {raw_search!r} escapes the runtime root — "
+                        "refusing (LHPC never touches anything outside the root)")
+                    return action
+                local = search / spec.adopt_dir
             strategy = spec.strategy or self.config.get("install", "source_strategy", "adopt")
             # The INDEX + SOURCE-PATH locks are already held by adopt_source across candidate
             # creation, verification, activation, and cleanup.
@@ -432,7 +462,7 @@ class Installer:
         return "", "fallback: manifest pin — no known-working record"
 
     def _stage_and_activate(self, comp: Component, source: str, action: "PlanAction",
-                            dest: Path, spec, local: Path, strategy: str,
+                            dest: Path, spec, local: "Path | None", strategy: str,
                             had_prior: bool = False, prior=None,
                             pinned_expected: tuple = None) -> "PlanAction":
         """Create, verify, and atomically activate a candidate under ONE held source-parent
@@ -452,7 +482,11 @@ class Installer:
         # planned the whole install/update up front (`pinned_expected`) — a concurrent
         # operator confirmation cannot alter an already-planned operation — else resolved
         # here (single-component adoption).
-        if source == "pinned":
+        if pinned_expected is not None and pinned_expected[0]:
+            # FROZEN plan identity (bulk): one exact immutable commit resolved at plan
+            # time — used verbatim for EVERY selector; no second selector lookup here.
+            expected, kw_label = pinned_expected
+        elif source == "pinned":
             expected, kw_label = (pinned_expected if pinned_expected is not None
                                   else self._pinned_expected(comp))
         else:
@@ -618,13 +652,19 @@ class Installer:
         return "removed"
 
     def _stage_candidate(self, txn, comp, source: str, dest: Path, staging: Path, spec,
-                         local: Path, strategy: str, action, expected_pin: str = ""):
+                         local: "Path | None", strategy: str, action,
+                         expected_pin: str = ""):
         """Stage the candidate through the held transaction. Returns `(desc, handle)` — a
         description plus the `CandidateHandle` (a retained FD on the candidate dir; None for
         the link strategy, whose leaf is a symlink). On failure returns `(None, None)` with a
         typed failure recorded on `action`. Git/copy write ONLY through the candidate FD-pinned
         path (`handle.pinned_path()`), never the mutable candidate leaf name."""
         if strategy == "link":
+            if local is None:
+                action.status, action.detail = "failed", (
+                    "link strategy requires a configured IN-ROOT adopt_search_root — "
+                    "no local checkout configured")
+                return None, None
             if not local.is_dir():
                 action.status, action.detail = "failed", f"local checkout not found: {local}"
                 return None, None
@@ -666,7 +706,7 @@ class Installer:
                         f"({why}) — active source untouched")
             return f"{why} — active source untouched"
 
-        if local.is_dir():
+        if local is not None and local.is_dir():
             if not self._fallback_satisfies(spec, local, source, expected_pin):
                 self._cleanup_owned_staging(txn, handle, staging.name)   # drop empty candidate
                 action.status = "failed"
@@ -720,6 +760,12 @@ class Installer:
         A version-selected request whose selector is not configured can never be proven,
         so it is rejected rather than reported as a successful selected adoption."""
         run = self.system.runner.run
+        if expected_pin:
+            # FROZEN BULK IDENTITY: link/copy/local fallback may activate ONLY at exactly
+            # the frozen commit, for EVERY selector — branch/tag/artifact shortcuts never
+            # substitute. A non-Git tree has no verifiable identity: refuse.
+            head = run(["git", "-C", str(local), "rev-parse", "HEAD"], 5.0)
+            return head.returncode == 0 and head.stdout.strip() == expected_pin
         if spec.artifact:
             return True
         if source == "pinned":
@@ -817,9 +863,19 @@ class Installer:
             "resolved_commit": (head.stdout or "").strip() if head.returncode == 0 else "",
             "remote": self.config.remotes.get(comp.id) or spec.remote or "",
             "strategy": strategy if strategy == "link" else (spec.strategy or ""),
-            "components": list(self._path_consumers(spec.path)),
+            # LIVE membership merge: an updated shared checkout factually serves every
+            # DECLARED consumer again, PLUS whoever the existing record already lists —
+            # a departure (uninstall of one sharer) survives unrelated re-adopts only
+            # until the checkout is genuinely refreshed for everyone.
+            "components": sorted(set(self._path_consumers(spec.path))
+                                 | self._record_members(spec.path)),
             "link_target": "",           # set by the caller for link-strategy staging
         }
+
+    def _record_members(self, source_rel: str) -> set:
+        from . import source_registry
+        state, rec, _why = source_registry.record_state(self.paths, source_rel)
+        return set(rec.components) if state == "valid" else set()
 
     @staticmethod
     def _valid_meta(meta) -> bool:
@@ -1692,7 +1748,17 @@ class Installer:
         if not remote:
             return False
         ok = False
-        if spec.artifact:
+        if expected_pin:
+            # FROZEN exact identity (any selector): full clone + exact checkout + verify —
+            # the remote's CURRENT refs are irrelevant; no selector lookup happens here.
+            if run(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
+                    and dest.exists():
+                ok = run(["git", "-C", str(dest), "checkout", expected_pin],
+                         30.0).returncode == 0
+                if ok:
+                    head = run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
+                    ok = head.returncode == 0 and head.stdout.strip() == expected_pin
+        elif spec.artifact:
             # Declared artifact source: EVERY selector resolves to the same declared artifact
             # (the maintainer's default branch) — no pin/branch/tag semantics are invented.
             ok = (run(["git", "clone", "--depth", "1", remote, str(dest)],

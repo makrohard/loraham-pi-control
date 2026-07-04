@@ -166,7 +166,8 @@ def test_install_adopts_each_coherent_shared_group_once(tmp_path, monkeypatch):
                 "logs", "docs"):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
     calls = []
-    def fake_adopt(self, comp, force=False, source="pinned", pinned_expected=None):
+    def fake_adopt(self, comp, force=False, source="pinned", pinned_expected=None,
+                   locked=False):
         calls.append(comp.source.path)
         from lhpc.core.install import PlanAction
         return PlanAction("adopt", "", f"adopt {comp.id}", status="failed", detail="(fake)")

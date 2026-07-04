@@ -86,7 +86,7 @@ def test_generated_wrapper_cannot_escape_via_symlinked_start_dir(tmp_path):
                      source=SourceSpec(path="src/app"))
     inst = Installer(Paths(runtime_root=rt),
                      (Stack(id="s", name="s", main="s-app", components=(comp,)),),
-                     Config(values={"install": {"adopt_search_root": str(tmp_path)}}),
+                     Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")}}),
                      RealSystem())
     plan = inst.apply_bootstrap()
     # the wrapper action must FAIL (containment), and nothing is written outside.

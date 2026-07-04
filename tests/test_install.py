@@ -46,7 +46,7 @@ def _stack(component: Component) -> tuple[Stack, ...]:
 
 
 def test_bootstrap_creates_layout(tmp_path):
-    inst = _installer(tmp_path / "rt", (), tmp_path)
+    inst = _installer(tmp_path / "rt", (), tmp_path / "rt")
     inst.apply_bootstrap()
     rt = tmp_path / "rt"
     for sub in RUNTIME_SUBDIRS:
@@ -59,7 +59,7 @@ def test_bootstrap_creates_layout(tmp_path):
 
 def test_bootstrap_is_idempotent_and_preserves_local_config(tmp_path):
     rt = tmp_path / "rt"
-    inst = _installer(rt, (), tmp_path)
+    inst = _installer(rt, (), tmp_path / "rt")
     inst.apply_bootstrap()
     (rt / "config" / "local.toml").write_text("[operator]\ncallsign = \"KEEP\"\n")
     inst.apply_bootstrap()  # second run
@@ -71,7 +71,7 @@ def test_wrapper_is_a_python_launcher_no_shell(tmp_path):
     comp = Component(id="s-app", name="app", kind=ComponentKind.SERVICE,
                      run_argv=("python3", "app.py"), run_cwd="{source}", start_order=0,
                      source=SourceSpec(path="src/app"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path)
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt")
     inst.apply_bootstrap()
     wrapper = tmp_path / "rt" / "start" / "s-0-app-start"
     assert wrapper.exists() and os.access(wrapper, os.X_OK)
@@ -95,7 +95,7 @@ def test_wrapper_execs_with_exact_argv_cwd_env_and_forwarded_args(tmp_path):
                      run_argv=(sys.executable, "-c", script),
                      run_cwd="{runtime}/work", run_env=(("WHO", "lhpc"),),
                      start_order=0, source=SourceSpec(path="src/app"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path)
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt")
     inst.apply_bootstrap()
     wrapper = tmp_path / "rt" / "start" / "s-0-app-start"
     subprocess.run([sys.executable, str(wrapper), "--extra", "x y"], check=True, timeout=20)
@@ -106,11 +106,11 @@ def test_wrapper_execs_with_exact_argv_cwd_env_and_forwarded_args(tmp_path):
 
 
 def test_adopt_clean_repo_verifies_pin_match(tmp_path):
-    head = _make_repo(tmp_path / "local" / "myrepo")
+    head = _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/myrepo", pin_commit=head,
                                        local_dir="myrepo"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "local")
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
     action = inst.adopt_source(comp)
     assert action.status == "done" and "match" in action.detail
     assert (tmp_path / "rt" / "src" / "myrepo" / "file.txt").exists()
@@ -119,40 +119,40 @@ def test_adopt_clean_repo_verifies_pin_match(tmp_path):
 def test_adopt_missing_local_fails(tmp_path):
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/nope", local_dir="nope"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "local")
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
     action = inst.adopt_source(comp)
     assert action.status == "failed" and "no local checkout" in action.detail
 
 
 def test_adopt_refuses_overwrite_without_force(tmp_path):
-    _make_repo(tmp_path / "local" / "myrepo")
+    _make_repo(tmp_path / "rt" / "local" / "myrepo")
     dest = tmp_path / "rt" / "src" / "myrepo"
     dest.mkdir(parents=True)
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/myrepo", local_dir="myrepo"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "local")
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
     action = inst.adopt_source(comp)
     assert action.status == "skipped"
 
 
 def test_adopt_link_strategy_symlinks_in_place(tmp_path):
-    _make_repo(tmp_path / "local" / "myrepo")
+    _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/myrepo", local_dir="myrepo", strategy="link"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "local")
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
     # A linked external tree is an explicit MUTABLE dev checkout (it has no pin to satisfy
     # the production-safe 'pinned' default), so the operator selects 'dev' explicitly.
     action = inst.adopt_source(comp, source="dev")
     dest = tmp_path / "rt" / "src" / "myrepo"
     assert action.status == "done"
-    assert dest.is_symlink() and dest.resolve() == (tmp_path / "local" / "myrepo")
+    assert dest.is_symlink() and dest.resolve() == (tmp_path / "rt" / "local" / "myrepo")
 
 
 def test_plan_install_reports_present_and_absent(tmp_path):
-    head = _make_repo(tmp_path / "local" / "myrepo")
+    head = _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/myrepo", pin_commit=head, local_dir="myrepo"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "local")
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
     assert inst.plan_install().actions[0].kind == "adopt"   # absent -> adopt
     inst.adopt_source(comp)
     assert inst.plan_install().actions[0].kind == "verify"  # present -> verify
@@ -169,7 +169,7 @@ def test_wrapper_runtime_helper_runs_presteps_and_revalidates(tmp_path):
                      run_cwd="{runtime}",
                      pre_steps=({"kind": "mkdir", "path": "{runtime}/work"},),
                      start_order=0, source=SourceSpec(path="src/app"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path)
+    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt")
     inst.apply_bootstrap()
     wrapper = tmp_path / "rt" / "start" / "s-0-app-start"
     repo = str(Path(__file__).resolve().parents[1])

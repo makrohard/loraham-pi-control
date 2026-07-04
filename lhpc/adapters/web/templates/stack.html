@@ -2,7 +2,7 @@
 {% from "_macros.html" import action_btn, stack_actions, cmdbox %}
 {% block title %}{{ stack.id }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('dashboard') }}">&larr; dashboard</a></p>
+  <p><a href="{{ url_for('stacks_overview') }}">&larr; apps</a></p>
   <div class="card">
     <header><h2>{{ stack.name }} <span class="pill">{{ stack.id }}</span></h2></header>
     <p class="summary">{{ stack.summary }}</p>

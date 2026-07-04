@@ -155,7 +155,8 @@ def test_get_routes_make_no_network_calls(tmp_path):
     client = create_app(service_factory=factory).test_client()
     for path in ("/", "/stacks", "/stacks/daemon", "/self-update",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
-                 "/api/dash-signature", "/api/logs/loraham-daemon"):
+                 "/api/dash-signature", "/api/logs/loraham-daemon",
+                 "/install-all", "/api/install-all"):
         client.get(path)
     offenders = [c for c in calls if _is_network(c)]
     assert not offenders, f"GET routes ran network commands: {offenders}"
@@ -1479,3 +1480,194 @@ def test_confirm_working_post_refuses_drifted_tree(tmp_path):
     r = c.post("/stacks/chat/known-working/confirm", data={"_csrf": tok})
     assert r.status_code in (302, 303)                                    # flashed refusal
     assert known_working.load(Paths(runtime_root=tmp_path), "chat") == [] # nothing recorded
+
+
+# --- M2 final: live-finding fixes (meshcore blank config, daemon activity feed) ---------------
+
+def test_blank_file_params_clear_override_not_error(tmp_path):
+    # LIVE FINDING: submitting blank txpower/frequency for meshcore refused the whole
+    # save ("not an integer ('')"). Blank = clear-the-override for file AND run params
+    # of every kind; invalid non-blank values are still refused.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    r = svc.save_config_bundle("meshcore", values={"file_txpower": "",
+                                                   "file_frequency": ""})
+    assert r.ok, r.details
+    r2 = svc.save_config_bundle("meshcore", values={"file_txpower": "7",
+                                                    "file_frequency": "869618000"})
+    assert r2.ok
+    r3 = svc.save_config_bundle("meshcore", values={"file_txpower": "abc"})
+    assert not r3.ok and any("not an integer" in d for d in r3.details)
+    # a stored blank renders as the manifest DEFAULT, never an empty config line
+    vals = svc.save_config_bundle("meshcore", values={"file_txpower": ""})
+    assert vals.ok
+
+
+def test_daemon_feed_reads_per_band_process_log(tmp_path, monkeypatch):
+    # CONTAINMENT: the feed must never touch the legacy /tmp path — any tail_log call
+    # (external-log reader) is a failure.
+    from lhpc.core import jobs as jobs_mod
+    def boom(*a, **k):
+        raise AssertionError("daemon_feed touched an external log path")
+    monkeypatch.setattr(jobs_mod, "tail_log", boom)
+    # LIVE FINDING: RX/TX activity never showed after a TX — the feed tailed a
+    # nonexistent legacy /tmp file. It now reads the per-band captured process log.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    d = tmp_path / "logs"
+    d.mkdir(parents=True)
+    (d / "start-loraham-daemon-868.log").write_text(
+        "boot\n[TX868] one frame TXOK=1\nnoise\n[RX868] pkt\n")
+    feed = svc.daemon_feed("868")
+    assert feed == ["[TX868] one frame TXOK=1", "[RX868] pkt"]
+    assert svc.daemon_feed("433") == []                          # band-scoped
+    # symlinked log leaf: refused by the no-follow tail, feed stays empty
+    (d / "start-loraham-daemon-433.log").symlink_to("start-loraham-daemon-868.log")
+    assert svc.daemon_feed("433") == []
+
+
+def test_confirm_start_optional_component_checkboxes(tmp_path, monkeypatch):
+    # Confirm:start reintroduces the optional-component choice (KISS serial, MeshCom GPS
+    # relay) as a checkbox; a confirmed start persists it BAND-LESS (the stack-level
+    # autostart flag `_run_order` actually reads — live finding: the band-suffixed file
+    # never took effect) and the run order follows it.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.config import load_stack_config
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c, "/stacks/kiss")
+    body = c.post("/action", data={"_csrf": tok, "op": "start",
+                                   "target": "kiss"}).data.decode()
+    assert 'name="opt_start_loraham-kiss-serial"' in body
+    assert "Start KISS serial" in body
+    body2 = c.post("/action", data={"_csrf": tok, "op": "start",
+                                    "target": "meshcom"}).data.decode()
+    assert 'name="opt_start_meshcom-gps-relay"' in body2
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "kiss",
+                            "confirmed": "yes", "opt_start_loraham-kiss-serial": "on"})
+    assert load_stack_config(svc._paths, "kiss").get(
+        "autostart_loraham-kiss-serial") == "on"                 # BAND-LESS file
+    assert "loraham-kiss-serial" in [x.id for _, x in svc._run_order("kiss")]
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "kiss",
+                            "confirmed": "yes"})                 # unchecked -> cleared
+    assert "autostart_loraham-kiss-serial" not in load_stack_config(svc._paths, "kiss")
+    assert "loraham-kiss-serial" not in [x.id for _, x in svc._run_order("kiss")]
+
+
+def test_settings_page_rules_line_before_optional_component(tmp_path):
+    # /stacks/meshcom?cfg=1: the MeshCom GPS relay settings group is separated by a rule.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
+    assert groups["MeshCom GPS relay"]["rule_before"] is True
+    body = create_app(service_factory=lambda: svc).test_client() \
+        .get("/stacks/meshcom?cfg=1").data.decode()
+    i_gps = body.find("MeshCom GPS relay")
+    assert any(0 < i_gps - n < 600
+               for n in range(len(body))
+               if body.startswith('<tr class="cfgrule">', n))
+
+
+def test_meshcore_power_frequency_defaults_start_clean(tmp_path):
+    # LIVE FINDING: 'blank = preset' labels lied — a blank txpower/frequency failed START
+    # validation. The params now carry the preset's REAL defaults (14 dBm / 869525000 Hz)
+    # with Hz-correct integer validation; blanks save (clear) and starts plan cleanly.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    comp = next(c for s in svc.stacks() if s.id == "meshcore"
+                for c in s.components if c.id == "meshcore-pi")
+    params = {p.name: p for p in comp.config_file.params}
+    assert params["txpower"].default == "14"
+    assert params["frequency"].default == "869525000"
+    assert params["frequency"].kind == "int"                     # Hz-correct validation
+    assert svc.save_config_bundle("meshcore", values={"file_txpower": "",
+                                                      "file_frequency": ""}).ok
+    plan = svc.start("meshcore", apply=False)
+    assert "not an integer" not in plan.summary + " ".join(plan.details)
+    assert svc.save_config_bundle("meshcore",
+                                  values={"file_frequency": "869618000"}).ok
+    assert not svc.save_config_bundle("meshcore",
+                                      values={"file_frequency": "999"}).ok
+
+
+def test_dash_signature_flips_when_booting_clears(tmp_path, monkeypatch):
+    # LIVE FINDING: the dash shows 'booting' (yellow) while the post-start runner is
+    # applying settings, but the reload signature ignored that state — the page never
+    # flipped green when it cleared. The signature now includes booting components.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(system=FakeSystem(cmdlines_data={555: ["loraham_kiss_tnc"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "_component_booting",
+                        lambda self, cid: cid == "loraham-kiss-tnc")
+    sig_booting = svc.dash_signature()
+    monkeypatch.setattr(type(svc), "_component_booting", lambda self, cid: False)
+    sig_done = svc.dash_signature()
+    assert sig_booting != sig_done                               # reload triggers
+    assert "B:" in sig_booting
+
+
+def test_start_notes_flash_yellow_and_long(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "local.toml").write_text(
+        '[operator]\ncallsign = "OE1TST"\nlocator = "JN88"\n')
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "run_action",
+                        lambda self, op, target, apply=False, **k:
+                        ActionResult(True, "started", data={}))
+    monkeypatch.setattr(type(svc), "start_notes",
+                        lambda self, result: ["the firmware boots in ~1–2 min"])
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c, "/stacks/meshcom")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "meshcom",
+                                "confirmed": "yes"}, follow_redirects=True)
+    body = r.data.decode()
+    assert "flash-warn" in body and "transient-long" in body     # yellow + 30s class
+    assert "boots in ~1–2 min" in body
+    assert "another machine" not in body
+
+
+def test_dash_reload_not_vetoed_by_open_details():
+    # LIVE FINDING: the dashboard's daemon Monitor <details> is open BY DEFAULT, and
+    # dash.js vetoed the signature reload whenever ANY details was open — so a booting
+    # badge never turned green without a manual reload. The veto is gone; open/closed
+    # panel states are saved to sessionStorage and restored after the reload.
+    import pathlib
+    js = pathlib.Path("lhpc/adapters/web/static/dash.js").read_text()
+    assert 'querySelector("details[open]")' not in js            # veto removed
+    assert "dashDetails" in js and "sessionStorage" in js        # state preserved
+    assert "location.reload()" in js
+
+
+def test_dash_reload_not_vetoed_by_focused_button():
+    # LIVE FINDING: a clicked BUTTON retains focus, and the busy-guard treated it as
+    # "user is interacting" — vetoing the signature reload every tick (badges stale for
+    # 30s+ until focus moved). Only genuine text-entry elements defer the reload now.
+    import pathlib
+    js = pathlib.Path("lhpc/adapters/web/static/dash.js").read_text()
+    assert "BUTTON" not in js.split("busy = ")[1].split(";")[0]
+    assert "SELECT|INPUT|TEXTAREA" in js

@@ -15,7 +15,10 @@ port = 8770
 #   "clone" — git clone the component's remote and check out its pinned commit.
 source_strategy = "adopt"
 # Where "adopt" looks for existing local checkouts (operator-overridable).
-adopt_search_root = "~/src"
+# Local adoption fallback: DISABLED by default (containment — LHPC never reads
+# outside the runtime root). When set, the directory MUST lie inside the runtime
+# root or every adoption that would use it is refused typed.
+adopt_search_root = ""
 
 [operator]
 # Filled in only in the runtime-local config/local.toml (never here):

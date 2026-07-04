@@ -211,6 +211,41 @@ class RealCommandRunner:
                              stderr=err.decode("utf-8", "replace"), timed_out=timed_out,
                              termination=termination)
 
+    def run_streaming(self, argv: list[str], timeout: float, log_fh,
+                      cwd: str | None = None, env: dict | None = None) -> CommandResult:
+        """Like run(), but the child's stdout+stderr stream DIRECTLY into `log_fh`
+        (kernel-level fd redirect, interleaved) — the log grows LIVE while the command
+        runs instead of being written once at completion. stdout/stderr on the result
+        are empty; callers read the persisted log for tails."""
+        import os
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
+        except OSError as exc:
+            return CommandResult(returncode=126, stdout="", stderr=str(exc))
+        from .. import proctree
+        _leader_token = proctree.capture_session_token(proc.pid)
+        timed_out = False
+        termination = ""
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            termination = proctree.terminate_session(_leader_token, os.getpid()).value
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
+        return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
+                             termination=termination)
+
 
 class RealProcFs:
     def cmdlines(self) -> dict[int, list[str]]:

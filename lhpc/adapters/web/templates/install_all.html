@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Install all — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('stacks_overview') }}">&larr; back to Apps</a></p>
+
+  {% if needs_ack %}
+  <div class="flash flash-bad">
+    {% if st and st.unsafe %}
+      The bulk run state is unreadable or malformed ({{ st.reason }}).
+    {% elif st and st.state == 'interrupted' %}
+      The previous bulk run ended unexpectedly — incomplete. Its state and lease are
+      retained as evidence.
+    {% else %}
+      {{ recovery }}
+    {% endif %}
+    A new run is blocked until you acknowledge: LHPC verifies the old run is dead and no
+    source transaction is pending, then archives the state.
+    <form method="post" action="{{ url_for('install_all_ack') }}" class="inline">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      {% if orphan_risk %}
+        <label><input type="checkbox" name="confirm_orphan" value="yes">
+          I have inspected/terminated the listed process myself</label>
+      {% endif %}
+      <button class="warnbtn" type="submit">Acknowledge &amp; recover</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <header>
+      <h2>{% if mode == 'install' %}Install and Build all Stacks
+          {% elif mode == 'update' %}Update all Stacks
+          {% else %}Install and update all stacks{% endif %}</h2>
+      {% if st and not st.unsafe %}
+        <span class="badge badge-{{ 'running' if running else ('stopped' if st.state in ('completed','completed-with-failures') else 'failed') }}"
+              id="bulk-status">
+          {{ 'run in progress' if running else
+             ('run completed' if st.state == 'completed' else
+              ('completed with failures' if st.state == 'completed-with-failures' else
+               'ended unexpectedly — incomplete')) }}</span>
+      {% endif %}
+    </header>
+    <div class="body">
+      <p class="muted">Installs (or updates), builds and optionally tests every stack in
+        dependency order — one guided run. <strong>This can take several minutes.</strong>
+        The run continues if you leave this page.</p>
+      {% if gate %}<p class="flash flash-warn">{{ gate }}</p>{% endif %}
+      <form method="post" action="{{ url_for('install_all_start') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p><label>Version:
+          <select name="source">
+            {% for key, label in src_labels %}
+              <option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select></label></p>
+        <p><label><input type="checkbox" name="tests" value="yes" checked>
+          Run host tests (RX-safe) after building</label></p>
+        <p><label><input type="checkbox" name="tx" value="yes">
+          Allow the TX test</label><br>
+          <span class="muted">Starts the LoRaHAM daemon <strong>temporarily</strong>,
+          transmits ONE bounded test frame per configured band on the real radios —
+          into the antennas/dummy loads — then stops the daemon again. Requires host
+          tests and a configured callsign. You will confirm this on a second page.</span></p>
+        <p><button type="submit" {% if gate or running %}disabled{% endif %}>
+          {% if mode == 'install' %}Install and Build all Stacks
+          {% elif mode == 'update' %}Update all Stacks
+          {% else %}Install and update all stacks{% endif %}</button></p>
+      </form>
+    </div>
+  </div>
+
+  {% if spawn_failed %}
+  <div class="card">
+    <header><h2>Run could not start
+      <span class="badge badge-failed">refused</span></h2></header>
+    <div class="body">
+      <p class="muted">The spawned run ended before it could start — its output:</p>
+      <pre class="logbox">{{ spawn_failed }}</pre>
+    </div>
+  </div>
+  {% endif %}
+  {% if starting %}
+  <div class="card" id="bulk-run" data-run="" data-run-expect="{{ starting_run }}">
+    <header><h2>Run starting…
+      <span class="badge badge-running" id="bulk-status">launching</span></h2></header>
+    <div class="body"><p class="muted">The bulk run was spawned and is initializing —
+      the task table appears in a moment (this page updates automatically).</p>
+      <pre class="logbox logbox-tall" id="bulk-logbox"></pre></div>
+  </div>
+  {% endif %}
+  {# The run card is OPEN only while a run is live or needs acknowledgement; a finished
+     run is collapsed history — the page never opens onto an old task list/log. While a
+     NEW run is starting the old card is suppressed (it would also duplicate the
+     poller's #bulk-run anchor). #}
+  {% if st and not st.unsafe and not starting %}
+  {% set collapsed = (not running and not needs_ack
+                      and st.state in ('completed', 'completed-with-failures')) %}
+  {% if collapsed %}
+  <details class="card" id="bulk-run" data-run="{{ st.run_id }}">
+    <summary>Last run {{ st.run_id[:8] }} — {{ st.state }}, finished
+      {{ st.finished_at or '?' }} (historical result — expand to view)</summary>
+  {% else %}
+  <div class="card" id="bulk-run" data-run="{{ st.run_id }}">
+    <header>
+      <h2>Run {{ st.run_id[:8] }} <span class="pill">{{ st.mode }} / {{ st.source }}</span>
+        <span class="muted" style="font-size:.8rem">
+          started {{ st.started_at }}{% if st.finished_at %} · finished {{ st.finished_at }}
+          — historical result, not live state{% endif %}</span></h2>
+    </header>
+  {% endif %}
+    <div class="body">
+      <table class="tasklist" id="bulk-tasks">
+        <tr><th>Stack</th><th>Status</th><th>Tests</th><th>Detail</th></tr>
+        {% for r in st.stacks %}
+        <tr data-stack="{{ r.id }}">
+          <td>{{ r.name }}</td>
+          <td><span class="badge badge-{{ 'running' if r.status in ('downloading','building','testing')
+                 else ('ok' if r.status == 'success' else ('failed' if r.status == 'fail' else 'stopped')) }}">
+            {{ r.status }}{% if r.status in ('downloading','building','testing') %}&hellip;{% endif %}</span></td>
+          <td>{% if r.tests.ran %}{{ 'passed' if r.tests.ok else 'FAILED' }}{% else %}{{ r.tests.detail or '—' }}{% endif %}
+              {% if r.tx.ran %} / TX {{ 'passed' if r.tx.ok else 'FAILED' }}{% endif %}</td>
+          <td class="muted">{{ r.detail }}</td>
+        </tr>
+        {% endfor %}
+        {% if st.tx %}
+        <tr data-stack="__tx__"><td>TX test (daemon)</td>
+          <td><span class="badge">{{ st.tx_phase.status }}</span></td>
+          <td></td><td class="muted">{{ st.tx_phase.detail }}</td></tr>
+        {% endif %}
+      </table>
+      {% if st.error %}<p class="flash flash-warn">{{ st.error }}</p>{% endif %}
+      <pre class="logbox logbox-half" id="bulk-logbox">{{ log_seed }}</pre>
+      {% if not collapsed %}
+      <p class="muted" style="margin:.6rem 0 .2rem">Component build &amp; test logs
+        (live, in execution order)</p>
+      <pre class="logbox logbox-half" id="bulk-complog"></pre>
+      {% endif %}
+    </div>
+  {% if collapsed %}</details>{% else %}</div>{% endif %}
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+  {% if starting or (st and not st.unsafe and (running or st.state in ('preparing', 'running'))) %}
+  <script src="{{ url_for('static', filename='bulk.js') }}"></script>
+  {% endif %}
+{% endblock %}

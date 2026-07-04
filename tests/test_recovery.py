@@ -28,7 +28,7 @@ def _repo(path: Path) -> str:
 
 def _svc(tmp_path: Path):
     """A controller whose manifest has one component sourced from a temp repo."""
-    head = _repo(tmp_path / "local" / "comp")
+    head = _repo(tmp_path / "rt" / "local" / "comp")
     manifest = tmp_path / "m.toml"
     manifest.write_text(
         '[[stack]]\nid = "s"\nname = "s"\n'
@@ -39,7 +39,7 @@ def _svc(tmp_path: Path):
     rt = tmp_path / "rt"
     (rt / "config").mkdir(parents=True)
     (rt / "config" / "local.toml").write_text(
-        f'[install]\nadopt_search_root = "{tmp_path / "local"}"\n'
+        f'[install]\nadopt_search_root = "{tmp_path / "rt" / "local"}"\n'
     )
     from lhpc.core.paths import Paths
     return ControllerService(manifest_path=manifest, system=RealSystem(),

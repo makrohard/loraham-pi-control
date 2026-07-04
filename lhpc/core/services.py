@@ -11,8 +11,10 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
+import uuid
 import contextlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -186,22 +188,1192 @@ class ControllerService:
              the index lock — a handoff, so no journal can appear between the check and
              the lock and the source is already locked before the index is released;
           5. release the index lock and yield with the source locks held for the op.
-        Raises `reslock.ResourceBusy` if the index or a source lock is contended."""
+        Raises `reslock.ResourceBusy` if the index or a source lock is contended.
+
+                RE-ENTRANT per THREAD (shared `_held_counts` with the lifecycle guard): a source key
+        already held by an OUTER boundary in this thread — e.g. the bulk-operation lease —
+        is not re-flocked, the index/recovery step is skipped for fully-covered nests (the
+        outer boundary performed it and holds the locks, so no foreign journal can appear
+        for a covered path), and a nested exit never releases the outer flocks. Independent
+        threads/processes contend through `reslock` unchanged."""
         from . import reslock
         inst = self._installer()
         keys = sorted({reslock.source_lock_key(sp) for sp in source_paths})
-        with contextlib.ExitStack() as src_stack:
-            # Index held across recovery + the source-lock handoff, then released.
-            with reslock.operation_lock(self._paths, inst._index_key(), op, ""):
-                inst._recover_scan()
-                if inst._pending_journals():
-                    raise SourceTxnBlocked(
-                        "an unresolved source-transaction journal is present — "
-                        "resolve it before any source operation")
+        counts = self._held_counts()
+        missing = [k for k in keys if counts.get(k, 0) == 0]
+        bumped: list = []
+        try:
+            with contextlib.ExitStack() as src_stack:
+                if missing:
+                    # Index held across recovery + the source-lock handoff, then released.
+                    with reslock.operation_lock(self._paths, inst._index_key(), op, ""):
+                        inst._recover_scan()
+                        if inst._pending_journals():
+                            raise SourceTxnBlocked(
+                                "an unresolved source-transaction journal is present — "
+                                "resolve it before any source operation")
+                        for k in missing:
+                            self._acquire_key(src_stack, k, op, "")
+                # Index released; source lock(s) remain held by src_stack for the operation.
                 for k in keys:
-                    src_stack.enter_context(reslock.operation_lock(self._paths, k, op, ""))
-            # Index released; source lock(s) remain held by src_stack for the operation.
-            yield
+                    counts[k] = counts.get(k, 0) + 1
+                    bumped.append(k)
+                yield
+        finally:
+            for k in bumped:
+                counts[k] -= 1
+                if counts[k] <= 0:
+                    counts.pop(k, None)
+
+    # ---- bulk run: status, gates, log, ack, spawn, driver (M2.1) -----------
+
+    BULK_OP = "install-all"
+
+    def bulk_status(self) -> dict | None:
+        """Tri-state run state for GETs (file + /proc only, never mutates): None (absent),
+        {"unsafe": True, reason}, or the marker dict — with a preparing/running marker
+        whose identity-tracked job is provably GONE presented as `interrupted`."""
+        from . import bulk as bulk_mod
+        state, d = bulk_mod.read_marker(self._paths)
+        if state == "absent":
+            return None
+        if state == "unsafe":
+            return {"unsafe": True, "reason": d["reason"]}
+        if d["state"] in ("preparing", "running"):
+            job = bulk_mod.log_name_for(d["run_id"]) + ".log"
+            if not self.log_running("all", job=job):
+                d = dict(d, state="interrupted", derived_interrupted=True)
+        return d
+
+    def bulk_running(self) -> bool:
+        st = self.bulk_status()
+        return bool(st and not st.get("unsafe")
+                    and st.get("state") in ("preparing", "running"))
+
+    def _bulk_bootstrap_refusal(self) -> ActionResult:
+        return ActionResult(
+            ok=False,
+            summary="Runtime root is not bootstrapped yet.",
+            details=[f"Run 'lhpc bootstrap' to create {self._paths.runtime_root}."],
+            next_commands=["lhpc bootstrap"],
+        )
+
+    def _bulk_gate(self) -> str:
+        """Typed reason a NEW bulk run must not start; "" when clear. A DEAD lease, a
+        dead/foreign bulk-start reservation, and an interrupted/unsafe marker are all
+        MUTATION-BLOCKING until explicitly acknowledged."""
+        from . import bulk as bulk_mod, procident
+        rstate, res = bulk_mod.read_reservation(self._paths)
+        if rstate == "unsafe":
+            return ("the bulk-start reservation is unreadable or malformed — acknowledge "
+                    "(recover) it before starting a new run")
+        if rstate == "valid":
+            if res.get("phase") == "spawning":
+                # `spawning` is an IN-LOCK transition only: a persisted record is always
+                # recovery evidence, never a live web-server-owned run.
+                if res.get("child") == "none":
+                    return ("a previous bulk start did not complete (no child process "
+                            "remains) — acknowledge (recover) it before starting a "
+                            "new run")
+                return ("a previous bulk start may have spawned a child that was never "
+                        "confirmed (ORPHAN RISK"
+                        f"{', pid ' + str(res.get('pid')) if res.get('pid', 0) > 1 else ''}"
+                        ") — inspect/terminate any such process, then acknowledge "
+                        "(recover) with the confirmation")
+            if res.get("phase") == "orphan-risk":
+                return ("a previous bulk start left a child whose termination could not "
+                        f"be proven (ORPHAN RISK{', pid ' + str(res.get('pid')) if res.get('pid', 0) > 1 else ''}"
+                        f"): {res.get('reason', '')} — inspect/terminate the process, "
+                        "then acknowledge (recover) with the confirmation")
+            if procident.identity_matches(res.get("ident", {}), res.get("pid", -1)):
+                return "a bulk run is already reserved/in progress"
+            return ("a previous bulk start died holding its reservation — acknowledge "
+                    "(recover) it before starting a new run")
+        lstate, lease = bulk_mod.read_lease(self._paths)
+        if lstate == "unsafe":
+            return ("the bulk-operation lease is unreadable or malformed — acknowledge "
+                    "(recover) it before starting a new run")
+        if lstate == "valid":
+            if procident.identity_matches(lease.get("ident", {}), lease.get("pid", -1)):
+                return "a bulk run is already in progress (lease held)"
+            return ("a previous bulk run died while holding its operation lease — "
+                    "acknowledge (recover) it before starting a new run")
+        st = self.bulk_status()
+        if st is None:
+            return ""
+        if st.get("unsafe"):
+            return ("the bulk run state is unreadable or malformed — acknowledge "
+                    "(recover) it before starting a new run")
+        if st["state"] in ("preparing", "running"):
+            return "a bulk run is already in progress"
+        if st["state"] == "interrupted":
+            return ("the previous bulk run was interrupted — acknowledge (recover) it "
+                    "before starting a new run")
+        return ""
+
+    def _bulk_claim(self, run_id: str) -> str:
+        """Claim (or, for a manual CLI run, create) the bulk-start reservation for this
+        driver process under the dedicated bulk-start lock. Returns "" when the slot is
+        bound to us, else a typed refusal. Handles every reservation state fail-closed."""
+        from . import bulk as bulk_mod, procident, reslock
+        ident = procident.proc_identity(os.getpid()) or {}
+        if not procident.identity_complete(ident):
+            return "bulk run refused: process identity incomplete"
+        try:
+            with reslock.operation_lock(self._paths, "bulk-start", "install-all", ""):
+                rstate, res = bulk_mod.read_reservation(self._paths)
+                if rstate == "unsafe":
+                    return ("the bulk-start reservation is unreadable or malformed — "
+                            "acknowledge (recover) it before starting a new run")
+                if rstate == "valid":
+                    if res.get("run_id") != run_id:
+                        if procident.identity_matches(res.get("ident", {}),
+                                                      res.get("pid", -1)):
+                            return "a bulk run is already reserved/in progress"
+                        return ("a previous bulk start died holding its reservation — "
+                                "acknowledge (recover) it before starting a new run")
+                    # OUR run_id: the slot must be in phase `spawned` and bound to
+                    # EXACTLY THIS process — a foreign or stale reservation is never
+                    # overwritten by a claim.
+                    if res.get("phase") != "spawned":
+                        return ("the bulk-start reservation is not in the spawned phase "
+                                "— refusing to claim (stale or foreign slot)")
+                    if not (res.get("pid") == os.getpid()
+                            and procident.identity_matches(res.get("ident", {}),
+                                                           os.getpid())):
+                        return ("the bulk-start reservation is bound to a different "
+                                "process — refusing to claim a foreign slot")
+                    if not bulk_mod.bind_reservation(self._paths, run_id,
+                                                     os.getpid(), ident, "claimed"):
+                        return ("the bulk-start reservation could not be claimed — "
+                                "refusing to run unbound")
+                    return ""
+                # absent -> manual CLI start: gate, then create our own reservation
+                gate = self._bulk_gate()
+                if gate:
+                    return f"Refusing to start the bulk run: {gate}"
+                ok, why = bulk_mod.write_reservation(self._paths, run_id,
+                                                     os.getpid(), ident,
+                                                     phase="claimed")
+                return "" if ok else f"bulk run refused: {why}"
+        except reslock.ResourceBusy:
+            return "a bulk start is already in progress (start lock contended)"
+
+    def bulk_recovery_reason(self) -> str:
+        """SAFE-SIDE recovery signal for GET rendering: the typed reason acknowledgement
+        is required — derived from DEAD/UNSAFE reservation or lease evidence and from
+        unsafe/interrupted run markers, EVEN when the run marker is absent or terminal.
+        "" when nothing blocks. File + /proc reads only; never mutates."""
+        gate = self._bulk_gate()
+        if gate and "acknowledge" in gate:
+            return gate
+        return ""
+
+    def bulk_log_chunk(self, run_id: str, offset: int) -> dict:
+        """Byte-capped, cursor-based log read for the run view. The filename is derived
+        EXCLUSIVELY from the validated run_id (marker log fields are never opened);
+        offsets are bounded non-negative ints. File-only, no-follow, GET-safe."""
+        from . import bulk as bulk_mod
+        try:
+            name = bulk_mod.log_name_for(run_id) + ".log"
+        except ValueError:
+            return {"error": "invalid run id", "offset": 0, "data": ""}
+        if not isinstance(offset, int) or offset < 0 or offset > (1 << 40):
+            return {"error": "invalid offset", "offset": 0, "data": ""}
+        # DESCRIPTOR-SAFE open: the managed log parent is reached by the no-follow
+        # descriptor walk (a symlinked logs dir fails closed) and the leaf is opened
+        # O_NOFOLLOW relative to the held parent fd; only a REGULAR leaf is read.
+        import stat as stat_mod
+        path = self._paths.under("logs", name)
+        fd = -1
+        try:
+            with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
+                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
+        except FileNotFoundError:
+            return {"offset": 0, "data": "", "size": 0}
+        except (OSError, PathContainmentError) as exc:
+            return {"error": f"log unreadable ({exc})", "offset": 0, "data": ""}
+        try:
+            stt = os.fstat(fd)
+            if not stat_mod.S_ISREG(stt.st_mode):
+                return {"error": "log is not a regular file", "offset": 0, "data": ""}
+            size = stt.st_size
+            if offset > size:
+                offset = 0                       # truncated/new run: client restarts
+            os.lseek(fd, offset, os.SEEK_SET)
+            data = os.read(fd, 64 * 1024)        # byte cap per poll
+            return {"offset": offset + len(data),
+                    "data": data.decode("utf-8", "replace"), "size": size}
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def _bulk_component_log_list(self, st) -> list:
+        """Canonical ORDERED (title, filename) list of the run's per-component
+        build/test logs — marker stack order, then per stack: build logs (one per step
+        for multi-step components), then test logs. Only files that EXIST and were
+        written DURING this run (mtime >= started_at) are listed; execution creates
+        them in exactly this order, so the list only ever grows at its end and cursor
+        indexes stay stable across polls."""
+        import calendar
+        import stat as stat_mod
+        try:
+            start = calendar.timegm(time.strptime(st.get("started_at", ""),
+                                                  "%Y-%m-%dT%H:%M:%SZ")) - 2
+        except (ValueError, TypeError):
+            start = 0
+        stacks = {stk.id: stk for stk in self.stacks()}
+        out = []
+        for row in st.get("stacks", []):
+            stk = stacks.get(row.get("id"))
+            if stk is None:
+                continue
+            names = []
+            for c in stk.components:
+                if c.build_steps:
+                    n = len(c.build_steps)
+                    if n > 1:
+                        names += [(f"{c.name} — Build log (step {i + 1}/{n})",
+                                   f"build-{c.id}-{i}.log") for i in range(n)]
+                    else:
+                        names.append((f"{c.name} — Build log", f"build-{c.id}.log"))
+            for c in stk.components:
+                if c.test_argv:
+                    names.append((f"{c.name} — Test log", f"test-{c.id}.log"))
+            for title, fname in names:
+                try:
+                    stt = os.lstat(self._paths.under("logs", fname))
+                except OSError:
+                    continue
+                if stat_mod.S_ISREG(stt.st_mode) and stt.st_mtime >= start:
+                    out.append((title, fname))
+        return out
+
+    @staticmethod
+    def _bulk_log_frame(title: str, path: str) -> str:
+        """The optical separator between streamed logs: an ASCII frame naming the
+        component/log and its path."""
+        width = 74
+        def row(text: str) -> str:
+            return "| " + text[:width - 4].ljust(width - 4) + " |"
+        bar = "+" + "=" * (width - 2) + "+"
+        return f"\n{bar}\n{row(title)}\n{row(path)}\n{bar}\n"
+
+    def _read_named_log_chunk(self, fname: str, offset: int, cap: int) -> tuple:
+        """Descriptor-safe byte-capped read of logs/<fname> from offset: returns
+        (raw_byte_count, text, size); (-1, "", 0) when unreadable."""
+        import stat as stat_mod
+        path = self._paths.under("logs", fname)
+        fd = -1
+        try:
+            with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
+                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
+        except (OSError, PathContainmentError):
+            return (-1, "", 0)
+        try:
+            stt = os.fstat(fd)
+            if not stat_mod.S_ISREG(stt.st_mode):
+                return (-1, "", 0)
+            size = stt.st_size
+            if offset > size:
+                return (0, "", size)
+            os.lseek(fd, offset, os.SEEK_SET)
+            data = os.read(fd, cap)
+            return (len(data), data.decode("utf-8", "replace"), size)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def bulk_component_log_chunk(self, run_id: str, index: int, offset: int) -> dict:
+        """LIVE sequential stream over the run's per-component build/test logs for the
+        second run-view window: cursor = (index, byte offset) into the canonical list;
+        each log begins with its ASCII-framed title, and a DRAINED log advances to the
+        next existing file (execution is sequential, so a successor file existing
+        proves the predecessor is complete). Stateless, GET-safe, byte-capped."""
+        st = self.bulk_status()
+        if (not st or st.get("unsafe") or st.get("run_id") != run_id
+                or not isinstance(index, int) or index < 0 or index > 4096
+                or not isinstance(offset, int) or offset < 0 or offset > (1 << 40)):
+            return {"index": 0, "offset": 0, "data": ""}
+        logs = self._bulk_component_log_list(st)
+        parts = []
+        budget = 512 * 1024                      # keep up with verbose builds (PIO)
+        hops = 0
+        while index < len(logs) and budget > 0 and hops < 8:
+            hops += 1
+            title, fname = logs[index]
+            nbytes, text, size = self._read_named_log_chunk(fname, offset, budget)
+            if nbytes < 0:
+                break                            # transiently unreadable: retry later
+            if nbytes:
+                # The frame is emitted EXACTLY ONCE per file — together with its first
+                # bytes (never for a still-empty live tail, which would re-frame on
+                # every poll while waiting for output).
+                if offset == 0:
+                    parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
+                parts.append(text)
+                offset += nbytes
+                budget -= nbytes
+                continue                         # maybe more of THIS file next loop
+            if offset >= size and index < len(logs) - 1:
+                if offset == 0:
+                    # A COMPLETE empty file: frame it once while passing over it.
+                    parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
+                index += 1                       # drained and a successor exists
+                offset = 0
+                continue
+            break                                # live tail: wait for more bytes
+        return {"index": index, "offset": offset, "data": "".join(parts)}
+
+    def bulk_ack(self, confirm_orphan: bool = False) -> ActionResult:
+        """EXPLICIT recovery/acknowledgement of dead/unsafe bulk state, SERIALIZED with
+        launches: the dedicated bulk-start lock is held from the liveness re-validation
+        of reservation/lease/marker/job through the archival of every bulk runtime leaf
+        (LOCK ORDER: bulk-start -> source-txn index; no code path acquires them in the
+        reverse order). A start racing this either completed first — then the LIVE
+        reservation/lease makes this refuse — or waits on the lock and starts fresh
+        afterwards. A live run's evidence is NEVER archived."""
+        from . import bulk as bulk_mod, procident, reslock
+        inst = self._installer()
+        try:
+            with reslock.operation_lock(self._paths, "bulk-start", "bulk-ack", ""):
+                lstate, lease = bulk_mod.read_lease(self._paths)
+                if lstate == "valid" and procident.identity_matches(
+                        lease.get("ident", {}), lease.get("pid", -1)):
+                    return ActionResult(False, "Cannot acknowledge: the bulk run is "
+                                        "still alive.")
+                rstate, res = bulk_mod.read_reservation(self._paths)
+                needs_confirm = rstate == "valid" and (
+                    res.get("phase") == "orphan-risk"
+                    or (res.get("phase") == "spawning"
+                        and res.get("child") != "none"))
+                if needs_confirm and not confirm_orphan:
+                    return ActionResult(
+                        False, "Cannot acknowledge automatically: a spawned child's "
+                        "termination was never proven (ORPHAN RISK"
+                        + (f", pid {res.get('pid')}" if res.get("pid", 0) > 1 else "")
+                        + "). Inspect/terminate the process manually, then acknowledge "
+                        "WITH the explicit confirmation.")
+                if rstate == "valid" \
+                        and res.get("phase") not in ("orphan-risk", "spawning") \
+                        and procident.identity_matches(
+                        res.get("ident", {}), res.get("pid", -1)):
+                    return ActionResult(False, "Cannot acknowledge: the bulk start is "
+                                        "still alive (reservation held by a live "
+                                        "process).")
+                st = self.bulk_status()
+                if st and not st.get("unsafe") and st["state"] in ("preparing",
+                                                                   "running"):
+                    return ActionResult(False, "Cannot acknowledge: the bulk run is in "
+                                        "progress.")
+                with reslock.operation_lock(self._paths, inst._index_key(),
+                                            "bulk-ack", ""):
+                    inst._recover_scan()
+                    if inst._pending_journals():
+                        return ActionResult(False, "Cannot acknowledge: an unresolved "
+                                            "source transaction journal exists — "
+                                            "resolve it first (see lhpc status).")
+                    ok1, d1 = bulk_mod.archive(self._paths, bulk_mod.MARKER, "run")
+                    ok2, d2 = bulk_mod.archive(self._paths, bulk_mod.LEASE, "lease")
+                    ok3, d3 = bulk_mod.archive(self._paths, bulk_mod.RESERVATION,
+                                               "start")
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot acknowledge: {busy}")
+        ok = ok1 and ok2 and ok3
+        return ActionResult(ok, "Bulk run state acknowledged and archived." if ok else
+                            "Acknowledgement INCOMPLETE.",
+                            details=[f"  marker: {d1}", f"  lease: {d2}",
+                                     f"  reservation: {d3}"])
+
+    def spawn_bulk_job(self, source: str, tests: bool, tx: bool) -> tuple:
+        """Spawn the detached bulk driver (`python -u -m lhpc install-all …`) with an
+        identity-tracked job marker. Returns (log_name, error)."""
+        from . import bulk as bulk_mod
+        if source not in self.SOURCE_CHOICES:
+            return None, f"unknown source choice {source!r}"
+        if tx and not tests:
+            return None, "the TX test requires host tests to be enabled"
+        if tx and not getattr(self.config().operator, "callsign", ""):
+            return None, ("TX requested but no operator callsign is configured — set it "
+                          "in Settings before a transmitting run")
+        if not self._paths.runtime_root_exists:
+            return None, ("Runtime root is not bootstrapped yet. "
+                          "Run 'lhpc bootstrap' first.")
+        from . import procident, reslock
+        # ONE cross-process bulk-start critical section: gate -> reservation (no-clobber,
+        # run_id-bound) -> spawn -> job claim, all under the dedicated bulk-start lock. A
+        # second concurrent POST/CLI start is refused typed BEFORE it can spawn a child.
+        try:
+            with reslock.operation_lock(self._paths, "bulk-start", "install-all", ""):
+                gate = self._bulk_gate()
+                if gate:
+                    return None, gate
+                run_id = uuid.uuid4().hex
+                ident = procident.proc_identity(os.getpid()) or {}
+                if not procident.identity_complete(ident):
+                    return None, "bulk start refused: process identity incomplete"
+                ok, why = bulk_mod.write_reservation(self._paths, run_id,
+                                                     os.getpid(), ident,
+                                                     phase="spawning")
+                if not ok:
+                    return None, f"bulk start refused: {why}"
+                argv = [sys.executable, "-u", "-m", "lhpc", "install-all", "--yes",
+                        "--source", source, "--run-id", run_id]
+                if not tests:
+                    argv.append("--no-tests")
+                if tx:
+                    argv.append("--tx")
+                # EXCEPTION-SAFE SETTLEMENT: from here, EVERY outcome — including
+                # ordinary exceptions from spawn, identity capture, rebinding, tracking,
+                # orphan-risk persistence, or clearing — settles the slot into exactly
+                # one durable state before the lock releases: bound to the child,
+                # safely removed, or a recovery-required record. A residual `spawning`
+                # record is NEVER a live web-server-owned run.
+
+                def settle_gone(msg: str) -> str:
+                    """No child was created, or its cessation is identity-PROVEN."""
+                    if bulk_mod.clear_reservation(self._paths):
+                        return msg
+                    if bulk_mod.mark_reservation_child(self._paths, run_id,
+                                                       os.getpid(), ident, "none"):
+                        return (msg + " — the reservation could not be removed; "
+                                "acknowledge (recover) it before the next run")
+                    return (msg + " — the reservation could not be removed or marked; "
+                            "acknowledge (recover) with the confirmation")
+
+                def settle_unproven(pid0, cident, msg: str) -> str:
+                    """A child may exist and cessation is UNPROVEN: durable orphan-risk
+                    evidence (child identity where available); if even that cannot be
+                    persisted, the residual `spawning`+uncertain record itself is the
+                    mutation-blocking evidence."""
+                    if not bulk_mod.write_orphan_risk(
+                            self._paths, run_id, pid0 or 0,
+                            msg, cident):
+                        return (msg + " — ORPHAN RISK; the orphan-risk record could "
+                                "not be persisted either; the residual reservation "
+                                "blocks new runs; acknowledge (recover) with the "
+                                "confirmation")
+                    return (msg + " — ORPHAN RISK; new bulk runs stay blocked; "
+                            "inspect/terminate the process, then acknowledge "
+                            "(recover) with the confirmation")
+
+                pid = None
+                child_ident = None
+                try:
+                    if not bulk_mod.mark_reservation_child(self._paths, run_id,
+                                                           os.getpid(), ident,
+                                                           "uncertain"):
+                        # cannot durably record spawn INTENT -> do not spawn at all
+                        return None, settle_gone(
+                            "bulk start refused: spawn intent could not be recorded")
+                    life = self._lifecycle()
+                    ln, pid = life.spawn_job(bulk_mod.log_name_for(run_id), argv,
+                                             str(self._paths.runtime_root))
+                    if ln is None:
+                        pid = None
+                        return None, settle_gone("could not spawn the bulk run "
+                                                 "(see logs)")
+                    child_ident = procident.proc_identity(pid)
+                    bound = (bool(child_ident)
+                             and procident.identity_complete(child_ident)
+                             and bulk_mod.bind_reservation(self._paths, run_id, pid,
+                                                           child_ident, "spawned"))
+                    if bound:
+                        err = self._track_or_terminate(life, ln, pid, "all",
+                                                       self.BULK_OP)
+                        if not err:
+                            return ln, None
+                        if "ORPHAN RISK" in err:
+                            return None, settle_unproven(
+                                pid, child_ident,
+                                "job tracking failed and cessation is unproven")
+                        return None, settle_gone(err)
+                    # identity capture or bind failed: SIGTERM-ONLY containment via the
+                    # identity-verified primitive (never a signal to an unproven pid,
+                    # never SIGKILL); cessation is either PROVEN or truthfully not.
+                    if life._terminate_unobserved(pid, child_ident):
+                        return None, settle_gone(
+                            "spawned bulk run could not be identity-bound — SIGTERM "
+                            "sent and child exit PROVEN")
+                    return None, settle_unproven(
+                        pid, child_ident,
+                        "child identity could not be captured/bound after spawn and "
+                        f"cessation is unproven (pid {pid})")
+                except Exception as exc:            # noqa: BLE001 — settlement boundary
+                    if pid is None:
+                        return None, settle_gone(
+                            f"bulk start failed before any child existed ({exc})")
+                    proven = False
+                    try:
+                        proven = life._terminate_unobserved(pid, child_ident)
+                    except Exception:               # noqa: BLE001
+                        proven = False
+                    if proven:
+                        return None, settle_gone(
+                            f"bulk start failed ({exc}) — SIGTERM sent and child "
+                            "exit PROVEN")
+                    return None, settle_unproven(
+                        pid, child_ident,
+                        f"bulk start failed ({exc}) and child cessation is unproven "
+                        f"(pid {pid})")
+        except reslock.ResourceBusy:
+            return None, "a bulk start is already in progress"
+
+    def install_all(self, source: str = "pinned", tests: bool = True, tx: bool = False,
+                    run_id: str = "", apply: bool = False, emit=print) -> ActionResult:
+        """THE bulk driver ("Install and Build all Stacks"): one outer bulk boundary
+        (config-stable + all source locks + durable lease), one immutable global plan,
+        per-source-group reconciliation, dependency-aware continuation, durable run
+        marker at every transition (a write failure STOPS the run), disclosed TX phase.
+        stdout (`emit`) is the narrative log."""
+        from . import bulk as bulk_mod, reslock
+        if source not in self.SOURCE_CHOICES:
+            return ActionResult(False, f"Unknown source choice {source!r}.")
+        if tx and not tests:
+            return ActionResult(False, "Refusing: the TX test requires host tests to be "
+                                "enabled (--tx without --no-tests).")
+        if run_id and not bulk_mod.RUN_ID_RE.match(run_id):
+            return ActionResult(False, "Refusing: invalid --run-id (32 lowercase hex).")
+        scope = self._bulk_scope()
+        if not scope:
+            return ActionResult(False, "No stacks with managed sources in the manifest.")
+        if not apply:
+            details = [f"  [{self.bulk_mode()}] {st.id}: "
+                       f"{', '.join(c.id for c in comps)}" for st, comps in scope]
+            details.append(f"  host tests: {'on' if tests else 'off'}; "
+                           f"TX test: {'ON (real RF!)' if tx else 'off'}; "
+                           f"source: {source}")
+            if not self._paths.runtime_root_exists:
+                details.append("  NOTE: runtime root is not bootstrapped yet — apply "
+                               "requires 'lhpc bootstrap' first")
+            return ActionResult(True, f"Bulk install/update plan: {len(scope)} stack(s) "
+                                "in dependency order. This can take several minutes.",
+                                details=details, data={"changes": len(scope)},
+                                next_commands=["lhpc install-all --yes"])
+        if not self._paths.runtime_root_exists:
+            # BEFORE any reservation/lease/marker/source/log/job mutation.
+            return self._bulk_bootstrap_refusal()
+        run_id = run_id or uuid.uuid4().hex
+        claim_err = self._bulk_claim(run_id)
+        if claim_err:
+            return ActionResult(False, claim_err if claim_err.startswith("Refusing")
+                                else f"Refusing to start the bulk run: {claim_err}")
+        self._lock_state.bulk_cleanup_failed = ""
+        res = None
+        try:
+            if tx and not getattr(self.config().operator, "callsign", ""):
+                # EARLY, NON-MUTATING: no boundary, no running marker, no source action —
+                # only the short-lived launch reservation, released by the finally below.
+                res = ActionResult(False, "Refusing the TX-enabled bulk run: no operator "
+                                   "callsign is configured — set it in Settings first.")
+            else:
+                res = self._install_all_claimed(scope, source, tests, tx, run_id, emit)
+        finally:
+            # ONE converging cleanup path for EVERY claimed exit — pre-boundary refusals,
+            # plan conflicts, post-lock refusals, marker-write aborts, lock contention,
+            # and exceptions alike. A failed reservation/lease clear is never silent.
+            failed = getattr(self._lock_state, "bulk_cleanup_failed", "")
+            if not failed:
+                if not bulk_mod.clear_reservation(self._paths):
+                    failed = "bulk-start reservation"
+                    self._lock_state.bulk_cleanup_failed = failed
+        failed = getattr(self._lock_state, "bulk_cleanup_failed", "")
+        if failed:
+            detail = (f"bulk cleanup INCOMPLETE ({failed} could not be cleared) — "
+                      "the next run is blocked until you acknowledge (recover)")
+            # best-effort SAFE-SIDE marker downgrade; status stays safe-side via the
+            # lease/reservation evidence even if this final rewrite also fails.
+            mstate, m = bulk_mod.read_marker(self._paths)
+            if mstate == "valid" and m.get("state") in ("completed",
+                                                        "completed-with-failures"):
+                m["state"] = "completed-with-failures"
+                m["error"] = (m.get("error", "") + " " + detail).strip()
+                bulk_mod.write_marker(self._paths, m)
+            base = res.summary if res is not None else "Bulk run did not complete."
+            return ActionResult(False, f"{base} {detail}",
+                                details=list(res.details) if res is not None else [],
+                                next_commands=["lhpc status"])
+        return res
+
+    def _install_all_claimed(self, scope, source, tests, tx, run_id, emit) -> ActionResult:
+        from . import bulk as bulk_mod, reslock
+        # cheap pre-lock preflight (typed early refusal; authoritative recheck post-lock)
+        pre_running = self._bulk_running_components(scope)
+        if pre_running:
+            return self._bulk_running_refusal(pre_running)
+        stacks_ids = [st.id for st, _ in scope]
+        all_paths = sorted({c.source.path for _, comps in scope for c in comps})
+
+        class _Abort(Exception):
+            pass
+
+        marker = None
+
+        def bw() -> None:
+            if not bulk_mod.write_marker(self._paths, marker):
+                emit("FATAL: run marker could not be persisted — stopping (no work "
+                     "without durable progress evidence)")
+                raise _Abort()
+        try:
+            with self._bulk_boundary(run_id, stacks_ids, all_paths) as ctx:
+                # AUTHORITATIVE post-lock stopped recheck: zero mutation on refusal
+                # (no run marker either — nothing was started).
+                running = self._bulk_running_components(scope)
+                if running:
+                    return self._bulk_running_refusal(running)
+                # own job marker (manual CLI runs; web spawns already tracked this pid)
+                job = bulk_mod.log_name_for(run_id) + ".log"
+                if not self.log_running("all", job=job):
+                    if not self._write_job_marker(job, os.getpid(), "all", self.BULK_OP):
+                        return ActionResult(False, "Refusing: the bulk run could not be "
+                                            "identity-tracked (job marker not persisted).")
+                # ONE immutable global plan (frozen selectors/remotes) + reconciliation —
+                # conflicts refuse BEFORE any marker/candidate/source mutation.
+                items = [(st, c) for st, comps in scope for c in comps]
+                groups, conflicts = self._plan_source_groups(items, source, freeze=True)
+                if conflicts:
+                    return ActionResult(False, "Refusing the bulk run: incompatible "
+                                        "source resolutions for a shared checkout.",
+                                        details=[f"  {c}" for c in conflicts])
+                plan = {}                        # path -> (action, reason, comp, resolved)
+                for path, comp, resolved in groups:
+                    action, reason = self._reconcile_group(path, comp)
+                    plan[path] = (action, reason, comp, resolved)
+                # STRICT TX ADMISSION GATE (tx=True): validated after the boundary +
+                # immutable plan, BEFORE any candidate/install/update/build/test. The
+                # run itself proceeds; an inadmissible TX is refused HERE — durable,
+                # actionable, and terminal-truthful (completed-with-failures).
+                tx_refused = ""
+                if tx:
+                    dstack = next(((st, comps) for st, comps in scope
+                                   if st.id == "daemon"), None)
+                    if not getattr(self.config().operator, "callsign", ""):
+                        tx_refused = ("no operator callsign is configured — set it in "
+                                      "Settings")
+                    elif dstack is None:
+                        tx_refused = "the daemon stack is not part of this run"
+                    else:
+                        blocked = [f"{c.source.path}: {plan[c.source.path][1]}"
+                                   for c in dstack[1]
+                                   if plan[c.source.path][0] == "blocked"]
+                        if blocked:
+                            tx_refused = ("the daemon source group is blocked — "
+                                          + "; ".join(blocked))
+                        elif not any(c.build_steps for c in dstack[1]):
+                            tx_refused = "the daemon has no host build planned"
+                        elif not any(c.test_argv for c in dstack[1]):
+                            tx_refused = "the daemon has no host test planned"
+                mode = self.bulk_mode()
+                mode = {"mixed": "mixed"}.get(mode, mode)
+                rows = [{"id": st.id, "name": st.name,
+                         "op": "+".join(sorted({plan[c.source.path][0] for c in comps}))}
+                        for st, comps in scope]
+                marker = bulk_mod.new_marker(run_id, mode, source, tests, tx, rows)
+                if tx_refused:
+                    marker["tx_phase"] = {"status": "fail",
+                                          "detail": f"TX refused before source work: "
+                                                    f"{tx_refused}"}
+                    drow0 = next((r0 for r0 in marker["stacks"]
+                                  if r0["id"] == "daemon"), None)
+                    if drow0 is not None:
+                        drow0["tx"] = {"ran": False, "ok": False,
+                                       "detail": f"refused: {tx_refused}"}
+                    emit(f"==== TX REFUSED before source work: {tx_refused} ====")
+                bw()                             # 'preparing' BEFORE the first mutation
+                marker["state"] = "running"
+                bw()
+                row = {r["id"]: r for r in marker["stacks"]}
+                _, edges = self._bulk_scope_edges()
+                processed: dict = {}             # path -> (ok, detail)
+                failed_stacks: set = set()
+                mutated: list = []
+                inst = self._installer()
+                for st, comps in scope:
+                    r = row[st.id]
+                    bad_deps = sorted(edges.get(st.id, set()) & failed_stacks)
+                    if bad_deps:
+                        r["status"] = "blocked"
+                        r["detail"] = f"dependency failed: {', '.join(bad_deps)}"
+                        failed_stacks.add(st.id)
+                        emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
+                        bw()
+                        continue
+                    emit(f"==== {st.id}: sources ====")
+                    r["status"] = "downloading"
+                    bw()
+                    ok = True
+                    for c in comps:
+                        path = c.source.path
+                        if path not in processed:
+                            action, reason, comp, resolved = plan[path]
+                            if action == "blocked":
+                                processed[path] = (False, f"blocked: {reason}")
+                            else:
+                                a = self._adopt_dev_fallback(
+                                    inst, st, comp, source, resolved,
+                                    force=(action == "update"), locked=True)
+                                emit(f"  [{a.status}] {path}: {a.detail}")
+                                # every non-failed adopt outcome is OK: done (mutated),
+                                # exists (already healthy), skipped (benign no-op, e.g.
+                                # a linked dev tree left as-is) — only "failed" fails.
+                                processed[path] = (a.status != "failed",
+                                                   f"{action}: {a.detail}")
+                                if a.status == "done" and action == "update":
+                                    mutated.append(path)
+                        p_ok, p_detail = processed[path]
+                        if not p_ok:
+                            ok = False
+                            r["detail"] = p_detail
+                    if not ok:
+                        r["status"] = ("blocked"
+                                       if r["detail"].startswith("blocked:") else "fail")
+                        failed_stacks.add(st.id)
+                        bw()
+                        continue
+                    missing = self.missing_system_deps(st.id)
+                    if missing:
+                        cmds = "; ".join(sorted({m.get("install", "") for m in missing
+                                                 if m.get("install")}))
+                        r["status"] = "blocked"
+                        r["detail"] = f"missing system deps — run: {cmds or 'see doctor'}"
+                        failed_stacks.add(st.id)
+                        emit(f"  [blocked] {st.id}: {r['detail']}")
+                        bw()
+                        continue
+                    # LINKED external trees: adoption may be a truthful no-op, but a
+                    # linked stack with DECLARED build/test work that bulk intentionally
+                    # refuses to execute is NOT a success — the row is blocked and the
+                    # run cannot end fully `completed`.
+                    linked_with_work = [c.id for c in comps
+                                        if (c.source.strategy or "") == "link"
+                                        and (c.build_steps or c.test_argv)]
+                    if linked_with_work:
+                        r["status"] = "blocked"
+                        r["detail"] = ("sources linked ✓ — linked external tree: "
+                                       "build/test must be performed in that checkout "
+                                       f"({', '.join(linked_with_work)}); deliberate "
+                                       "skip, LHPC never writes into your dev trees")
+                        r["tests"] = {"ran": False, "ok": None,
+                                      "detail": "skipped (linked source)"}
+                        failed_stacks.add(st.id)
+                        emit(f"  [blocked] {st.id}: {r['detail']}")
+                        bw()
+                        continue
+                    linked = [c.id for c in comps
+                              if (c.source.strategy or "") == "link"]
+                    buildable = [c for c in comps if c.build_steps
+                                 and (c.source.strategy or "") != "link"]
+                    if buildable:
+                        emit(f"==== {st.id}: build ====")
+                        r["status"] = "building"
+                        bw()
+                        b = self.build(st.id, apply=True, bulk_ctx=ctx)
+                        for line in b.details:
+                            emit(line)
+                        if not b.ok:
+                            r["status"], r["detail"] = "fail", b.summary
+                            failed_stacks.add(st.id)
+                            bw()
+                            continue
+                    elif linked:
+                        r["detail"] = ("linked external tree — LHPC never builds/tests "
+                                       "into it (build it in that checkout)")
+                    testable = [c for c in comps if c.test_argv
+                                and (c.source.strategy or "") != "link"]
+                    if tests and testable:
+                        emit(f"==== {st.id}: host tests ====")
+                        r["status"] = "testing"
+                        bw()
+                        t = self.test(st.id, tx=False, apply=True, bulk_ctx=ctx)
+                        for line in t.details:
+                            emit(line)
+                        r["tests"] = {"ran": True, "ok": bool(t.ok),
+                                      "detail": "passed" if t.ok else "FAILED"}
+                        if not t.ok:
+                            r["status"], r["detail"] = "fail", t.summary
+                            failed_stacks.add(st.id)
+                            bw()
+                            continue
+                    else:
+                        r["tests"] = {"ran": False, "ok": None,
+                                      "detail": ("skipped (tests disabled)" if not tests
+                                                 else "skipped (no host tests)")}
+                    r["status"] = "success"
+                    bw()
+                # candidate retirement for updated groups BEFORE the boundary releases
+                extra: list = []
+                if not self._retire_candidates_for_paths(mutated, extra):
+                    for line in extra:
+                        emit(line)
+                    marker["error"] = "candidate-marker cleanup incomplete"
+                # DISCLOSED TX phase (the only start this run performs) — ELIGIBLE
+                # only when not already refused at admission, the daemon row is
+                # `success`, its required host test PASSED, and required cleanup is
+                # complete. Otherwise: no daemon start, no transmission — a truthful
+                # refusal with an actionable detail.
+                if tx and marker["tx_phase"]["status"] == "pending":
+                    drow = next((r0 for r0 in marker["stacks"]
+                                 if r0["id"] == "daemon"), None)
+                    reason = ""
+                    if drow is None or drow["status"] != "success":
+                        reason = ("the daemon stack did not complete successfully "
+                                  f"({(drow or {}).get('status', 'missing')}: "
+                                  f"{(drow or {}).get('detail', '')})".strip())
+                    elif not (drow["tests"].get("ran") and drow["tests"].get("ok")):
+                        reason = ("the daemon host test did not pass "
+                                  f"({drow['tests'].get('detail', 'not run')})")
+                    elif marker["error"]:
+                        reason = f"required cleanup incomplete ({marker['error']})"
+                    if reason:
+                        marker["tx_phase"] = {"status": "fail",
+                                              "detail": "TX refused (no daemon start, "
+                                                        f"no transmission): {reason}"}
+                        if drow is not None:
+                            drow["tx"] = {"ran": False, "ok": False,
+                                          "detail": f"refused: {reason}"}
+                            # the row is NEVER `success` while requested TX was refused;
+                            # host build/test evidence stays intact in the tests field.
+                            if drow["status"] == "success":
+                                drow["status"] = "fail"
+                                drow["detail"] = f"requested TX was refused: {reason}"
+                        emit(f"==== TX REFUSED: {reason} ====")
+                        bw()
+                    else:
+                        self._bulk_tx_phase(marker, ctx, emit, bw)
+                elif tx and marker["tx_phase"]["status"] == "fail":
+                    # TX was refused at ADMISSION (before source work): if the daemon
+                    # nevertheless completed its host work successfully, the row must
+                    # still not read `success` — flip it with the actionable detail,
+                    # preserving the separate host-test evidence.
+                    drow = next((r0 for r0 in marker["stacks"]
+                                 if r0["id"] == "daemon"), None)
+                    if drow is not None and drow["status"] == "success":
+                        drow["status"] = "fail"
+                        drow["detail"] = ("requested TX was refused: "
+                                          + marker["tx_phase"].get("detail", ""))
+                        bw()
+                # TRUTHFUL terminal state: `completed` ONLY when every row is success,
+                # TX is skipped/successful, and required cleanup is complete. Blocked
+                # rows are NOT success — the run did not do everything it was asked to.
+                any_bad = (any(r2["status"] != "success" for r2 in marker["stacks"])
+                           or marker["tx_phase"]["status"] == "fail"
+                           or bool(marker["error"]))
+                marker["state"] = ("completed-with-failures" if any_bad
+                                   else "completed")
+                marker["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                      time.gmtime())
+                bw()
+        except _Abort:
+            return ActionResult(False, "Bulk run ABORTED: durable progress evidence "
+                                "could not be persisted.")
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Bulk run refused: {blocked}")
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Bulk run refused: {busy}")
+        cleanup_failed = getattr(self._lock_state, "bulk_cleanup_failed", "")
+        if cleanup_failed:
+            # A retained lease/reservation blocks the NEXT run until acknowledged: the
+            # result must be a durable INCOMPLETE, never a silent success.
+            marker["state"] = "completed-with-failures"
+            marker["error"] = (marker.get("error", "") +
+                               f" boundary cleanup failed ({cleanup_failed}) — "
+                               "acknowledge before the next run").strip()
+            bulk_mod.write_marker(self._paths, marker)
+        ok = marker["state"] == "completed"
+        done = sum(1 for r2 in marker["stacks"] if r2["status"] == "success")
+        blocked_n = sum(1 for r2 in marker["stacks"] if r2["status"] == "blocked")
+        failed_n = sum(1 for r2 in marker["stacks"] if r2["status"] == "fail")
+        summary = (f"Bulk run {marker['state']}: {done}/{len(marker['stacks'])} stack(s) "
+                   f"successful, {blocked_n} blocked, {failed_n} failed."
+                   + ("" if ok else " Successful stacks REMAIN installed and built."))
+        if marker.get("error"):
+            summary += f" ({marker['error']})"
+        emit(f"==== {summary} ====")
+        return ActionResult(ok, summary,
+                            details=[f"  [{r2['status']}] {r2['id']}: {r2['detail']}"
+                                     for r2 in marker["stacks"]],
+                            next_commands=["lhpc status --versions"])
+
+    def _bulk_running_components(self, scope) -> list:
+        snap = self.build_snapshot()
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        ids = {c.id for st, _ in scope for c in st.components}
+        return sorted(cid for ss in snap.stacks for cid, cst in ss.components.items()
+                      if cid in ids and cst.run_state in up)
+
+    def _bulk_running_refusal(self, running) -> ActionResult:
+        owners = sorted({self._owner_stack_id(cid) for cid in running})
+        return ActionResult(
+            False, "Refusing to start the bulk run: component(s) are running — this run "
+            "never stops anything itself.",
+            details=[f"  running: {', '.join(running)}"],
+            next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+
+    def _bulk_scope_edges(self) -> tuple:
+        """(ordered stack ids, {stack -> set(dependency stacks)}) from the manifest graph."""
+        stacks = [st for st in self.stacks() if any(c.source for c in st.components)]
+        by_comp = {c.id: st.id for st in self.stacks() for c in st.components}
+        edges = {st.id: set() for st in stacks}
+        for st in stacks:
+            for c in st.components:
+                for dep in tuple(c.depends_on or ()) + tuple(c.build_requires or ()):
+                    owner = by_comp.get(dep)
+                    if owner and owner != st.id and owner in edges:
+                        edges[st.id].add(owner)
+        return [st.id for st in stacks], edges
+
+    def _bulk_tx_phase(self, marker, ctx, emit, bw) -> None:
+        """Disclosed temporary daemon start -> ONE bounded TX test -> guaranteed stop
+        attempt. EVERY failure path — missing callsign, start failure, TX-test failure,
+        or a failed final stop — marks the DAEMON ROW fail with a precise actionable
+        detail AND the tx outcome, and persists the state while marker persistence is
+        available. No task list may show the daemon successful with a failed TX phase."""
+        daemon_row = next((r for r in marker["stacks"] if r["id"] == "daemon"), None)
+
+        def fail_tx(detail: str, ran: bool) -> None:
+            marker["tx_phase"] = {"status": "fail", "detail": detail}
+            if daemon_row is not None:
+                daemon_row["tx"] = {"ran": ran, "ok": False, "detail": detail}
+                daemon_row["status"] = "fail"
+                daemon_row["detail"] = f"TX phase failed: {detail}"
+            bw()                                 # persisted before return when available
+
+        op = self.config().operator
+        if not getattr(op, "callsign", ""):
+            fail_tx("operator callsign not configured — set it in Settings; refusing to "
+                    "transmit unidentified", ran=False)
+            return
+        emit("==== TX phase: starting the daemon TEMPORARILY (disclosed; real RF) ====")
+        marker["tx_phase"] = {"status": "running", "detail": ""}
+        bw()
+        started = False
+        stop_failed = ""
+        try:
+            rs = self.start("daemon", apply=True, bulk_ctx=ctx)
+            emit(rs.summary)
+            if not rs.ok:
+                fail_tx(f"temporary daemon start failed: {rs.summary}", ran=False)
+                return
+            started = True
+            rt = self.test("daemon", tx=True, apply=True, bulk_ctx=ctx)
+            for line in rt.details:
+                emit(line)
+            if not rt.ok:
+                fail_tx(f"TX test failed: {rt.summary}", ran=True)
+                return
+            marker["tx_phase"] = {"status": "success", "detail": rt.summary}
+            if daemon_row is not None:
+                daemon_row["tx"] = {"ran": True, "ok": True, "detail": "passed"}
+        finally:
+            if started:
+                rstop = self.stop("daemon", apply=True, bulk_ctx=ctx)
+                emit(rstop.summary)
+                if not rstop.ok:
+                    prior = marker["tx_phase"].get("detail", "")
+                    fail_tx((prior + " — " if prior and
+                             marker["tx_phase"]["status"] == "fail" else "") +
+                            "final daemon stop FAILED — the daemon may still be "
+                            "RUNNING; stop it: lhpc stack stop daemon --yes", ran=True)
+                    stop_failed = "stop"
+            if not stop_failed:
+                bw()
+
+    # ---- bulk reconciliation + global plan (M2.0b) -------------------------
+
+    def _reconcile_group(self, path: str, comp) -> tuple:
+        """Per-SOURCE-GROUP action decision (never `is_installed(stack)` guessing):
+        absent leaf -> install; registered + identity-valid -> update; anything partial,
+        unowned, unsafe, dirty, or otherwise unprovable -> ("blocked", typed reason).
+        Driver-side (may run git identity checks under the held boundary)."""
+        from . import source_fs, source_registry
+        try:
+            dest = self._paths.resolve_source(path)
+            kind = source_fs.leaf_kind(self._paths, dest)
+        except PathContainmentError as exc:
+            return "blocked", f"unsafe source path ({exc})"
+        rec_state, rec, rec_why = source_registry.record_state(self._paths, path)
+        if rec_state == "unsafe":
+            return "blocked", f"unsafe ownership record — {rec_why}"
+        if kind == "absent":
+            if rec_state == "valid":
+                return "blocked", ("ownership record exists but the source is absent — "
+                                   "run uninstall to clear the orphaned record")
+            return "install", ""
+        if kind in ("file", "special"):
+            return "blocked", f"unexpected {kind} leaf at the managed source path"
+        if rec_state != "valid":
+            return "blocked", ("present but UNOWNED (no ownership record) — LHPC never "
+                               "overwrites an unmanaged tree; move it away or Clean")
+        vrec, why = source_registry.verify_identity(
+            self._paths, self._system, self.config(), comp, dest,
+            components=tuple(sorted(self._source_consumers().get(path, {comp.id}))))
+        if vrec is None:
+            return "blocked", f"identity not provable — {why}"
+        if kind == "dir":
+            inst = self._installer()
+            dirty = inst.dirty_report(dest, path)
+            if dirty:
+                return "blocked", ("local changes present — commit/stash or Clean before "
+                                   "a bulk update touches this checkout")
+        return "update", ""
+
+    def bulk_mode(self) -> str:
+        """FILE-ONLY page-mode aggregate for GET routes: 'install' (nothing present),
+        'update' (all present), or 'mixed'. Uses leaf existence only — the authoritative
+        per-group reconciliation runs in the driver under the held boundary."""
+        from . import source_fs
+        actions = set()
+        for st in self.stacks():
+            for c in st.components:
+                if c.source is None or c.optional:
+                    continue
+                try:
+                    kind = source_fs.leaf_kind(self._paths,
+                                               self._paths.resolve_source(c.source.path))
+                except PathContainmentError:
+                    kind = "special"
+                actions.add("install" if kind == "absent" else "update")
+        if actions == {"install"} or not actions:
+            return "install"
+        if actions == {"update"}:
+            return "update"
+        return "mixed"
+
+    def bulk_welcome(self) -> dict | None:
+        """First-start banner decision, FILE-ONLY and tri-state: {"fresh": True} only when
+        NO managed installed state exists AND everything is safely readable; an unsafe
+        registry record, unresolved source transaction, or unowned present source returns
+        {"fresh": False, "recovery": reason} — recovery guidance, never a misleading
+        fresh-install welcome. None -> installed state exists (no banner)."""
+        from . import source_fs, source_registry
+        txn_dir = self._paths.under("state", "source-txn")
+        try:
+            names = [n for n, _ in runtime_fs.scandir_nofollow(self._paths, txn_dir)]
+            if any(n.endswith(".json") for n in names):
+                return {"fresh": False, "recovery":
+                        "an unresolved source transaction exists — see lhpc status"}
+        except FileNotFoundError:
+            pass
+        except (OSError, PathContainmentError):
+            return {"fresh": False, "recovery": "runtime state is not safely readable"}
+        for st in self.stacks():
+            for c in st.components:
+                if c.source is None:
+                    continue
+                try:
+                    kind = source_fs.leaf_kind(self._paths,
+                                               self._paths.resolve_source(c.source.path))
+                except PathContainmentError:
+                    return {"fresh": False, "recovery":
+                            f"unsafe source path for {c.id} — inspect the runtime root"}
+                state, rec, why = source_registry.record_state(self._paths, c.source.path)
+                if state == "unsafe":
+                    return {"fresh": False, "recovery":
+                            f"unsafe ownership record for {c.source.path} — {why}"}
+                if kind != "absent":
+                    if state == "valid":
+                        return None                       # managed install exists
+                    return {"fresh": False, "recovery":
+                            f"unmanaged tree at {c.source.path} — move it away or Clean"}
+                if kind == "absent" and state == "valid":
+                    return {"fresh": False, "recovery":
+                            f"orphaned ownership record for {c.source.path} — run "
+                            "uninstall to clear it"}
+        return {"fresh": True}
+
+    def _bulk_scope(self) -> list:
+        """(stack, [components-with-sources]) for every stack in DEPENDENCY order
+        (manifest graph: depends_on + build_requires stack edges; stable manifest order
+        among independents). OPTIONAL components are INCLUDED — the bulk run installs and
+        builds every declared source under <root>/src (they are only excluded from
+        auto-START, which stays autostart-gated). This also keeps the boundary's lock set
+        aligned with what build()/test() cover (a stack build covers ALL its comps)."""
+        stacks = [st for st in self.stacks()
+                  if any(c.source for c in st.components)]
+        by_comp = {c.id: st.id for st in self.stacks() for c in st.components}
+        edges = {st.id: set() for st in stacks}
+        for st in stacks:
+            for c in st.components:
+                for dep in tuple(c.depends_on or ()) + tuple(c.build_requires or ()):
+                    owner = by_comp.get(dep)
+                    if owner and owner != st.id and owner in edges:
+                        edges[st.id].add(owner)
+        ordered, seen = [], set()
+        def visit(sid, chain=()):
+            if sid in seen or sid in chain:
+                return
+            for dep in sorted(edges.get(sid, ())):
+                visit(dep, chain + (sid,))
+            seen.add(sid)
+            ordered.append(sid)
+        for st in stacks:
+            visit(st.id)
+        by_id = {st.id: st for st in stacks}
+        out = []
+        for sid in ordered:
+            st = by_id[sid]
+            comps = [c for c in st.components if c.source]
+            if comps:
+                out.append((st, comps))
+        return out
+
+    # ---- bulk-operation boundary (M2.0) ----------------------------------
+
+    def _current_bulk_ctx(self):
+        return getattr(self._lock_state, "bulk_ctx", None)
+
+    def _bulk_ctx_error(self, bulk_ctx, source_paths) -> str:
+        """Fail-closed validation of an EXPLICIT outer bulk-operation context: it must BE
+        this thread's active boundary and COVER the operation's source paths. Returns ""
+        when valid (or when no context is supplied — the op runs standalone)."""
+        if bulk_ctx is None:
+            return ""
+        if bulk_ctx is not self._current_bulk_ctx():
+            return ("bulk operation context is not the active boundary of this thread — "
+                    "refusing (locks not provably held)")
+        if not bulk_ctx.covers(source_paths):
+            missing = sorted(set(source_paths) - set(bulk_ctx.source_paths))
+            return ("bulk operation context does not cover source path(s) "
+                    f"{', '.join(missing)} — refusing (locks not provably held)")
+        return ""
+
+    @contextmanager
+    def _bulk_boundary(self, run_id: str, stacks, source_paths):
+        """The ONE outer boundary of a bulk run, held for its whole lifetime:
+        config-stable (shared; a concurrent remote/config save waits) → source-txn
+        index/recovery → ALL affected source-path locks (same coordination locks
+        Start/Restart contend on) → durable LEASE bound to this process's full identity →
+        the explicit `BulkOperationContext` active for this thread. Composed ops nest via
+        the re-entrant guards and validate the context; the lease is cleared and the
+        context deactivated before the locks release. Lease-write failure aborts typed —
+        the boundary never operates without durable evidence."""
+        from . import bulk as bulk_mod, procident
+        with self._config_stable():
+            with self._source_operation_guard(sorted(source_paths), op="install-all"):
+                ident = procident.proc_identity(os.getpid()) or {}
+                if not procident.identity_complete(ident):
+                    raise SourceTxnBlocked(
+                        "bulk lease refused: own process identity incomplete")
+                if not bulk_mod.write_lease(self._paths, run_id, os.getpid(), ident,
+                                            stacks, source_paths):
+                    raise SourceTxnBlocked("bulk lease could not be persisted — refusing "
+                                           "to operate without durable evidence")
+                ctx = bulk_mod.BulkOperationContext(run_id, source_paths)
+                self._lock_state.bulk_ctx = ctx
+                try:
+                    self._lock_state.bulk_cleanup_failed = ""
+                    yield ctx
+                finally:
+                    self._lock_state.bulk_ctx = None
+                    fails = []
+                    if not bulk_mod.clear_lease(self._paths):
+                        fails.append("lease")
+                    if not bulk_mod.clear_reservation(self._paths):
+                        fails.append("bulk-start reservation")
+                    if fails:
+                        # retained evidence blocks the next run until acknowledged; the
+                        # driver reads this flag and reports a truthful INCOMPLETE result.
+                        self._lock_state.bulk_cleanup_failed = " + ".join(fails)
 
     # ---- manifest --------------------------------------------------------
 
@@ -432,7 +1604,7 @@ class ControllerService:
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "pinned") -> ActionResult:
+                source: str = "pinned", bulk_ctx=None) -> ActionResult:
         if stack_id and self.stack(stack_id) is None:
             return self._unknown_stack(stack_id)
         if not self._paths.runtime_root_exists:
@@ -468,6 +1640,11 @@ class ControllerService:
         install_items = [(st, c) for st in self.stacks()
                          if not stack_id or st.id == stack_id
                          for c in st.components if c.source]
+        ctx_err = self._bulk_ctx_error(bulk_ctx,
+                                       {c.source.path for _, c in install_items})
+        if ctx_err:
+            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
+                                f"{ctx_err}")
         groups, plan_conflicts = self._plan_source_groups(install_items, source)
         if plan_conflicts:
             return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
@@ -482,10 +1659,30 @@ class ControllerService:
             # a dangling/unknown leaf is never silently treated as installed.
             try:
                 if source_fs.leaf_kind(self._paths, dest) == "dir":
+                    # HEALTHY SKIP: the leaf already serves this install. RE-JOIN the
+                    # targeted consumers in the ownership record's live membership —
+                    # otherwise a later sibling departure could remove a leaf this
+                    # just-installed stack relies on.
+                    from . import source_registry as _sreg
+                    state, rec, _w = _sreg.record_state(self._paths, path)
+                    targeted = {c2.id for _, c2 in install_items
+                                if c2.source and c2.source.path == path}
+                    if state == "valid" and not targeted <= set(rec.components):
+                        if _sreg.update_components(self._paths, path,
+                                                   set(rec.components) | targeted):
+                            extra_out.append(f"  [re-joined] {path}: shared checkout now "
+                                             "serves this stack again")
+                        else:
+                            extra_out.append(f"  [warn] {path}: shared-consumer record "
+                                             "could not be updated — re-run install")
                     continue
             except PathContainmentError:
                 pass                       # unsafe parent -> adopt_source refuses typed
-            result = inst.adopt_source(comp, source=source, pinned_expected=resolved)
+            st_of = next((st2 for st2 in self.stacks()
+                          if any(c2.id == comp.id for c2 in st2.components)), None)
+            result = self._adopt_dev_fallback(inst, st_of, comp, source, resolved,
+                                              force=False,
+                                              locked=bulk_ctx is not None)
             if result.status == "done":
                 mutated_paths.append(path)
             for a in plan.actions:
@@ -631,17 +1828,28 @@ class ControllerService:
                 elif getattr(e, "external", False):
                     # External endpoints are observe-only and NEVER gate readiness.
                     continue
-                elif not self._paths.contains(Path(e.address)):
-                    # A ready Unix/path endpoint must be runtime-contained unless
-                    # explicitly external — an outside-root endpoint can never gate.
-                    present = False
-                    ev.append(f"{e.address}: rejected (ready endpoint not runtime-contained)")
                 else:
-                    if e.kind == "unix":
-                        present = probe_socket(self._system, e.address).is_socket
+                    # A RELATIVE unix/path endpoint address is runtime-root-relative —
+                    # contained by construction (the manifest never names outside-root
+                    # paths LHPC-side; the daemon's own /tmp sockets are `external`).
+                    addr = e.address
+                    if not Path(addr).is_absolute():
+                        try:
+                            addr = str(self._paths.under(*Path(addr).parts))
+                        except PathContainmentError:
+                            addr = ""
+                    if not addr or not self._paths.contains(Path(addr)):
+                        # A ready endpoint must be runtime-contained unless explicitly
+                        # external — an outside-root endpoint can never gate.
+                        present = False
+                        ev.append(f"{e.address}: rejected (ready endpoint not "
+                                  "runtime-contained)")
+                    elif e.kind == "unix":
+                        present = probe_socket(self._system, addr).is_socket
+                        ev.append(f"{addr}: {'present' if present else 'absent'}")
                     else:
-                        present = self._system.fs.exists(e.address)
-                    ev.append(f"{e.address}: {'present' if present else 'absent'}")
+                        present = self._system.fs.exists(addr)
+                        ev.append(f"{addr}: {'present' if present else 'absent'}")
                 ok_all = ok_all and present
             return ok_all, ev
         waited = 0.0
@@ -1057,12 +2265,18 @@ class ControllerService:
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
-              file_overrides: dict | None = None) -> ActionResult:
+              file_overrides: dict | None = None, bulk_ctx=None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
         persisted); None = apply the saved config, as the CLI does."""
         from . import reslock
+        if bulk_ctx is not None:
+            order = self._run_order(target) or []
+            ctx_err = self._bulk_ctx_error(
+                bulk_ctx, {c.source.path for _, c in order if c.source})
+            if ctx_err:
+                return ActionResult(False, f"Refusing to start '{target}': {ctx_err}")
         if not apply:
             return self._start_impl(target, apply=False, params=params,
                                     stop_owners=stop_owners, band=band,
@@ -2074,12 +3288,16 @@ class ControllerService:
         return daemon_sid, release
 
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
-             band: str = "", release_daemon: bool = True) -> ActionResult:
+             band: str = "", release_daemon: bool = True, bulk_ctx=None) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
         from . import reslock
+        if bulk_ctx is not None:
+            ctx_err = self._bulk_ctx_error(bulk_ctx, set())
+            if ctx_err:
+                return ActionResult(False, f"Refusing to stop '{target}': {ctx_err}")
         # A daemon stop is FORCED-cascade — resolve that BEFORE acquiring the lock bundle so the
         # dependents' lifecycle/resource locks are part of the outer guard (no dependent races the
         # cascade), and so a blocking dependent can gate the daemon stop.
@@ -2372,12 +3590,35 @@ class ControllerService:
                             results=tuple(stopped.results) + tuple(res.results),
                             next_commands=res.next_commands)
 
-    def build(self, target: str, apply: bool = False) -> ActionResult:
+    def build(self, target: str, apply: bool = False, bulk_ctx=None) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
+        # _resolve returns RUNNABLE components; the build must ALSO cover buildable
+        # non-runnable sources (libraries like RadioLib — their artifacts are consumed
+        # via build_requires, so skipping them silently pushed builds onto external
+        # fallbacks outside the runtime root).
+        st_full = self.stack(target)
+        if st_full is not None:
+            have = {c.id for _, c in items}
+            items = items + [(st_full, c) for c in st_full.components
+                             if c.build_steps and c.id not in have]
         life = self._lifecycle()
         buildable = [(s, c) for s, c in items if c.build_steps]
+        # BUILD-DEPENDENCY order: a component's build_requires providers build FIRST
+        # (fresh root: RadioLib's libRadioLib.a must exist before the daemon's build.sh
+        # consumes it). Stable within equal rank (manifest order preserved).
+        by_id = {c.id: c for _, c in buildable}   # BEFORE sort: the list is empty
+        def _rank(c, seen=None):                  # during sorting (CPython list.sort)
+            seen = seen or set()
+            if c.id in seen:
+                return 0                         # defensive: cycle -> flat
+            seen.add(c.id)
+            deps = [d for d in (c.build_requires or ()) if d in by_id]
+            if not deps:
+                return 0
+            return 1 + max(_rank(by_id[d], seen) for d in deps)
+        buildable.sort(key=lambda sc: _rank(sc[1]))
         if not apply:
             details = [f"  [build] {c.id}: "
                        + " ; ".join(" ".join(str(t) for t in st.get("argv", []))
@@ -2392,6 +3633,9 @@ class ControllerService:
         # caught under the index lock before the source locks are taken.
         from . import reslock
         src_paths = sorted({c.source.path for _, c in buildable if c.source})
+        ctx_err = self._bulk_ctx_error(bulk_ctx, src_paths)
+        if ctx_err:
+            return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
         try:
             with self._source_operation_guard(src_paths, op="build"):
                 details = []
@@ -2688,11 +3932,15 @@ class ControllerService:
                             next_commands=[f"lhpc status {target}"])
 
     def test(self, target: str, tx: bool = False,
-             apply: bool = False) -> ActionResult:
+             apply: bool = False, bulk_ctx=None) -> ActionResult:
         """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`)."""
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
+        ctx_err = self._bulk_ctx_error(bulk_ctx,
+                                       {c.source.path for _, c in items if c.source})
+        if ctx_err:
+            return ActionResult(False, f"Refusing to test '{target}': {ctx_err}")
         life = self._lifecycle()
         if not tx:
             # RX-safe host tests.
@@ -3040,6 +4288,7 @@ class ControllerService:
                                             c.name, key, c.id))
             if rows:
                 groups.append({"id": c.id, "name": c.name, "is_dep": c.id != main_id,
+                               "optional": bool(c.optional),
                                "rule_before": False, "rule_after": False, "rows": rows})
         # Rule a horizontal line BEFORE the first dependency-component group and AFTER the last one,
         # so the dependency components are visually bracketed off from the stack's main component.
@@ -3047,6 +4296,11 @@ class ControllerService:
         if dep_idx:
             groups[dep_idx[0]]["rule_before"] = True
             groups[dep_idx[-1]]["rule_after"] = True
+        # An OPTIONAL component's settings (e.g. the MeshCom GPS relay, KISS serial) are
+        # additionally separated from the preceding group by their own rule.
+        for i, g in enumerate(groups):
+            if g["optional"] and i > 0:
+                g["rule_before"] = True
         return groups
 
     def _param_ref(self, target: str, kind: str, key: str):
@@ -3459,8 +4713,13 @@ class ControllerService:
             except (OSError, ValueError):
                 marks.append(stem)
         rr = self.restart_required_stacks()      # dashboard reloads when the yellow flag flips
+        # BOOTING components (post-start runner still applying settings, e.g. MeshCom's
+        # callsign push): the yellow 'booting' state must flip the signature when it
+        # clears, or the dash keeps showing 'booting' after the node is serving.
+        booting = sorted(cid for cid in running if self._component_booting(cid))
         return ("R:" + ",".join(running) + ";D:" + ",".join(usable)
-                + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr))
+                + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
+                + ";B:" + ",".join(booting))
 
     def _build_artifact(self, comp):
         """Relative path of the built binary (explicit `bin`, else the process
@@ -3839,8 +5098,14 @@ class ControllerService:
                     errors.append(f"unknown config field: {key!r}" if err.startswith("unknown")
                                   else err)
                     continue
+                vf = str(value)
+                if vf.strip() == "":
+                    # BLANK = "clear this override / use the default" — never validated
+                    # as a literal value (an empty txpower/frequency is not an error).
+                    clean_params.append(("f", c, p, vf))
+                    continue
                 try:
-                    clean_params.append(("f", c, p, validators.validate_param(p, value)))
+                    clean_params.append(("f", c, p, validators.validate_param(p, vf)))
                 except validators.ValidationError as exc:
                     errors.append(str(exc))
                 continue
@@ -3849,7 +5114,8 @@ class ControllerService:
                 errors.append(f"unknown config field: {key!r}" if err.startswith("unknown") else err)
                 continue
             v = str(value)
-            if p.kind == "int" and v.strip() == "":
+            if v.strip() == "":
+                # BLANK = clear the override (any kind), same rule as file params above.
                 clean_params.append(("r", c, p, v))
                 continue
             try:
@@ -3958,11 +5224,17 @@ class ControllerService:
 
         to_set: dict = {}
         to_remove: set = set()
+        auto_set: dict = {}
+        auto_remove: set = set()
         for k, av in clean_auto.items():                                     # autostart
+            # Autostart is a STACK-LEVEL flag: it must live in the BAND-LESS stack file —
+            # `_run_order` reads it band-independently. (Live finding: stored in the
+            # band-suffixed file, the option never took effect for band-switchable
+            # stacks like kiss.)
             if av == "on":
-                to_set[k] = av
+                auto_set[k] = av
             else:
-                to_remove.add(k)
+                auto_remove.add(k)
         for kind, c, p, v in clean_params:
             key = _store_key(kind, c, p)
             if str(v) == self._param_default_canon(p, cfg_band, band):
@@ -3978,6 +5250,18 @@ class ControllerService:
                 merged.pop(k, None)
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
+        if (auto_set or auto_remove) and cfg_band:
+            # SECOND transactional target: autostart flags land in the band-less file.
+            def _render_auto(pth, tgt=sid, setv=dict(auto_set), rmv=set(auto_remove)):
+                merged = merge_stack_values(pth, tgt, "", setv, clear_empty=False)
+                for k in rmv:
+                    merged.pop(k, None)
+                return render_stack_config(tgt, merged)
+            targets.append(("stack", _stack_config_path(self._paths, sid, ""),
+                            _render_auto, 0o644))
+        else:
+            to_set.update(auto_set)
+            to_remove |= auto_remove
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
         # journal kind "state", pre-image journaled): a restart/build-mode param changed while
         # the stack is RUNNING means the running processes no longer match the saved config.
@@ -4876,14 +6160,38 @@ class ControllerService:
                 "branch": prepared["branch"], "pending": prepared["pending"],
                 "txid": prepared.get("txid")}
 
+    def optional_start_components(self, target: str) -> list:
+        """Optional, non-interactive SERVICE components of a stack (e.g. KISS Serial,
+        the MeshCom GPS relay) with their saved auto-start choice — rendered as
+        checkboxes on the Confirm:start page. File-only read."""
+        s = self.stack(target)
+        if s is None:
+            return []
+        cfg = load_stack_config(self._paths, target)
+        return [{"id": c.id, "name": c.name,
+                 "autostart": cfg.get(f"autostart_{c.id}") == "on"}
+                for c in s.components
+                if c.optional and c.kind == ComponentKind.SERVICE
+                and not getattr(c, "interactive", False)]
+
     def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
-        """Bounded tail of the daemon log filtered to RX/TX activity."""
-        from .jobs import tail_log
-        from pathlib import Path
+        """Bounded tail of the daemon's activity, filtered to RX/TX lines. The v111a
+        multi-instance daemon logs to stdout, which LHPC captures into the per-band
+        process log `logs/start-<daemon>-<band>.log` — the ONLY feed source (in-root;
+        LHPC reads no external log files)."""
+        raws: list[str] = []
+        for name in (f"start-{self.DAEMON_ID}-{band}.log",
+                     f"start-{self.DAEMON_ID}.log"):
+            try:
+                raws += runtime_fs.tail(self._paths,
+                                        self._paths.under("logs", name), 400)
+            except (OSError, PathContainmentError, ValueError):
+                pass                             # absent/symlinked/escaping -> no lines
         out: list[str] = []
-        for raw in tail_log(Path("/tmp/lora_daemon.log"), 400):
+        for raw in raws:
             if any(tok in raw for tok in (f"[TX{band}]", f"[RX{band}]", "TX_RESULT",
-                                          "RX_PACKET", "[TX]", "[RX]")):
+                                          "RX_PACKET", "[TX]", "[RX]", "TXOK",
+                                          f"TX {band}", f"RX {band}")):
                 out.append(raw)
         return out[-lines:]
 
@@ -5010,7 +6318,108 @@ class ControllerService:
         locks are held, between source groups). Tests monkeypatch it to inject concurrent
         events; it carries no production behaviour."""
 
-    def _plan_source_groups(self, items, source: str) -> tuple:
+    _VERSION_TAG_RE = None
+
+    def _adopt_dev_fallback(self, inst, st, comp, source: str, resolved, force: bool,
+                            locked: bool):
+        """Adopt with the DEFAULT policy: on a FAILED `dev` adoption, retry ONCE at the
+        known-working (else manifest-pin) identity — DISCLOSED in the action detail,
+        never silent. Non-dev selectors and fallback-less failures return unchanged."""
+        a = inst.adopt_source(comp, force=force, source=source,
+                              pinned_expected=resolved, locked=locked)
+        if a.status != "failed" or source != "dev":
+            return a
+        fb = self._kw_fallback_expected(st, comp)
+        if not fb[0]:
+            return a
+        a2 = inst.adopt_source(comp, force=force, source="pinned",
+                               pinned_expected=fb, locked=locked)
+        if a2.status != "failed":
+            a2.detail = (f"dev unreachable ({a.detail}) — FELL BACK to "
+                         f"{fb[1]}: {a2.detail}")
+        else:
+            a2.detail = (f"dev failed ({a.detail}); known-working fallback also "
+                         f"failed: {a2.detail}")
+        return a2
+
+    def _kw_fallback_expected(self, stack, comp) -> tuple:
+        """DISCLOSED fallback identity when `dev` is unreachable: the stack's newest
+        compatible known-working composition entry, else the manifest pin. ("", "")
+        when neither exists (the dev refusal then stands — never a silent substitute)."""
+        from . import known_working
+        try:
+            entries = known_working.compatible_composition(
+                self._paths, stack, lambda c: self._effective_remote(c))
+        except Exception:                        # noqa: BLE001 — fallback probe only
+            entries = None
+        if entries and comp.id in entries and entries[comp.id].get("commit"):
+            return (entries[comp.id]["commit"],
+                    "fallback: known-working (dev unreachable)")
+        if comp.source.pin_commit:
+            return (comp.source.pin_commit, "fallback: manifest pin (dev unreachable)")
+        return ("", "")
+
+    def _frozen_ref(self, comp, source: str) -> tuple:
+        """Resolve ONE exact immutable commit for a dev/stable/artifact group at PLAN
+        time (bounded `git ls-remote`, no fetch, no mutation). Returns
+        ((sha, label), "") or ((None, None), typed-reason). Adoption receives the frozen
+        sha and performs NO second selector lookup."""
+        import re
+        from . import validators
+        spec = comp.source
+        remote = self.config().remotes.get(comp.id) or spec.remote
+        try:
+            remote = validators.remote_url(remote or "", field="remote")
+        except validators.ValidationError as exc:
+            return (None, None), f"invalid remote ({exc})"
+        if not remote:
+            return (None, None), "no remote configured"
+        run = self._system.runner.run
+        if spec.artifact or source == "dev":
+            # artifact: the declared artifact IS the maintainer's default branch;
+            # dev: the configured development branch (strict — never another ref).
+            ref = "HEAD" if spec.artifact else (spec.branch or "HEAD")
+            out = run(["git", "ls-remote", remote, ref], timeout=15.0)
+            if out.returncode != 0 or not out.stdout.strip():
+                return (None, None), f"could not resolve {ref!r} on {remote}"
+            sha = out.stdout.split()[0]
+            label = ("declared artifact (default branch)" if spec.artifact
+                     else f"development branch {ref}")
+            return (sha, f"frozen: {label} @ {sha[:9]}"), ""
+        # stable: newest VERSION-SHAPED tag (peeled commit), else default-branch HEAD —
+        # resolved remotely so the whole run uses ONE exact commit.
+        out = run(["git", "ls-remote", "--tags", remote], timeout=15.0)
+        if out.returncode != 0:
+            return (None, None), f"could not list tags on {remote}"
+        if self._VERSION_TAG_RE is None:
+            type(self)._VERSION_TAG_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
+        best, best_sha = None, ""
+        plain, peeled = {}, {}
+        for line in (out.stdout or "").splitlines():
+            parts = line.split()
+            if len(parts) != 2 or not parts[1].startswith("refs/tags/"):
+                continue
+            name = parts[1][len("refs/tags/"):]
+            if name.endswith("^{}"):
+                peeled[name[:-3]] = parts[0]
+            else:
+                plain[name] = parts[0]
+        for name, sha in plain.items():
+            m = self._VERSION_TAG_RE.match(name)
+            if not m:
+                continue
+            key = tuple(int(x) for x in m.group(1).split("."))
+            if best is None or key > best:
+                best, best_sha = key, peeled.get(name, sha)
+        if best is not None:
+            return (best_sha, f"frozen: latest stable tag @ {best_sha[:9]}"), ""
+        out2 = run(["git", "ls-remote", remote, "HEAD"], timeout=15.0)
+        if out2.returncode != 0 or not out2.stdout.strip():
+            return (None, None), f"could not resolve HEAD on {remote}"
+        sha = out2.stdout.split()[0]
+        return (sha, f"frozen: default branch @ {sha[:9]} (no version tags)"), ""
+
+    def _plan_source_groups(self, items, source: str, freeze: bool = False) -> tuple:
         """ONE immutable operation plan for an install/update over `items` [(stack, comp)]:
 
           * known-working is resolved ONCE per affected stack from one complete compatible
@@ -5045,6 +6454,7 @@ class ControllerService:
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, ident, resolved))
         groups, conflicts = [], []
+        frozen_cache: dict = {}
         for path, members in by_path.items():
             idents = {m[2] for m in members}
             if len(idents) > 1:
@@ -5055,6 +6465,29 @@ class ControllerService:
                                  "installing/updating")
                 continue
             st, comp, _, resolved = members[0]
+            if freeze and not resolved[0] and (source != "pinned"
+                                               or comp.source.artifact):
+                # FROZEN selector resolution (bulk plan): one exact immutable commit per
+                # group, resolved HERE — adoption never performs a second lookup.
+                # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
+                # selector (incl. 'pinned' — they never use known-working entries): the
+                # plan-time commit IS this run's immutable artifact identity.
+                if path not in frozen_cache:
+                    frozen_cache[path] = self._frozen_ref(comp, source)
+                (fz, why) = frozen_cache[path]
+                if fz[0] is None:
+                    # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
+                    # known-working composition (then the manifest pin) when dev is
+                    # unreachable — never a silent substitute, never pinned-by-default.
+                    fb = self._kw_fallback_expected(st, comp)
+                    if source == "dev" and fb[0]:
+                        resolved = fb
+                    else:
+                        conflicts.append(f"source {path!r}: exact {source} resolution "
+                                         f"failed — {why}")
+                        continue
+                else:
+                    resolved = fz
             groups.append((path, comp, resolved))
         if conflicts:
             return None, conflicts
@@ -5245,7 +6678,7 @@ class ControllerService:
                                      for cid, e in sorted(cand["entries"].items())])
 
     def update(self, target: str = "", apply: bool = False,
-               source: str = "pinned") -> ActionResult:
+               source: str = "pinned", bulk_ctx=None) -> ActionResult:
         """Refresh the managed source(s) from GitHub (version per `source`:
         dev/stable/pinned), falling back to the local checkout on failure. Skips
         optional libs/firmware unless one is targeted directly.
@@ -5263,6 +6696,9 @@ class ControllerService:
         else:
             required = {dep for _, c in all_items if not c.optional for dep in c.build_requires}
             items = [(s, c) for s, c in all_items if not c.optional or c.id in required]
+        ctx_err = self._bulk_ctx_error(bulk_ctx, {c.source.path for _, c in items})
+        if ctx_err:
+            return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}")
         if not apply:
             # The dry-run is the explicit freshness check (`lhpc update --check`):
             # it is the ONLY place that contacts the remote (git ls-remote). GET web
@@ -5336,9 +6772,12 @@ class ControllerService:
                     inst = self._installer()
                     out, ok = [], True
                     mutated_paths = []
+                    stacks_by_comp = {c2.id: st2 for st2 in self.stacks()
+                                      for c2 in st2.components}
                     for path, c, resolved in groups:
-                        r = inst.adopt_source(c, force=True, source=source,
-                                              pinned_expected=resolved, locked=True)
+                        r = self._adopt_dev_fallback(
+                            inst, stacks_by_comp.get(c.id), c, source, resolved,
+                            force=True, locked=True)
                         out.append(f"  [{r.status}] {c.id}: {r.detail}")
                         if r.status == "failed":
                             ok = False                    # incl. prior-dirty: NEVER success
@@ -5459,13 +6898,54 @@ class ControllerService:
                 if _sreg.read_record(self._paths, path) is not None and path not in orphans:
                     orphans.append(path)
                 continue
-            remaining = sorted(consumers.get(path, set()) - target_ids)
+            remaining = sorted(self._live_consumers(path, consumers) - target_ids)
             if remaining:
                 if path not in {p for p, _ in kept}:
                     kept.append((path, remaining))
             else:
                 to_remove.setdefault(path, c)
         return to_remove, kept, orphans, consumers
+
+    def _live_consumers(self, path: str, consumers: dict) -> set:
+        """LIVE consumer membership of a shared source path: the manifest declarers
+        INTERSECTED with the ownership record's `components` (departures are decremented
+        there by uninstall/clean, so a sibling that already departed no longer keeps the
+        leaf alive). Absent/legacy record -> manifest fallback (safe-side keep)."""
+        from . import source_registry as _sreg
+        manifest = set(consumers.get(path, set()))
+        state, rec, _why = _sreg.record_state(self._paths, path)
+        if state == "valid" and rec.components:
+            # Membership tracks DIRECT declarers only; DERIVED consumers (build_requires
+            # edges, e.g. the daemon needing RadioLib) are live by construction and are
+            # never intersected away.
+            declarers = {c.id for c in self._path_declarers(path)}
+            derived = manifest - declarers
+            return (manifest & declarers & set(rec.components)) | derived
+        return manifest
+
+    def _depart_kept_paths(self, kept, target_ids, out: list) -> bool:
+        """Durably record the departing stack's components leaving each KEPT shared
+        path's ownership record (under the caller's held source locks). A failed rewrite
+        is a truthful INCOMPLETE — the retry converges. Returns overall ok."""
+        from . import source_registry as _sreg
+        ok = True
+        for path, remaining in kept:
+            state, rec, _why = _sreg.record_state(self._paths, path)
+            if state != "valid":
+                continue                          # legacy/unowned: manifest fallback rules
+            new_members = set(rec.components) - set(target_ids)
+            if set(rec.components) == new_members:
+                continue                          # nothing of ours recorded there
+            if not new_members:
+                continue                          # would be empty -> removal path owns it
+            if _sreg.update_components(self._paths, path, new_members):
+                out.append(f"  [departed] {path}: now used by "
+                           f"{', '.join(sorted(new_members))}")
+            else:
+                out.append(f"  [fail] {path}: shared-consumer record could not be "
+                           "updated — re-run to retry (the checkout is otherwise kept)")
+                ok = False
+        return ok
 
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target
@@ -5568,6 +7048,9 @@ class ControllerService:
                 # a removed source retires the affected stacks' last-start candidates —
                 # an older composition must not stay eligible for later confirmation
                 ok = self._retire_candidates_for_paths(removed_paths, out) and ok
+                # KEPT shared paths: durably record this stack's departure so the LAST
+                # sharer's uninstall removes the leaf (live membership, not manifest).
+                ok = self._depart_kept_paths(kept, target_ids, out) and ok
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {blocked}",
                                 next_commands=["lhpc status"])
@@ -5625,7 +7108,7 @@ class ControllerService:
                 if _sreg.read_record(self._paths, path) is not None:
                     orphans.append(path)         # explicit retry clears the orphan record
                 continue
-            remaining = sorted(consumers.get(path, set()) - comp_ids)
+            remaining = sorted(self._live_consumers(path, consumers) - comp_ids)
             (src_keep if remaining else src_remove).append((path, remaining))
         cfg_dir = self._paths.under("config", "stacks")
         cfg_files = []
@@ -5709,7 +7192,8 @@ class ControllerService:
                             if source_registry.read_record(self._paths, path) is not None:
                                 orphans.append(path)
                             continue
-                        remaining = sorted(consumers.get(path, set()) - comp_ids)
+                        remaining = sorted(self._live_consumers(path, consumers)
+                                           - comp_ids)
                         (src_keep if remaining else src_remove).append((path, remaining))
                     # 1) sources — race-safe capture/verify/detach removal under the held
                     # lock; dirty TRACKED/UNTRACKED changes are allowed (explicit purge), but
@@ -5731,6 +7215,7 @@ class ControllerService:
                                        "record could not be dropped — re-run clean to retry")
                             ok = False
                     ok = self._retire_candidates_for_paths(removed_paths, out) and ok
+                    ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
                     for path in orphans:
                         if source_registry.remove_record(self._paths, path):
                             out.append(f"  [cleaned] orphaned ownership record for {path}")
