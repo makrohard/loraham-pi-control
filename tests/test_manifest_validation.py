@@ -111,3 +111,17 @@ def test_unknown_endpoint_kind_rejected():
     with pytest.raises(ManifestError):
         _ok({"run_argv": ["./app"], "readiness": "process",
              "endpoint": [{"kind": "carrier-pigeon", "address": "x"}]})
+
+
+def test_readiness_timeout_out_of_range_rejected():
+    with pytest.raises(ManifestError):
+        _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 9999})
+
+
+def test_readiness_timeout_negative_rejected():
+    with pytest.raises(ManifestError):
+        _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": -1})
+
+
+def test_readiness_timeout_in_range_ok():
+    _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 45})

@@ -66,6 +66,23 @@ def test_bootstrap_is_idempotent_and_preserves_local_config(tmp_path):
     assert "KEEP" in (rt / "config" / "local.toml").read_text()
 
 
+def test_bootstrap_hardens_runtime_root_to_owner_only(tmp_path):
+    """The runtime root must not be group/other-WRITABLE (the controller-identity boundary):
+    bootstrap enforces 0700, fixing the "identity UNSAFE: runtime root is group/other-
+    writable" seen on a default-umask (0775) root — and tightens an already-loose root."""
+    import os
+    rt = tmp_path / "rt"
+    inst = _installer(rt, (), tmp_path / "rt")
+    inst.apply_bootstrap()
+    assert (rt.stat().st_mode & 0o022) == 0                # no group/other write
+    # A subsequently-loosened root is re-tightened on the next bootstrap (idempotent fix).
+    os.chmod(rt, 0o775)
+    plan = inst.plan_bootstrap()
+    assert any(a.kind == "harden" and a.status == "planned" for a in plan.actions)
+    inst.apply_bootstrap()
+    assert (rt.stat().st_mode & 0o022) == 0
+
+
 def test_adopt_clean_repo_verifies_pin_match(tmp_path):
     head = _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,

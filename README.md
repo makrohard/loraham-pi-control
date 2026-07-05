@@ -25,25 +25,45 @@ Daemon-backed stacks (chat, igate, voice, kiss, meshcom, meshcore) start the
 daemon automatically. Meshtastic drives the radio itself, so it cannot run while
 the daemon is serving its band — `lhpc` blocks the conflict.
 
-## Install
+## Install (self-hosted)
 
-Requires Python 3.11+ and Flask.
+Requires Python 3.11+. A deployment is **self-hosted**: the runtime root
+`~/loraham-pi-control` is a plain container, and LHPC's own checkout lives *under* it at
+`src/loraham-pi-control` (just like the stacks it manages), with the venv OUTSIDE the
+checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are one tree.
 
 ```bash
-git clone https://github.com/makrohard/loraham-pi-control.git
-cd loraham-pi-control
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+# 1. Clone LHPC into the runtime root's src/ — this is what makes it self-hosted
+mkdir -p ~/loraham-pi-control/src
+git clone https://github.com/makrohard/loraham-pi-control.git \
+    ~/loraham-pi-control/src/loraham-pi-control
 
-lhpc bootstrap              # create the runtime root (~/loraham-pi-control)
+# 2. Create the venv OUTSIDE the checkout, then install
+python3 -m venv ~/loraham-pi-control/venv/lhpc
+~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
+
+# 3. Create the runtime layout + default config (owner-only, mode 0700)
+~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
+
+# 4. Adopt + build stacks (add venv/lhpc/bin to PATH, or use the full path)
+export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc install --check        # show which stack sources would be adopted
 lhpc install daemon --yes   # adopt + verify a stack's source …
 lhpc build daemon           # … then build it
+lhpc web                    # http://127.0.0.1:8770/  (loopback only)
 ```
+
+`lhpc status` then shows the controller row as **identity ok**. To run it persistently as a
+user service, see [`docs/deployment.md`](docs/deployment.md) (the `deploy/lhpc-web.service`
+template already uses this layout). Self-update requires the web service stopped.
 
 Set your callsign once in a stack's web **Settings**; until then HAM apps default to
 `N0CALL`. Secrets (passwords, HMAC keys) live only in
 `~/loraham-pi-control/config/secrets.toml`.
+
+> Working on LHPC itself? Clone anywhere and `pip install -e .` in a venv for a dev checkout
+> — that instance is intentionally *not* self-hosted (the controller row shows "not
+> self-hosted"). Commit and push from there; deploy self-hosted as above.
 
 ## CLI
 
@@ -84,3 +104,19 @@ lhpc web                     # http://127.0.0.1:8770/  (loopback only)
 
 Loopback-only bind, POST actions are CSRF-protected, `Content-Security-Policy:
 default-src 'self'`. Not intended to be exposed to a network.
+
+## Deployment & self-update
+
+The supported deployment is **self-hosted**: the runtime root `~/loraham-pi-control` is a
+plain container, LHPC's own checkout lives under it at `src/loraham-pi-control` (alongside
+the managed stack sources), and the venv is at `venv/lhpc`. The systemd unit sets
+`LHPC_RUNTIME_ROOT` explicitly. LHPC's checkout is a **controller identity** — observable
+and updatable via `lhpc self-update`, but never installed/built/started/cleaned/etc.; every
+generic verb aimed at it refuses and points to `lhpc self-update`, and `lhpc status` shows a
+distinct `[controller]` row.
+
+Self-update requires the web service **stopped** (it takes an exclusive lock the running
+console holds shared), refuses a dirty checkout unless you overwrite, and — when a
+dependency change is reported — needs a manual `pip install -e …` before restart. See
+[`docs/deployment.md`](docs/deployment.md) and the operator relocation runbook in
+[`docs/deployment-migration.md`](docs/deployment-migration.md).

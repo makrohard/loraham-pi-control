@@ -25,6 +25,7 @@ from .assets import asset_path
 from .model import (
     Component,
     ComponentKind,
+    ControllerSpec,
     EndpointSpec,
     FileConfig,
     FileParam,
@@ -84,11 +85,24 @@ def default_manifest_path() -> Path:
 
 
 def load_manifest(path: Path | None = None) -> tuple[Stack, ...]:
-    """Load and parse the manifest into Stack/Component objects (read-only)."""
+    """Load and parse the manifest into Stack/Component objects (read-only). Also VALIDATES
+    any present `[controller]` table (strict parser, result discarded) so an invalid
+    controller declaration is rejected here — not silently ignored by dashboard, bootstrap,
+    bulk, or normal stack paths. The `tuple[Stack, ...]` return contract is unchanged."""
+    stacks, _controller = _load_stacks_and_controller(path)
+    return stacks
+
+
+def _load_stacks_and_controller(path: Path | None):
+    """Shared load+parse: stacks + the (validated) controller. `parse_controller` raises
+    `ManifestError` on any invalid `[controller]` table (unknown key, nested sub-table,
+    fixed-path/branch violation, id collision)."""
     manifest_path = path or _DEFAULT_MANIFEST
     with manifest_path.open("rb") as fh:
         data = tomllib.load(fh)
-    return parse_manifest(data)
+    stacks = parse_manifest(data)
+    known = {s.id for s in stacks} | {c.id for s in stacks for c in s.components}
+    return stacks, parse_controller(data, known)
 
 
 class ManifestError(Exception):
@@ -174,6 +188,9 @@ def _validate_component(comp) -> None:
     if comp.readiness == "endpoint" and not any(e.ready for e in comp.endpoints):
         raise ManifestError(f"{cid}: readiness=\"endpoint\" requires at least one "
                             f"endpoint marked ready = true")
+    if not (0.0 <= comp.readiness_timeout <= 600.0):
+        raise ManifestError(f"{cid}: readiness_timeout must be between 0 and 600 seconds "
+                            f"(got {comp.readiness_timeout})")
     for e in comp.endpoints:
         _validate_endpoint(cid, e)
     names = {p.name for p in comp.run_params}
@@ -311,6 +328,55 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
     return result
 
 
+# ---- controller identity (LHPC's OWN checkout; a dedicated non-stack entity) --------------
+
+CONTROLLER_KEYS = frozenset({"id", "display_name", "source_path", "branch", "remote"})
+CONTROLLER_SOURCE_PATH = "src/loraham-pi-control"
+CONTROLLER_BRANCH = "main"
+
+
+def parse_controller(data: dict, known_ids: set[str] | None = None) -> ControllerSpec | None:
+    """Parse the SINGLE top-level `[controller]` table into a `ControllerSpec`, or None if
+    absent. STRICT: an EXACT allow-list (any unknown key OR nested sub-table -> typed
+    error), a FIXED `source_path`/`branch`, and no id collision with any stack/component.
+    This is a dedicated identity — it is NEVER fed through stack/source machinery."""
+    raw = data.get("controller")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ManifestError("[controller] must be a single table")
+    # An `[[controller]]` array-of-tables decodes as a list; a nested `[controller.x]`
+    # decodes as a dict value under a key not in the allow-list -> both rejected below.
+    unknown = set(raw) - CONTROLLER_KEYS
+    if unknown:
+        raise ManifestError(
+            f"[controller]: unknown key(s) {sorted(unknown)} — allowed only "
+            f"{sorted(CONTROLLER_KEYS)}")
+    for key in CONTROLLER_KEYS:
+        val = raw.get(key)
+        if not isinstance(val, str) or not val.strip():
+            raise ManifestError(f"[controller].{key} must be a non-empty string")
+    if raw["source_path"] != CONTROLLER_SOURCE_PATH:
+        raise ManifestError(
+            f'[controller].source_path must be exactly "{CONTROLLER_SOURCE_PATH}"')
+    if raw["branch"] != CONTROLLER_BRANCH:
+        raise ManifestError(f'[controller].branch must be exactly "{CONTROLLER_BRANCH}"')
+    if known_ids and raw["id"] in known_ids:
+        raise ManifestError(
+            f"[controller].id {raw['id']!r} collides with a stack/component id")
+    return ControllerSpec(id=raw["id"], display_name=raw["display_name"],
+                          source_path=raw["source_path"], branch=raw["branch"],
+                          remote=raw["remote"])
+
+
+def load_controller(path: Path | None = None) -> ControllerSpec | None:
+    """Load the manifest and return its `ControllerSpec` (or None). Validates the id does
+    not collide with any stack/component id. The `load_manifest` stack contract is
+    UNCHANGED — controller state travels ONLY through this separate accessor."""
+    _stacks, controller = _load_stacks_and_controller(path)
+    return controller
+
+
 _SHELL_OPS = ("&&", "||", "|", ";", "$(", "`", ">", "<", "${", "&")
 _SHELL_WORDS = {"cd", "env", "export", "exec", "sleep", "mkdir", "chmod", "ln", "rm", "set"}
 
@@ -383,6 +449,7 @@ def _parse_component(raw: dict) -> Component:
         build_steps=tuple(dict(s) for s in raw.get("build_steps", [])),
         test_argv=tuple(str(t) for t in raw.get("test_argv", [])),
         readiness=raw.get("readiness", ""),
+        readiness_timeout=float(raw.get("readiness_timeout", 0.0) or 0.0),
         bin=raw.get("bin", ""),
         requires=tuple(
             Requirement(cmd=r.get("cmd", ""), install=r.get("install", ""),

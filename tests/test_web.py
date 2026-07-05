@@ -1184,10 +1184,16 @@ def test_footer_version_ahead_is_red_with_link(tmp_path):
     assert "ver-red" in b and "update-link" in b
 
 
-def test_apps_has_self_entry_first(tmp_path):
+def test_apps_has_no_hardcoded_self_stack_entry(tmp_path):
+    # The controller lives on the dashboard + Self-Update page, NOT as a hardcoded
+    # always-"running" row on /stacks.
     b = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert 'id="self-stack"' in b and ">LoRaHAM Pi Control<" in b and "/self-update" in b
-    assert b.index('id="self-stack"') < b.index('class="stackrow"', b.index('id="self-stack"') + 20)
+    assert 'id="self-stack"' not in b
+
+
+def test_dashboard_shows_controller_card(tmp_path):
+    b = _client(tmp_path).get("/").get_data(as_text=True)
+    assert "controller-row" in b and "/self-update" in b
 
 
 def test_self_update_page_renders(tmp_path):

@@ -11,6 +11,7 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 import threading
 import time
@@ -65,6 +66,34 @@ from .status import Snapshot, StatusProber, rollup_states, summarize
 
 _SPI_DEV = "/dev/spidev0.0"
 _GPIO_DEV = "/dev/gpiochip0"
+_UNSET = object()                # sentinel: "not yet resolved" (distinct from None)
+
+
+def _canon_git_url(url: str) -> str:
+    """Normalize a git remote URL for identity comparison: the `git@host:path` / `ssh://` /
+    `https://` forms are reduced to a common `host/path` (so an approved canonical origin
+    matches regardless of transport), trailing `.git`/`/` stripped. Only the HOST is
+    lowercased — the path is left case-exact, since on case-sensitive hosts `host/Foo` and
+    `host/foo` are DIFFERENT repos (avoids a cross-repo false-accept). Returns `""` for a
+    degenerate/empty input (the caller must reject an empty canonical, never treat two
+    empties as a match)."""
+    u = (url or "").strip()
+    low = u.lower()
+    for pre in ("https://", "http://", "ssh://", "git://"):
+        if low.startswith(pre):
+            u = u[len(pre):]
+            break
+    else:
+        if low.startswith("git@"):
+            u = u[len("git@"):].replace(":", "/", 1)
+    if "@" in u.split("/", 1)[0]:                # strip user@ credentials in host part
+        u = u.split("@", 1)[1]
+    u = u.rstrip("/")
+    if u.lower().endswith(".git"):
+        u = u[:-4]
+    u = u.rstrip("/")
+    host, sep, rest = u.partition("/")
+    return host.lower() + sep + rest             # host case-folded; path preserved
 
 
 class SourceTxnBlocked(Exception):
@@ -112,6 +141,7 @@ class ControllerService:
         self._system = system or RealSystem()
         self._paths = paths or resolve_paths()
         self._stacks: tuple[Stack, ...] | None = None
+        self._controller = _UNSET       # controller spec (None = none declared); lazy
         self._config: Config | None = None
         # The config cache is shared by the (threaded) web app; guard it so a save on one
         # thread is visible to the next read on any thread (no stale callsign/remote).
@@ -1453,6 +1483,133 @@ class ControllerService:
                 return s
         return None
 
+    def controller(self):
+        """LHPC's own checkout as a dedicated controller identity (or None). Parsed via
+        the SEPARATE `load_controller` accessor — never through stack machinery."""
+        if self._controller is _UNSET:
+            self._controller = manifest_mod.load_controller(self._manifest_path)
+        return self._controller
+
+    def _controller_deps_sync_cmd(self) -> str:
+        """The EXACT editable-install command for the self-hosted controller after a
+        `deps_changed` update: the DEPLOYMENT interpreter (`<root>/venv/lhpc/bin/python`)
+        against the controller CHECKOUT (`<root>/<source_path>`), shell-quoted so a path
+        with spaces/metacharacters is safe to paste. Empty when no controller is declared —
+        the caller then falls back to the dev `pip install -e .`."""
+        spec = self.controller()
+        if spec is None:
+            return ""
+        root = self._paths.runtime_root
+        python_bin = root / "venv" / "lhpc" / "bin" / "python"
+        checkout = root.joinpath(*Path(spec.source_path).parts)
+        return (f"{shlex.quote(str(python_bin))} -m pip install -e "
+                f"{shlex.quote(str(checkout))}")
+
+    def _controller_refusal(self, target) -> "ActionResult | None":
+        """CENTRAL guard: a generic verb (install/update/uninstall/clean/build/test/
+        start/stop) targeting the controller id returns a typed refusal BEFORE any target
+        resolution or mutation. The CLI/web adapters only RENDER this — they hold no guard
+        logic of their own. `lhpc update <controller-id>` is NOT an alias for self-update."""
+        c = self.controller()
+        if c is not None and target == c.id:
+            return ActionResult(
+                False, "LHPC's own checkout is controller-managed. Use: lhpc self-update",
+                next_commands=["lhpc self-update"])
+        return None
+
+    def controller_identity_live(self) -> dict:
+        """LIVE controller-identity proof (git subprocesses) — used ONLY at startup
+        refresh, explicit "check now", and immediately before self-update apply. Returns a
+        TRI-STATE verdict `{checked_at, status, ok, reason}` where `status` is:
+          * `not_applicable` — the deployment is NOT self-hosted (lhpc does not run from the
+            in-root `src/loraham-pi-control` checkout: a bootstrap-only root, a plain/dev
+            install, etc.). NEUTRAL, not a failure — self-update proceeds via the normal
+            `repo_root()` mechanism and apply is NOT blocked.
+          * `unsafe` — the deployment IS self-hosted but the in-root checkout/layout is
+            tampered/misconfigured (symlink leaf, group/other-writable, wrong branch/origin,
+            repo/package mismatch). Apply IS blocked.
+          * `ok` — self-hosted and every strict check passed.
+        `ok` is the boolean `status == "ok"` for callers that only care about the green path.
+
+        The strict (self-hosted) path is STRICTER than managed-source resolution
+        (`resolve_source` permits a symlink to an external checkout; here that would let the
+        deployment silently run from an outside tree). It is a detection boundary, NOT a
+        same-account race-proof guarantee."""
+        import stat as _stat
+
+        import lhpc as _lhpc
+
+        from . import selfupdate as _su
+        now = int(time.time())
+
+        def verdict(status: str, reason: str) -> dict:
+            return {"checked_at": now, "status": status, "ok": status == "ok",
+                    "reason": reason[:200]}
+
+        spec = self.controller()
+        if spec is None:
+            return verdict("not_applicable", "no controller declared")
+        if spec.source_path != manifest_mod.CONTROLLER_SOURCE_PATH:
+            return verdict("unsafe", "controller source_path is not the fixed value")
+        try:
+            checkout = self._paths.under(*Path(spec.source_path).parts)   # contained, no-follow
+        except PathContainmentError as exc:
+            return verdict("unsafe", f"source path escapes runtime root ({exc})")
+
+        # SELF-HOSTED? lhpc must actually run FROM the in-root checkout. If the checkout is
+        # absent, or lhpc runs from a DIFFERENT tree (dev checkout / plain install / tangled
+        # root), the controller-identity boundary does not apply -> NEUTRAL. This is the
+        # common case for a bootstrap-only or non-migrated deployment and must NOT read as a
+        # security failure or block self-update.
+        repo = _su.repo_root()
+        real_checkout = os.path.realpath(checkout)
+        if repo is None or not os.path.exists(checkout):
+            return verdict("not_applicable",
+                           "not self-hosted: no controller checkout under the runtime root")
+        if os.path.realpath(repo) != real_checkout:
+            return verdict("not_applicable",
+                           "not self-hosted: lhpc runs from a different checkout")
+
+        # The deployment IS self-hosted -> strict tamper checks. A failure now is UNSAFE.
+        root = self._paths.runtime_root
+        for label, pth in (("runtime root", root), ("src", root / "src"),
+                           ("checkout", checkout)):
+            try:
+                st = os.lstat(pth)
+            except OSError:
+                return verdict("unsafe", f"{label} is missing")
+            if _stat.S_ISLNK(st.st_mode):
+                return verdict("unsafe", f"{label} is a symlink (fixed layout required)")
+            if not _stat.S_ISDIR(st.st_mode):
+                return verdict("unsafe", f"{label} is not a directory")
+            if st.st_uid != os.getuid():
+                return verdict("unsafe", f"{label} not owned by the service user")
+            if st.st_mode & 0o022:
+                return verdict("unsafe", f"{label} is group/other-writable")
+        real_root = os.path.realpath(root)
+        if not (real_checkout == real_root or real_checkout.startswith(real_root + os.sep)):
+            return verdict("unsafe", "checkout realpath escapes the runtime root")
+        if os.path.realpath(str(Path(_lhpc.__file__).resolve().parents[1])) != real_checkout:
+            return verdict("unsafe", "imported package repo != controller checkout")
+        g = _su._git(self._system, Path(real_checkout), ["rev-parse", "--is-inside-work-tree"], 10.0)
+        if g.returncode != 0 or g.stdout.strip() != "true":
+            return verdict("unsafe", "not a git checkout")
+        b = _su._git(self._system, Path(real_checkout), ["rev-parse", "--abbrev-ref", "HEAD"], 10.0)
+        head_branch = b.stdout.strip() if b.returncode == 0 else ""
+        if head_branch == "HEAD":
+            return verdict("unsafe", "checkout is in detached HEAD")
+        if head_branch != spec.branch:
+            return verdict("unsafe", f"checkout branch {head_branch!r} != {spec.branch!r}")
+        o = _su._git(self._system, Path(real_checkout), ["config", "--get", "remote.origin.url"], 10.0)
+        origin = o.stdout.strip() if o.returncode == 0 else ""
+        canon_spec = _canon_git_url(spec.remote)
+        # Reject an EMPTY canonical on either side: a degenerate manifest remote (".git",
+        # "/", "https://") canonicalizes to "" and would otherwise match a checkout with NO
+        # origin (also "") — a false-accept. A valid, non-empty canonical must match.
+        if not canon_spec or _canon_git_url(origin) != canon_spec:
+            return verdict("unsafe", "origin is not the approved canonical remote")
+        return verdict("ok", "identity ok")
+
     @property
     def runtime_root(self):
         """Absolute runtime installation root (display/resolution use)."""
@@ -1533,6 +1690,27 @@ class ControllerService:
                 "Note: runtime root not installed; managed sources report "
                 "'not-installed' (expected before install)."
             )
+        # Controller row — a DISTINCT non-stack entity (LHPC's own checkout). Cached-only
+        # (no git/network/live check here); managed only via `lhpc self-update`.
+        if not stack_id:
+            cs = self.controller_status()
+            if cs is not None:
+                details.append("")
+                idv = cs.get("identity")
+                st_id = (idv or {}).get("status")
+                if idv is None:
+                    ident = "identity unchecked"
+                elif st_id == "ok":
+                    ident = "identity ok"
+                elif st_id == "unsafe":
+                    ident = f"identity UNSAFE ({idv.get('reason', '')})"
+                else:
+                    ident = "not self-hosted"
+                upd = "update available" if cs["update_available"] else "up to date"
+                head = f"@{cs['head_short']}" if cs["head_short"] else ""
+                details.append(f"[controller] {cs['display_name']}  ({upd})")
+                details.append(f"  v{cs['version']} {head}  {ident}  — manage with: "
+                               f"{cs['self_update_cmd']}")
         # Probing succeeded; status is informational — exit success even when stopped.
         return ActionResult(
             ok=True,
@@ -1670,6 +1848,8 @@ class ControllerService:
 
     def install(self, stack_id: str | None = None, apply: bool = False,
                 source: str = "pinned", bulk_ctx=None) -> ActionResult:
+        if (_r := self._controller_refusal(stack_id)) is not None:
+            return _r
         if stack_id and self.stack(stack_id) is None:
             return self._unknown_stack(stack_id)
         if not self._paths.runtime_root_exists:
@@ -1917,10 +2097,15 @@ class ControllerService:
                         ev.append(f"{addr}: {'present' if present else 'absent'}")
                 ok_all = ok_all and present
             return ok_all, ev
+        # A slow-booting app (e.g. a Python node that imports heavy libs before opening its
+        # port) can need longer than the global default to become ready. Honour a
+        # per-component `readiness_timeout` override when set, so one slow component gets a
+        # longer window WITHOUT lengthening every other component's start-failure latency.
+        budget = getattr(comp, "readiness_timeout", 0.0) or self.ENDPOINT_VERIFY_TIMEOUT_S
         waited = 0.0
         while True:
             ok_all, ev = snapshot()
-            if ok_all or self.ENDPOINT_VERIFY_TIMEOUT_S <= 0 or waited >= self.ENDPOINT_VERIFY_TIMEOUT_S:
+            if ok_all or budget <= 0 or waited >= budget:
                 return ok_all, ev
             time.sleep(self.ENDPOINT_VERIFY_POLL_S)
             waited += self.ENDPOINT_VERIFY_POLL_S
@@ -2335,6 +2520,8 @@ class ControllerService:
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
         persisted); None = apply the saved config, as the CLI does."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         from . import reslock
         if bulk_ctx is not None:
             order = self._run_order(target) or []
@@ -3358,6 +3545,8 @@ class ControllerService:
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         from . import reslock
         if bulk_ctx is not None:
             ctx_err = self._bulk_ctx_error(bulk_ctx, set())
@@ -3668,6 +3857,8 @@ class ControllerService:
 
     def build(self, target: str, apply: bool = False, bulk_ctx=None,
               on_component_log=None) -> ActionResult:
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -4113,6 +4304,8 @@ class ControllerService:
     def test(self, target: str, tx: bool = False,
              apply: bool = False, bulk_ctx=None, on_component_log=None) -> ActionResult:
         """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`)."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -6133,6 +6326,27 @@ class ControllerService:
         from . import selfupdate
         return selfupdate.status_view(self._paths)
 
+    def controller_status(self) -> dict | None:
+        """Cached-only presentation of the controller (its OWN checkout) as a distinct
+        NON-stack row for CLI status + the dashboard. Returns None if no controller is
+        declared. Reads the cached self-update envelope ONLY — NO git, NO network, NO live
+        identity check, NO blocking read (safe for GET). Points to `lhpc self-update`."""
+        spec = self.controller()
+        if spec is None:
+            return None
+        from . import selfupdate
+        view = selfupdate.status_view(self._paths)        # cached envelope only
+        return {
+            "id": spec.id,
+            "display_name": spec.display_name,
+            "branch": spec.branch,
+            "version": view.get("version", ""),
+            "head_short": view.get("head_short", ""),
+            "update_available": bool(view.get("update_available", False)),
+            "identity": view.get("identity"),             # {ok, reason, checked_at} or None
+            "self_update_cmd": "lhpc self-update",
+        }
+
     def self_update_check(self) -> ActionResult:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so
         the footer/pages reflect it. Serialized with apply through the self-update lock: if an apply is
@@ -6158,7 +6372,11 @@ class ControllerService:
                                         "state/selfupdate-migrate.json).",
                                         data={"recovery_required": True,
                                               **selfupdate.status_view(self._paths)})
-                view = selfupdate.refresh_cache(self._system, self._paths)
+                # Embed the LIVE controller-identity verdict into the SAME atomic envelope
+                # write (a separate field could be dropped by a later refresh). GET/status
+                # then renders the cached verdict only.
+                identity = self.controller_identity_live() if self.controller() else None
+                view = selfupdate.refresh_cache(self._system, self._paths, identity=identity)
         except selfupdate.SelfUpdateBusy:
             view = selfupdate.status_view(self._paths)        # no fetch, no cache write
             return ActionResult(True, "A self-update is in progress — showing the last known status.",
@@ -6192,9 +6410,30 @@ class ControllerService:
                                 details=tuple(f"  {j.get('op', 'job')} {j.get('target', '')}"
                                               for j in jobs),
                                 data={"blocked_by_jobs": True})
+        # LIVE identity gate (recomputed here, NEVER trusting the cache): only a genuinely
+        # UNSAFE self-hosted checkout (tampered layout: symlink / group-writable / wrong
+        # branch-origin / repo mismatch) blocks apply before any mutation. A `not_applicable`
+        # verdict (NOT self-hosted — a dev checkout or a plain/tangled deployment) does NOT
+        # block: self-update proceeds via the normal `repo_root()` mechanism.
+        if self.controller() is not None:
+            idv = self.controller_identity_live()
+            if idv.get("status") == "unsafe":
+                return ActionResult(False, f"Self-update blocked: unsafe controller identity "
+                                    f"({idv['reason']}). No changes were made.",
+                                    data={"identity_unsafe": True, "identity": idv})
+        # LOCK ORDER (fixed): controller-runtime EXCLUSIVE first (so the running web server —
+        # which holds it SHARED — can never have its source mutated underneath it), THEN the
+        # self-update lock. Both non-blocking; incompatible holders refuse promptly.
         try:
-            with selfupdate.update_lock(self._paths):
-                return self._self_update_locked(force)
+            with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
+                with selfupdate.update_lock(self._paths):
+                    return self._self_update_locked(force)
+        except selfupdate.ControllerRuntimeBusy:
+            return ActionResult(False, "lhpc-web.service is running — stop it, then run self-update.",
+                                data={"web_running": True})
+        except selfupdate.ControllerRuntimeLockError:
+            return ActionResult(False, "Could not acquire the controller-runtime lock (unsafe runtime "
+                                "state) — aborting without changes.", data={"lock_error": True})
         except selfupdate.SelfUpdateBusy:
             return ActionResult(False, "A self-update is already in progress — try again shortly.",
                                 data={"busy": True})
@@ -6298,7 +6537,8 @@ class ControllerService:
             if selfupdate.clear_migration_journal(self._paths):
                 selfupdate.delete_anchor(self._system, hook["txid"])
 
-        instr = selfupdate.restart_instructions(res.get("deps_changed", False))
+        instr = selfupdate.restart_instructions(res.get("deps_changed", False),
+                                                self._controller_deps_sync_cmd())
         data = {**res, "restart": instr, "migrated": migrated, "pending_migrations": len(remaining)}
         migrated_note = f"{migrated} legacy default(s) migrated to the new defaults." if migrated else ""
         pending_note = (f"{len(remaining)} config default migration(s) could NOT be completed and will "
@@ -6864,6 +7104,8 @@ class ControllerService:
         dev/stable/pinned), falling back to the local checkout on failure. Skips
         optional libs/firmware unless one is targeted directly.
         """
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         all_items = self._with_source(target)
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
@@ -7132,6 +7374,8 @@ class ControllerService:
         """Remove managed runtime sources for `target`. Refuses if a target
         component is running; never removes a source still referenced by another
         component (shared checkout); never touches config, secrets or profiles."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         items = self._with_source(target)
         if not items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
@@ -7253,6 +7497,8 @@ class ControllerService:
         `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets, and every
         other stack are untouched. All removal is descriptor-anchored/no-follow; a linked
         source loses only its runtime symlink leaf."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
         from . import known_working, reslock, source_fs, source_registry
         stack = self.stack(target)
         if stack is None:

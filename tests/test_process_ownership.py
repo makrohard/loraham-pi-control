@@ -136,8 +136,8 @@ def test_record_is_restrictive_permissions(tmp_path, reaper):
 # --- §6.1/§6.2/§6.4 ownership retention + PID-reuse-safe cleanup --------------
 
 def test_ceased_process_with_lingering_endpoint_retains_record(tmp_path, reaper, monkeypatch):
-    # Process ceases on SIGTERM, but a ready=true endpoint still answers -> the stop
-    # is ENDPOINT_STILL_PRESENT and the ownership record is NOT discarded.
+    # Process ceases on SIGTERM, but a ready=true endpoint still answers (even after the
+    # bounded grace poll) -> the stop is ENDPOINT_STILL_PRESENT and the record is retained.
     from lhpc.core.model import Component, ComponentKind, EndpointSpec
     comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
                      readiness="endpoint",
@@ -145,8 +145,8 @@ def test_ceased_process_with_lingering_endpoint_retains_record(tmp_path, reaper,
     life = _life(tmp_path)
     p = _leader(reaper)
     life.record_launch(STACK, comp, p.pid, band="both")
-    # Pretend the readiness endpoint is still up after the process dies.
-    monkeypatch.setattr(life, "_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
+    # Genuinely-persistent endpoint (survives the grace) -> patch the grace-poll decision.
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
     res = life.stop(comp)
     assert res.outcome.value == "endpoint_still_present" and not res.ok
     assert life.owned_records("loraham-daemon") != []      # evidence retained
@@ -157,9 +157,58 @@ def test_no_record_but_lingering_endpoint_is_not_already_stopped(tmp_path, monke
     comp = Component(id="x", name="x", kind=ComponentKind.SERVICE, readiness="endpoint",
                      endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),))
     life = _life(tmp_path)
-    monkeypatch.setattr(life, "_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
     res = life.stop(comp)
     assert res.outcome.value == "endpoint_still_present" and not res.ok
+
+
+def test_lingering_endpoint_that_closes_within_grace_converges_to_stopped(tmp_path, reaper, monkeypatch):
+    # THE meshcom-qemu case: the tracked wrapper (run.sh) ceases immediately while its
+    # backgrounded child (qemu) takes a beat to close its 12323 listener. The endpoint is
+    # present on the first check(s) then gone -> the bounded grace poll must converge to a
+    # clean STOPPED (record cleared), NOT a spurious ENDPOINT_STILL_PRESENT.
+    from lhpc.core.model import Component, ComponentKind, EndpointSpec
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     readiness="endpoint",
+                     endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),))
+    life = _life(tmp_path)
+    monkeypatch.setattr(life, "STOP_POLL_S", 0.01)         # keep the test fast
+    p = _leader(reaper)
+    life.record_launch(STACK, comp, p.pid, band="both")
+    calls = {"n": 0}
+
+    def _fake_gone(c):
+        calls["n"] += 1
+        return (calls["n"] >= 3, [] if calls["n"] >= 3 else ["127.0.0.1:9999"])
+
+    monkeypatch.setattr(life, "_ready_endpoints_gone", _fake_gone)
+    res = life.stop(comp)
+    assert res.outcome.value == "stopped" and res.ok
+    assert calls["n"] >= 3                                  # it actually POLLED past the first check
+    assert life.owned_records("loraham-daemon") == []      # record cleared on the clean stop
+
+
+def test_endpoint_grace_is_bounded(tmp_path, reaper, monkeypatch):
+    # A genuinely-stuck endpoint must NOT poll forever — bounded by STOP_ENDPOINT_GRACE_S.
+    from lhpc.core.model import Component, ComponentKind, EndpointSpec
+    comp = Component(id="loraham-daemon", name="d", kind=ComponentKind.SERVICE,
+                     readiness="endpoint",
+                     endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),))
+    life = _life(tmp_path)
+    monkeypatch.setattr(life, "STOP_POLL_S", 0.01)
+    monkeypatch.setattr(life, "STOP_ENDPOINT_GRACE_S", 0.05)
+    p = _leader(reaper)
+    life.record_launch(STACK, comp, p.pid, band="both")
+    calls = {"n": 0}
+
+    def _always_present(c):
+        calls["n"] += 1
+        return (False, ["127.0.0.1:9999"])
+
+    monkeypatch.setattr(life, "_ready_endpoints_gone", _always_present)
+    res = life.stop(comp)
+    assert res.outcome.value == "endpoint_still_present" and not res.ok
+    assert 2 <= calls["n"] <= 12                            # polled a few times, then gave up
 
 
 def test_terminate_unobserved_refuses_on_identity_mismatch(tmp_path, reaper):

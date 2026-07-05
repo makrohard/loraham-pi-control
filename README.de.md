@@ -9,15 +9,27 @@ Konfiguration jeder App und überwacht und tunt den LoRaHAM-Daemon live.
 > Diese deutsche Anleitung richtet sich an Funkamateur-Betreiber. Code,
 > Oberflächentexte und die übrigen Dokumente sind auf Englisch (siehe `README.md`).
 
-## Installation
+## Installation (self-hosted)
+
+Ein Deployment ist **self-hosted**: Das Laufzeitverzeichnis `~/loraham-pi-control` ist ein
+reiner Container, und LHPCs eigener Checkout liegt darunter unter `src/loraham-pi-control`
+(wie die verwalteten Stacks), das venv außerhalb des Checkouts unter `venv/lhpc`.
 
 ```bash
-git clone https://github.com/makrohard/loraham-pi-control.git
-cd loraham-pi-control
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+# 1. LHPC in src/ des Laufzeitverzeichnisses klonen (das macht es self-hosted)
+mkdir -p ~/loraham-pi-control/src
+git clone https://github.com/makrohard/loraham-pi-control.git \
+    ~/loraham-pi-control/src/loraham-pi-control
 
-lhpc bootstrap              # Laufzeitverzeichnis ~/loraham-pi-control anlegen
+# 2. venv AUSSERHALB des Checkouts anlegen und installieren
+python3 -m venv ~/loraham-pi-control/venv/lhpc
+~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
+
+# 3. Laufzeit-Layout + Default-Config anlegen (nur Eigentümer, Modus 0700)
+~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
+
+# 4. Stacks übernehmen + bauen (venv/lhpc/bin in den PATH aufnehmen)
+export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc install daemon --yes   # Quelle übernehmen/prüfen …
 lhpc build daemon           # … dann bauen
 ```

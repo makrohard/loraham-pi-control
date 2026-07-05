@@ -124,3 +124,34 @@ def test_daemon_not_ready_endpoint_makes_degraded(tmp_path):
         unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=UNINITIALIZED\n"},
     )
     assert _prober(fake, tmp_path).assess_component(comp).run_state is RunState.DEGRADED
+
+
+def test_path_endpoint_symlink_to_outside_device_reads_present(tmp_path):
+    """A `path` endpoint that is a SYMLINK to a node OUTSIDE the runtime root (e.g. a socat
+    PTY link `state/loraham_kiss -> /dev/pts/N`) must resolve to the IN-ROOT leaf and read
+    PRESENT — not be mistaken for a containment escape and reported absent. Strict `under()`
+    realpath-follows the leaf, sees it escape, and refuses (the bug that stuck the KISS
+    serial bridge in DEGRADED); the lenient (path) resolution contains it lexically."""
+    import os
+
+    from lhpc.core.probes import RealSystem
+    (tmp_path / "state").mkdir()
+    outside = tmp_path.parent / (tmp_path.name + "_dev_target")
+    outside.write_text("x")                               # stands in for /dev/pts/N
+    (tmp_path / "state" / "loraham_kiss").symlink_to(outside)
+    prober = StatusProber(RealSystem(), Paths(runtime_root=tmp_path))
+    lenient = prober._resolve_addr("state/loraham_kiss", lenient=True)
+    strict = prober._resolve_addr("state/loraham_kiss", lenient=False)
+    # lenient -> the in-root leaf, which os.path.exists follows to the (existing) target
+    assert lenient.endswith("state/loraham_kiss") and os.path.exists(lenient)
+    # strict -> a guaranteed-absent sentinel (containment refusal), i.e. the old buggy path
+    assert strict.endswith(".unresolved-endpoint") and not os.path.exists(strict)
+
+
+def test_path_endpoint_lenient_still_rejects_dotdot_escape(tmp_path):
+    """Lexical leniency for path endpoints must NOT allow a `..` escape — only a symlink
+    leaf to an external node is tolerated, never a path that lexically leaves the root."""
+    from lhpc.core.probes import RealSystem
+    prober = StatusProber(RealSystem(), Paths(runtime_root=tmp_path))
+    resolved = prober._resolve_addr("../evil", lenient=True)
+    assert resolved.endswith(".unresolved-endpoint")     # refused -> absent sentinel

@@ -39,6 +39,34 @@ def test_external_unix_ready_endpoint_does_not_gate(tmp_path):
     assert ok            # external is observe-only -> never gates -> readiness not blocked
 
 
+def test_per_component_readiness_timeout_extends_wait(tmp_path, monkeypatch):
+    """A slow-booting endpoint that comes up AFTER the global default but WITHIN the
+    per-component `readiness_timeout` verifies (the meshcore-pi fix); with only the short
+    global default it would time out and be torn down."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "ENDPOINT_VERIFY_POLL_S", 0.001)
+    monkeypatch.setattr(svc, "ENDPOINT_VERIFY_TIMEOUT_S", 0.005)   # short global default
+    calls = {"n": 0}
+
+    def _fake_present(system, addr):
+        calls["n"] += 1
+        return (calls["n"] >= 20, f"{addr}: {'present' if calls['n'] >= 20 else 'absent'}")
+
+    monkeypatch.setattr("lhpc.core.probes.endpoints.tcp_endpoint_present", _fake_present)
+    ep = (EndpointSpec(kind="tcp", address="127.0.0.1:5000", ready=True),)
+
+    # Default budget: times out well before the endpoint appears -> NOT ready.
+    fast = Component(id="c", name="c", kind=ComponentKind.SERVICE, readiness="endpoint",
+                     endpoints=ep)
+    assert svc._ready_endpoints_present(fast)[0] is False
+
+    # Per-component budget: enough polls for the endpoint to appear -> ready.
+    calls["n"] = 0
+    slow = Component(id="c", name="c", kind=ComponentKind.SERVICE, readiness="endpoint",
+                     endpoints=ep, readiness_timeout=1.0)
+    assert svc._ready_endpoints_present(slow)[0] is True
+
+
 def test_stop_cessation_ignores_outside_root_unix(tmp_path):
     life = Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
                      FakeSystem().system)

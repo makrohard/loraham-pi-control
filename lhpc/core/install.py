@@ -132,6 +132,14 @@ class Installer:
 
     # -- bootstrap ---------------------------------------------------------
 
+    def _needs_harden(self, d: Path) -> bool:
+        """True if the directory exists but is group/other-writable (mode has 0o022 set)
+        — the identity/security boundary wants the runtime root owner-only (0700)."""
+        try:
+            return bool(d.is_dir() and (d.stat().st_mode & 0o022))
+        except OSError:
+            return False
+
     def plan_bootstrap(self) -> Plan:
         plan = Plan(title=f"Bootstrap runtime root {self.paths.runtime_root}")
         for name in RUNTIME_SUBDIRS:
@@ -139,6 +147,19 @@ class Installer:
             plan.actions.append(PlanAction(
                 "mkdir", str(d), f"create {name}/",
                 status="exists" if d.is_dir() else "planned"))
+        # HARDEN the runtime root (and src/, the controller-checkout parent) to 0700 AFTER
+        # the dirs exist — the documented security boundary behind the controller-identity
+        # proof. Default umask makes fresh dirs group-writable (0775), which surfaces as
+        # "identity UNSAFE: runtime root is group/other-writable"; enforcing it here fixes
+        # it at install time (idempotent — re-bootstrap tightens an existing loose root).
+        root = self.paths.runtime_root
+        plan.actions.append(PlanAction(
+            "harden", str(root), "restrict runtime root to 0700 (owner-only)",
+            status="planned" if (not root.is_dir() or self._needs_harden(root)) else "exists"))
+        src = self.subdir("src")
+        plan.actions.append(PlanAction(
+            "harden", str(src), "restrict src/ to 0700 (owner-only)",
+            status="planned" if (not src.is_dir() or self._needs_harden(src)) else "exists"))
         # Local config + secrets: create from templates only if absent.
         local = self.subdir("config") / "local.toml"
         plan.actions.append(PlanAction(
@@ -176,6 +197,16 @@ class Installer:
         if action.kind == "mkdir":
             runtime_fs.ensure_dir(self.paths, Path(action.target))
             action.status = "done"
+        elif action.kind == "harden":
+            # Owner-only 0700 on the runtime root / src (the controller-identity boundary).
+            # No-follow: refuse to chmod through a symlink leaf that leaves the root.
+            target = Path(action.target)
+            if target.is_symlink():
+                action.status, action.detail = "failed", "refusing to chmod a symlink"
+            else:
+                os.chmod(target, 0o700)
+                action.status = "done"
+                action.detail = "mode 0700"
         elif action.kind == "config":
             dest = Path(action.target)
             if not dest.exists():       # preserve an existing operator config

@@ -11,10 +11,10 @@ step below is manual and under your control.
 multi-threaded, no debug, no reloader. If waitress is not installed it falls back to the
 Flask development server (fine for quick interactive use only) and prints a warning.
 
-Install the supported server into the project venv (manual, one-time):
+Install the supported server into the deployment venv (manual, one-time):
 
 ```bash
-~/src/loraham-pi-control/.venv/bin/pip install waitress
+~/loraham-pi-control/venv/lhpc/bin/pip install waitress
 ```
 
 Loopback-only is a **hard invariant**: `run_server` refuses any non-loopback `--host`
@@ -22,6 +22,68 @@ Loopback-only is a **hard invariant**: `run_server` refuses any non-loopback `--
 
 Use **one** process. The console keeps per-request state and CSRF assumptions that are only
 safe single-process; do not run multiple workers without explicitly re-designing that.
+
+## Self-hosted deployment layout (the deployment standard)
+
+The supported **deployment** makes the runtime root a **plain container** and keeps LHPC's
+own source under it, exactly like the managed stack sources — so "the code that runs" and
+"the code self-update fetches" are one tree:
+
+```
+~/loraham-pi-control/            runtime root — a PLAIN container, NOT a git checkout
+├── src/
+│   ├── loraham-pi-control/      LHPC's OWN checkout (.git lives HERE, nowhere else)
+│   └── loraham-daemon/  RadioLib/  …   managed stack sources
+├── config/  logs/  state/  backups/
+└── venv/lhpc/                   the venv, OUTSIDE the checkout
+```
+
+The unit sets `LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs
+`venv/lhpc/bin/lhpc web`, and works from `src/loraham-pi-control`. Keeping the venv
+*outside* the checkout means self-update's `git clean` can never reach it.
+
+LHPC's checkout is a **dedicated controller identity**: it is observable and self-updatable,
+but it is **never** installed, adopted, built, tested, started, stopped, uninstalled,
+cleaned, or bulk-processed — every generic verb (`lhpc install/update/uninstall/clean/
+build/test/stack start|stop <controller-id>`) refuses centrally and points you at
+`lhpc self-update`. `lhpc status` shows a distinct `[controller]` row with its cached
+version / update / identity state.
+
+### Security boundary (the identity policy)
+
+The runtime root and the controller checkout must be **owned by the service user** and have
+**no group/other write** (mode `0700`). This is the stated policy behind the identity
+proof: before any self-update apply, LHPC verifies the fixed layout (no symlink anywhere in
+the `runtime-root → src → checkout` chain, correct ownership/mode, the checkout realpath
+equal to both the discovered git repo and the imported package), on the expected branch,
+attached, with the approved canonical `origin`. A same-account process replacing the
+checkout mid-check is **out of the threat model** — LHPC *detects and refuses* an unsafe
+layout, it does not claim same-account race-proofness.
+
+### Self-update operating rules
+
+- **Stop the web service first.** Self-update takes an EXCLUSIVE controller-runtime lock;
+  the running console holds it SHARED for its whole lifetime, so an apply refuses while the
+  service is up (and, symmetrically, the service fails closed at startup if an apply holds
+  the lock). Run `systemctl --user stop lhpc-web`, then `lhpc self-update`, then start it
+  again.
+- **A dirty checkout blocks apply** unless you explicitly choose overwrite.
+- **Dependency changes need a manual sync.** When an update reports `deps_changed`
+  (`pyproject.toml` changed), run the editable install yourself before restarting:
+  ```bash
+  ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
+  ```
+- The unit is **operator-managed** — self-update never rewrites or restarts it for you.
+
+### Recovery
+
+- **Identity mismatch** (`self-update blocked: unsafe controller identity …`): fix the
+  layout the message names — a stray symlink in the chain, wrong ownership/mode (`chmod 700`,
+  `chown` to yourself), a detached/renamed branch (`git -C … checkout main`), or a changed
+  `origin` — then re-check.
+- **Failed / interrupted update**: the existing migration-journal recovery applies; inspect
+  `state/selfupdate-migrate.json` as the message directs. Nothing is applied on a blocked or
+  recovery-required journal.
 
 ## Run it under systemd (user service, no root)
 
@@ -31,7 +93,7 @@ root and the daemon's shared `/tmp` sockets.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp ~/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
+cp ~/loraham-pi-control/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
 # adjust ExecStart path / port in the copy if your layout differs
 systemctl --user daemon-reload
 systemctl --user enable --now lhpc-web.service

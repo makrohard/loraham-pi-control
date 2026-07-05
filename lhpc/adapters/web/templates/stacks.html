@@ -21,22 +21,8 @@
 
   <div class="card">
     <div class="body stacklist">
-      {# LoRaHAM Pi Control itself — first entry, styled like a stack: the running web console, its
-         version/head freshness, and a link to the Self-Update page. #}
-      <details class="stackrow" id="self-stack">
-        <summary>
-          <span class="ss-name">LoRaHAM Pi Control</span>
-          <span class="pill">self</span>
-          <span class="badge badge-running">running</span>
-          <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}">@{{ selfupdate.head_short }}</span>{% endif %}
-          {% if selfupdate.update_available %}<span class="pill">update available</span>{% endif %}
-        </summary>
-        <div class="stackrow-body">
-          <p class="summary">This operator web console. Check for and apply updates on the
-            Self-Update page (the console must be restarted afterwards to load a new version).</p>
-          <p class="links"><a href="{{ url_for('self_update_page') }}">Self-Update &rarr;</a></p>
-        </div>
-      </details>
+      {# The controller (LHPC's own checkout) is shown on the dashboard + Self-Update page —
+         NOT here as a hardcoded always-"running" row. #}
       {% for g in groups %}
         <details class="stackrow"{% if g.jobs %} open{% endif %}>
           <summary>

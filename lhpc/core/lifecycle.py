@@ -545,6 +545,8 @@ class Lifecycle:
 
     STOP_WAIT_S = 5.0          # bounded wait for verified cessation after SIGTERM
     STOP_POLL_S = 0.2
+    STOP_ENDPOINT_GRACE_S = 3.0  # bounded extra wait for a ready endpoint to close after the
+                                 # owned process ceased (a child listener may lag the wrapper)
 
     def _owned_dir(self) -> Path:
         return self.paths.under("state", "owned")
@@ -729,6 +731,23 @@ class Lifecycle:
                 lingering.append(e.address)
         return (not lingering), lingering
 
+    def _await_ready_endpoints_gone(self, comp: Component) -> tuple[bool, list[str]]:
+        """`_ready_endpoints_gone` with a BOUNDED grace poll. A ready endpoint is often owned
+        by a CHILD that exits a beat after the tracked process: e.g. the meshcom-qemu wrapper
+        `run.sh` backgrounds `qemu-system-xtensa` in the same process group, so a `killpg`
+        SIGTERM reaches both, but the shell wrapper dies immediately while QEMU takes a moment
+        to shut down and close its `127.0.0.1:12323` listener. A single immediate check would
+        race and spuriously report ENDPOINT_STILL_PRESENT. Polling up to `STOP_WAIT_S` lets a
+        normal slow port release converge to STOPPED; a genuinely orphaned listener (e.g. a
+        detached child outside the killed group) still survives the wait and is reported."""
+        gone, lingering = self._ready_endpoints_gone(comp)
+        waited = 0.0
+        while not gone and waited < self.STOP_ENDPOINT_GRACE_S:
+            time.sleep(self.STOP_POLL_S)
+            waited += self.STOP_POLL_S
+            gone, lingering = self._ready_endpoints_gone(comp)
+        return gone, lingering
+
     def _cancel_post_runners(self, comp: Component, band: str | None) -> tuple[list, bool]:
         """Stop every detached post-start runner owned for this component (identity-verified SIGTERM,
         no SIGKILL, bounded verified cessation). Returns (notes, unverified) — `unverified` True when
@@ -800,7 +819,7 @@ class Lifecycle:
                     return result(Outcome.MANUAL_REQUIRED,
                                   "a matching process is running but not owned by LHPC — "
                                   f"stop it yourself: kill {' '.join(map(str, pm.pids))}")
-            gone, lingering = self._ready_endpoints_gone(comp)
+            gone, lingering = self._await_ready_endpoints_gone(comp)
             if not gone:
                 return result(Outcome.ENDPOINT_STILL_PRESENT,
                               "no owned process, but readiness endpoint(s) still present: "
@@ -849,8 +868,11 @@ class Lifecycle:
                           "an owned record could not be verified — ownership retained",
                           killed, notes)
         # All owned processes ceased. A verified stop ALSO requires every ready=true
-        # endpoint to be gone — only THEN are records/markers cleared.
-        gone, lingering = self._ready_endpoints_gone(comp)
+        # endpoint to be gone — only THEN are records/markers cleared. Poll with a bounded
+        # grace so a child that outlives the tracked wrapper by a beat (e.g. run.sh's
+        # backgrounded qemu closing its 12323 listener) converges to STOPPED instead of a
+        # spurious ENDPOINT_STILL_PRESENT.
+        gone, lingering = self._await_ready_endpoints_gone(comp)
         if not gone:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "

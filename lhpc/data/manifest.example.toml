@@ -12,6 +12,19 @@
 # Resource modes: exclusive | cooperative | provider | consumer | requirement.
 
 # =====================================================================
+# Controller identity: LHPC's OWN checkout (a dedicated NON-stack entity).
+# Observable + self-updatable, but NEVER installed/adopted/built/tested/
+# started/stopped/uninstalled/cleaned/bulk-processed. Exactly these keys are
+# allowed; source_path and branch are FIXED. Use `lhpc self-update` to change it.
+# =====================================================================
+[controller]
+id = "loraham-pi-control"
+display_name = "LoRaHAM Pi Control"
+source_path = "src/loraham-pi-control"
+branch = "main"
+remote = "https://github.com/makrohard/loraham-pi-control.git"
+
+# =====================================================================
 # Stack: daemon — the LoRaHAM daemon (radio chosen at run time)
 # =====================================================================
 [[stack]]
@@ -1223,6 +1236,10 @@ main = "meshcore-pi"
   [[stack.component]]
   id = "meshcore-pi"
   readiness = "endpoint"
+  # A Python node that imports its stack (LoRaRF/scapy/crypto) before opening TCP 5000 can
+  # take well over the 6 s global default to become ready — give it a longer window so start
+  # verifies instead of tearing it down. Tune down if your Pi is faster.
+  readiness_timeout = 45.0
   name = "MeshCore Pi (868)"
   kind = "service"
   band = "868"

@@ -126,6 +126,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
             welcome=service.bulk_welcome(),
+            # Controller (LHPC's own checkout) — CACHED only: version/head/identity/update
+            # read from the self-update envelope, NEVER a live git/network/identity call.
+            controller=service.controller_status(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -371,9 +374,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/self-update")
     def self_update_page():  # noqa: ANN202
-        # Read-only: cached status marker + local job list. No network, no git.
+        # Read-only: cached status marker + local job list. No network, no git, no live
+        # identity check — `controller_status()` reads the cached envelope only.
         return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
                                st=service.self_update_status(), jobs=service.active_jobs(),
+                               controller=service.controller_status(),
                                confirm=None, result=None, apply_data=None)
 
     @app.post("/self-update/check")
@@ -396,7 +401,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # dirty, that local changes would be overwritten). A running job blocks the button.
             return render_template("self_update.html", version=__version__,
                                    runtime_root=_runtime_root(), st=st, jobs=jobs, result=None,
-                                   apply_data=None,
+                                   apply_data=None, controller=service.controller_status(),
                                    confirm={"dirty": st.get("dirty"),
                                             "update_available": st.get("update_available")})
         # Stage 2 — apply (blocked if a job is active; dirty refused unless overwrite chosen).
@@ -404,6 +409,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(res.summary, "ok" if res.ok else "warn")
         return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
                                st=service.self_update_status(), jobs=service.active_jobs(),
+                               controller=service.controller_status(),
                                confirm=None, result=res, apply_data=res.data)
 
     @app.get("/stacks/<stack_id>")
@@ -962,36 +968,56 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
             "     (or a documented trusted reverse proxy)."
         )
         return 1
-    app = create_app()
-    # Best-effort, NON-BLOCKING upstream freshness check at startup (this is process startup, NOT a
-    # GET route) so the footer's version/head indicator becomes meaningful shortly after boot. Any
-    # failure is swallowed — the footer simply stays grey/"unknown".
-    import threading
-
-    def _startup_selfcheck():
-        try:
-            ControllerService().self_update_check()
-        except Exception:
-            pass
-
-    threading.Thread(target=_startup_selfcheck, name="lhpc-selfcheck", daemon=True).start()
-    print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
-    print("     Loopback-only. Press Ctrl-C to stop.")
-    # Supported deployment uses a production-capable WSGI server (waitress): one process,
-    # multi-threaded, no debug, no reloader. The Flask dev server is a fallback for bare
-    # interactive use only (still loopback-only, no debug, no reloader). waitress is NOT a
-    # hard dependency — if it is absent we fall back and say so.
+    # Controller-runtime lock (B6): acquire it SHARED, NON-BLOCKING, BEFORE the startup
+    # self-check or binding the socket, and hold it for the ENTIRE serving lifetime. If a
+    # self-update holds it EXCLUSIVE, fail CLOSED here — never serve with unlocked source
+    # that an apply could `reset --hard`/`clean` underneath the running process. The lock is
+    # released in the contextmanager's finally on ALL exit paths, incl. startup failure.
+    from lhpc.core import selfupdate as _su
+    from lhpc.core.paths import resolve_paths as _resolve_paths
     try:
-        from waitress import serve as _waitress_serve
-    except ImportError:
-        _waitress_serve = None
-    if _waitress_serve is not None:
-        # Single listening process; threads let live monitor polling + actions overlap.
-        _waitress_serve(app, host=host, port=port, threads=8, ident="lhpc")
-    else:
-        print("WARN waitress not installed — using the Flask dev server (OK for local "
-              "interactive use only).\n"
-              "     For the supported systemd deployment, install 'waitress' in the venv "
-              "(see docs/deployment.md).")
-        app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
-    return 0
+        _lock_cm = _su.controller_runtime_lock(_resolve_paths(), exclusive=False)
+        _lock_cm.__enter__()
+    except _su.ControllerRuntimeBusy:
+        print("ERR  a self-update is in progress (controller-runtime lock held) — "
+              "not starting the web server. Retry once self-update finishes.")
+        return 1
+    except _su.ControllerRuntimeLockError as exc:
+        print(f"ERR  could not acquire the controller-runtime lock ({exc}) — not starting.")
+        return 1
+    try:
+        app = create_app()
+        # Best-effort, NON-BLOCKING upstream freshness check at startup (this is process startup, NOT a
+        # GET route) so the footer's version/head indicator becomes meaningful shortly after boot. Any
+        # failure is swallowed — the footer simply stays grey/"unknown".
+        import threading
+
+        def _startup_selfcheck():
+            try:
+                ControllerService().self_update_check()
+            except Exception:
+                pass
+
+        threading.Thread(target=_startup_selfcheck, name="lhpc-selfcheck", daemon=True).start()
+        print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
+        print("     Loopback-only. Press Ctrl-C to stop.")
+        # Supported deployment uses a production-capable WSGI server (waitress): one process,
+        # multi-threaded, no debug, no reloader. The Flask dev server is a fallback for bare
+        # interactive use only (still loopback-only, no debug, no reloader). waitress is NOT a
+        # hard dependency — if it is absent we fall back and say so.
+        try:
+            from waitress import serve as _waitress_serve
+        except ImportError:
+            _waitress_serve = None
+        if _waitress_serve is not None:
+            # Single listening process; threads let live monitor polling + actions overlap.
+            _waitress_serve(app, host=host, port=port, threads=8, ident="lhpc")
+        else:
+            print("WARN waitress not installed — using the Flask dev server (OK for local "
+                  "interactive use only).\n"
+                  "     For the supported systemd deployment, install 'waitress' in the venv "
+                  "(see docs/deployment.md).")
+            app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+        return 0
+    finally:
+        _lock_cm.__exit__(None, None, None)

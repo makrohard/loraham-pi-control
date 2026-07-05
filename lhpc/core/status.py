@@ -63,14 +63,25 @@ class StatusProber:
         self._paths = paths
         self._profiles = profiles or {}
 
-    def _resolve_addr(self, address: str) -> str:
+    def _resolve_addr(self, address: str, *, lenient: bool = False) -> str:
         """A RELATIVE unix/path endpoint address is runtime-root-relative (contained by
         construction); absolute addresses (the external daemon's own /tmp sockets) pass
-        through untouched — LHPC only connects to those as a client."""
+        through untouched — LHPC only connects to those as a client.
+
+        `lenient=True` (for `path` endpoints) contains the leaf LEXICALLY without
+        realpath-following it: a path endpoint may LEGITIMATELY be a SYMLINK to a device
+        node OUTSIDE the root — e.g. a socat PTY link `state/loraham_kiss -> /dev/pts/N`.
+        Strict `under()` realpath-resolves that to `/dev/pts/N`, sees it escape the root,
+        and refuses — so the running PTY bridge read as ABSENT and the component was stuck
+        DEGRADED. Lexical containment keeps the resolved path the in-root leaf (never
+        CWD-relative), mirroring how observe-only source dirs allow a symlink leaf."""
+        import os
         from pathlib import Path as _P
         if address and not _P(address).is_absolute():
             try:
-                return str(self._paths.under(*_P(address).parts))
+                rel = os.path.join(*_P(address).parts)
+                return str(self._paths._lexical_under(rel) if lenient
+                           else self._paths.under(*_P(address).parts))
             except Exception:
                 # AUDIT ER3: containment refusal must read as ABSENT. Returning the
                 # ORIGINAL relative address let the probe resolve it against the
@@ -222,7 +233,11 @@ class StatusProber:
                         obs.present = False
                         obs.detail = ds.evidence.get("error", "status unreadable")
             elif spec.kind == "path":
-                present = self._system.fs.exists(self._resolve_addr(spec.address))
+                # A path endpoint (e.g. a socat PTY link) may be a symlink to a device
+                # node outside the root — contain it lexically so the legitimate link is
+                # not mistaken for a containment escape and reported absent.
+                present = self._system.fs.exists(
+                    self._resolve_addr(spec.address, lenient=True))
                 obs.present = present
                 obs.detail = "present" if present else "absent"
             observations.append(obs)

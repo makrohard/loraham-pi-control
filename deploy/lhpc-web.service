@@ -1,10 +1,18 @@
 # LoRaHAM Pi Control — web console: user-level systemd unit TEMPLATE.
 #
 # This file is a TEMPLATE. lhpc NEVER installs, enables, or starts it for you.
+#
+# SELF-HOSTED DEPLOYMENT LAYOUT (the supported deployment standard): the runtime root
+# ~/loraham-pi-control is a PLAIN container; LHPC's own checkout lives under it at
+# src/loraham-pi-control (like the managed stack sources), and the venv is OUTSIDE the
+# checkout at venv/lhpc. LHPC_RUNTIME_ROOT is set EXPLICITLY below. (For a bare dev run
+# from ~/src/loraham-pi-control with a .venv, point ExecStart/WorkingDirectory there and
+# drop LHPC_RUNTIME_ROOT — the default runtime root still applies.)
+#
 # Install it MANUALLY as a *user* service (runs as your normal user, no root):
 #
 #   mkdir -p ~/.config/systemd/user
-#   cp ~/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
+#   cp ~/loraham-pi-control/src/loraham-pi-control/deploy/lhpc-web.service ~/.config/systemd/user/
 #   # (adjust ExecStart/paths/port below if your layout differs)
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now lhpc-web.service
@@ -21,7 +29,7 @@
 
 [Unit]
 Description=LoRaHAM Pi Control web console (loopback-only)
-Documentation=file:///home/%u/src/loraham-pi-control/docs/deployment.md
+Documentation=file:///home/%u/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
 After=network-online.target
 Wants=network-online.target
 # Bounded restart: if it flaps (5 starts within 60 s) systemd gives up instead of looping.
@@ -30,9 +38,13 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+# Self-hosted layout: explicit runtime root (a plain container), checkout under src/, venv
+# at venv/lhpc (OUTSIDE the checkout, so self-update's `git clean` can never reach it).
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
 # Loopback-only bind is a HARD invariant (run_server refuses anything else). Uses the
 # supported WSGI server (waitress) when installed, else the dev-server fallback.
-ExecStart=%h/src/loraham-pi-control/.venv/bin/lhpc web --host 127.0.0.1 --port 8770
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc web --host 127.0.0.1 --port 8770
 Restart=on-failure
 RestartSec=3
 

@@ -35,6 +35,7 @@ _NET_TIMEOUT = 25.0
 _MARKER = ("state", "selfupdate.json")
 _MIGRATE_MARKER = ("state", "selfupdate-migrate.json")
 _LOCK = ("state", "locks", "selfupdate.lock")
+_CTRL_RUNTIME_LOCK = ("state", "locks", "controller-runtime")
 _VERSION_RE = re.compile(r"""__version__\s*=\s*["']([^"']+)["']""")
 
 JOURNAL_VERSION = 3                                # v3: records reference a durable git transaction ANCHOR
@@ -76,6 +77,45 @@ def update_lock(paths: Paths):
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as e:
             raise SelfUpdateBusy() from e
+        yield
+    finally:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        fh.close()
+
+
+class ControllerRuntimeBusy(Exception):
+    """The controller-runtime lock is held incompatibly — either the web server holds it
+    SHARED (so an apply cannot take it EXCLUSIVE) or an apply holds it EXCLUSIVE (so the
+    web server cannot start). Fail-closed, never block."""
+
+
+class ControllerRuntimeLockError(Exception):
+    """The controller-runtime lock leaf could not be opened safely (unsafe runtime state)."""
+
+
+@contextmanager
+def controller_runtime_lock(paths: Paths, *, exclusive: bool):
+    """The runtime-owned, no-follow controller-runtime flock at `state/locks/
+    controller-runtime`. Prevents the running web server from having its own source mutated
+    underneath it: `lhpc web` holds it SHARED (`exclusive=False`) for its whole lifetime;
+    `self-update --apply` takes it EXCLUSIVE (`exclusive=True`) BEFORE the self-update
+    `update_lock` (fixed lock order — no inversion). Both acquisitions are NON-BLOCKING:
+    an incompatible holder raises `ControllerRuntimeBusy` immediately (never a hang). There
+    is NO shared→exclusive upgrade — each caller opens its own descriptor. The kernel drops
+    the flock automatically if the holder dies."""
+    try:
+        fh = runtime_fs.open_lock(paths, paths.under(*_CTRL_RUNTIME_LOCK))
+    except (OSError, PathContainmentError) as e:
+        raise ControllerRuntimeLockError(str(e)) from e
+    mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    try:
+        try:
+            fcntl.flock(fh.fileno(), mode | fcntl.LOCK_NB)
+        except OSError as e:
+            raise ControllerRuntimeBusy() from e
         yield
     finally:
         try:
@@ -169,18 +209,99 @@ def check_upstream(system: System, branch: str = "") -> dict:
 
 # ---- cached marker (the ONLY thing GET pages read) --------------------------------------------
 
+CACHE_MAX_BYTES = 64 * 1024          # a tiny status marker; anything larger is untrusted
+CACHE_SCHEMA_VERSION = 1
+
+
 def read_cache(paths: Paths) -> dict:
+    """FILE-SAFE AND SCHEMA-SAFE cached-status read (the ONLY thing GET pages read). It
+    must never block, raise, or hand malformed data to presentation code:
+      * regular-file only, no-follow, size-gated (`stat_leaf_nofollow` BEFORE the bounded
+        `read_text_regular`, which alone caps the read but does not prove the file was not
+        larger) — reject an oversized cache (incl. a valid-JSON prefix + padding), never
+        truncate;
+      * the JSON ROOT and the nested `local`/`upstream`/`identity` values (when present)
+        must be dicts of bounded primitives — a scalar/list/wrong-shape payload → `{}`.
+    Any unsafe / missing / malformed / wrong-shape cache returns `{}` (rendered as GRAY
+    "unknown"), never an exception or a block."""
+    from . import runtime_fs as _rfs
+    import stat as _stat
     try:
-        return json.loads(runtime_fs.read_text(paths, paths.under(*_MARKER)))
-    except (OSError, ValueError):
+        # `paths.under()` realpath-checks the leaf and raises PathContainmentError (a
+        # ValueError) for an ESCAPING symlink — it MUST be inside the try so that case
+        # returns {} rather than 500-ing the page (the very case no-follow defends against).
+        path = paths.under(*_MARKER)
+        stt = _rfs.stat_leaf_nofollow(paths, path)
+        if stt is None or not _stat.S_ISREG(stt.st_mode) or stt.st_size > CACHE_MAX_BYTES:
+            return {}                                     # absent/symlink/non-regular/oversized
+        raw = _rfs.read_text_regular(paths, path, max_bytes=CACHE_MAX_BYTES)
+        data = json.loads(raw)
+    except (OSError, PathContainmentError, ValueError):
         return {}
+    return data if _valid_cache(data) else {}
+
+
+# Type predicates for cached fields. `bool` is deliberately NOT an int here — a JSON `true`
+# must never masquerade as a timestamp/version — and strings are length-bounded so nothing
+# unbounded reaches presentation (the whole file is already <= CACHE_MAX_BYTES, but be
+# explicit). Any consumed field of the wrong type invalidates the WHOLE envelope -> {}.
+_STR_MAX = 512
+
+
+def _is_str(v) -> bool:
+    return isinstance(v, str) and len(v) <= _STR_MAX
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _is_bool(v) -> bool:
+    return isinstance(v, bool)
+
+
+# {section: {field: predicate}} for EVERY cache field presentation code consumes. A present
+# field must satisfy its predicate; absent is always allowed (rendered as unknown/default).
+_LOCAL_FIELDS = {"head": _is_str, "head_short": _is_str, "branch": _is_str,
+                 "version": _is_str, "root": _is_str, "dirty": _is_bool, "is_git": _is_bool}
+_UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
+                    "branch": _is_str, "upstream_head": _is_str,
+                    "upstream_head_short": _is_str, "upstream_version": _is_str}
+_IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_int}
+
+
+def _valid_section(sec, fields) -> bool:
+    if sec is None:
+        return True                                       # absent section is fine
+    if not isinstance(sec, dict):
+        return False
+    return all(pred(sec[k]) for k, pred in fields.items() if k in sec)
+
+
+def _valid_cache(data) -> bool:
+    """Schema-validate a decoded cache envelope: the root must be a dict; a present
+    `schema_version` must be exactly the current one (an unknown/future version is rejected;
+    a LEGACY envelope with none is accepted and renders as unchecked); a present `checked_at`
+    must be an int (never a bool); and every consumed `local`/`upstream`/`identity` field
+    must match its type. Unknown extra fields are ignored, not rendered."""
+    if not isinstance(data, dict):
+        return False                                      # scalar / list / wrong root shape
+    if "schema_version" in data:                          # absent = legacy envelope (allowed)
+        sv = data["schema_version"]
+        if not _is_int(sv) or sv != CACHE_SCHEMA_VERSION:
+            return False                                  # unknown/future version, or "1"/true
+    if "checked_at" in data and not _is_int(data["checked_at"]):
+        return False
+    return (_valid_section(data.get("local"), _LOCAL_FIELDS)
+            and _valid_section(data.get("upstream"), _UPSTREAM_FIELDS)
+            and _valid_section(data.get("identity"), _IDENTITY_FIELDS))
 
 
 def write_cache(paths: Paths, data: dict) -> None:
     try:
         runtime_fs.write_marker(paths, paths.under(*_MARKER), json.dumps(data), 0o600)
-    except OSError:
-        pass                                              # cache is best-effort
+    except (OSError, PathContainmentError, ValueError, TypeError):
+        pass                                              # cache is best-effort, never fatal
 
 
 # A candidate carries `from_head`/`expected` only as advisory record fields — NEITHER is trusted to
@@ -407,31 +528,58 @@ def classify_journal(paths: Paths, system: System):
     return "ok", env, head
 
 
-def refresh_cache(system: System, paths: Paths, branch: str = "") -> dict:
-    """Do a live upstream check and persist {local, upstream, checked_at} to the marker. Returns the
-    computed status_view."""
-    data = {"local": local_state(system), "upstream": check_upstream(system, branch),
-            "checked_at": int(time.time())}
+def refresh_cache(system: System, paths: Paths, branch: str = "",
+                  identity: dict | None = None, now: int | None = None) -> dict:
+    """Do a live upstream check and persist the COMPLETE versioned envelope
+    `{schema_version, local, upstream, identity, checked_at}` in ONE atomic write. The
+    `identity` verdict (computed by the controller-identity live check in the service
+    layer) is embedded HERE so it can never be silently dropped by a later refresh; it is
+    a bounded `{checked_at, ok, reason}` dict or None. Returns the computed status_view.
+
+    Called with `identity=None` (e.g. by `apply_update`, which cannot recompute it), the
+    PRIOR envelope's identity verdict is CARRIED FORWARD rather than nulled — so an unrelated
+    refresh never drops the verdict (single-envelope invariant)."""
+    if identity is None:
+        prior = read_cache(paths).get("identity")
+        identity = prior if isinstance(prior, dict) else None
+    data = {"schema_version": CACHE_SCHEMA_VERSION,
+            "local": local_state(system), "upstream": check_upstream(system, branch),
+            "identity": identity if isinstance(identity, dict) else None,
+            "checked_at": int(time.time()) if now is None else int(now)}
     write_cache(paths, data)
     return status_view(paths)
 
 
+def _cstr(v) -> str:
+    """Coerce a cached value to a bounded display string (defensive: a future reader
+    regression that let a non-string through must not blow up `head[:9]` on a GET)."""
+    return v[:_STR_MAX] if isinstance(v, str) else ""
+
+
+def _cint(v) -> int:
+    return v if (isinstance(v, int) and not isinstance(v, bool)) else 0
+
+
 def status_view(paths: Paths) -> dict:
     """Read-only, network-free, subprocess-free view for the footer / pages, computed from the cached
-    marker only. Always returns a version + head to display, plus colors + `update_available`."""
+    marker only. Always returns a version + head to display, plus colors + `update_available`.
+    Every cached field is coerced (`_cstr`/`_cint`/`bool`) BEFORE use, so even if `read_cache`
+    ever regressed and let malformed data through, rendering can never raise on a GET."""
     cache = read_cache(paths)
-    local = cache.get("local") or {}
-    up = cache.get("upstream") or {}
+    local = cache.get("local")
+    local = local if isinstance(local, dict) else {}
+    up = cache.get("upstream")
+    up = up if isinstance(up, dict) else {}
     # is_git + version come from CHEAP local sources (a .git FS check + the in-process __version__),
     # NOT the cache, so they are correct even before the first upstream check. The HEAD (needs git)
     # comes from the cache — "" (unknown) until the startup/explicit check populates it.
     is_git = repo_root() is not None
     version = __version__
-    head = local.get("head", "")
-    head_short = local.get("head_short") or (head[:9] if head else "")
-    have_up = bool(up.get("ok"))
-    up_ver = up.get("upstream_version", "")
-    up_head = up.get("upstream_head", "")
+    head = _cstr(local.get("head"))
+    head_short = _cstr(local.get("head_short")) or (head[:9] if head else "")
+    have_up = bool(up.get("ok") is True)
+    up_ver = _cstr(up.get("upstream_version"))
+    up_head = _cstr(up.get("upstream_head"))
 
     if not have_up:
         ver_color = commit_color = "grey"
@@ -446,14 +594,37 @@ def status_view(paths: Paths) -> dict:
         "is_git": is_git,
         "available": is_git,
         "version": version, "head": head, "head_short": head_short,
-        "branch": local.get("branch", ""), "dirty": bool(local.get("dirty", False)),
-        "have_upstream": have_up, "upstream_error": up.get("error", ""),
-        "upstream_version": up_ver, "upstream_head_short": up.get("upstream_head_short", ""),
-        "deps_changed": bool(up.get("deps_changed", False)),
-        "checked_at": cache.get("checked_at", 0),
+        "branch": _cstr(local.get("branch")), "dirty": bool(local.get("dirty") is True),
+        "have_upstream": have_up, "upstream_error": _cstr(up.get("error")),
+        "upstream_version": up_ver, "upstream_head_short": _cstr(up.get("upstream_head_short")),
+        "deps_changed": bool(up.get("deps_changed") is True),
+        "checked_at": _cint(cache.get("checked_at")),
         "ver_color": ver_color, "commit_color": commit_color,
         "update_available": update_available,
+        # Controller identity verdict — CACHED only (never a live check on this read).
+        # Absent / unchecked -> None, rendered as "unchecked/unknown".
+        "identity": _identity_view(cache.get("identity")),
     }
+
+
+def _identity_view(raw):
+    """Bounded, shape-safe controller-identity verdict from the cached envelope: a dict
+    `{checked_at:int, ok:bool, status:str, reason:str}` or None ('unchecked/unknown').
+    `status` is one of `ok` / `unsafe` / `not_applicable` (defaulted from `ok` for a legacy
+    two-state cache), so presentation can render the NEUTRAL not-self-hosted case distinctly
+    from a genuine security failure."""
+    if not isinstance(raw, dict):
+        return None
+    ok = raw.get("ok")
+    reason = raw.get("reason")
+    if not isinstance(ok, bool):
+        return None
+    status = raw.get("status")
+    if status not in ("ok", "unsafe", "not_applicable"):
+        status = "ok" if ok else "unsafe"                 # legacy cache without a status field
+    return {"ok": ok, "status": status,
+            "reason": str(reason)[:200] if isinstance(reason, str) else "",
+            "checked_at": int(raw["checked_at"]) if isinstance(raw.get("checked_at"), int) else 0}
 
 
 # ---- apply + restart guidance -----------------------------------------------------------------
@@ -525,13 +696,18 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
     return out
 
 
-def restart_instructions(deps_changed: bool = False) -> dict:
+def restart_instructions(deps_changed: bool = False, deps_sync_cmd: str = "") -> dict:
     """How the operator restarts the web console after an update (lhpc never restarts itself).
-    Detects a systemd user-service context via `INVOCATION_ID`."""
+    Detects a systemd user-service context via `INVOCATION_ID`. When dependencies changed,
+    `deps_sync_cmd` (if given by the caller) is the EXACT editable-install command for the
+    deployment — the self-hosted controller passes its deployment interpreter + checkout,
+    already shell-quoted. With no controller declared, the dev fallback `pip install -e .`
+    is used."""
     under_systemd = bool(os.environ.get("INVOCATION_ID"))
     cmds: list[str] = []
     if deps_changed:
-        cmds.append("pip install -e .    # dependencies changed in this update")
+        sync = deps_sync_cmd or "pip install -e ."
+        cmds.append(f"{sync}    # dependencies changed in this update")
     cmds.append("systemctl --user restart lhpc-web" if under_systemd
                 else "stop the console (Ctrl-C) and re-run:  lhpc web")
     return {"under_systemd": under_systemd, "deps_changed": deps_changed, "commands": cmds}
