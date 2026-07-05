@@ -120,6 +120,19 @@ def test_proctree_missing_or_incomplete_token_never_signals():
         p.kill(); p.wait()
 
 
+def _raw_token(pid):
+    """A SessionToken for ANY pid, bypassing capture_session_token's session-leader
+    invariant — these tests intentionally probe NON-leader pids to exercise
+    terminate_session's fail-closed ownership checks."""
+    from lhpc.core import proctree
+    import os
+    with open(f"/proc/{pid}/stat") as fh:
+        data = fh.read()
+    rest = data[data.rindex(")") + 2:].split()
+    return proctree.SessionToken(pid=pid, starttime=int(rest[19]),
+                                 sid=os.getsid(pid), pgid=os.getpgid(pid))
+
+
 def test_proctree_wrong_token_does_not_signal():
     # #12: a live pid that is NOT a session leader + a WRONG start-time token -> neither the
     # token nor a session member matches -> nothing is signalled.
@@ -127,8 +140,7 @@ def test_proctree_wrong_token_does_not_signal():
     from lhpc.core import proctree
     p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])  # no new session
     try:
-        real = proctree.capture_session_token(p.pid)
-        wrong = dataclasses.replace(real, starttime=real.starttime + 987654)
+        wrong = dataclasses.replace(_raw_token(p.pid), starttime=987654321)
         res = proctree.terminate_session(wrong, os.getpid(), term_grace=0.2, kill_grace=0.2)
         assert not res.ok and p.poll() is None             # NOT signalled (ownership not proven)
     finally:
@@ -147,8 +159,7 @@ def test_proctree_never_signals_controller_group():
     # stale/mismatched token must not authorize killing ourselves (if it did, pytest dies).
     import os, dataclasses
     from lhpc.core import proctree
-    me = proctree.capture_session_token(os.getpid())
-    stale = dataclasses.replace(me, starttime=me.starttime + 12345)   # no longer matches us
+    stale = dataclasses.replace(_raw_token(os.getpid()), starttime=987654321)  # stale
     res = proctree.terminate_session(stale, os.getpid(), term_grace=0.1, kill_grace=0.1)
     assert res is proctree.Termination.UNVERIFIED                     # no signal; we're alive
 

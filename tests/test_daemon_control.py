@@ -97,3 +97,10 @@ def test_full_status_stats_channel(monkeypatch):
     sys.unix = Multi()
     view = dc.read_view(sys, "433")
     assert view.stats["TXOK"] == "1" and view.channel["LIVERSSI"] == "-103"
+
+
+def test_audit_freq_regex_is_ascii_only():
+    # AUDIT IN5: \d matched Unicode digits; ASCII-only [0-9] intended.
+    from lhpc.core import daemon_control as dc
+    assert dc._FREQ_RE.fullmatch("433.775")
+    assert not dc._FREQ_RE.fullmatch("٤٣٣")           # Arabic-Indic digits rejected

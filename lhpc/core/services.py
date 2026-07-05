@@ -116,6 +116,7 @@ class ControllerService:
         # The config cache is shared by the (threaded) web app; guard it so a save on one
         # thread is visible to the next read on any thread (no stale callsign/remote).
         self._config_lock = threading.RLock()
+        self._config_mtime = None               # local.toml mtime the cache was built from
         # THREAD-LOCAL re-entrancy bookkeeping: this service is shared by the (possibly
         # threaded) web app, so lock ownership is scoped to the CURRENT thread. Only
         # nested calls in the SAME thread skip re-acquisition; an independent thread
@@ -164,9 +165,21 @@ class ControllerService:
 
     def config(self) -> Config:
         with self._config_lock:
-            if self._config is None:
+            # AUDIT CC4: reload when local.toml's mtime changed since the cache was built.
+            # A long-lived web process otherwise served a stale callsign/remotes forever
+            # after an out-of-band hand-edit (a scenario the loader explicitly supports),
+            # and an in-lock plan could verify identity against the wrong effective remote.
+            mtime = self._local_config_mtime()
+            if self._config is None or mtime != self._config_mtime:
                 self._config = load_config(self._paths)
+                self._config_mtime = mtime
             return self._config
+
+    def _local_config_mtime(self):
+        try:
+            return os.stat(self._paths.runtime_root / "config" / "local.toml").st_mtime
+        except OSError:
+            return None
 
     def _invalidate_config(self) -> None:
         """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
@@ -370,84 +383,70 @@ class ControllerService:
         return ""
 
     def bulk_log_chunk(self, run_id: str, offset: int) -> dict:
-        """Byte-capped, cursor-based log read for the run view. The filename is derived
-        EXCLUSIVELY from the validated run_id (marker log fields are never opened);
-        offsets are bounded non-negative ints. File-only, no-follow, GET-safe."""
+        """Byte-capped, cursor-based read of the primary run log for the run view. The
+        filename is derived EXCLUSIVELY from the validated run_id (marker log fields are
+        never opened); offsets are bounded non-negative ints. File-only, no-follow.
+
+        FULLY FAIL-CLOSED (never raises through a GET route): path CONSTRUCTION (`under`
+        can raise PathContainmentError when `logs/` is an escaping symlink), the no-follow
+        parent walk, the O_NOFOLLOW open, and fstat/lseek/read are ALL guarded, and the
+        whole body is wrapped as a backstop. An escaping/symlinked/non-regular/unreadable
+        log yields bounded safe `error` data — the external target is never followed or
+        read. Both /install-all and /api/install-all stay GET-safe (HTTP 200)."""
+        import stat as stat_mod
         from . import bulk as bulk_mod
         try:
-            name = bulk_mod.log_name_for(run_id) + ".log"
-        except ValueError:
-            return {"error": "invalid run id", "offset": 0, "data": ""}
-        if not isinstance(offset, int) or offset < 0 or offset > (1 << 40):
-            return {"error": "invalid offset", "offset": 0, "data": ""}
-        # DESCRIPTOR-SAFE open: the managed log parent is reached by the no-follow
-        # descriptor walk (a symlinked logs dir fails closed) and the leaf is opened
-        # O_NOFOLLOW relative to the held parent fd; only a REGULAR leaf is read.
-        import stat as stat_mod
-        path = self._paths.under("logs", name)
-        fd = -1
-        try:
-            with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
-                fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
-        except FileNotFoundError:
-            return {"offset": 0, "data": "", "size": 0}
-        except (OSError, PathContainmentError) as exc:
-            return {"error": f"log unreadable ({exc})", "offset": 0, "data": ""}
-        try:
-            stt = os.fstat(fd)
-            if not stat_mod.S_ISREG(stt.st_mode):
-                return {"error": "log is not a regular file", "offset": 0, "data": ""}
-            size = stt.st_size
-            if offset > size:
-                offset = 0                       # truncated/new run: client restarts
-            os.lseek(fd, offset, os.SEEK_SET)
-            data = os.read(fd, 64 * 1024)        # byte cap per poll
-            return {"offset": offset + len(data),
-                    "data": data.decode("utf-8", "replace"), "size": size}
-        finally:
-            if fd >= 0:
-                os.close(fd)
+            try:
+                name = bulk_mod.log_name_for(run_id) + ".log"
+            except ValueError:
+                return {"error": "invalid run id", "offset": 0, "data": ""}
+            if not isinstance(offset, int) or offset < 0 or offset > (1 << 40):
+                return {"error": "invalid offset", "offset": 0, "data": ""}
+            fd = -1
+            try:
+                # Path CONSTRUCTION is inside the guard: `under` raises
+                # PathContainmentError for an escaping/symlinked `logs/` parent.
+                path = self._paths.under("logs", name)
+                with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
+                    fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
+            except FileNotFoundError:
+                return {"offset": 0, "data": "", "size": 0}
+            except (OSError, PathContainmentError, ValueError) as exc:
+                return {"error": f"log unreadable ({exc})", "offset": 0, "data": ""}
+            try:
+                stt = os.fstat(fd)
+                if not stat_mod.S_ISREG(stt.st_mode):
+                    return {"error": "log is not a regular file",
+                            "offset": 0, "data": ""}
+                size = stt.st_size
+                if offset > size:
+                    offset = 0                   # truncated/new run: client restarts
+                os.lseek(fd, offset, os.SEEK_SET)
+                data = os.read(fd, 64 * 1024)    # byte cap per poll
+                return {"offset": offset + len(data),
+                        "data": data.decode("utf-8", "replace"), "size": size}
+            except OSError as exc:
+                return {"error": f"log unreadable ({exc})", "offset": 0, "data": ""}
+            finally:
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+        except Exception:                        # noqa: BLE001 — a GET must never 500
+            return {"error": "run log temporarily unavailable", "offset": 0, "data": ""}
 
     def _bulk_component_log_list(self, st) -> list:
-        """Canonical ORDERED (title, filename) list of the run's per-component
-        build/test logs — marker stack order, then per stack: build logs (one per step
-        for multi-step components), then test logs. Only files that EXIST and were
-        written DURING this run (mtime >= started_at) are listed; execution creates
-        them in exactly this order, so the list only ever grows at its end and cursor
-        indexes stay stable across polls."""
-        import calendar
-        import stat as stat_mod
-        try:
-            start = calendar.timegm(time.strptime(st.get("started_at", ""),
-                                                  "%Y-%m-%dT%H:%M:%SZ")) - 2
-        except (ValueError, TypeError):
-            start = 0
-        stacks = {stk.id: stk for stk in self.stacks()}
-        out = []
-        for row in st.get("stacks", []):
-            stk = stacks.get(row.get("id"))
-            if stk is None:
-                continue
-            names = []
-            for c in stk.components:
-                if c.build_steps:
-                    n = len(c.build_steps)
-                    if n > 1:
-                        names += [(f"{c.name} — Build log (step {i + 1}/{n})",
-                                   f"build-{c.id}-{i}.log") for i in range(n)]
-                    else:
-                        names.append((f"{c.name} — Build log", f"build-{c.id}.log"))
-            for c in stk.components:
-                if c.test_argv:
-                    names.append((f"{c.name} — Test log", f"test-{c.id}.log"))
-            for title, fname in names:
-                try:
-                    stt = os.lstat(self._paths.under("logs", fname))
-                except OSError:
-                    continue
-                if stat_mod.S_ISREG(stt.st_mode) and stt.st_mtime >= start:
-                    out.append((title, fname))
-        return out
+        """The run's ordered (title, filename) component build/test logs read DIRECTLY
+        from the marker's DURABLE, run-owned `component_logs` — recorded in exact creation
+        order as each log was about to be written under a RUN-SPECIFIC name. Membership and
+        order come ONLY from this list; there is NO mtime/timestamp/glob/manifest inference,
+        so a prior run's generic log can never appear, the list is append-only (a new log
+        only ever extends the end), and identical timestamps are irrelevant. Fail-closed:
+        `bulk.component_logs` validates each entry's run-id-bound filename and SKIPS (never
+        raises on) any malformed/foreign one — the browser never influences this list."""
+        from . import bulk as bulk_mod
+        return bulk_mod.component_logs(st)
 
     @staticmethod
     def _bulk_log_frame(title: str, path: str) -> str:
@@ -460,16 +459,29 @@ class ControllerService:
         return f"\n{bar}\n{row(title)}\n{row(path)}\n{bar}\n"
 
     def _read_named_log_chunk(self, fname: str, offset: int, cap: int) -> tuple:
-        """Descriptor-safe byte-capped read of logs/<fname> from offset: returns
-        (raw_byte_count, text, size); (-1, "", 0) when unreadable."""
+        """Descriptor-safe, O_NOFOLLOW, byte-capped read of logs/<fname> from offset:
+        returns (raw_byte_count, text, size); (-1, "", 0) when unreadable. FAIL-CLOSED:
+        path CONSTRUCTION (`under` can raise PathContainmentError), the no-follow parent
+        walk, and open/stat/read are ALL inside the guard; `fname` must additionally be a
+        single safe leaf. A symlinked/escaping/malformed logs parent or leaf yields the
+        unreadable sentinel — it is never followed and never raised to the caller."""
         import stat as stat_mod
-        path = self._paths.under("logs", fname)
         fd = -1
         try:
+            # Defense-in-depth: even though marker entries are already run-id-validated,
+            # never build a path from a name with separators/`..`/NULs.
+            validators.path_component(fname, field="component log")
+            path = self._paths.under("logs", fname)
             with runtime_fs._walk_parent(self._paths, path, create=False) as (pfd, leaf):
                 fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=pfd)
-        except (OSError, PathContainmentError):
-            return (-1, "", 0)
+        except FileNotFoundError:
+            # ABSENT: the log leaf does not exist YET. A bulk component's step logs are
+            # registered in the marker before they are created (created one at a time as
+            # the build runs), so an absent leaf is a FUTURE log — distinct from an unsafe
+            # one, and the stream must WAIT at it, never frame or advance past it.
+            return (-2, "", 0)
+        except (OSError, PathContainmentError, ValueError, validators.ValidationError):
+            return (-1, "", 0)                    # UNSAFE: present but symlink/non-regular/escaping
         try:
             stt = os.fstat(fd)
             if not stat_mod.S_ISREG(stt.st_mode):
@@ -480,50 +492,93 @@ class ControllerService:
             os.lseek(fd, offset, os.SEEK_SET)
             data = os.read(fd, cap)
             return (len(data), data.decode("utf-8", "replace"), size)
+        except OSError:
+            return (-1, "", 0)
         finally:
             if fd >= 0:
-                os.close(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
     def bulk_component_log_chunk(self, run_id: str, index: int, offset: int) -> dict:
-        """LIVE sequential stream over the run's per-component build/test logs for the
-        second run-view window: cursor = (index, byte offset) into the canonical list;
-        each log begins with its ASCII-framed title, and a DRAINED log advances to the
-        next existing file (execution is sequential, so a successor file existing
-        proves the predecessor is complete). Stateless, GET-safe, byte-capped."""
-        st = self.bulk_status()
-        if (not st or st.get("unsafe") or st.get("run_id") != run_id
-                or not isinstance(index, int) or index < 0 or index > 4096
-                or not isinstance(offset, int) or offset < 0 or offset > (1 << 40)):
-            return {"index": 0, "offset": 0, "data": ""}
-        logs = self._bulk_component_log_list(st)
-        parts = []
-        budget = 512 * 1024                      # keep up with verbose builds (PIO)
-        hops = 0
-        while index < len(logs) and budget > 0 and hops < 8:
-            hops += 1
-            title, fname = logs[index]
-            nbytes, text, size = self._read_named_log_chunk(fname, offset, budget)
-            if nbytes < 0:
-                break                            # transiently unreadable: retry later
-            if nbytes:
-                # The frame is emitted EXACTLY ONCE per file — together with its first
-                # bytes (never for a still-empty live tail, which would re-frame on
-                # every poll while waiting for output).
-                if offset == 0:
-                    parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
-                parts.append(text)
-                offset += nbytes
-                budget -= nbytes
-                continue                         # maybe more of THIS file next loop
-            if offset >= size and index < len(logs) - 1:
-                if offset == 0:
-                    # A COMPLETE empty file: frame it once while passing over it.
-                    parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
-                index += 1                       # drained and a successor exists
-                offset = 0
-                continue
-            break                                # live tail: wait for more bytes
-        return {"index": index, "offset": offset, "data": "".join(parts)}
+        """LIVE sequential stream over the run's DURABLE, run-owned component build/test
+        logs (from the marker, run-id-bound): cursor = (index, byte offset) into that
+        ordered list; each log begins with its ASCII-framed title, and a DRAINED log
+        advances to the next. Stateless, GET-safe, byte-capped, NO mutation, NO network.
+
+        FAIL-CLOSED (never raises through a GET route): the whole body is wrapped; an
+        UNREADABLE log leaf (symlinked/malformed/escaping) is framed once with a bounded
+        '[log unavailable — unsafe or unreadable]' notice and skipped if a successor
+        exists, else surfaced as an explicit safe `error` — the browser is never given a
+        500 and no unsafe evidence is followed or trusted."""
+        try:
+            st = self.bulk_status()
+            if (not st or st.get("unsafe") or st.get("run_id") != run_id
+                    or not isinstance(index, int) or index < 0 or index > 4096
+                    or not isinstance(offset, int) or offset < 0 or offset > (1 << 40)):
+                return {"index": 0, "offset": 0, "data": ""}
+            logs = self._bulk_component_log_list(st)
+            parts = []
+            error = ""
+            budget = 512 * 1024                  # keep up with verbose builds (PIO)
+            hops = 0
+            while index < len(logs) and budget > 0 and hops < 8:
+                hops += 1
+                title, fname = logs[index]
+                nbytes, text, size = self._read_named_log_chunk(fname, offset, budget)
+                if nbytes == -2:
+                    # ABSENT: this log's step has not run yet — the live frontier. WAIT
+                    # here (no frame, no advance); it is framed with its first bytes once
+                    # created. This is what stops (a) re-framing the last registered step
+                    # every poll and (b) skipping earlier steps before their content exists.
+                    break
+                if nbytes == -1:
+                    # UNSAFE leaf (present but symlink/non-regular/escaping): frame a
+                    # bounded notice ONCE, then advance past it if a successor exists
+                    # (never stall, never follow it); no successor -> explicit safe error.
+                    if offset == 0:
+                        parts.append(self._bulk_log_frame(
+                            title, f"logs/{fname} — [log unavailable — unsafe or "
+                                   f"unreadable]"))
+                    if index < len(logs) - 1:
+                        index += 1
+                        offset = 0
+                        continue
+                    error = "a component log is unavailable (unsafe or unreadable)"
+                    break
+                if nbytes:
+                    # The frame is emitted EXACTLY ONCE per file — with its first bytes
+                    # (never for a still-empty live tail, which would re-frame each poll).
+                    if offset == 0:
+                        parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
+                    parts.append(text)
+                    offset += nbytes
+                    budget -= nbytes
+                    continue                     # maybe more of THIS file next loop
+                # DRAINED (nbytes == 0, at EOF). Advance to the next log ONLY once the
+                # successor actually EXISTS — because logs are created sequentially, a
+                # created successor proves THIS step finished. If the successor is still
+                # absent, THIS file is the live frontier: wait for more of it rather than
+                # advancing past a step that may still be producing output.
+                if offset >= size and index < len(logs) - 1:
+                    succ_present = self._read_named_log_chunk(
+                        logs[index + 1][1], 0, 1)[0] != -2
+                    if succ_present:
+                        if offset == 0:
+                            # A COMPLETE empty file: frame it once while passing over it.
+                            parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
+                        index += 1               # drained and a successor exists
+                        offset = 0
+                        continue
+                break                            # live tail / frontier: wait for more bytes
+            out = {"index": index, "offset": offset, "data": "".join(parts)}
+            if error:
+                out["error"] = error
+            return out
+        except Exception:                        # noqa: BLE001 — a GET must never 500
+            return {"index": 0, "offset": 0, "data": "",
+                    "error": "component-log stream temporarily unavailable"}
 
     def bulk_ack(self, confirm_orphan: bool = False) -> ActionResult:
         """EXPLICIT recovery/acknowledgement of dead/unsafe bulk state, SERIALIZED with
@@ -814,6 +869,14 @@ class ControllerService:
                 emit("FATAL: run marker could not be persisted — stopping (no work "
                      "without durable progress evidence)")
                 raise _Abort()
+
+        def register_log(title: str, log: str) -> None:
+            # DURABLE, append-only registration of a component build/test log the run is
+            # ABOUT to create — persisted (bw) before the file exists under its
+            # run-specific name, so the live stream only ever shows this run's own logs.
+            if bulk_mod.is_component_log_for(run_id, log):
+                marker["component_logs"].append({"title": title, "log": log})
+                bw()
         try:
             with self._bulk_boundary(run_id, stacks_ids, all_paths) as ctx:
                 # AUTHORITATIVE post-lock stopped recheck: zero mutation on refusal
@@ -967,7 +1030,8 @@ class ControllerService:
                         emit(f"==== {st.id}: build ====")
                         r["status"] = "building"
                         bw()
-                        b = self.build(st.id, apply=True, bulk_ctx=ctx)
+                        b = self.build(st.id, apply=True, bulk_ctx=ctx,
+                                       on_component_log=register_log)
                         for line in b.details:
                             emit(line)
                         if not b.ok:
@@ -984,7 +1048,8 @@ class ControllerService:
                         emit(f"==== {st.id}: host tests ====")
                         r["status"] = "testing"
                         bw()
-                        t = self.test(st.id, tx=False, apply=True, bulk_ctx=ctx)
+                        t = self.test(st.id, tx=False, apply=True, bulk_ctx=ctx,
+                                      on_component_log=register_log)
                         for line in t.details:
                             emit(line)
                         r["tests"] = {"ran": True, "ok": bool(t.ok),
@@ -3463,7 +3528,18 @@ class ControllerService:
         # the saved config).
         if ok and apply and self.stack(target) is not None:
             from . import known_working
-            known_working.clear_candidate(self._paths, target)
+            # AUDIT ER4: report a candidate-clear failure instead of swallowing it. A
+            # still-present candidate marker keeps the "confirm this stack as working"
+            # offer eligible for a stack that was just stopped — the operator could
+            # confirm a no-longer-running composition. `read_candidate` does not check
+            # liveness, so the "re-validated on read" rationale of the silent path is
+            # false. A failed clear downgrades the stop to NOT-fully-verified.
+            cleared, why = known_working.clear_candidate_checked(self._paths, target)
+            if not cleared:
+                ok = False
+                summary = (f"Stop for '{target}' applied but the known-working candidate "
+                           f"could not be retired — see details.")
+                details = list(details) + [f"  [candidate] not cleared: {why}"]
             self._clear_restart_required(target)
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
@@ -3590,7 +3666,8 @@ class ControllerService:
                             results=tuple(stopped.results) + tuple(res.results),
                             next_commands=res.next_commands)
 
-    def build(self, target: str, apply: bool = False, bulk_ctx=None) -> ActionResult:
+    def build(self, target: str, apply: bool = False, bulk_ctx=None,
+              on_component_log=None) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -3638,10 +3715,24 @@ class ControllerService:
             return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
         try:
             with self._source_operation_guard(src_paths, op="build"):
+                from . import bulk as bulk_mod
                 details = []
                 ok = True
+                run_id = getattr(bulk_ctx, "run_id", "") if bulk_ctx else ""
                 for _, comp in buildable:
-                    res = life.build(comp)
+                    # BULK: run-specific log base + DURABLE ordered registration BEFORE the
+                    # build runs, so the live stream shows only this run's own logs (the
+                    # file does not yet exist under a run-specific name -> no prior content).
+                    log_base = None
+                    if run_id and on_component_log is not None:
+                        log_base = bulk_mod.component_log_base(run_id, f"build-{comp.id}")
+                        n = len(comp.build_steps)
+                        for i in range(n):
+                            fn = f"{log_base}-{i}.log" if n > 1 else f"{log_base}.log"
+                            title = (f"{comp.name} — Build log (step {i + 1}/{n})"
+                                     if n > 1 else f"{comp.name} — Build log")
+                            on_component_log(title, fn)
+                    res = life.build(comp, log_base=log_base)
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
@@ -3791,40 +3882,106 @@ class ControllerService:
         and never following a symlink. Returns the number removed. Called at operation
         boundaries; there is no background cleaner."""
         from .paths import PathContainmentError
-        d = self._paths.under("logs")
+        from . import bulk as bulk_mod
         protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
         protected = {f"{n}.log" for n in protected} | {n for n in protected}
-        # Descriptor-safe enumeration (no `is_dir()`/`glob`/`is_symlink`): a symlinked/
-        # escaping logs dir fails closed; a symlinked log leaf is skipped (never followed,
-        # never pruned so an outside target can't be deleted).
+        # Protect the LIVE bulk run's own component build/test logs (requirement #7): its
+        # durable descriptors are this run's evidence — a mid-run prune must never remove a
+        # component log the stream still owns, even if the retention budget is exceeded.
+        # Retired runs' logs carry no such protection and age out normally.
         try:
+            st = self.bulk_status()
+        except Exception:                        # noqa: BLE001 — pruning must never fail
+            st = None
+        bulk_prefix = ""
+        if st and not st.get("unsafe") and st.get("state") in ("preparing", "running"):
+            try:
+                # FULL-run-id component-log prefix (`install-all-<run32>-`) — matches the
+                # exact names the run writes; the 8-hex run-log prefix would not.
+                bulk_prefix = bulk_mod.component_log_prefix(st["run_id"])
+            except (ValueError, KeyError, TypeError):
+                bulk_prefix = ""
+        # FAIL-CLOSED logs-root resolution + enumeration (no `is_dir()`/`glob`/`is_symlink`):
+        # `under` resolves the path (an ESCAPING `logs/` symlink raises PathContainmentError
+        # DURING construction — this was outside the guard and could 500 via build()/
+        # spawn_web_job()), the no-follow scandir refuses a symlinked/swapped logs dir, and
+        # a missing/unreadable directory is an ordinary OSError. Any of these returns 0
+        # safely — nothing outside the runtime root is ever read, followed, or deleted.
+        try:
+            d = self._paths.under("logs")
             entries = runtime_fs.scandir_nofollow(self._paths, d)
-        except PathContainmentError:
+        except (OSError, PathContainmentError, ValueError):
             return 0
+        import stat as _stat
         logs = []
         for name, is_link in entries:
             if is_link or not name.endswith(".log"):
                 continue
             f = d / name
-            try:
-                mtime = os.stat(f, follow_symlinks=False).st_mtime
-            except OSError:
+            # REGULAR FILES ONLY, via a DESCRIPTOR-SAFE stat (a path-based lstat could
+            # follow a `logs/` parent swapped after enumeration). A directory named
+            # `bad.log`, a FIFO/socket/device node, an unreadable leaf, or any
+            # uncertainty (`None`) is RETAINED and skipped — never a deletion candidate
+            # (an `os.unlink` on a directory would raise IsADirectoryError and escape).
+            stt = runtime_fs.stat_leaf_nofollow(self._paths, f)
+            if stt is None or not _stat.S_ISREG(stt.st_mode):
                 continue
-            logs.append((mtime, name, f))
+            logs.append((stt.st_mtime, name, f, stt.st_size))
         logs.sort(reverse=True)                                    # newest first
         removed, kept, total = 0, 0, 0
-        for _mtime, name, f in logs:
-            if name in protected:
-                continue
-            try:
-                size = os.stat(f, follow_symlinks=False).st_size
-            except OSError:
+        for _mtime, name, f, size in logs:
+            if name in protected or (bulk_prefix and name.startswith(bulk_prefix)):
                 continue
             kept += 1
             total += size
             if kept > self.LOG_RETENTION or total > self.LOG_RETENTION_BYTES:
-                runtime_fs.unlink(self._paths, f)      # descriptor-safe, refuses a symlink
+                try:
+                    runtime_fs.unlink(self._paths, f)  # descriptor-safe, refuses a symlink
+                    removed += 1
+                except (OSError, PathContainmentError):
+                    pass                               # refused/failed delete -> retain,
+                    # never raise, never increment the count (a leaf swapped to a dir or
+                    # symlink between stat and unlink lands here safely)
+        # AUDIT ER1: the transient launcher scripts (`state/jobs/<uid>.py`,
+        # `state/post/<uid>.py`) were created every build/start and NEVER pruned —
+        # unbounded inode growth, and (before the secrets-at-exec fix) a resting place for
+        # baked secrets. Python reads a launcher wholly at interpreter start, so once its
+        # process is running the file is no longer needed; keep only the newest few.
+        for sub in ("jobs", "post"):
+            removed += self._prune_ephemeral(("state", sub), ".py", self.LOG_RETENTION)
+        return removed
+
+    def _prune_ephemeral(self, subdir: tuple, suffix: str, keep: int) -> int:
+        """Keep only the newest `keep` REGULAR `suffix`-files under a runtime subdir; remove
+        the rest. FULLY FAIL-CLOSED (P2-B): path CONSTRUCTION (`under` raises
+        PathContainmentError for an escaping/symlinked `state/jobs`|`state/post`), no-follow
+        enumeration, descriptor-safe metadata, and deletion are ALL guarded — an unsafe
+        subdir returns a safe zero for that subdir and leaves external sentinels untouched.
+        Only regular files are candidates; any uncertainty is retained."""
+        import stat as _stat
+        from .paths import PathContainmentError
+        try:
+            d = self._paths.under(*subdir)
+            entries = runtime_fs.scandir_nofollow(self._paths, d)
+        except (OSError, PathContainmentError, ValueError):
+            return 0
+        items = []
+        for name, is_link in entries:
+            if is_link or not name.endswith(suffix):
+                continue
+            f = d / name
+            stt = runtime_fs.stat_leaf_nofollow(self._paths, f)    # descriptor-safe, no-follow
+            if stt is None or not _stat.S_ISREG(stt.st_mode):
+                continue                                           # regular files only
+            items.append((stt.st_mtime, f))
+        items.sort(reverse=True)                                   # newest first
+        removed = 0
+        for _mtime, f in items[keep:]:
+            try:
+                runtime_fs.unlink(self._paths, f)
                 removed += 1
+            except (OSError, PathContainmentError):
+                pass                                               # retain, never raise
         return removed
 
     def _jobs_dir(self):
@@ -3876,11 +4033,23 @@ class ControllerService:
         return (f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
                 "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
 
+    # A `.job` marker is a tiny TOML (pid + identity fields); anything larger is untrusted
+    # diagnostic evidence, never read in full or treated as a live job.
+    _JOB_MARKER_MAX = 64 * 1024
+
     def active_jobs(self) -> list[dict]:
         """Build/test jobs whose ORIGINAL process is still alive (identity-verified).
         A reused PID, a malformed marker, or a symlinked marker is never treated as a
-        live job; proven-finished markers are cleaned through the safe API."""
+        live job; proven-finished markers are cleaned through the safe API.
+
+        UNTRUSTED-STATE SAFE (P2): each marker is inspected non-blocking, no-follow,
+        regular-only, and BYTE-BOUNDED. A FIFO/device (would block), a directory, a
+        symlink/swapped leaf, an oversized or malformed marker is treated as diagnostic
+        evidence — never blocks, never trusted as active, never followed, and never
+        auto-deleted merely for being malformed. No exception escapes into the callers
+        (`prune_logs`/`build`/`test`/`spawn_web_job`)."""
         import tomllib
+        import stat as _stat
         from .paths import PathContainmentError
         d = self._jobs_dir()
         # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping jobs dir
@@ -3888,30 +4057,40 @@ class ControllerService:
         # never treated as a live job.
         try:
             entries = runtime_fs.scandir_nofollow(self._paths, d)
-        except PathContainmentError:
+        except (OSError, PathContainmentError):
             return []
         out = []
         for name, is_link in sorted(entries):
             if is_link or not name.endswith(".job"):
                 continue
             f = d / name
+            # DESCRIPTOR-SAFE gate: regular file, and small enough to be a real marker.
+            # An oversized marker is untrusted (a bounded read could truncate it to a
+            # still-parseable prefix and be wrongly trusted) — skip it, do not read it.
+            stt = runtime_fs.stat_leaf_nofollow(self._paths, f)
+            if stt is None or not _stat.S_ISREG(stt.st_mode) \
+                    or stt.st_size > self._JOB_MARKER_MAX:
+                continue                        # non-regular/oversized -> untrusted, retain
             try:
-                # No-follow read at the OPEN (no check-then-open): a swapped/symlinked marker
-                # raises OSError here and is skipped, never followed.
-                raw = tomllib.loads(runtime_fs.read_text(self._paths, f))
+                # BOUNDED, non-blocking, no-follow, regular-only read (never blocks on a
+                # FIFO, never follows a swapped/symlinked marker, never reads unbounded).
+                raw = tomllib.loads(runtime_fs.read_text_regular(
+                    self._paths, f, max_bytes=self._JOB_MARKER_MAX))
                 pid = int(raw["pid"])
-            except (OSError, KeyError, ValueError, tomllib.TOMLDecodeError):
-                continue                        # malformed -> retain for diagnosis
+            except (OSError, PathContainmentError, KeyError, ValueError,
+                    tomllib.TOMLDecodeError):
+                continue                        # malformed/unsafe -> retain for diagnosis
             if procident.identity_matches(raw, pid):
                 out.append({"log": raw.get("log"), "target": raw.get("target"),
                             "op": raw.get("op"), "stack": self.stack_of(raw.get("target", ""))})
             else:
-                # Finished/reused -> clear the marker. If it RACED into a symlink between
-                # the no-follow read and now, the safe unlink refuses it: retain it as
-                # evidence rather than letting this public read path throw.
+                # Finished/reused -> clear the marker. If it RACED into a symlink OR a
+                # DIRECTORY (IsADirectoryError) between the no-follow read and now, the
+                # safe unlink refuses/fails: retain it as evidence rather than letting this
+                # public read path throw into prune_logs()/build()/test()/spawn_web_job().
                 try:
                     runtime_fs.unlink(self._paths, f)
-                except PathContainmentError:
+                except (OSError, PathContainmentError):
                     pass
         return out
 
@@ -3932,7 +4111,7 @@ class ControllerService:
                             next_commands=[f"lhpc status {target}"])
 
     def test(self, target: str, tx: bool = False,
-             apply: bool = False, bulk_ctx=None) -> ActionResult:
+             apply: bool = False, bulk_ctx=None, on_component_log=None) -> ActionResult:
         """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`)."""
         items, err = self._resolve(target)
         if err:
@@ -3960,10 +4139,18 @@ class ControllerService:
             details = []
             ok = True
             src_paths = sorted({c.source.path for _, c in items if c.source and c.test_argv})
+            from . import bulk as bulk_mod
+            run_id = getattr(bulk_ctx, "run_id", "") if bulk_ctx else ""
             try:
                 with self._source_operation_guard(src_paths, op="host-test"):
                     for _, comp in items:
-                        res = life.host_test(comp)
+                        # BULK: run-specific test-log base + DURABLE ordered registration
+                        # BEFORE the test runs (same guarantees as the build path).
+                        log_base = None
+                        if run_id and on_component_log is not None and comp.test_argv:
+                            log_base = bulk_mod.component_log_base(run_id, f"test-{comp.id}")
+                            on_component_log(f"{comp.name} — Test log", f"{log_base}.log")
+                        res = life.host_test(comp, log_base=log_base)
                         if res is None:
                             details.append(f"  [skip] {comp.id}: no host test")
                             continue
@@ -5776,11 +5963,20 @@ class ControllerService:
         `O_DIRECTORY|O_NOFOLLOW` (a component that is — or was just swapped to — a symlink
         or non-directory is refused at the syscall). With `create=True` intermediate dirs
         are created one component at a time. Yields (parent_fd, leaf_name)."""
-        root = self._paths.resolve_source(c.source.path)
-        parts = [p for p in Path(rel_path).parts if p not in ("", ".")]
-        if not parts or any(p in ("..", "/") for p in parts):
+        # Walk EVERY component from the runtime root — including the source path's own
+        # parts (`src`, `<comp>`) — each opened O_NOFOLLOW relative to its parent fd, so a
+        # symlink swapped in at an INTERMEDIATE dir (e.g. `src` -> /elsewhere) is refused
+        # at the syscall. Opening the pre-resolved source root in one os.open would guard
+        # only its final component and follow such an intermediate symlink (P1 escape).
+        src_parts = [p for p in Path(c.source.path).parts if p not in ("", ".")]
+        leaf_parts = [p for p in Path(rel_path).parts if p not in ("", ".")]
+        parts = src_parts + leaf_parts
+        if not leaf_parts or any(p in ("..", "/") for p in parts):
             raise PathContainmentError(f"unsafe source config path: {rel_path!r}")
-        fds = [os.open(str(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)]
+        # The runtime ROOT is the trusted anchor — it may itself legitimately be a symlink
+        # in the operator's setup (mirror runtime_fs._walk_parent), so it is NOT opened
+        # O_NOFOLLOW; every component UNDER it (incl. `src`) is.
+        fds = [os.open(str(self._paths.runtime_root), os.O_RDONLY | os.O_DIRECTORY)]
         try:
             for comp in parts[:-1]:
                 if create:
@@ -5812,36 +6008,21 @@ class ControllerService:
                 return fh.read().decode("utf-8")
 
     def _write_source_config(self, c, rel_path: str, text: str) -> None:
-        """Atomically write a generated config into the managed SOURCE tree using a
-        DESCRIPTOR-ANCHORED walk that is immune to a symlink-swap race (P1.1): each path
-        component is created and opened RELATIVE TO ITS PARENT directory fd with
-        `O_DIRECTORY|O_NOFOLLOW`, so replacing an already-checked directory with a symlink
-        before the next step is refused AT THE syscall (a `source/conf -> outside` link can
-        never get `outside/newdir` created). The leaf is written `O_NOFOLLOW` (no symlink
-        clobber) and renamed in place. Linked external sources are rejected before here."""
-        import stat as _stat
-        with self._open_source_parent(c, rel_path, create=True) as (parent_fd, leaf):
-            try:                                              # refuse an existing symlink leaf
-                st = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
-                if _stat.S_ISLNK(st.st_mode):
-                    raise OSError(f"refusing a symlink-leaf source config: {leaf}")
-            except FileNotFoundError:
-                pass
-            tmp = f".{leaf}.tmp-{os.getpid()}"
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644,
-                         dir_fd=parent_fd)
-            try:
-                with os.fdopen(fd, "w") as fh:
-                    fh.write(text)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.rename(tmp, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            except BaseException:
-                try:
-                    os.unlink(tmp, dir_fd=parent_fd)
-                except OSError:
-                    pass
-                raise
+        """Atomically write a generated config into the managed SOURCE tree via the shared
+        `runtime_fs.atomic_write`: a full parent NO-FOLLOW walk from the runtime root (a
+        symlink swapped in at ANY component, incl. `src`, is refused at the syscall), a
+        UNIQUE `O_EXCL`+random-nonce temp, mode-set, atomic rename, and a parent fsync for
+        durability (AUDIT FS3 — the old hand-rolled temp reused a `pid`-named, non-`O_EXCL`
+        leaf that two waitress threads writing the same file could corrupt, and skipped the
+        parent fsync). Linked external sources fail the no-follow walk and are refused."""
+        from . import runtime_fs
+        leaf_parts = [p for p in Path(rel_path).parts if p not in ("", ".")]
+        if not leaf_parts or any(p in ("..", "/") for p in leaf_parts):
+            raise PathContainmentError(f"unsafe source config path: {rel_path!r}")
+        target = self._paths.resolve_source(c.source.path)
+        for p in leaf_parts:
+            target = target / p
+        runtime_fs.atomic_write(self._paths, target, text, 0o644)
 
     def reset_config(self, target: str, band: str = "") -> ActionResult:
         """Reset a stack/band's NORMAL Config-page settings (run params, file config, autostart)

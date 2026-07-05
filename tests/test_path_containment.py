@@ -70,30 +70,6 @@ def test_under_rejects_symlink_escape(tmp_path):
         p.under("evil", "secret.toml")        # resolves outside the runtime root
 
 
-def test_generated_wrapper_cannot_escape_via_symlinked_start_dir(tmp_path):
-    import os
-    from lhpc.core.config import Config
-    from lhpc.core.install import Installer
-    from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
-    from lhpc.core.probes import RealSystem
-    rt = tmp_path / "rt"
-    (rt).mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    os.symlink(outside, rt / "start")          # start/ is a symlink escaping the root
-    comp = Component(id="s-app", name="app", kind=ComponentKind.SERVICE,
-                     run_argv=("./app",), run_cwd="{source}", start_order=0,
-                     source=SourceSpec(path="src/app"))
-    inst = Installer(Paths(runtime_root=rt),
-                     (Stack(id="s", name="s", main="s-app", components=(comp,)),),
-                     Config(values={"install": {"adopt_search_root": str(tmp_path / "rt")}}),
-                     RealSystem())
-    plan = inst.apply_bootstrap()
-    # the wrapper action must FAIL (containment), and nothing is written outside.
-    assert any(a.kind == "wrapper" and a.status == "failed" for a in plan.actions)
-    assert not list(outside.iterdir())
-
-
 def test_atomic_write_rejects_symlink_leaf(tmp_path):
     import os
     from lhpc.core.config import _atomic_write

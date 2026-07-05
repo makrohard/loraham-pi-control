@@ -310,11 +310,11 @@ class Component:
     # this component is started — e.g. how to connect a just-launched GUI to its node.
     start_note: str = ""
     # Human-readable commands (relative to the component's source dir). Used to
-    # generate readable start/ wrappers and, in later phases, build/test jobs.
+    # drive starts and build/test jobs (manual start/ wrappers are retired).
     build_cmd: str = ""
     run_cmd: str = ""
     test_cmd: str = ""
-    pre_cmd: str = ""            # optional pre-start hook in the wrapper (e.g. mkdir a lock dir)
+    pre_cmd: str = ""            # optional pre-start hook (e.g. mkdir a lock dir)
     post_start: str = ""         # optional command spawned (detached) after start (e.g. set region)
     # --- structured command model (preferred; replaces the shell strings above) ---
     run_argv: tuple[str, ...] = ()        # argv token template (literals + {param:…}/{operator:…})

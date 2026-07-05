@@ -149,7 +149,10 @@ def check_upstream(system: System, branch: str = "") -> dict:
     if root is None:
         return {"ok": False, "error": "not a git checkout"}
     br = branch or local_state(system).get("branch") or "main"
-    f = _git(system, root, ["fetch", "--quiet", _REMOTE, br], _NET_TIMEOUT)
+    # `--` ends option parsing so a branch name can never be read as a git flag (S5:
+    # defense-in-depth — `br` is derived locally today, but guard it if it ever becomes
+    # operator-settable).
+    f = _git(system, root, ["fetch", "--quiet", _REMOTE, "--", br], _NET_TIMEOUT)
     if getattr(f, "not_found", False):
         return {"ok": False, "error": "git not found"}
     if f.returncode != 0:

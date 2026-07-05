@@ -496,7 +496,7 @@ def _fake_commands(root, *, clean_rc):
         ("git", "-C", r, "rev-parse", "HEAD"): R(out="aaaaaaaaa\n"),
         ("git", "-C", r, "rev-parse", "--abbrev-ref", "HEAD"): R(out="main\n"),
         ("git", "-C", r, "status", "--porcelain"): R(out="?? junk\n"),         # dirty -> needs force
-        ("git", "-C", r, "fetch", "--quiet", "origin", "main"): R(),
+        ("git", "-C", r, "fetch", "--quiet", "origin", "--", "main"): R(),
         ("git", "-C", r, "rev-parse", "origin/main"): R(out="bbbbbbbbb\n"),
         ("git", "-C", r, "show", "origin/main:lhpc/version.py"): R(out='__version__ = "0.1.2"\n'),
         ("git", "-C", r, "diff", "--name-only", "HEAD..origin/main", "--", "pyproject.toml"): R(),

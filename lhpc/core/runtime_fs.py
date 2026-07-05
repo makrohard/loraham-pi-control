@@ -1,7 +1,7 @@
 """One authoritative runtime-owned filesystem API (Workstream §6).
 
 Every mutation of a controller-owned runtime path (config, state, logs, markers,
-launchers, wrappers, locks) goes through this module so containment and no-follow
+launchers, locks) goes through this module so containment and no-follow
 guarantees are enforced in ONE place rather than re-implemented per site.
 
 Guarantees (Linux):
@@ -295,13 +295,19 @@ def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> 
         file_fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode,
                           dir_fd=parent_fd)
         try:
+            # os.dup can itself fail under fd exhaustion (EMFILE/ENFILE); build the marker
+            # INSIDE the try so file_fd is always closed on any failure (AUDIT FS4 — and
+            # its re-review: the dup must be guarded too, not just the write).
             marker = OwnedMarker(name, os.dup(parent_fd), file_fd, 0, 0)
             marker._write_all(data)             # COMPLETE write (loops over partial writes)
             os.fsync(file_fd)
             st = os.fstat(file_fd)
             marker.st_dev, marker.st_ino = st.st_dev, st.st_ino
         except BaseException:
-            os.close(file_fd)
+            try:
+                marker.close()                  # closes file_fd AND the dup'd parent fd
+            except NameError:
+                os.close(file_fd)               # dup failed before marker existed
             raise
         try:
             os.fsync(parent_fd)                 # the new dir entry is durable
@@ -464,6 +470,23 @@ def scandir_nofollow(paths: Paths, path: Path) -> list[tuple[str, bool]]:
                 os.close(dfd)
     except FileNotFoundError:
         return []                                      # a missing intermediate -> absent
+
+
+def stat_leaf_nofollow(paths: Paths, path: Path):
+    """Descriptor-anchored, no-follow lstat of a runtime leaf: the parent is walked
+    O_NOFOLLOW and the leaf is stat'd RELATIVE TO the held parent fd, so neither a swapped
+    parent NOR a symlink leaf is ever followed (a path-based `os.stat` would follow a
+    parent swapped between enumeration and stat). Returns `os.stat_result`, or `None` when
+    the leaf is absent/unreadable/escaping — the caller treats `None` as "uncertain, do
+    not act on it"."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            try:
+                return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError:
+                return None
+    except (OSError, PathContainmentError):
+        return None
 
 
 def unlink(paths: Paths, path: Path) -> None:

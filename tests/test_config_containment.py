@@ -116,7 +116,10 @@ def test_descriptor_walk_refuses_symlink_leaf(tmp_path):
     src = tmp_path / "src" / "app"; src.mkdir(parents=True)
     outside = tmp_path / "secret.toml"; outside.write_text("orig")
     os.symlink(outside, src / "app.toml")           # leaf is a symlink
-    with pytest.raises(OSError):
+    # The write now routes through runtime_fs.atomic_write, which refuses a symlink leaf
+    # with the typed PathContainmentError (was a bare OSError from the hand-rolled writer).
+    from lhpc.core.paths import PathContainmentError
+    with pytest.raises((OSError, PathContainmentError)):
         svc._write_source_config(_comp(), "app.toml", "x")
     assert outside.read_text() == "orig"            # not clobbered through the link
 

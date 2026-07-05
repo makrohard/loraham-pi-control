@@ -55,7 +55,7 @@ class Paths:
         return target
 
     def under(self, *parts: str) -> Path:
-        """Resolve a MUTABLE runtime path (logs/config/state/wrappers/owned records),
+        """Resolve a MUTABLE runtime path (logs/config/state/owned records),
         proven to stay inside the runtime root both lexically AND against symlink
         escapes — LHPC must never write through a symlink that leaves the root.
         (Use `resolve_source` for observe-only source dirs, which may be links.)"""
@@ -85,15 +85,13 @@ class Paths:
 
     def safe_unlink(self, path: Path) -> None:
         """Delete a runtime-owned leaf safely: contained, and never through a symlink
-        leaf. A missing file is a no-op; an escaping or symlinked target raises."""
-        if not self.contains(path):
-            raise PathContainmentError(f"refusing to unlink outside runtime root: {path}")
-        if path.is_symlink():
-            raise PathContainmentError(f"refusing to unlink a symlink leaf: {path}")
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+        leaf OR a swapped parent. A missing file is a no-op; an escaping or symlinked
+        target raises. Descriptor-anchored (AUDIT FS2): the parent is walked O_NOFOLLOW
+        and the leaf unlinked relative to that fd, so a check-then-unlink TOCTOU where the
+        parent dir is swapped to a symlink between validation and the syscall cannot
+        redirect the delete outside the root."""
+        from . import runtime_fs
+        runtime_fs.unlink(self, path)
 
     def resolve_source(self, relative: str) -> Path:
         """Resolve a manifest `source.path` (runtime-root-relative) to absolute,

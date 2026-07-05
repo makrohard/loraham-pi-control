@@ -37,6 +37,11 @@ class ConfigError(Exception):
     """A config file could not be parsed — surfaced as a diagnostic, never a crash."""
 
 
+class ConfigLockBusy(ConfigError):
+    """The exclusive config lock could not be acquired within the bounded timeout —
+    a long-running operation holds it; the mutation should be retried shortly."""
+
+
 def _atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None:
     """Atomically write a RUNTIME-OWNED config leaf THROUGH the safe runtime FS
     (`runtime_fs.atomic_write`): containment, no-follow leaf, parent fsync. Runtime-state
@@ -46,22 +51,46 @@ def _atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> Non
     runtime_fs.atomic_write(paths, path, text, mode)
 
 
+CONFIG_LOCK_TIMEOUT_S = 15.0
+_CONFIG_LOCK_POLL_S = 0.1
+
+
 @contextmanager
-def config_lock(paths: Paths):
+def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
     """Serialize config mutations within a runtime root (a single exclusive flock).
     The lock file is opened with O_NOFOLLOW so a symlinked `.lock` leaf is refused,
     and its path is containment-checked; if the lock cannot be acquired safely the
-    mutation is blocked (the exception propagates), never silently bypassed."""
+    mutation is blocked (the exception propagates), never silently bypassed.
+
+    BOUNDED acquire (AUDIT CC1): the exclusive lock is polled non-blocking up to
+    `timeout`, then raises `ConfigLockBusy`. A blocking `LOCK_EX` here would wedge — a
+    bulk run holds the SHARED config-stability lock for its ENTIRE duration (minutes),
+    so a Settings save on one of the web server's fixed thread pool would block that
+    thread until the run ended; repeated retries could freeze the whole UI. Failing fast
+    with a truthful 'busy, retry shortly' keeps the server responsive."""
+    import time as _time
     from . import runtime_fs
     # Single safe API: contained path + O_NOFOLLOW open (a symlinked .lock leaf or an
     # escaping parent raises here, blocking mutation rather than being bypassed).
     fh = runtime_fs.open_lock(paths, paths.under("config", ".lock"))
+    deadline = _time.monotonic() + max(0.0, timeout)
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if _time.monotonic() >= deadline:
+                    raise ConfigLockBusy(
+                        "config is busy — a long-running operation holds it; "
+                        "try again shortly")
+                _time.sleep(_CONFIG_LOCK_POLL_S)
         yield
     finally:
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        fh.close()
+        try:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
 
 
 @dataclass(frozen=True)
@@ -125,6 +154,10 @@ def _load_runtime_toml(paths: Paths, path: Path) -> dict:
         return tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
+    except RecursionError as exc:
+        # AUDIT IN2: pathologically deep inline-table nesting makes tomllib recurse past
+        # the interpreter limit — a malformed config must be a diagnostic, not a crash.
+        raise ConfigError(f"{path}: config nesting too deep") from exc
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

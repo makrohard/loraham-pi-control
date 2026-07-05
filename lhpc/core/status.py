@@ -71,8 +71,13 @@ class StatusProber:
         if address and not _P(address).is_absolute():
             try:
                 return str(self._paths.under(*_P(address).parts))
-            except Exception:                    # containment refusal -> probe "absent"
-                return address
+            except Exception:
+                # AUDIT ER3: containment refusal must read as ABSENT. Returning the
+                # ORIGINAL relative address let the probe resolve it against the
+                # controller's CWD — a same-named file/socket there falsely reported the
+                # component present/ready. Return a guaranteed-absent absolute sentinel
+                # under the runtime root instead (never CWD-relative).
+                return str(self._paths.runtime_root / "state" / ".unresolved-endpoint")
         return address
 
     # -- whole-snapshot ----------------------------------------------------

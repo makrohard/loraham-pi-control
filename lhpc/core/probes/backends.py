@@ -260,7 +260,7 @@ class RealProcFs:
             pid = int(entry)
             try:
                 with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                    raw = fh.read()
+                    raw = fh.read(64 * 1024)   # bounded: symmetry with capped drains
             except OSError:
                 continue
             if not raw:

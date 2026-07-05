@@ -70,6 +70,71 @@ def log_name_for(run_id: str) -> str:
     return f"install-all-{run_id[:8]}"
 
 
+# A component build/test log created BY a bulk run: a single flat leaf under logs/ whose
+# name embeds the FULL 32-hex run id, so it is EXACTLY owned by one run (a prior run's log
+# can never collide with — or be mistaken for — this run's, even when two run ids share
+# their first eight hex characters) and is a strict, controller-derived character set.
+# Browser-supplied strings are NEVER used to build these.
+_LOG_BASE_RE = re.compile(r"^[0-9A-Za-z._-]{1,80}$")
+COMPONENT_LOG_RE = re.compile(r"^install-all-[0-9a-f]{32}-[0-9A-Za-z._-]{1,80}\.log$")
+
+
+def component_log_prefix(run_id: str) -> str:
+    """The exact `install-all-<full-run-id>-` filename prefix that binds a component log to
+    ONE run — used both to build names and to protect/recognise a run's logs. Raises
+    ValueError on a bad run id."""
+    if not RUN_ID_RE.match(run_id or ""):
+        raise ValueError("invalid bulk run id")
+    return f"install-all-{run_id}-"
+
+
+def component_log_name(run_id: str, base: str) -> str:
+    """Run-specific component-log filename `install-all-<full-run-id>-<base>.log`. `base`
+    is a controller-derived job base (e.g. `build-loraham-daemon`, `test-<comp>`, with an
+    optional `-<step>` suffix) restricted to a strict charset. Raises ValueError on a bad
+    run id or base — never produces a path with separators, `..`, or NULs."""
+    if not _LOG_BASE_RE.match(base or ""):
+        raise ValueError(f"invalid component-log base: {base!r}")
+    return f"{component_log_prefix(run_id)}{base}.log"
+
+
+def component_log_base(run_id: str, base: str) -> str:
+    """The job-NAME base (no `.log`) for a run-specific component log — `run_job` appends
+    `.log`, and a multi-step build appends `-<i>` before that. Kept in lock-step with
+    `component_log_name` so the registered filename equals what the job actually writes."""
+    return component_log_name(run_id, base)[:-len(".log")]
+
+
+def is_component_log_for(run_id: str, name: str) -> bool:
+    """True iff `name` is a well-formed component-log leaf OWNED by `run_id` (bound to the
+    FULL 32-hex id) — used to protect a live run's logs from pruning and to fail-closed on
+    any other name (including a different run that shares the first eight hex chars)."""
+    if not RUN_ID_RE.match(run_id or "") or not COMPONENT_LOG_RE.match(name or ""):
+        return False
+    return name.startswith(f"install-all-{run_id}-")
+
+
+def component_logs(marker) -> list:
+    """The marker's DURABLE ordered component-log descriptors as validated
+    (title, filename) tuples. Fail-closed: a non-list field, a non-dict entry, a missing
+    field, or a filename that is not a well-formed component-log leaf is SKIPPED (never
+    raised, never followed) — the browser never influences this list. The run_id binding
+    is enforced against the marker's own run_id."""
+    run_id = str((marker or {}).get("run_id", ""))
+    raw = (marker or {}).get("component_logs")
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for e in raw:
+        if not isinstance(e, dict):
+            continue
+        title, log = e.get("title"), e.get("log")
+        if isinstance(title, str) and isinstance(log, str) \
+                and is_component_log_for(run_id, log):
+            out.append((title, log))
+    return out
+
+
 # ---- lease -----------------------------------------------------------------------------
 
 
@@ -291,6 +356,10 @@ def new_marker(run_id: str, mode: str, source: str, tests: bool, tx: bool,
             "tests": bool(tests), "tx": bool(tx),
             "log": log_name_for(run_id) + ".log",       # informational only, never opened
             "error": "",
+            # DURABLE, run-owned, APPEND-ONLY ordered component build/test log descriptors
+            # (each {"title", "log"}), recorded as each log is about to be created. Run
+            # membership/order come from THIS list — never from mtime/glob/manifest.
+            "component_logs": [],
             "tx_phase": {"status": "pending" if tx else "skipped", "detail": ""},
             "stacks": [{"id": s["id"], "name": s.get("name", s["id"]),
                         "status": "pending", "detail": "", "op": s.get("op", ""),

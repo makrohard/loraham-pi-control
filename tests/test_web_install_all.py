@@ -4,6 +4,7 @@ API, welcome-banner tri-state, Apps-page button labels."""
 
 import json
 import os
+from pathlib import Path
 
 from lhpc.core import bulk as bulk_mod
 from lhpc.core.paths import Paths
@@ -411,42 +412,105 @@ def _seed_running_marker(paths, run_id="c" * 32):
     return m
 
 
+def _register_log(paths, m, run_id, base, title, content=None):
+    """Register a run-owned component log the way the driver does: append the durable
+    descriptor to the marker AND (optionally) write the run-specific file."""
+    log = bulk_mod.component_log_name(run_id, base)
+    m["component_logs"].append({"title": title, "log": log})
+    assert bulk_mod.write_marker(paths, m)
+    if content is not None:
+        (paths.runtime_root / "logs").mkdir(exist_ok=True)
+        (paths.runtime_root / "logs" / log).write_text(content)
+    return log
+
+
 def test_component_log_stream_frames_and_advances(tmp_path):
-    # The second run-view window: canonical order, ASCII-framed titles, drained logs
-    # advance to the successor, live tail keeps the cursor.
+    # Ordered, run-owned descriptors: ASCII-framed titles, drained log advances to the
+    # successor, live tail keeps the cursor — all from the marker, not mtime/glob.
     paths = Paths(runtime_root=tmp_path)
-    _seed_running_marker(paths)
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    (logs / "build-loraham-daemon.log").write_text("daemon build output\n")
-    (logs / "build-loraham-kiss-tnc.log").write_text("kiss build ok\n")
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  "daemon build output\n")
+    _register_log(paths, m, rid, "build-loraham-kiss-tnc", "LoRaHAM KISS — Build log",
+                  "kiss build ok\n")
     c, svc = _client(tmp_path)
-    out = svc.bulk_component_log_chunk("c" * 32, 0, 0)
+    out = svc.bulk_component_log_chunk(rid, 0, 0)
     assert "+====" in out["data"]                                # ASCII frame
     assert "LoRaHAM Daemon" in out["data"] and "Build log" in out["data"]
     assert "daemon build output" in out["data"]
     assert "kiss build ok" in out["data"]                        # advanced to successor
     assert out["index"] >= 1
-    # live tail: appended bytes stream from the same cursor
-    with (logs / "build-loraham-kiss-tnc.log").open("a") as f:
+    log2 = bulk_mod.component_log_name(rid, "build-loraham-kiss-tnc")
+    with (tmp_path / "logs" / log2).open("a") as f:
         f.write("more output\n")
-    out2 = svc.bulk_component_log_chunk("c" * 32, out["index"], out["offset"])
+    out2 = svc.bulk_component_log_chunk(rid, out["index"], out["offset"])
     assert "more output" in out2["data"]
     assert "daemon build output" not in out2["data"]             # no re-send
 
 
-def test_component_log_stream_mtime_gates_stale_runs(tmp_path):
-    # A log left over from a PREVIOUS run (mtime before started_at) is not streamed.
+def test_prior_run_generic_log_never_appears(tmp_path):
+    # P1: a prior run left generic build-<comp>.log files; the new run's descriptors point
+    # at RUN-SPECIFIC names, so the prior content can never appear in the new run's stream.
     paths = Paths(runtime_root=tmp_path)
-    m = _seed_running_marker(paths)
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    stale = logs / "build-loraham-daemon.log"
-    stale.write_text("OLD RUN CONTENT\n")
-    os.utime(stale, (1.0, 1.0))                                  # long before this run
+    logs = tmp_path / "logs"; logs.mkdir()
+    (logs / "build-loraham-daemon.log").write_text("PRIOR RUN CONTENT\n")   # old generic
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
     c, svc = _client(tmp_path)
-    out = svc.bulk_component_log_chunk("c" * 32, 0, 0)
-    assert "OLD RUN CONTENT" not in out["data"]
+    # new run started, NO component log registered yet -> stream contains no prior text
+    out = svc.bulk_component_log_chunk(rid, 0, 0)
+    assert "PRIOR RUN CONTENT" not in out["data"]
+    assert out["data"] == ""
+    # once the run registers+creates its own run-specific log, ONLY that appears
+    _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  "THIS RUN\n")
+    out = svc.bulk_component_log_chunk(rid, 0, 0)
+    assert "THIS RUN" in out["data"]
+    assert "PRIOR RUN CONTENT" not in out["data"]
+
+
+def test_immediately_consecutive_run_no_prior_evidence(tmp_path):
+    # P1: a completed prior run HAS component logs; a new run begins within the same
+    # second (former 2s mtime window). Before the new run creates its own log, its API
+    # response contains none of the prior run's text or frame.
+    paths = Paths(runtime_root=tmp_path)
+    prev = "a" * 32
+    mp = bulk_mod.new_marker(prev, "install", "dev", True, False,
+                             [{"id": "daemon", "name": "LoRaHAM Daemon"}])
+    mp["state"] = "completed"
+    _register_log(paths, mp, prev, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  "PRIOR OUTPUT\n")
+    # new run, same wall-clock second, brand-new run_id, empty component_logs
+    rid = "c" * 32
+    _seed_running_marker(paths, rid)
+    c, svc = _client(tmp_path)
+    out = svc.bulk_component_log_chunk(rid, 0, 0)
+    assert out["data"] == "" and "PRIOR OUTPUT" not in out["data"]
+    assert "+====" not in out["data"]                            # no frame from prior run
+    # prior run's log cannot alter the new run's list
+    assert svc._bulk_component_log_list(svc.bulk_status()) == []
+
+
+def test_component_log_cursor_stable_with_identical_timestamps(tmp_path):
+    # P1: ordering comes from the durable list, not timestamps — two logs sharing an
+    # mtime keep a stable order and never reorder an already-emitted index.
+    import os
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    a = _register_log(paths, m, rid, "build-radiolib", "RadioLib — Build log", "radiolib\n")
+    b = _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                      "daemon\n")
+    same = 1700000000.0
+    os.utime(paths.runtime_root / "logs" / a, (same, same))
+    os.utime(paths.runtime_root / "logs" / b, (same, same))       # identical mtime
+    c, svc = _client(tmp_path)
+    lst = svc._bulk_component_log_list(svc.bulk_status())
+    assert [x[1] for x in lst] == [a, b]                          # registration order kept
+    # streaming index 0 then advancing never reorders
+    out = svc.bulk_component_log_chunk(rid, 0, 0)
+    assert out["data"].index("radiolib") < out["data"].index("daemon")
 
 
 def test_component_log_stream_rejects_wrong_run(tmp_path):
@@ -513,25 +577,434 @@ def test_api_reports_spawn_liveness(tmp_path):
 
 
 def test_component_log_headers_emitted_exactly_once(tmp_path):
-    # LIVE FINDING: an EMPTY live log re-framed its ASCII header on EVERY 2s poll
-    # ("header lots of times but not the log"). The frame now rides with the file's
-    # FIRST bytes (or once while passing a complete empty file) — never repeated.
+    # An EMPTY registered log (descriptor exists, file not yet written) must not re-frame
+    # its header on every poll; the frame rides with the file's first bytes.
     paths = Paths(runtime_root=tmp_path)
-    _seed_running_marker(paths)
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    f = logs / "build-loraham-daemon.log"
-    f.write_text("")                                             # live tail, no bytes
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    log = _register_log(paths, m, rid, "build-loraham-daemon",
+                        "LoRaHAM Daemon — Build log", content=None)   # registered, no file
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    f = tmp_path / "logs" / log
+    f.write_text("")                                             # live tail, no bytes yet
     c, svc = _client(tmp_path)
     ci = co = 0
-    for _ in range(3):                                           # poll while empty
-        out = svc.bulk_component_log_chunk("c" * 32, ci, co)
+    for _ in range(3):
+        out = svc.bulk_component_log_chunk(rid, ci, co)
         assert out["data"] == ""                                 # NO header spam
         ci, co = out["index"], out["offset"]
     f.write_text("first output\n")
-    out = svc.bulk_component_log_chunk("c" * 32, ci, co)
+    out = svc.bulk_component_log_chunk(rid, ci, co)
     assert out["data"].count("LoRaHAM Daemon") == 1              # header once
     assert "first output" in out["data"]
     ci, co = out["index"], out["offset"]
-    out = svc.bulk_component_log_chunk("c" * 32, ci, co)
+    out = svc.bulk_component_log_chunk(rid, ci, co)
     assert out["data"] == ""                                     # no re-header, no re-send
+
+
+def test_component_log_list_is_append_only_from_marker(tmp_path):
+    # The list is derived ONLY from the marker's durable descriptors, in registration
+    # order — a newly registered log only ever appends at the END; earlier indices are
+    # identical across polls regardless of build-vs-manifest ordering or timestamps.
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    _register_log(paths, m, rid, "build-loraham-kiss-tnc", "LoRaHAM KISS — Build log",
+                  "kiss\n")                                      # registered FIRST
+    c, svc = _client(tmp_path)
+    first = svc._bulk_component_log_list(svc.bulk_status())
+    _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  "daemon\n")                                    # registered SECOND
+    second = svc._bulk_component_log_list(svc.bulk_status())
+    assert second[:len(first)] == first                          # append-only: prefix stable
+    assert [x[1] for x in second] == [
+        bulk_mod.component_log_name(rid, "build-loraham-kiss-tnc"),
+        bulk_mod.component_log_name(rid, "build-loraham-daemon")]
+
+
+# --- P2: component-log GET/API must fail closed, never HTTP 500, never follow unsafe -----------
+
+def test_api_install_all_200_with_symlinked_logs_dir(tmp_path):
+    # P2: a symlinked logs/ parent must never raise through the GET route.
+    import os
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  content=None)
+    import tempfile
+    outside = Path(tempfile.mkdtemp())                            # genuinely OUTSIDE runtime root
+    (outside / bulk_mod.component_log_name(rid, "build-loraham-daemon")).write_text("SECRET\n")
+    os.symlink(outside, tmp_path / "logs")                        # logs/ -> outside
+    c, svc = _client(tmp_path)
+    r = c.get(f"/api/install-all?run_id={rid}&ci=0&co=0")
+    assert r.status_code == 200                                   # no 500
+    d = r.get_json()
+    assert isinstance(d, dict) and "complog" in d                # valid JSON
+    assert "SECRET" not in json.dumps(d)                         # symlinked dir NOT followed
+
+
+def test_api_install_all_200_with_unsafe_component_log_leaf(tmp_path):
+    # P2: a component-log LEAF swapped to a symlink pointing outside must not be read;
+    # the section returns a bounded, valid safe state (never a 500, never the target).
+    import os
+    paths = Paths(runtime_root=tmp_path)
+    import tempfile
+    logs = tmp_path / "logs"; logs.mkdir()
+    secret = Path(tempfile.mkdtemp()) / "secret.txt"             # genuinely OUTSIDE runtime root
+    secret.write_text("TOP SECRET\n")
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    log = _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                        content=None)
+    os.symlink(secret, logs / log)                               # leaf is a symlink -> outside
+    c, svc = _client(tmp_path)
+    r = c.get(f"/api/install-all?run_id={rid}&ci=0&co=0")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert "TOP SECRET" not in json.dumps(d)                     # never followed/read
+    cl = d["complog"]
+    assert isinstance(cl, dict) and isinstance(cl.get("data"), str)
+    # single unsafe leaf with no successor -> explicit safe error state, bounded
+    assert cl.get("error")                                       # actionable safe error
+    # direct call: unsafe leaf yields the unreadable sentinel, never raises
+    assert svc._read_named_log_chunk(log, 0, 1024)[0] == -1
+
+
+def test_install_all_page_200_and_no_500_paths(tmp_path):
+    # P2: /install-all remains GET-safe (HTTP 200) even with a live marker present.
+    paths = Paths(runtime_root=tmp_path)
+    _seed_running_marker(paths, "c" * 32)
+    c, _ = _client(tmp_path)
+    assert c.get("/install-all").status_code == 200
+
+
+def test_read_named_log_chunk_rejects_traversal_names(tmp_path):
+    # P2: path CONSTRUCTION failures (separators/..) fail closed, never raise.
+    c, svc = _client(tmp_path)
+    for bad in ("../../etc/passwd", "a/b.log", "..", "x\x00y.log"):
+        assert svc._read_named_log_chunk(bad, 0, 1024) == (-1, "", 0)
+
+
+# --- P1: component logs bound to the FULL 32-hex run id (no 8-hex-prefix aliasing) -------------
+
+def test_full_run_id_binding_no_eight_hex_alias(tmp_path):
+    # P1: two DISTINCT run ids sharing their first eight hex chars must not alias the same
+    # component-log names, and run B's stream must never show run A's retained log.
+    run_a = "aaaaaaaa" + "1" * 24                                # first 8 = aaaaaaaa
+    run_b = "aaaaaaaa" + "2" * 24                                # same first 8, diff suffix
+    assert run_a[:8] == run_b[:8] and run_a != run_b
+    paths = Paths(runtime_root=tmp_path)
+    # run A: completed, with a retained component log
+    ma = bulk_mod.new_marker(run_a, "install", "dev", True, False,
+                             [{"id": "daemon", "name": "LoRaHAM Daemon"}])
+    ma["state"] = "completed"
+    log_a = _register_log(paths, ma, run_a, "build-loraham-daemon",
+                          "LoRaHAM Daemon — Build log", "RUN-A OUTPUT\n")
+    # the two derived filenames differ
+    log_b = bulk_mod.component_log_name(run_b, "build-loraham-daemon")
+    assert log_a != log_b
+    assert not bulk_mod.is_component_log_for(run_a, log_b)       # A does not own B's name
+    assert not bulk_mod.is_component_log_for(run_b, log_a)       # B does not own A's name
+    # run B begins (same first 8), NO component log yet
+    _seed_running_marker(paths, run_b)
+    c, svc = _client(tmp_path)
+    out = svc.bulk_component_log_chunk(run_b, 0, 0)
+    assert out["data"] == ""                                     # neither A's text ...
+    assert "RUN-A OUTPUT" not in out["data"] and "+====" not in out["data"]  # ... nor A's frame
+    assert svc._bulk_component_log_list(svc.bulk_status()) == []  # A cannot alter B's list
+
+
+# --- P2: PRIMARY run-log GET path is fail-closed too (page + API), external target ------------
+
+def _external_logs_symlink(tmp_path, run_id, secret):
+    """Point tmp_path/logs at a directory genuinely OUTSIDE the runtime root that holds a
+    primary run log with recognisable secret text. Returns the outside dir."""
+    import os, tempfile
+    outside = Path(tempfile.mkdtemp())
+    (outside / (bulk_mod.log_name_for(run_id) + ".log")).write_text(secret + "\n")
+    os.symlink(outside, tmp_path / "logs")
+    return outside
+
+
+def test_primary_bulk_log_fail_closed_direct(tmp_path):
+    # P2: bulk_log_chunk must not raise and must not read an escaping-symlink target.
+    rid = "c" * 32
+    _seed_running_marker(Paths(runtime_root=tmp_path), rid)
+    _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
+    c, svc = _client(tmp_path)
+    res = svc.bulk_log_chunk(rid, 0)
+    assert isinstance(res, dict) and res.get("error")           # explicit safe error
+    assert "PRIMARY-SECRET-XYZ" not in json.dumps(res)          # target never read
+
+
+def test_api_install_all_200_with_escaping_primary_log(tmp_path):
+    # P2: /api/install-all stays 200 + valid JSON; neither log nor complog leaks the secret.
+    rid = "c" * 32
+    m = _seed_running_marker(Paths(runtime_root=tmp_path), rid)
+    _register_log(Paths(runtime_root=tmp_path), m, rid, "build-loraham-daemon",
+                  "LoRaHAM Daemon — Build log", content=None)
+    _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
+    c, svc = _client(tmp_path)
+    r = c.get("/api/install-all?ci=0&co=0")
+    assert r.status_code == 200                                  # no 500
+    d = r.get_json()
+    assert isinstance(d, dict) and "log" in d and "complog" in d
+    assert "PRIMARY-SECRET-XYZ" not in json.dumps(d)            # not in log OR complog
+    assert d["log"].get("error")                                # primary log: safe error
+
+
+def test_install_all_page_200_with_escaping_primary_log(tmp_path):
+    # P2: /install-all page stays 200 with an escaping logs/ symlink (interrupted marker).
+    rid = "d" * 32
+    paths = Paths(runtime_root=tmp_path)
+    m = bulk_mod.new_marker(rid, "install", "dev", True, False,
+                            [{"id": "daemon", "name": "LoRaHAM Daemon"}])
+    m["state"] = "running"                                       # dead -> read-derived interrupted
+    assert bulk_mod.write_marker(paths, m)
+    _external_logs_symlink(tmp_path, rid, "PRIMARY-SECRET-XYZ")
+    c, _ = _client(tmp_path)
+    resp = c.get("/install-all")
+    assert resp.status_code == 200
+    assert b"PRIMARY-SECRET-XYZ" not in resp.data
+
+
+# --- P2: prune_logs() must be fail-closed for an escaping/unsafe logs/ parent -----------------
+
+def test_prune_logs_fail_closed_escaping_symlink(tmp_path):
+    # P2: a logs/ symlink escaping the runtime root must not raise from prune_logs()
+    # (the logs-root resolution was outside the guard and could 500 via build()/
+    # spawn_web_job()); the external target is never read or deleted.
+    import tempfile
+    outside = Path(tempfile.mkdtemp())
+    victim = outside / "old-external.log"; victim.write_text("EXTERNAL-SECRET\n")
+    os.symlink(outside, tmp_path / "logs")                       # logs/ -> outside
+    c, svc = _client(tmp_path)
+    n = svc.prune_logs()                                         # must NOT raise
+    assert isinstance(n, int) and n == 0                         # safe result, deleted nothing
+    assert victim.exists() and victim.read_text() == "EXTERNAL-SECRET\n"   # untouched
+
+
+def test_prune_logs_missing_dir_is_safe(tmp_path):
+    # P2: an absent logs/ directory is an ordinary OSError, handled safely.
+    c, svc = _client(tmp_path)                                   # no logs/ created
+    assert svc.prune_logs() == 0
+
+
+def test_build_reaching_prune_returns_typed_not_500(tmp_path):
+    # P2 requirement #3: a normal build path that reaches prune_logs() with an escaping
+    # logs/ symlink returns a typed ActionResult, never raising (which would surface as
+    # HTTP 500 on the web mutation path).
+    import tempfile
+    from lhpc.core.services import ActionResult
+    (tmp_path / "src" / "loraham-voice").mkdir(parents=True)
+    outside = Path(tempfile.mkdtemp()); (outside / "x.log").write_text("EXTERNAL-SECRET\n")
+    os.symlink(outside, tmp_path / "logs")
+    c, svc = _client(tmp_path)
+    res = svc.build("voice", apply=True)                         # reaches prune_logs()
+    assert isinstance(res, ActionResult)                        # typed, not a raise/500
+    assert (outside / "x.log").read_text() == "EXTERNAL-SECRET\n"   # nothing external touched
+
+
+def test_get_routes_200_with_escaping_logs_during_run(tmp_path):
+    # P2 requirement #4: /install-all and /api/install-all stay 200 and never leak the
+    # external content, even with an escaping logs/ symlink alongside a live marker.
+    import tempfile
+    rid = "c" * 32
+    _seed_running_marker(Paths(runtime_root=tmp_path), rid)
+    outside = Path(tempfile.mkdtemp())
+    (outside / (bulk_mod.log_name_for(rid) + ".log")).write_text("EXTERNAL-SECRET\n")
+    os.symlink(outside, tmp_path / "logs")
+    c, _ = _client(tmp_path)
+    page = c.get("/install-all")
+    api = c.get("/api/install-all?ci=0&co=0")
+    assert page.status_code == 200 and api.status_code == 200
+    assert b"EXTERNAL-SECRET" not in page.data
+    assert "EXTERNAL-SECRET" not in json.dumps(api.get_json())
+
+
+def test_prune_logs_normal_retention_preserves_live_bulk_logs(tmp_path):
+    # P2 requirement #5: a SAFE runtime-owned logs/ still prunes eligible old logs by the
+    # count budget while preserving the LIVE bulk run's component logs (full-run prefix).
+    import time as _t
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    live = _register_log(paths, m, rid, "build-loraham-daemon",
+                         "LoRaHAM Daemon — Build log", "live\n")   # live bulk component log
+    c, svc = _client(tmp_path)
+    logs = tmp_path / "logs"
+    now = _t.time()
+    # create many old unrelated runtime logs (exceed the retention count budget)
+    for i in range(svc.LOG_RETENTION + 10):
+        f = logs / f"old-{i}.log"; f.write_text("x" * 10)
+        os.utime(f, (now - 10000 - i, now - 10000 - i))            # older than the live log
+    os.utime(logs / live, (now, now))                             # live log is newest
+    removed = svc.prune_logs()
+    assert removed > 0                                            # eligible old logs pruned
+    assert (logs / live).exists()                                # live bulk log PRESERVED
+
+
+# --- P2-A/P2-B: prune retention must skip non-regular entries & fail-closed ephemeral dirs -----
+
+def test_prune_retains_directory_named_log(tmp_path):
+    # P2-A: a runtime-owned DIRECTORY named `bad.log` must not raise (os.unlink would raise
+    # IsADirectoryError) and must not be deleted; eligible old REGULAR logs still prune.
+    import time as _t
+    c, svc = _client(tmp_path)
+    logs = tmp_path / "logs"; logs.mkdir()
+    (logs / "bad.log").mkdir()                                   # directory, not a file
+    now = _t.time()
+    for i in range(svc.LOG_RETENTION + 5):
+        f = logs / f"old-{i}.log"; f.write_text("x" * 20)
+        os.utime(f, (now - 1000 - i, now - 1000 - i))
+    removed = svc.prune_logs()                                   # must NOT raise
+    assert removed > 0                                           # eligible regular logs pruned
+    assert (logs / "bad.log").is_dir()                          # directory retained, untouched
+
+
+def test_prune_non_regular_entries_retained(tmp_path):
+    # P2-A: a FIFO named `*.log` is non-regular -> never a deletion candidate, no raise.
+    import time as _t
+    c, svc = _client(tmp_path)
+    logs = tmp_path / "logs"; logs.mkdir()
+    fifo = logs / "pipe.log"
+    try:
+        os.mkfifo(fifo)
+    except (OSError, AttributeError):
+        return                                                  # platform without mkfifo
+    now = _t.time()
+    for i in range(svc.LOG_RETENTION + 3):
+        f = logs / f"old-{i}.log"; f.write_text("y" * 15)
+        os.utime(f, (now - 1000 - i, now - 1000 - i))
+    removed = svc.prune_logs()
+    assert removed > 0 and fifo.exists()                        # fifo retained, no raise
+
+
+def test_prune_deletion_refusal_not_counted(tmp_path, monkeypatch):
+    # P2-A: a deletion that raises (OSError/PathContainmentError — e.g. a leaf swapped to a
+    # symlink between stat and unlink) is retained, does not raise, and is NOT counted.
+    import time as _t
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import PathContainmentError
+    c, svc = _client(tmp_path)
+    logs = tmp_path / "logs"; logs.mkdir()
+    now = _t.time()
+    for i in range(svc.LOG_RETENTION + 6):
+        f = logs / f"old-{i}.log"; f.write_text("z" * 12)
+        os.utime(f, (now - 1000 - i, now - 1000 - i))
+    real_unlink = runtime_fs.unlink
+    calls = {"n": 0}
+    def flaky_unlink(paths, p):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PathContainmentError("simulated swapped leaf")   # first delete refused
+        return real_unlink(paths, p)
+    monkeypatch.setattr(runtime_fs, "unlink", flaky_unlink)
+    removed = svc.prune_logs()                                   # must NOT raise
+    assert removed == calls["n"] - 1                            # the refused delete not counted
+
+
+def test_prune_ephemeral_escaping_dirs_fail_closed(tmp_path):
+    # P2-B: state/jobs and state/post each symlinked to a genuinely external dir must not
+    # make prune_logs() raise; external sentinel files remain untouched.
+    import tempfile
+    c, svc = _client(tmp_path)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "state").mkdir()
+    out_jobs = Path(tempfile.mkdtemp()); (out_jobs / "s.py").write_text("SENT-JOBS\n")
+    out_post = Path(tempfile.mkdtemp()); (out_post / "s.py").write_text("SENT-POST\n")
+    os.symlink(out_jobs, tmp_path / "state" / "jobs")
+    os.symlink(out_post, tmp_path / "state" / "post")
+    assert svc.prune_logs() == 0                                 # no raise, nothing removed
+    assert (out_jobs / "s.py").read_text() == "SENT-JOBS\n"     # external untouched
+    assert (out_post / "s.py").read_text() == "SENT-POST\n"
+
+
+def test_prune_ephemeral_normal_pruning_still_works(tmp_path):
+    # P2-B: a SAFE state/jobs still prunes eligible old regular launcher files.
+    import time as _t
+    c, svc = _client(tmp_path)
+    (tmp_path / "logs").mkdir()
+    jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
+    now = _t.time()
+    for i in range(svc.LOG_RETENTION + 8):
+        f = jobs / f"u{i}.py"; f.write_text("x")
+        os.utime(f, (now - 1000 - i, now - 1000 - i))
+    (jobs / "not-a-launcher.dir.py").mkdir()                     # non-regular -> retained
+    svc.prune_logs()
+    assert len(list(jobs.glob("*.py"))) <= svc.LOG_RETENTION + 1  # pruned to budget (+dir)
+    assert (jobs / "not-a-launcher.dir.py").is_dir()            # non-regular retained
+
+
+def test_build_reaching_prune_typed_under_bad_log_dir(tmp_path):
+    # P2 requirement #4: an applied build reaching prune_logs() with a `bad.log` directory
+    # (and escaping ephemeral dirs) returns a typed ActionResult, never raising.
+    import tempfile
+    from lhpc.core.services import ActionResult
+    (tmp_path / "src" / "loraham-voice").mkdir(parents=True)
+    logs = tmp_path / "logs"; logs.mkdir()
+    (logs / "bad.log").mkdir()
+    (tmp_path / "state").mkdir()
+    out = Path(tempfile.mkdtemp()); (out / "s.py").write_text("EXT\n")
+    os.symlink(out, tmp_path / "state" / "jobs")
+    c, svc = _client(tmp_path)
+    res = svc.build("voice", apply=True)                        # reaches prune_logs()
+    assert isinstance(res, ActionResult)                       # typed, not a raise/500
+    assert (logs / "bad.log").is_dir() and (out / "s.py").exists()
+
+
+def test_component_log_not_created_step_waits_no_repeat_frame(tmp_path):
+    # BUG: a multi-step component registers ALL its step logs up front, but they are
+    # created one at a time. A not-yet-created (ABSENT) step must be a WAIT frontier —
+    # never framed, never advanced past. Previously absent was treated as "unavailable",
+    # so the last registered step's header was re-emitted every poll and earlier steps'
+    # content was skipped before it existed.
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    logs = tmp_path / "logs"; logs.mkdir()
+    bases = [bulk_mod.component_log_name(rid, f"build-meshcom-qemu-{i}") for i in range(4)]
+    for i, b in enumerate(bases):
+        m["component_logs"].append({"title": f"MeshCom QEMU — Build log (step {i+1}/4)",
+                                    "log": b})
+    assert bulk_mod.write_marker(paths, m)
+    c, svc = _client(tmp_path)
+    # only step 0 exists (running); steps 1-3 absent (not created yet)
+    (logs / bases[0]).write_text("setup running\n")
+    ci = co = 0
+    acc = ""
+    for _ in range(5):                                       # poll repeatedly while absent
+        d = svc.bulk_component_log_chunk(rid, ci, co)
+        acc += d["data"]; ci, co = d["index"], d["offset"]
+    assert acc.count("step 4/4") == 0                        # future step NEVER framed early
+    assert acc.count("step 1/4") == 1                        # step 0 framed once
+    assert "unavailable" not in acc                          # absent != unavailable
+    assert "setup running" in acc
+    # now steps create sequentially -> each framed exactly once, content preserved
+    (logs / bases[1]).write_text("overlay\n")
+    (logs / bases[2]).write_text("openeth\n")
+    (logs / bases[3]).write_text("cmake\ncompiling\n")
+    for _ in range(6):
+        d = svc.bulk_component_log_chunk(rid, ci, co)
+        acc += d["data"]; ci, co = d["index"], d["offset"]
+    for step in ("step 1/4", "step 2/4", "step 3/4", "step 4/4"):
+        assert acc.count(step) == 1, f"{step} framed {acc.count(step)} times"
+    assert "overlay" in acc and "openeth" in acc and "compiling" in acc   # no skipped blocks
+
+
+def test_component_log_absent_vs_unsafe_distinguished(tmp_path):
+    # An ABSENT leaf waits (-2); a genuinely UNSAFE leaf (symlink) is framed-unavailable.
+    import tempfile
+    paths = Paths(runtime_root=tmp_path)
+    rid = "c" * 32
+    m = _seed_running_marker(paths, rid)
+    logs = tmp_path / "logs"; logs.mkdir()
+    absent = bulk_mod.component_log_name(rid, "build-x")
+    m["component_logs"].append({"title": "X", "log": absent})
+    assert bulk_mod.write_marker(paths, m)
+    c, svc = _client(tmp_path)
+    assert svc._read_named_log_chunk(absent, 0, 10)[0] == -2       # absent sentinel
+    outside = Path(tempfile.mkdtemp()) / "secret"; outside.write_text("S\n")
+    os.symlink(outside, logs / absent)                            # now a symlink -> unsafe
+    assert svc._read_named_log_chunk(absent, 0, 10)[0] == -1       # unsafe sentinel

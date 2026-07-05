@@ -16,15 +16,6 @@ def test_normalizer_feeds_the_shared_engine(tmp_path):
     assert tuples == [("mkdir", str(tmp_path / "d"), "755")]
 
 
-def test_render_wrapper_uses_same_normalized_steps(tmp_path):
-    from lhpc.core.model import Component, ComponentKind
-    comp = Component(id="x", name="x", kind=ComponentKind.SERVICE, run_argv=("./app",),
-                     pre_steps=({"kind": "mkdir", "path": "{runtime}/w", "mode": "700"},))
-    script = commands.render_wrapper(comp, "start", str(tmp_path), str(tmp_path))
-    # the wrapper embeds the SAME tuple the normalizer produces
-    assert repr(("mkdir", str(tmp_path / "w"), "700")) in script
-
-
 def test_controller_and_wrapper_produce_identical_tree(tmp_path):
     steps = [{"kind": "mkdir", "path": "{runtime}/shared", "mode": "750"},
              {"kind": "symlink", "src": "{source}/x", "dst": "{runtime}/shared/link"}]

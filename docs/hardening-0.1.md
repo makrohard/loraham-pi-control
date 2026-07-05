@@ -21,6 +21,10 @@ are the current rules.
   persistence and before execution. Dependency probing uses `shutil.which`.
   Remote-override URLs use an https/scp-ssh policy.
 - All shipped components are migrated (`test_all_command_bearing_components_are_migrated`).
+> **Note (2026-07-05):** manual `start/` wrappers are retired — lhpc starts
+> services itself and the dashboard shows interactive commands. The hardening
+> described below applied while they existed; bootstrap now prunes legacy files.
+
   Manual wrappers + the displayed manual command are generated from the SAME spec
   (`commands.display_command`); they `exec` a fixed argv + forward `"$@"`, never
   building a command string from configuration.

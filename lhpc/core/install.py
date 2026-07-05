@@ -1,10 +1,8 @@
-"""Runtime-root bootstrap, readable wrappers, and safe source adoption.
+"""Runtime-root bootstrap and safe source adoption.
 
 This is the first *mutating* layer, but it is deliberately conservative:
 
   * bootstrap is idempotent and NEVER overwrites local config or secrets;
-  * generated `start/` wrappers point at real commands, forward `$@`, and use
-    RX-safe defaults — no opaque logic is hidden in them;
   * source adoption copies the operator's locally verified checkout into the
     runtime root (or clones a pin) and then VERIFIES the pin; it never edits,
     resets or cleans the original source, and refuses to overwrite an existing
@@ -32,7 +30,7 @@ from .probes import System
 from .probes.source import probe_source
 
 RUNTIME_SUBDIRS = (
-    "bin", "src", "build", "start", "config", "profiles", "systemd", "state", "logs", "docs",
+    "bin", "src", "build", "config", "profiles", "systemd", "state", "logs", "docs",
     "config/secrets",
 )
 
@@ -97,7 +95,7 @@ _LOCAL_STARTER = """\
 
 @dataclass
 class PlanAction:
-    kind: str                 # mkdir | config | secret | wrapper | adopt | clone | verify
+    kind: str                 # mkdir | config | secret | adopt | clone | verify
     target: str
     description: str
     status: str = "planned"   # planned | exists | done | failed | skipped
@@ -150,21 +148,16 @@ class Installer:
         plan.actions.append(PlanAction(
             "secret", str(secret), "write config/secrets.toml (0600)",
             status="exists" if secret.exists() else "planned"))
-        # Readable wrappers (regenerated).
-        expected = set()
-        for stack, comp, fname in self._wrappers():
-            expected.add(fname)
-            plan.actions.append(PlanAction(
-                "wrapper", str(self.subdir("start") / fname),
-                f"generate start/{fname}"))
-        # Prune stale wrappers (e.g. left over after a stack/component rename).
+        # Manual start wrappers are RETIRED: lhpc starts services itself and the
+        # dashboard shows interactive components' copy-paste commands (rendered from
+        # the same structured spec) — a wrapper-started service would bypass LHPC
+        # ownership. Legacy wrappers are pruned on bootstrap.
         start_dir = self.subdir("start")
         if start_dir.is_dir():
             for existing in sorted(start_dir.glob("*-start")):
-                if existing.name not in expected:
-                    plan.actions.append(PlanAction(
-                        "prune-wrapper", str(existing),
-                        f"remove stale start/{existing.name}"))
+                plan.actions.append(PlanAction(
+                    "prune-wrapper", str(existing),
+                    f"remove legacy start/{existing.name}"))
         return plan
 
     def apply_bootstrap(self, plan: Plan | None = None) -> Plan:
@@ -194,48 +187,9 @@ class Installer:
                 runtime_fs.atomic_write(self.paths, dest, asset_text("secrets.example.toml"), 0o600)
             action.status = "done"
             action.detail = "mode 0600"
-        elif action.kind == "wrapper":
-            self._write_wrapper_by_path(Path(action.target))
-            action.status = "done"
         elif action.kind == "prune-wrapper":
             runtime_fs.unlink(self.paths, Path(action.target))
             action.status = "done"
-
-    # -- wrappers ----------------------------------------------------------
-
-    def _runnable(self):
-        for stack in self.stacks:
-            for comp in stack.components:
-                if comp.run_argv and comp.source is not None:
-                    yield stack, comp
-
-    def _wrapper_name(self, stack: Stack, comp: Component) -> str:
-        order = "0" if comp.start_order is None else str(comp.start_order)
-        short = comp.id[len(stack.id) + 1:] if comp.id.startswith(stack.id + "-") else comp.id
-        return f"{stack.id}-{order}-{short}-start"
-
-    def _wrappers(self):
-        for stack, comp in self._runnable():
-            yield stack, comp, self._wrapper_name(stack, comp)
-
-    def _write_wrapper_by_path(self, path: Path) -> None:
-        for stack, comp, fname in self._wrappers():
-            if self.subdir("start") / fname == path:
-                self._write_wrapper(stack, comp, path)
-                return
-
-    def _write_wrapper(self, stack: Stack, comp: Component, path: Path) -> None:
-        """Generate a manual launcher as PYTHON (os.execvpe, no shell) from the SAME
-        structured command spec. Written via the containment-checked mutable-path API
-        so a wrapper can never be created through a symlink that escapes the root."""
-        from . import commands, runtime_fs
-        src_dir = str(self.paths.resolve_source(comp.source.path))
-        runtime = str(self.paths.runtime_root)
-        body = commands.render_wrapper(comp, self.config.operator, runtime, src_dir)
-        # Confine the wrapper under the runtime root and write it atomically THROUGH the
-        # safe runtime FS (containment + no-follow leaf + fsync), executable.
-        safe = self.paths.under("start", path.name)
-        runtime_fs.atomic_write(self.paths, safe, body, 0o755)
 
     # -- source adoption ---------------------------------------------------
 

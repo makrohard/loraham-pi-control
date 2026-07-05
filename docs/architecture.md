@@ -94,5 +94,7 @@ all-or-recoverable bundle transaction; its journal uses logical target kinds + a
 allowlist and blocks fail-closed on any malformed/malicious journal. Lifecycle stop is
 typed (`core/outcomes.py`): a verified stop requires process cessation AND ready-endpoint
 disappearance, markers clear only on a verified stop, and restart/owner-stop/cascade
-propagate typed failures. End-to-end `CompResult` aggregation through the start loop and a
-wrapper execution-time revalidation helper remain open — see `docs/hardening-0.1.md`.
+propagate typed failures. End-to-end `CompResult` aggregation through the start loop remains
+open — see `docs/hardening-0.1.md`. Manual `start/` wrappers are RETIRED: lhpc starts
+services itself, interactive components get their copy-paste command on the dashboard
+(rendered from the same structured spec), and bootstrap prunes legacy wrapper files.

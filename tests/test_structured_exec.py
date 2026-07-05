@@ -196,10 +196,16 @@ def test_at_env_default_only_when_declared(tmp_path, monkeypatch):
 # --- Workstream D: web-job build launcher fails closed -----------------------
 
 def test_build_launcher_at_file_missing_blocks(tmp_path):
+    # A required @file: secret is now resolved fail-closed at EXEC time (not render), so
+    # the secret value is never baked into the launcher; a missing secret fails the BUILD.
+    import subprocess, sys
     from lhpc.core import commands
-    steps = [{"argv": ["make"], "env": {"XR_PW": f"@file:{tmp_path}/nope.pw"}}]
-    with pytest.raises(commands.CommandError):
-        commands.render_build_launcher(steps, str(tmp_path), str(tmp_path))
+    steps = [{"argv": ["true"], "env": {"XR_PW": f"@file:{tmp_path}/nope.pw"}}]
+    script = commands.render_build_launcher(steps, str(tmp_path), str(tmp_path))
+    assert "@file:" in script                             # token carried, resolved at exec
+    f = tmp_path / "b.py"; f.write_text(script)
+    rc = subprocess.run([sys.executable, str(f)], capture_output=True, text=True, timeout=20)
+    assert rc.returncode != 0 and "build env error" in rc.stderr
 
 
 def test_build_launcher_pkgconfig_failure_exits_nonzero(tmp_path):

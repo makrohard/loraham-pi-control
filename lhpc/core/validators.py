@@ -90,7 +90,7 @@ def host(value, *, field: str = "host") -> str:
 
 def port(value, *, field: str = "port") -> str:
     s = str(value).strip()
-    if not re.fullmatch(r"[0-9]{1,5}", s) or not (0 <= int(s) <= 65535):
+    if not re.fullmatch(r"[0-9]{1,5}", s) or not (1 <= int(s) <= 65535):
         raise ValidationError(f"{field}: invalid port {s!r}")
     return s
 
@@ -229,6 +229,13 @@ def validate_param(param, value) -> str:
         s = str(value).strip()
         if not re.fullmatch(r"-?[0-9]{1,9}(\.[0-9]{1,9})?", s):
             raise ValidationError(f"{name}: not a number ({value!r})")
+        # AUDIT IN3: enforce declared min/max like the int branch (was skipped).
+        fv = float(s)
+        lo, hi = getattr(param, "min", None), getattr(param, "max", None)
+        if lo is not None and fv < lo:
+            raise ValidationError(f"{name}: below minimum {lo}")
+        if hi is not None and fv > hi:
+            raise ValidationError(f"{name}: above maximum {hi}")
         return s
     if kind == "enum":
         choices = getattr(param, "choices", ())
@@ -238,4 +245,12 @@ def validate_param(param, value) -> str:
     # kind == "str": a named validator if declared, else the safe-text default.
     vname = getattr(param, "validator", "") or ""
     fn = _NAMED.get(vname, safe_text)
-    return fn(value, field=name)
+    cleaned = fn(value, field=name)
+    # AUDIT S2: a POSITIONAL free-text param (no `arg` flag prefix, no named validator)
+    # emitted as a bare token starting with '-' would be parsed as an option by a GNU
+    # target. Reject it — the value stays exactly one data token, never a flag. Named
+    # validators (callsign/host/…) already constrain their charset, so only the
+    # unconstrained positional-text case needs this guard.
+    if not vname and not getattr(param, "arg", "") and cleaned.startswith("-"):
+        raise ValidationError(f"{name}: a positional value may not start with '-'")
+    return cleaned

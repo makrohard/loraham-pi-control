@@ -184,11 +184,17 @@ class Lifecycle:
 
     # -- build / start / stop / logs --------------------------------------
 
-    def build(self, comp: Component, timeout: float = 600.0) -> JobResult:
+    def build(self, comp: Component, timeout: float = 600.0,
+              log_base: str | None = None) -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
-        step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config)."""
+        step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
+
+        `log_base` overrides the default `build-<comp.id>` job/log name — the bulk driver
+        passes a RUN-SPECIFIC base so a run's build log can never collide with a prior
+        run's. Multi-step components append `-<i>` to whichever base is used."""
+        base = log_base or f"build-{comp.id}"
         if self.is_linked_source(comp):       # never build INTO an external linked tree
-            return JobResult(name=f"build-{comp.id}", state=JobState.FAILED, returncode=1,
+            return JobResult(name=base, state=JobState.FAILED, returncode=1,
                              log_path="", tail=["BLOCKED: source is a linked external "
                              "tree — build it yourself in that checkout (lhpc never "
                              "writes into a linked source)"])
@@ -200,15 +206,15 @@ class Lifecycle:
                 argv = commands.build_step_argv(step, self.system.runner, runtime, src)
                 env = commands.build_env(tuple((step.get("env") or {}).items()), runtime, src)
             except commands.CommandError as exc:
-                return JobResult(name=f"build-{comp.id}", state=JobState.FAILED,
+                return JobResult(name=base, state=JobState.FAILED,
                                  returncode=1, log_path="", tail=[str(exc)])
-            name = f"build-{comp.id}" + (f"-{i}" if len(steps) > 1 else "")
+            name = base + (f"-{i}" if len(steps) > 1 else "")
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
                            env=(env or None), logs_dir=self.logs_dir(), timeout=timeout)
             if not last.ok:
                 return last
         if last is None:        # nothing to build
-            return JobResult(name=f"build-{comp.id}", state=JobState.SUCCEEDED,
+            return JobResult(name=base, state=JobState.SUCCEEDED,
                              returncode=0, log_path="", tail=["(no build steps)"])
         return last
 
@@ -897,11 +903,15 @@ class Lifecycle:
             return None, None
         return log.name, pid
 
-    def host_test(self, comp: Component, timeout: float = 300.0) -> JobResult | None:
+    def host_test(self, comp: Component, timeout: float = 300.0,
+                  log_base: str | None = None) -> JobResult | None:
+        # `log_base` (bulk driver) overrides the default `test-<comp.id>` job/log name
+        # with a RUN-SPECIFIC one, so a run's test log never collides with a prior run's.
+        base = log_base or f"test-{comp.id}"
         if not comp.test_argv:
             return None
         if self.is_linked_source(comp):       # never run tests INTO an external linked tree
-            return JobResult(name=f"test-{comp.id}", state=JobState.FAILED, returncode=1,
+            return JobResult(name=base, state=JobState.FAILED, returncode=1,
                              log_path="", tail=["BLOCKED: source is a linked external "
                              "tree — test it yourself in that checkout"])
         src = str(self.source_dir(comp))
@@ -909,9 +919,9 @@ class Lifecycle:
             argv = commands.build_step_argv({"argv": list(comp.test_argv)},
                                             self.system.runner, str(self.paths.runtime_root), src)
         except commands.CommandError as exc:
-            return JobResult(name=f"test-{comp.id}", state=JobState.FAILED,
+            return JobResult(name=base, state=JobState.FAILED,
                              returncode=1, log_path="", tail=[str(exc)])
-        return run_job(self.system.runner, name=f"test-{comp.id}", argv=argv, paths=self.paths,
+        return run_job(self.system.runner, name=base, argv=argv, paths=self.paths,
                        cwd=src, logs_dir=self.logs_dir(), timeout=timeout)
 
     # -- daemon readiness + bounded TX test --------------------------------

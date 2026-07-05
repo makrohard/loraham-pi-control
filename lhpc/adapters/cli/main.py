@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="Bounded local health checks")
 
-    p_boot = sub.add_parser("bootstrap", help="Create the runtime root, config and start/ wrappers")
+    p_boot = sub.add_parser("bootstrap", help="Create the runtime root and default config")
     p_boot.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     p_install = sub.add_parser("install", help="Adopt/verify managed sources into the runtime root")

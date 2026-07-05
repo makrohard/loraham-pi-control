@@ -138,6 +138,13 @@ def capture_session_token(pid: int) -> SessionToken | None:
         return None
     if min(pid, pgid, sid, start) <= 0:
         return None
+    # AUDIT S3: every process we capture was spawned with start_new_session=True, so it
+    # MUST be its own session AND group leader (sid == pgid == pid). If the pid was
+    # recycled — in the microseconds before this read — by a mere MEMBER of a foreign
+    # session, sid/pgid would point elsewhere and a later terminate_session could signal
+    # that foreign session. Refuse a token that isn't a self-led session (fail closed).
+    if sid != pid or pgid != pid:
+        return None
     return SessionToken(pid=pid, starttime=start, sid=sid, pgid=pgid)
 
 
@@ -151,6 +158,20 @@ def _ownership_state(token: SessionToken, exclude_pid: int) -> str:
     leader = capture_session_token(token.pid)
     if leader is not None:                # leader pid alive -> must BE our leader, exactly
         return "owned" if leader == token else "unverified"
+    # `capture_session_token` returns None BOTH when the pid is gone AND when a live pid
+    # is not a self-led session leader (the S3 invariant). Those are OPPOSITE cases for
+    # signalling: a LIVE non-leader pid means our leader's pid was recycled by a foreign
+    # process — refuse to trust session members ('unverified', NEVER signal). Only a truly
+    # ABSENT leader falls through to the session-member liveness check. (Without this, the
+    # strict-capture change would misread a recycled pid as 'owned' and signal a foreign
+    # — or our own — session.)
+    try:
+        os.kill(token.pid, 0)
+        return "unverified"               # live pid, not our self-led leader -> recycled
+    except ProcessLookupError:
+        pass                              # leader genuinely gone
+    except PermissionError:
+        return "unverified"               # exists but not ours -> recycled, don't signal
     return "owned" if session_members(token.sid, exclude_pid) else "ceased"
 
 

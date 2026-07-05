@@ -159,3 +159,37 @@ def test_voice_params_all_validate_defaults():
     assert {"preamble", "sync", "ldro"} <= names              # present, not missing
     assert next(p for p in comp.config_file.params if p.name == "freq").validator == "freq"
     assert next(p for p in comp.config_file.params if p.name == "sync").validator == "sync"
+
+
+def test_audit_port_rejects_zero():
+    # AUDIT IN4: port 0 passed field validation but parse_endpoint requires >0.
+    import pytest
+    from lhpc.core import validators
+    with pytest.raises(validators.ValidationError):
+        validators.port("0")
+    assert validators.port("1") == "1" and validators.port("65535") == "65535"
+
+
+def test_audit_float_kind_enforces_bounds():
+    # AUDIT IN3: float kind ignored declared min/max.
+    import pytest
+    from lhpc.core import validators
+    class P:
+        name = "f"; kind = "float"; min = 1.0; max = 10.0; validator = ""
+    assert validators.validate_param(P(), "5.5") == "5.5"
+    with pytest.raises(validators.ValidationError):
+        validators.validate_param(P(), "20")
+    with pytest.raises(validators.ValidationError):
+        validators.validate_param(P(), "0.5")
+
+
+def test_audit_positional_free_text_rejects_leading_dash():
+    # AUDIT S2: a positional (no arg, no named validator) value starting with '-' would
+    # be parsed as an option by a GNU target.
+    import pytest
+    from lhpc.core import validators
+    class P:
+        name = "pos"; kind = "str"; validator = ""; arg = ""
+    assert validators.validate_param(P(), "value") == "value"
+    with pytest.raises(validators.ValidationError):
+        validators.validate_param(P(), "--output=/etc/x")

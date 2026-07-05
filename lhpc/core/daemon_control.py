@@ -110,7 +110,7 @@ def conf_socket(band: str) -> str:
 # NaN, inf, or embedded whitespace) inside that hardware domain.
 _FREQ_MIN_MHZ = 150.0
 _FREQ_MAX_MHZ = 960.0
-_FREQ_RE = re.compile(r"\d+(?:\.\d+)?")   # plain decimal MHz only — no sign/exponent/space
+_FREQ_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?")  # ASCII decimal MHz only — \d would match Unicode digits
 
 
 def _query(system: System, band: str, command: bytes, prefix: str) -> dict[str, str]:
@@ -256,8 +256,17 @@ def _norm(val: str) -> str:
     """Canonicalise for comparison: integers numerically, else upper-cased."""
     v = val.strip().upper()
     try:
-        return str(int(float(v)))
+        f = float(v)
     except ValueError:
+        return v
+    # A hostile/garbled daemon reply of `inf`/`-inf`/`1e400`/a long digit run makes
+    # float() non-finite; int(inf) raises OverflowError. Never let a socket value crash
+    # a mutating action — a non-finite/overflowing value is left as its upper-cased text.
+    if not math.isfinite(f):
+        return v
+    try:
+        return str(int(f))
+    except (ValueError, OverflowError):
         return v
 
 

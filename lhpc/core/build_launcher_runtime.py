@@ -174,10 +174,18 @@ def run(spec: dict) -> None:
             idx.close()
             idx = None
 
+        from .commands import build_env, CommandError
         for s in steps:
             argv = _resolve_argv(s["argv"])
+            # Resolve env (incl. @file: secrets) HERE, on-host at exec time — the secret
+            # value never touched the on-disk launcher spec. Fail-closed as at render.
+            try:
+                step_env = build_env(s.get("env_items", ()), spec["runtime_root"], cwd)
+            except CommandError as exc:
+                sys.stderr.write("build env error: %s\n" % exc)
+                raise SystemExit(1)
             print("+ " + " ".join(argv), flush=True)
-            rc = _run_step(argv, cwd, {**os.environ, **s["env"]}, step_timeout)
+            rc = _run_step(argv, cwd, {**os.environ, **step_env}, step_timeout)
             if rc != 0:
                 raise SystemExit(rc)
     finally:

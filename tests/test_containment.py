@@ -200,3 +200,105 @@ def test_stack_build_includes_buildable_libraries_dep_first(tmp_path):
     order = [d.split()[1].rstrip(":") for d in plan.details if d.strip().startswith("[build]")]
     assert "radiolib" in order and "loraham-daemon" in order
     assert order.index("radiolib") < order.index("loraham-daemon")
+
+
+def test_build_launcher_never_bakes_secret_plaintext():
+    # AUDIT S1: build-step @file secrets were resolved at RENDER time and baked cleartext
+    # into the on-disk launcher .py (which is never pruned). The launcher must carry the
+    # UNRESOLVED token and resolve on-host at exec time.
+    import tempfile
+    from lhpc.core import commands
+    secret = tempfile.NamedTemporaryFile("w", delete=False, suffix="-xrpw")
+    secret.write("TOPSECRETpw\n")
+    secret.close()
+    steps = [{"argv": ["scripts/build.sh"],
+              "env": {"XR_PASSWORD": f"@file:{secret.name}", "XR_HOST": "10.0.2.2"}}]
+    script = commands.render_build_launcher(steps, "/rt", "/rt/src/x")
+    assert "TOPSECRETpw" not in script                    # secret NOT baked
+    assert "@file:" in script                             # token carried instead
+    assert "10.0.2.2" in script                           # non-secret literal fine
+
+
+def test_open_source_parent_refuses_intermediate_symlink(tmp_path):
+    # AUDIT FS1: opening the resolved source root in one os.open guarded only its final
+    # component; an intermediate `src` symlink escaped the root. The walk now starts at
+    # the runtime root and refuses a swapped intermediate at the syscall.
+    import os
+    from lhpc.core.paths import Paths, PathContainmentError
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.model import Component, ComponentKind, SourceSpec
+    rt = tmp_path / "rt"
+    (rt / "src" / "app").mkdir(parents=True)
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system, paths=Paths(runtime_root=rt))
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app"))
+    # happy path writes inside the tree
+    svc._write_source_config(comp, "conf/x.toml", "ok=1\n")
+    assert (rt / "src" / "app" / "conf" / "x.toml").read_text() == "ok=1\n"
+    # swap `src` for a symlink escaping the root -> refused at the walk
+    outside = tmp_path / "evil"; outside.mkdir()
+    import shutil
+    shutil.rmtree(rt / "src")
+    os.symlink(outside, rt / "src")
+    try:
+        svc._write_source_config(comp, "conf/y.toml", "pwned=1\n")
+        assert False, "escape not refused"
+    except (PathContainmentError, OSError):
+        pass
+    assert not (outside / "app" / "conf" / "y.toml").exists()   # nothing written outside
+
+
+def test_norm_survives_hostile_daemon_value():
+    # AUDIT IN1: int(float("1e400")) raised uncaught OverflowError, crashing a mutating
+    # action on a garbled daemon reply.
+    from lhpc.core import daemon_control as dc
+    for v in ("1e400", "inf", "-inf", "9" * 400):
+        assert isinstance(dc._norm(v), str)               # no crash
+    assert dc._norm("433.0") == "433" and dc._norm("LORA") == "LORA"
+
+
+def test_source_config_works_through_symlinked_runtime_root(tmp_path):
+    # RE-AUDIT F1: the FS1 walk over-applied O_NOFOLLOW to the runtime ROOT, breaking the
+    # documented symlinked-root setup (writes went via atomic_write and worked, but reads
+    # via _open_source_parent raised ELOOP — asymmetric). The root is the trusted anchor
+    # and may be a symlink; only components UNDER it are O_NOFOLLOW.
+    import os
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.model import Component, ComponentKind, SourceSpec
+    real = tmp_path / "real"; (real / "src" / "app").mkdir(parents=True)
+    link = tmp_path / "link"; os.symlink(real, link)
+    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
+                            paths=Paths(runtime_root=link))
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app"))
+    svc._write_source_config(comp, "conf/x.toml", "ok=1\n")
+    assert svc._read_source_base(comp, "conf/x.toml").strip() == "ok=1"   # read works too
+
+
+def test_open_marker_excl_no_fd_leak_when_dup_fails(tmp_path, monkeypatch):
+    # RE-AUDIT F2: hoisting os.dup(parent_fd) before the try leaked file_fd if os.dup
+    # raised under fd exhaustion. The dup is now guarded; file_fd is always closed.
+    import os
+    from lhpc.core import runtime_fs
+    closed = []
+    real_close = os.close
+    monkeypatch.setattr(os, "close", lambda fd: (closed.append(fd), real_close(fd))[1])
+    real_dup = os.dup
+    def boom(fd):
+        raise OSError(24, "EMFILE")               # simulate fd exhaustion at dup
+    monkeypatch.setattr(os, "dup", boom)
+    try:
+        runtime_fs.open_marker_excl(Paths_(tmp_path), tmp_path / "m.marker", "x")
+        assert False, "should have raised"
+    except OSError:
+        pass
+    monkeypatch.setattr(os, "dup", real_dup)
+    assert closed, "file_fd was not closed on the dup-failure path"
+
+
+def Paths_(rt):
+    from lhpc.core.paths import Paths
+    return Paths(runtime_root=rt)

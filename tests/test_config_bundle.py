@@ -389,3 +389,39 @@ def test_component_remote_set_and_clear_preserve_others(tmp_path):
     cfg.save_component_remote(paths, "loraham-daemon", "")     # clear
     rem = tomllib.loads(p.read_text())["remotes"]
     assert "loraham-daemon" not in rem and rem["meshcore-pi"] == "https://b/mc.git"
+
+
+def test_audit_config_lock_is_bounded(tmp_path):
+    # AUDIT CC1: a held exclusive config lock must make a second acquire fail fast with
+    # ConfigLockBusy, not block forever (which would wedge the fixed web thread pool).
+    import threading, time
+    from lhpc.core import config as cfg
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir()
+    paths = Paths(runtime_root=tmp_path)
+    held, release = threading.Event(), threading.Event()
+    def holder():
+        with cfg.config_lock(paths):
+            held.set(); release.wait(10)
+    threading.Thread(target=holder, daemon=True).start()
+    assert held.wait(5)
+    t0 = time.monotonic()
+    try:
+        with cfg.config_lock(paths, timeout=0.5):
+            assert False, "should not have acquired"
+    except cfg.ConfigLockBusy:
+        pass
+    assert time.monotonic() - t0 < 3.0                # bounded, not wedged
+    assert isinstance(cfg.ConfigLockBusy("x"), cfg.ConfigError)   # caught by existing handlers
+    release.set()
+
+
+def test_audit_deep_toml_is_diagnostic_not_crash(tmp_path):
+    # AUDIT IN2: pathologically deep inline-table nesting -> ConfigError, never RecursionError.
+    from lhpc.core import config as cfg
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.toml").write_text("a = " + "{x = " * 3000 + "1" + "}" * 3000)
+    paths = Paths(runtime_root=tmp_path)
+    cfgobj = cfg.load_config(paths)                   # must not raise RecursionError
+    assert cfgobj.diagnostics                         # surfaced as a diagnostic

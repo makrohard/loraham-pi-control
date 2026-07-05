@@ -72,7 +72,7 @@ def test_help_topic(capsys):
 def test_bootstrap_and_install_check(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     assert main(["bootstrap", "--yes"]) == 0
-    assert (tmp_path / "rt" / "start").is_dir()
+    assert (tmp_path / "rt" / "src").is_dir()      # start/ retired (no wrappers)
     capsys.readouterr()
     # install --check is a dry run (no copying); must succeed and plan adoptions.
     assert main(["install", "--check"]) == 0

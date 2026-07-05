@@ -278,7 +278,7 @@ def _tx_env(tmp_path, monkeypatch, callsign="OE1TST", start_ok=True, test_ok=Tru
     monkeypatch.setattr(svc, "start", lambda t, apply=False, bulk_ctx=None, **k:
                         (calls.append(("start", t)),
                          ActionResult(start_ok, "start"))[1])
-    monkeypatch.setattr(svc, "test", lambda t, tx=False, apply=False, bulk_ctx=None:
+    monkeypatch.setattr(svc, "test", lambda t, tx=False, apply=False, bulk_ctx=None, **k:
                         (calls.append(("test-tx" if tx else "test", t)),
                          ActionResult(test_ok, "txtest"))[1])
     monkeypatch.setattr(svc, "stop", lambda t, apply=False, bulk_ctx=None, **k:
@@ -373,10 +373,10 @@ def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
                    detail="linked dev tree — left as-is"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "built"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None:
+                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "tested"))
     _stub_frozen(monkeypatch)
     svc = _svc(tmp_path)
@@ -437,10 +437,10 @@ def _happy_ops(monkeypatch):
         PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "built"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None:
+                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "tested"))
 
 
@@ -947,10 +947,10 @@ def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
         PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(build_ok if t == "daemon" else True, f"build {t}"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None:
+                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
                         ActionResult(test_ok if t == "daemon" and not tx else True,
                                      f"{'tx' if tx else 'host'} {t}"))
     lifecycle = []
@@ -1175,10 +1175,10 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     _callsign(tmp_path)
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "b"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None:
+                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "t"))
     svc = _svc(tmp_path)
     sha_a, sha_b = "a" * 40, "b" * 40
@@ -1455,7 +1455,7 @@ def test_pinned_bulk_freezes_artifact_commit(tmp_path, monkeypatch):
          PlanAction("adopt", "", "x", status="done", detail="ok"))[1])
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
     r = svc.install_all(apply=True, tests=False, source="pinned", emit=lambda s: None)
@@ -1490,7 +1490,7 @@ def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
     monkeypatch.setattr(Installer, "adopt_source", adopt)
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None:
+                        lambda self, t, apply=False, bulk_ctx=None, **k:
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
     svc.install_all(apply=True, tests=False, source="pinned", emit=lambda s: None)
