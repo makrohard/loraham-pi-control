@@ -126,9 +126,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
             welcome=service.bulk_welcome(),
-            # Controller (LHPC's own checkout) — CACHED only: version/head/identity/update
-            # read from the self-update envelope, NEVER a live git/network/identity call.
-            controller=service.controller_status(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -358,28 +355,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
+    def _render_stacks(**over):
+        # The Apps page — also the home of the controller's embedded Update UI. `st`/`jobs`
+        # are CACHED (status envelope + local job list); `confirm`/`result`/`apply_data` are
+        # only set when the update apply flow renders back here. All controller data is
+        # cached-only — no live git/network/identity on a GET.
+        groups, snapshot = _stack_groups()
+        ctx = dict(
+            version=__version__, runtime_root=_runtime_root(), snapshot=snapshot,
+            summary=summarize(snapshot), groups=groups, bulk_mode=service.bulk_mode(),
+            observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
+            controller=service.controller_status(),
+            st=service.self_update_status(), jobs=service.active_jobs(),
+            confirm=None,
+        )
+        ctx.update(over)
+        return render_template("stacks.html", **ctx)
+
     @app.get("/stacks")
     def stacks_overview():  # noqa: ANN202
-        groups, snapshot = _stack_groups()
-        return render_template(
-            "stacks.html",
-            version=__version__,
-            runtime_root=_runtime_root(),
-            snapshot=snapshot,
-            summary=summarize(snapshot),
-            groups=groups,
-            bulk_mode=service.bulk_mode(),
-            observed_conflicts=service.observed_conflicts(snapshot),   # band-aware (no false 433/868)
-        )
-
-    @app.get("/self-update")
-    def self_update_page():  # noqa: ANN202
-        # Read-only: cached status marker + local job list. No network, no git, no live
-        # identity check — `controller_status()` reads the cached envelope only.
-        return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
-                               st=service.self_update_status(), jobs=service.active_jobs(),
-                               controller=service.controller_status(),
-                               confirm=None, result=None, apply_data=None)
+        return _render_stacks()
 
     @app.post("/self-update/check")
     def self_update_check():  # noqa: ANN202
@@ -387,30 +382,33 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         res = service.self_update_check()          # NETWORK (explicit): git fetch, refresh cache
         flash(res.summary, "ok" if res.ok else "warn")
-        return redirect(url_for("self_update_page"))
+        return redirect(url_for("stacks_overview") + "#controller-row")
 
     @app.post("/self-update/apply")
     def self_update_apply():  # noqa: ANN202
+        # One-click self-update. The running console cannot apply in-process (it holds the
+        # controller-runtime lock SHARED so its own code is never mutated underneath it);
+        # a confirmed request starts the PARAMETER-FREE updater unit, which stops this
+        # service, applies (all gates), syncs the venv and starts the console again.
         if not _csrf_ok():
             abort(400)
         st = service.self_update_status()
-        jobs = service.active_jobs()
-        force = request.form.get("overwrite") == "yes"
         if request.form.get("confirmed") != "yes":
-            # Stage 1 — plan/confirm: warn that applying restarts the console (and, if the tree is
-            # dirty, that local changes would be overwritten). A running job blocks the button.
-            return render_template("self_update.html", version=__version__,
-                                   runtime_root=_runtime_root(), st=st, jobs=jobs, result=None,
-                                   apply_data=None, controller=service.controller_status(),
-                                   confirm={"dirty": st.get("dirty"),
-                                            "update_available": st.get("update_available")})
-        # Stage 2 — apply (blocked if a job is active; dirty refused unless overwrite chosen).
-        res = service.self_update_apply(force=force)
-        flash(res.summary, "ok" if res.ok else "warn")
-        return render_template("self_update.html", version=__version__, runtime_root=_runtime_root(),
-                               st=service.self_update_status(), jobs=service.active_jobs(),
-                               controller=service.controller_status(),
-                               confirm=None, result=res, apply_data=res.data)
+            # Stage 1 — confirm: warn about the automatic stop/update/restart. The dirty
+            # state is checked FRESH here (local git only, POST-time) — if dirty, the
+            # discard-consent checkbox is the operator's explicit agreement.
+            return _render_stacks(confirm={"dirty": service.self_update_local_dirty(),
+                                           "update_available": st.get("update_available")})
+        # Stage 2 — trigger. Consent only SELECTS between the two fixed units; a stale
+        # overwrite tick with a meanwhile-clean tree downgrades to the normal unit.
+        overwrite = (request.form.get("overwrite") == "yes"
+                     and service.self_update_local_dirty())
+        res = service.self_update_trigger(overwrite=overwrite)
+        if not res.ok:
+            flash(res.summary, "warn")
+            return _render_stacks()
+        return render_template("updating.html", version=__version__,
+                               runtime_root=_runtime_root())
 
     @app.get("/stacks/<stack_id>")
     def stack_detail(stack_id: str):  # noqa: ANN202
@@ -958,6 +956,32 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     return app
 
 
+# Periodic background update check: default cadence + hard bounds. 0 disables the loop
+# (the one startup check still runs). Clamped so a typo can neither hammer upstream
+# (min 1h) nor silently never check (max 7 days).
+UPDATE_CHECK_DEFAULT_HOURS = 12
+UPDATE_CHECK_MIN_HOURS = 1
+UPDATE_CHECK_MAX_HOURS = 168
+
+
+def update_check_interval_s() -> float:
+    """Resolve `[web] update_check_hours` from config/local.toml to seconds (0 = disabled).
+    Bad type / out-of-range values fall back to the clamped default — never an exception
+    (this runs on server startup)."""
+    try:
+        from lhpc.core.config import load_config
+        from lhpc.core.paths import resolve_paths
+        raw = load_config(resolve_paths()).get("web", "update_check_hours",
+                                               UPDATE_CHECK_DEFAULT_HOURS)
+    except Exception:
+        raw = UPDATE_CHECK_DEFAULT_HOURS
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        raw = UPDATE_CHECK_DEFAULT_HOURS
+    if raw == 0:
+        return 0.0
+    return float(min(max(raw, UPDATE_CHECK_MIN_HOURS), UPDATE_CHECK_MAX_HOURS)) * 3600.0
+
+
 def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
     """Run the console, refusing any non-loopback bind. No debug, no reloader."""
     if host not in _LOOPBACK_HOSTS:
@@ -987,18 +1011,31 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
         return 1
     try:
         app = create_app()
-        # Best-effort, NON-BLOCKING upstream freshness check at startup (this is process startup, NOT a
-        # GET route) so the footer's version/head indicator becomes meaningful shortly after boot. Any
-        # failure is swallowed — the footer simply stays grey/"unknown".
+        # Best-effort, NON-BLOCKING upstream freshness checks (process startup + a slow
+        # periodic loop — NOT GET routes) so the footer's "Update →" indicator appears
+        # without the operator pressing "Check for updates". One check right away (existing
+        # behavior), then every `[web] update_check_hours` (config/local.toml; default 12,
+        # clamped 1..168, 0 = disabled → startup check only). self_update_check serializes
+        # via the update lock and defers when busy; failures are swallowed — the footer
+        # simply keeps the last cached state.
         import threading
 
-        def _startup_selfcheck():
-            try:
-                ControllerService().self_update_check()
-            except Exception:
-                pass
+        interval_s = update_check_interval_s()
 
-        threading.Thread(target=_startup_selfcheck, name="lhpc-selfcheck", daemon=True).start()
+        def _selfcheck_loop():
+            while True:
+                try:
+                    ControllerService().self_update_check()
+                except Exception:
+                    pass
+                if interval_s <= 0:
+                    return                       # periodic checks disabled: startup check only
+                # Sleep in short slices so a daemon-thread teardown never blocks exit paths.
+                deadline = time.monotonic() + interval_s
+                while time.monotonic() < deadline:
+                    time.sleep(min(30.0, max(0.1, deadline - time.monotonic())))
+
+        threading.Thread(target=_selfcheck_loop, name="lhpc-selfcheck", daemon=True).start()
         print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
         print("     Loopback-only. Press Ctrl-C to stop.")
         # Supported deployment uses a production-capable WSGI server (waitress): one process,

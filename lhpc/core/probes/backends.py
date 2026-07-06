@@ -125,16 +125,20 @@ def _decode_hex_ip(ip_hex: str) -> str:
 
 # --- real implementation --------------------------------------------------
 
-# A bounded, stable environment for read-only subprocesses. HOME and the XDG vars
-# are passed through so git honours the user's config + global gitignore (otherwise
-# globally-ignored files like .claude/ show as untracked -> false "dirty") and so
-# `systemctl --user` can find its bus.
+# A bounded, stable environment for subprocesses. HOME and the XDG vars are passed through so
+# git honours the user's config + global gitignore (otherwise globally-ignored files like
+# .claude/ show as untracked -> false "dirty") and so `systemctl --user` can find its bus. The
+# tool-cache vars (PLATFORMIO_CORE_DIR / IDF_TOOLS_PATH / XDG_CACHE_HOME / PIP_CACHE_DIR) are
+# forwarded so that, under the hardened web-service sandbox (ProtectHome=read-only), build/test
+# tools write their caches into the runtime-owned location the unit points them at — never into
+# ~/.platformio, ~/.espressif or ~/.cache. See deploy/lhpc-web.service.
 _FIXED_ENV = {
     "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
     "LANG": "C",
     "LC_ALL": "C",
 }
-for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS"):
+for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
+           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR"):
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 

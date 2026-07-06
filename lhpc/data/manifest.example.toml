@@ -866,6 +866,7 @@ main = "meshtastic"
       section = "Webserver"
       kind = "str"
       default = "{runtime}/state/meshtasticd/ssl/private_key.pem"
+      validator = "path"
       label = "SSL key path (writable, for rootless web)"
       advanced = true
       [[stack.component.config_file.param]]
@@ -874,6 +875,7 @@ main = "meshtastic"
       section = "Webserver"
       kind = "str"
       default = "{runtime}/state/meshtasticd/ssl/certificate.pem"
+      validator = "path"
       label = "SSL cert path (writable, for rootless web)"
       advanced = true
       [[stack.component.config_file.param]]
@@ -1124,14 +1126,25 @@ main = "meshcom-qemu"
   # SELF-SUFFICIENT fresh clone: the workspace (.work/ MeshCom firmware + overlay +
   # OpenETH vendor) is prepared by the repo's own pinned setup scripts before build.sh —
   # a linked dev tree used to carry a pre-built .work/, a managed clone must not.
+  # The firmware source MUST be the external-radio feature branch: the default
+  # (upstream icssw-org pinned tag) has NO external-radio transport, so the extradio
+  # build boots with "LoRa radio disabled (no backend)" and never talks to the bridge —
+  # no messages in either direction (live finding).
   build_steps = [
-    { argv = ["scripts/setup.sh"] },
+    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"] },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"] },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
   ]
   readiness = "endpoint"
   run = "scripts/run.sh {env} {qemu}"
+  # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
+  # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
+  # itself and stops exactly that instance afterwards — so install-all runs it right after the
+  # build (no running stack needed). A guest that is already running is probed and left alone.
+  # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
+  # last param table (TOML), leaving the component with no test ("skipped (no host tests)").
+  test = "scripts/test.sh"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
@@ -1146,7 +1159,12 @@ main = "meshcom-qemu"
     # and killed its web UI): probe `--info` first and SKIP when the callsign is already
     # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
     # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
-    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call:{param:mc_callsign}", stop_on = "Call:{param:mc_callsign}", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # probe_stop_on matches --info's DISPLAY format `...Call: <DJ0CHE-1>` (space + angle
+    # brackets); stop_on matches the setcall ACK `Call:DJ0CHE-1 Short:... set`. They DIFFER —
+    # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
+    # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
+    # wedged in the bootloader (guest reset is not survivable in qemu-xtensa) — live finding.
+    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
@@ -1174,7 +1192,6 @@ main = "meshcom-qemu"
     default = ""
     label = "qemu-system-xtensa path (auto if blank)"
     advanced = true
-  test = "scripts/test.sh"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
@@ -1268,7 +1285,7 @@ main = "meshcore-pi"
     [stack.component.config_file]
     path = "{runtime}/config/files/meshcore-pi.toml"
     fmt = "toml-update"
-    base = "{runtime}/config/files/meshcore-pi-base.toml"
+    base = "examples/config-loraham868.toml"
       [[stack.component.config_file.param]]
       name = "preset"
       key = "preset"

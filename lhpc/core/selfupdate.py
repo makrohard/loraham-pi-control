@@ -268,6 +268,9 @@ _UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
                     "branch": _is_str, "upstream_head": _is_str,
                     "upstream_head_short": _is_str, "upstream_version": _is_str}
 _IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_int}
+# Outcome of the LAST service-mediated apply (the one-click web update) — shown once the
+# console is back so the operator sees what happened while it was down.
+_LAST_APPLY_FIELDS = {"ok": _is_bool, "summary": _is_str, "finished_at": _is_int}
 
 
 def _valid_section(sec, fields) -> bool:
@@ -294,7 +297,8 @@ def _valid_cache(data) -> bool:
         return False
     return (_valid_section(data.get("local"), _LOCAL_FIELDS)
             and _valid_section(data.get("upstream"), _UPSTREAM_FIELDS)
-            and _valid_section(data.get("identity"), _IDENTITY_FIELDS))
+            and _valid_section(data.get("identity"), _IDENTITY_FIELDS)
+            and _valid_section(data.get("last_apply"), _LAST_APPLY_FIELDS))
 
 
 def write_cache(paths: Paths, data: dict) -> None:
@@ -538,16 +542,32 @@ def refresh_cache(system: System, paths: Paths, branch: str = "",
 
     Called with `identity=None` (e.g. by `apply_update`, which cannot recompute it), the
     PRIOR envelope's identity verdict is CARRIED FORWARD rather than nulled — so an unrelated
-    refresh never drops the verdict (single-envelope invariant)."""
+    refresh never drops the verdict (single-envelope invariant). The `last_apply` outcome is
+    likewise carried forward (only `record_last_apply` writes it)."""
+    prior_env = read_cache(paths)
     if identity is None:
-        prior = read_cache(paths).get("identity")
+        prior = prior_env.get("identity")
         identity = prior if isinstance(prior, dict) else None
+    last_apply = prior_env.get("last_apply")
     data = {"schema_version": CACHE_SCHEMA_VERSION,
             "local": local_state(system), "upstream": check_upstream(system, branch),
             "identity": identity if isinstance(identity, dict) else None,
+            "last_apply": last_apply if isinstance(last_apply, dict) else None,
             "checked_at": int(time.time()) if now is None else int(now)}
     write_cache(paths, data)
     return status_view(paths)
+
+
+def record_last_apply(paths: Paths, *, ok: bool, summary: str, now: int | None = None) -> None:
+    """Merge the outcome of a service-mediated apply into the existing envelope (single
+    atomic rewrite; every other field kept as-is). Bounded + best-effort like write_cache."""
+    env = read_cache(paths)
+    if not env:
+        env = {"schema_version": CACHE_SCHEMA_VERSION}
+    env["schema_version"] = CACHE_SCHEMA_VERSION
+    env["last_apply"] = {"ok": bool(ok), "summary": str(summary)[:_STR_MAX],
+                         "finished_at": int(time.time()) if now is None else int(now)}
+    write_cache(paths, env)
 
 
 def _cstr(v) -> str:
@@ -570,10 +590,12 @@ def status_view(paths: Paths) -> dict:
     local = local if isinstance(local, dict) else {}
     up = cache.get("upstream")
     up = up if isinstance(up, dict) else {}
-    # is_git + version come from CHEAP local sources (a .git FS check + the in-process __version__),
-    # NOT the cache, so they are correct even before the first upstream check. The HEAD (needs git)
-    # comes from the cache — "" (unknown) until the startup/explicit check populates it.
-    is_git = repo_root() is not None
+    # CACHED-ONLY: `is_git`/`available` come from the cached `local.is_git` written by the last
+    # refresh (local_state) — NEVER a live `repo_root()`/`.git` probe here, so every GET stays
+    # read-only. Absent (no cache yet, or a legacy cache without the field) -> unavailable/unknown
+    # until the startup or explicit "check for updates" refresh populates it. `version` is the
+    # in-process running version (not a source-tree probe), fine for display.
+    is_git = bool(local.get("is_git") is True)
     version = __version__
     head = _cstr(local.get("head"))
     head_short = _cstr(local.get("head_short")) or (head[:9] if head else "")
@@ -604,6 +626,9 @@ def status_view(paths: Paths) -> dict:
         # Controller identity verdict — CACHED only (never a live check on this read).
         # Absent / unchecked -> None, rendered as "unchecked/unknown".
         "identity": _identity_view(cache.get("identity")),
+        # Outcome of the last service-mediated apply (one-click web update) — CACHED only;
+        # None until one has run.
+        "last_apply": _last_apply_view(cache.get("last_apply")),
     }
 
 
@@ -625,6 +650,17 @@ def _identity_view(raw):
     return {"ok": ok, "status": status,
             "reason": str(reason)[:200] if isinstance(reason, str) else "",
             "checked_at": int(raw["checked_at"]) if isinstance(raw.get("checked_at"), int) else 0}
+
+
+def _last_apply_view(raw):
+    """Bounded, shape-safe last-apply outcome from the cached envelope:
+    `{ok:bool, summary:str, finished_at:int}` or None (no service-mediated apply yet)."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("ok"), bool):
+        return None
+    summary = raw.get("summary")
+    return {"ok": raw["ok"],
+            "summary": str(summary)[:_STR_MAX] if isinstance(summary, str) else "",
+            "finished_at": _cint(raw.get("finished_at"))}
 
 
 # ---- apply + restart guidance -----------------------------------------------------------------

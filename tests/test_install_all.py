@@ -40,6 +40,53 @@ def _make_repo(path, remote=""):
     return _git(path, "rev-parse", "HEAD")
 
 
+# ---- integration tests that need the running stack are deferred in bulk ------------------
+
+def test_running_required_host_test_is_deferred_in_bulk_but_runs_explicitly(tmp_path, monkeypatch):
+    """A component with `test_requires_running` (generic mechanism; no packaged stack uses it
+    today — meshcom's test.sh is self-sufficient) is DEFERRED in a bulk sweep (never a false
+    failure) and RUN by an explicit `lhpc test` (no bulk_ctx)."""
+    from contextlib import nullcontext
+    svc = _svc(tmp_path)
+    ran: list[str] = []
+    # Force the flag on a real testable component (meshcom-qemu) for this test only.
+    # Component is a frozen dataclass -> object.__setattr__, restored in finally.
+    comp = next(c for st in svc.stacks() for c in st.components if c.id == "meshcom-qemu")
+    object.__setattr__(comp, "test_requires_running", True)
+    try:
+        class _FakeLife:
+            def host_test(self, comp, log_base=None):
+                ran.append(comp.id)
+                return type("R", (), {"ok": True, "returncode": 0, "log_path": "x",
+                                      "state": type("S", (), {"value": "succeeded"})()})()
+        monkeypatch.setattr(svc, "_lifecycle", lambda: _FakeLife())
+        monkeypatch.setattr(svc, "_bulk_ctx_error", lambda ctx, paths: "")   # lock check elsewhere
+        monkeypatch.setattr(svc, "_source_operation_guard", lambda *a, **k: nullcontext())
+
+        # BULK context present -> the flagged test is deferred, NOT run, NOT failed.
+        r_bulk = svc.test("meshcom", tx=False, apply=True, bulk_ctx=object())
+        assert r_bulk.ok
+        assert any("[deferred]" in d and "meshcom-qemu" in d for d in r_bulk.details), r_bulk.details
+        assert "meshcom-qemu" not in ran
+
+        # EXPLICIT (no bulk_ctx) -> the test actually runs.
+        ran.clear()
+        r_expl = svc.test("meshcom", tx=False, apply=True)
+        assert "meshcom-qemu" in ran
+    finally:
+        object.__setattr__(comp, "test_requires_running", False)
+
+
+def test_packaged_meshcom_test_runs_in_bulk(tmp_path):
+    """The PACKAGED meshcom-qemu test is self-sufficient (test.sh boots its own guest), so it
+    must NOT carry test_requires_running — install-all runs it right after the build instead of
+    deferring (regression: 'deferred — 1 test(s) need the running stack')."""
+    svc = _svc(tmp_path)
+    comp = next(c for st in svc.stacks() for c in st.components if c.id == "meshcom-qemu")
+    assert comp.test_argv == ("scripts/test.sh",)
+    assert comp.test_requires_running is False
+
+
 # ---- dry-run + flag coupling ------------------------------------------------------------
 
 def test_dry_run_names_scope_and_flags(tmp_path):

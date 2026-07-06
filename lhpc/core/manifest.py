@@ -448,6 +448,7 @@ def _parse_component(raw: dict) -> Component:
         post_steps=tuple(dict(s) for s in raw.get("post_steps", [])),
         build_steps=tuple(dict(s) for s in raw.get("build_steps", [])),
         test_argv=tuple(str(t) for t in raw.get("test_argv", [])),
+        test_requires_running=bool(raw.get("test_requires_running", False)),
         readiness=raw.get("readiness", ""),
         readiness_timeout=float(raw.get("readiness_timeout", 0.0) or 0.0),
         bin=raw.get("bin", ""),

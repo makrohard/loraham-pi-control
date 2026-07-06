@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Updating — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <div class="card">
+    <header><h2>Updating <span class="pill">LoRaHAM Pi Control</span></h2></header>
+    <div class="body">
+      <p class="flash flash-warn"><strong>The console is stopping to update itself.</strong>
+        It will come back automatically — this page reconnects on its own (typically well
+        under a minute).</p>
+      <p class="muted" id="upd-state">Waiting for the console to go down…</p>
+      <p class="muted">If it does not come back: <code>journalctl --user -u lhpc-selfupdate -n 50</code>
+        shows what happened; <code>systemctl --user start lhpc-web</code> starts the console manually.</p>
+    </div>
+  </div>
+  <script>
+    /* Poll /healthz THROUGH the outage: first wait until the console actually goes down
+       (so we don't reload into the OLD process), then wait for it to answer again, then
+       reload to /stacks (which shows the recorded update outcome). All assets for this
+       page are already loaded — nothing here needs the server until it is back. */
+    (function () {
+      var state = document.getElementById("upd-state");
+      var sawDown = false;
+      var started = Date.now();
+      function tick() {
+        fetch("/healthz", {cache: "no-store"}).then(function (r) {
+          if (!r.ok) { throw new Error("down"); }
+          if (sawDown) { window.location.href = "/stacks#controller-row"; return; }
+          // Still the old process (or already back very fast): after 90s assume done.
+          if (Date.now() - started > 90000) { window.location.href = "/stacks#controller-row"; return; }
+          setTimeout(tick, 1500);
+        }).catch(function () {
+          sawDown = true;
+          state.textContent = "Console is down — updating… waiting for it to come back.";
+          setTimeout(tick, 1500);
+        });
+      }
+      setTimeout(tick, 1000);
+    })();
+  </script>
+{% endblock %}

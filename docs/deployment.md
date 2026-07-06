@@ -62,18 +62,27 @@ layout, it does not claim same-account race-proofness.
 
 ### Self-update operating rules
 
-- **Stop the web service first.** Self-update takes an EXCLUSIVE controller-runtime lock;
-  the running console holds it SHARED for its whole lifetime, so an apply refuses while the
-  service is up (and, symmetrically, the service fails closed at startup if an apply holds
-  the lock). Run `systemctl --user stop lhpc-web`, then `lhpc self-update`, then start it
-  again.
+- **One-click from the web console (the normal path).** "Update now" (confirm step included)
+  starts a static, **parameter-free** helper unit — `lhpc-selfupdate.service` — whose fixed
+  job is: stop `lhpc-web` → apply the update (exclusive lock, fresh live identity check,
+  dirty refusal) → sync the venv when the checkout advanced → **always start `lhpc-web`
+  again** (also on failure/timeout, enforced twice: in the updater and by the unit's
+  `ExecStopPost`). The browser shows a reconnecting page and returns on its own; the
+  controller row then shows the recorded outcome. No free-form input reaches the updater:
+  a **dirty** tree is detected fresh at the confirm step, and your explicit discard consent
+  merely selects the second fixed unit (`lhpc-selfupdate-overwrite.service`).
+- **Manual CLI path (equivalent, still supported).** The running console holds the
+  controller-runtime lock SHARED, so an in-process apply refuses while it is up:
+  `systemctl --user stop lhpc-web`, then `lhpc self-update --apply`, then start it again.
 - **A dirty checkout blocks apply** unless you explicitly choose overwrite.
-- **Dependency changes need a manual sync.** When an update reports `deps_changed`
-  (`pyproject.toml` changed), run the editable install yourself before restarting:
+- **Dependency sync:** the one-click updater runs the editable install automatically after a
+  real advance. On the manual path, when an update reports `deps_changed`, run it yourself
+  before restarting:
   ```bash
   ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
   ```
-- The unit is **operator-managed** — self-update never rewrites or restarts it for you.
+- The web unit is **operator-managed** — self-update never rewrites it. `install.sh` writes
+  the two updater helpers next to it (start-on-demand, never enabled at boot).
 
 ### Recovery
 
@@ -115,12 +124,45 @@ loginctl enable-linger "$USER"     # optional: keep running after logout
   `StartLimitIntervalSec=60`): auto-recovers from a crash but stops flapping instead of
   looping forever.
 - **journald logging**: all stdout/stderr goes to the journal (`SyslogIdentifier=lhpc-web`).
-- **Hardening**: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only` with
-  `ReadWritePaths=%h/loraham-pi-control` (the runtime root is the only writable path),
-  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and related restrictions.
+- **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome=read-only`, `RestrictNamespaces`,
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and related restrictions. The **only**
+  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the
+  shared `/tmp`. The service does **not** get broad write access to the rest of your home or
+  to `/var`.
+- **Runtime-owned build/tool caches**: the console orchestrates builds (cmake / PlatformIO /
+  pip) and the QEMU emulator, which write toolchain caches. The unit points them at a
+  runtime-owned location under `build/tool-cache/` via
+  `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`, `XDG_CACHE_HOME` and `PIP_CACHE_DIR` — so nothing
+  is written to `~/.platformio`, `~/.espressif` or `~/.cache`. These are inherited by every
+  build/test/QEMU child the console spawns. (Install the ESP QEMU/toolchain into
+  `IDF_TOOLS_PATH` rather than `~/.espressif`.)
+- **`MemoryDenyWriteExecute` is deliberately omitted** — QEMU's TCG JIT (the meshcom
+  emulator) needs writable-executable memory. It is the single documented exception; every
+  other protection stays on.
 - **`PrivateTmp=false`** — deliberately: the console must see the daemon's shared Unix
   sockets in `/tmp` (`/tmp/loraconf*.sock`, `/tmp/lora*.sock`). A private `/tmp` would hide
-  them and break status/monitor.
+  them and break status/monitor. `/tmp` is the one shared writable location (it also holds
+  the daemon self-test's scratch dir).
+
+### Controller status & updates on the web console
+
+The controller row (first entry on **Apps**/`/stacks`) and the version indicator in the
+footer are **cached-only on every page load**: they read the last self-update envelope from
+`state/` plus the running in-process version, and never touch the live checkout, `.git`, the
+network, or the controller identity while rendering a GET. A missing or stale cache simply
+shows an "unchecked/unknown" state.
+
+- **Background check:** the console refreshes that cache by itself — once at startup and then
+  every `update_check_hours` (default 12; set it in `config/local.toml` under `[web]`,
+  clamped 1–168, `0` disables the loop) — so the footer's "Update →" indicator appears
+  without any clicking.
+- **“Check for updates”** (in the controller row) does the same live work on demand —
+  `git fetch` against upstream and a fresh identity check — and rewrites the cache.
+- **Applying an update** always performs a **fresh live identity/provenance check immediately
+  before mutating** the checkout; it never trusts the cached verdict to authorise a change,
+  and it always runs with the web service stopped (controller-runtime lock) — the one-click
+  updater unit handles that stop/start for you.
 
 ## Security boundary
 

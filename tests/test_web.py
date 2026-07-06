@@ -153,7 +153,7 @@ def test_get_routes_make_no_network_calls(tmp_path):
         return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
     client = create_app(service_factory=factory).test_client()
-    for path in ("/", "/stacks", "/stacks/daemon", "/self-update",
+    for path in ("/", "/stacks", "/stacks/daemon",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
                  "/api/dash-signature", "/api/logs/loraham-daemon",
                  "/install-all", "/api/install-all"):
@@ -1173,7 +1173,7 @@ def test_footer_commit_ahead_same_version_is_yellow(tmp_path):
                       "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
     b = _client(tmp_path).get("/").get_data(as_text=True)
     assert "ver-green" in b and "ver-yellow" in b   # version green, commit yellow
-    assert "update-link" in b and "Self-Update" in b
+    assert "update-link" in b and "Update" in b and "Self-Update" not in b
 
 
 def test_footer_version_ahead_is_red_with_link(tmp_path):
@@ -1184,123 +1184,142 @@ def test_footer_version_ahead_is_red_with_link(tmp_path):
     assert "ver-red" in b and "update-link" in b
 
 
-def test_apps_has_no_hardcoded_self_stack_entry(tmp_path):
-    # The controller lives on the dashboard + Self-Update page, NOT as a hardcoded
-    # always-"running" row on /stacks.
+def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
+    # The controller is the FIRST /stacks entry (cached), with the Update UI embedded as its
+    # collapsible section — replacing the old hardcoded always-"running" self-stack row.
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})   # cached-only availability
     b = _client(tmp_path).get("/stacks").get_data(as_text=True)
     assert 'id="self-stack"' not in b
+    assert 'id="controller-row"' in b
+    assert "/self-update/check" in b and "Check for updates" in b   # embedded update form
+    assert "Self-Update" not in b                                   # renamed to just "Update"
 
 
-def test_dashboard_shows_controller_card(tmp_path):
+def test_dashboard_has_no_controller_card(tmp_path):
     b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert "controller-row" in b and "/self-update" in b
+    assert "controller-row" not in b
 
 
-def test_self_update_page_renders(tmp_path):
-    body = _client(tmp_path).get("/self-update").get_data(as_text=True)
-    assert body.count("Self-Update") and "Check for updates" in body   # git checkout -> available
+def test_standalone_self_update_page_is_gone(tmp_path):
+    # No backward-compat standalone page — the Update UI lives only on /stacks.
+    assert _client(tmp_path).get("/self-update").status_code == 404
 
 
 def test_self_update_check_post_csrf(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "self_update_check", lambda self: ActionResult(True, "Up to date."))
     c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
+    tok = _csrf(c, "/stacks")
     assert c.post("/self-update/check", data={"_csrf": tok}).status_code in (302, 303)
     assert c.post("/self-update/check").status_code == 400          # CSRF enforced
 
 
-def test_self_update_apply_confirm_then_restart_instructions(tmp_path, monkeypatch):
+def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
+    """Stage 1 warns about the automatic stop/update/restart (fresh CLEAN tree -> no discard
+    checkbox); stage 2 starts the NORMAL updater unit and renders the reconnecting page."""
     from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})     # available checkout (cached)
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    triggered = {}
+    def fake_trigger(self, *, overwrite=False):
+        triggered["overwrite"] = overwrite
+        return ActionResult(True, "Updater started.", data={"triggered": True})
+    monkeypatch.setattr(ControllerService, "self_update_trigger", fake_trigger)
     c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
-    # stage 1: no `confirmed` -> a confirm page warning about the restart
+    tok = _csrf(c, "/stacks")
     r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
-    assert "Apply update" in r1 and "restarted" in r1
-    # stage 2: confirmed -> apply (stubbed, no git/network) shows restart instructions
-    seen = {}
-    def fake_apply(self, *, force=False):
-        seen["force"] = force
-        return ActionResult(True, "Update applied — restart the web console to load it.",
-                            data={"restart": {"commands": ["stop the console (Ctrl-C) and re-run:  lhpc web"]},
-                                  "deps_changed": False, "already": False})
-    monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    assert "stop the web console" in r1 and "automatically" in r1
+    assert "Update &amp; restart now" in r1
+    assert "Overwrite (discard)" not in r1                      # clean tree -> no consent box
     r2 = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "load the new version" in r2 and "lhpc web" in r2 and seen["force"] is False
+    assert "reconnects" in r2 and "/healthz" in r2              # updating.html waiting page
+    assert triggered["overwrite"] is False
     assert c.post("/self-update/apply", data={"confirmed": "yes"}).status_code == 400   # CSRF
 
 
-def test_self_update_apply_blocked_by_active_job(tmp_path, monkeypatch):
+def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):
+    """A FRESH dirty check drives the confirm warning; ticking the discard consent selects the
+    fixed overwrite unit; without the tick the normal unit runs (dirty apply then refuses)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: True)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "Local changes are present" in r1 and "Overwrite (discard)" in r1
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is True
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    assert seen["ow"] is False
+
+
+def test_self_update_stale_overwrite_tick_downgrades_on_clean_tree(tmp_path, monkeypatch):
+    """An overwrite tick submitted against a MEANWHILE-CLEAN tree must NOT select the
+    destructive unit (fresh re-check at stage 2)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is False
+
+
+def test_self_update_trigger_blocked_by_active_job(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
     monkeypatch.setattr(ControllerService, "active_jobs", lambda self: [{"op": "build", "target": "x"}])
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
+    tok = _csrf(c, "/stacks")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "still running" in body                     # blocked, no git/network touched
+    assert "still running" in body                     # blocked; no unit started, no waiting page
+    assert "reconnects" not in body
 
 
-def test_self_update_apply_dirty_offers_overwrite(tmp_path, monkeypatch):
+def test_self_update_trigger_failure_flashes_and_stays(tmp_path, monkeypatch):
+    """A failed unit start (updater not installed) must NOT strand the operator on the
+    waiting page — it flashes the error and re-renders /stacks."""
     from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(False, "Local uncommitted changes present.",
-                                                                  data={"dirty": True}))
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_trigger",
+                        lambda self, *, overwrite=False: ActionResult(
+                            False, "Could not start the updater service (lhpc-selfupdate.service).",
+                            data={"trigger_failed": True}))
     c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
+    tok = _csrf(c, "/stacks")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "Overwrite local changes" in body           # opt-in to discard is offered
+    assert "Could not start the updater service" in body and "reconnects" not in body
 
 
-def test_self_update_cleanup_failure_renders_partial(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
-        ActionResult(False, "Update aligned to upstream, but some untracked files could NOT be removed "
-                     "— delete them manually, then restart the console.",
-                     details=("cannot unlink 'x': Permission denied", "Restart the web console after cleaning up:",
-                              "  stop the console (Ctrl-C) and re-run:  lhpc web"),
-                     data={"ok": True, "cleanup_failed": True, "cleanup_error": "cannot unlink 'x': Permission denied",
-                           "already": False, "restart": {"commands": ["stop the console (Ctrl-C) and re-run:  lhpc web"]},
-                           "deps_changed": False, "migrated": 0, "pending_migrations": 0}))
-    c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
-    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"}).get_data(as_text=True)
-    assert "could NOT be removed" in body and "Permission denied" in body   # truthful partial
-    assert "lhpc web" in body                                                # still tells them to restart
-
-
-def test_self_update_pending_migration_warns_in_view(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
-        ActionResult(True, "Update applied — restart the web console to load it.",
-                     data={"ok": True, "already": False, "deps_changed": False, "migrated": 3,
-                           "pending_migrations": 2, "restart": {"commands": ["lhpc web"]}}))
-    c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
-    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "3 legacy configuration default(s) migrated" in body
-    assert "2 configuration default" in body and "retried automatically" in body   # truthful incomplete
-
-
-def test_self_update_busy_renders_truthfully(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
-        ActionResult(False, "A self-update is already in progress — try again shortly.",
-                     data={"busy": True}))
-    c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
-    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "already in progress" in body
-
-
-def test_self_update_journal_corrupt_renders_recovery_message(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService, ActionResult
-    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
-        ActionResult(False, "Self-update blocked: the migration journal is corrupt or unsafe. "
-                     "No changes were made — recovery needed (inspect / remove "
-                     "state/selfupdate-migrate.json).", data={"journal_corrupt": True}))
-    c = _real_app(tmp_path)
-    tok = _csrf(c, "/self-update")
-    body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "migration journal is corrupt" in body and "recovery needed" in body
+def test_last_apply_outcome_renders_from_cache(tmp_path):
+    """The updater records its outcome while the console is down; the returning /stacks page
+    shows it CACHED-only (both success and failure)."""
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    selfupdate.record_last_apply(Paths(runtime_root=tmp_path), ok=False,
+                                 summary="Local uncommitted changes present.", now=5)
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Last update run:" in body and "Local uncommitted changes present." in body
 
 
 # --- M4: "Confirm this stack as working" (operator-confirmed known-working) ------------------

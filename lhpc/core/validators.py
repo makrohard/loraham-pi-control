@@ -115,16 +115,29 @@ def node_name(value, *, field: str = "node name") -> str:
     return s
 
 
+# Controller-derived path placeholders — expanded to fixed real paths before the value ever
+# reaches a shell/argv/config file (see commands._paths_subst / config subst). They legitimately
+# contain braces, so `path_value` tolerates ONLY these exact tokens; any other brace still fails.
+_PATH_PLACEHOLDERS = ("{runtime}", "{source}", "{band}")
+
+
 def path_value(value, *, field: str = "path") -> str:
-    """A filesystem path argument (e.g. a socket path): allows `/` and the safe path
-    characters, but rejects shell metacharacters, control/NUL, and `..` traversal."""
+    """A filesystem path argument (e.g. a socket path, or a generated-config path such as
+    meshtasticd's SSL key). Allows `/`, the safe path characters, and the controller-derived
+    placeholders {runtime}/{source}/{band} — but rejects shell metacharacters, control/NUL,
+    stray braces, and `..` traversal."""
     s = str(value).strip()
     if not s:
         return ""
     if len(s) > MAX_LEN:
         raise ValidationError(f"{field}: too long")
     _reject_control(s, field)
-    bad = sorted((_FORBIDDEN - set("/")) & set(s))
+    # Strip ONLY the exact controller placeholders before the metacharacter check; a stray
+    # '{'/'}' (not part of one of these tokens) is still rejected.
+    probe = s
+    for ph in _PATH_PLACEHOLDERS:
+        probe = probe.replace(ph, "")
+    bad = sorted((_FORBIDDEN - set("/")) & set(probe))
     if bad:
         raise ValidationError(f"{field}: illegal character(s): {''.join(bad)!r}")
     if any(part == ".." for part in s.split("/")):

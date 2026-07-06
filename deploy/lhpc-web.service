@@ -53,22 +53,41 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=lhpc-web
 
-# --- conservative hardening (compatible with the runtime root + /tmp daemon sockets) ---
+# --- least-privilege hardening (compatible with build/test jobs + the daemon /tmp sockets) ---
+# This service ORCHESTRATES builds (cmake / platformio / pip) and the QEMU emulator, but that
+# does NOT justify broad write access to the user's data. The whole FS is read-only EXCEPT the
+# LHPC runtime root and the shared /tmp; build tools are pointed (below) at a runtime-OWNED
+# cache so nothing writes to ~/.platformio, ~/.espressif, ~/.cache or /var.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-# The console reads AND writes its runtime root:
-ReadWritePaths=%h/loraham-pi-control
-# It must SEE the daemon's shared Unix sockets in /tmp (/tmp/loraconf*.sock, /tmp/lora*.sock),
-# so a PRIVATE /tmp would break it — keep the shared /tmp visible:
+# Writable: the runtime root (checkout, venv, state, logs, build caches) + the shared /tmp
+# (the daemon's Unix sockets AND the daemon self-test's hardcoded scratch dir). NOTHING else
+# under $HOME, and NOT /var. (The one-click updater trigger — `systemctl --user start
+# lhpc-selfupdate` — needs NO extra paths: connect() to unix sockets is exempt from
+# read-only mounts, so the user-manager control socket stays reachable; verified live.)
+ReadWritePaths=%h/loraham-pi-control /tmp
+# Redirect build-tool caches into the runtime-OWNED tool cache (inherited by the build/test/
+# QEMU children lhpc spawns — the job runner forwards these vars). Keeps writes off $HOME.
+Environment=PLATFORMIO_CORE_DIR=%h/loraham-pi-control/build/tool-cache/platformio
+Environment=IDF_TOOLS_PATH=%h/loraham-pi-control/build/tool-cache/espressif
+Environment=XDG_CACHE_HOME=%h/loraham-pi-control/build/tool-cache/cache
+Environment=PIP_CACHE_DIR=%h/loraham-pi-control/build/tool-cache/pip
+# See the daemon's shared /tmp Unix sockets (/tmp/loraconf*.sock, /tmp/lora*.sock) — a private
+# /tmp would break status/monitor:
 PrivateTmp=false
 ProtectControlGroups=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK: interface enumeration (getifaddrs) used by stack tools; AF_BLUETOOTH:
+# meshtasticd autodetects its node MAC from the Pi's BT adapter (HCI) — without it the
+# daemon aborts with 'Blank MAC Address' and its API port never opens.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute is deliberately OMITTED — QEMU's TCG JIT (the meshcom emulator) needs
+# writable-executable memory; re-enabling it would break it. This is the single, documented
+# exception; every other protection stays on.
 SystemCallArchitectures=native
 
 [Install]

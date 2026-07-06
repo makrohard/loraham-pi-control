@@ -21,8 +21,34 @@
 
   <div class="card">
     <div class="body stacklist">
-      {# The controller (LHPC's own checkout) is shown on the dashboard + Self-Update page —
-         NOT here as a hardcoded always-"running" row. #}
+      {% if controller %}
+      {# Controller (LHPC's own checkout) — the FIRST entry, a distinct NON-stack entity named
+         "LoRaHAM Pi Control" with its cached controller/version/identity fields in the summary.
+         Its Update UI is a NESTED "Update" collapsible inside (no duplicated name/fields).
+         CACHED data only on this GET (no live git/network/identity). #}
+      <details class="stackrow" id="controller-row"{% if confirm or controller.update_available %} open{% endif %}>
+        <summary>
+          <span class="ss-name">{{ controller.display_name }}</span>
+          <span class="pill">controller</span>
+          <span class="ver ver-grey">v{{ controller.version }}</span>{% if controller.head_short %} <span class="ver ver-grey" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}
+          {% if controller.identity is none %}<span class="pill">identity unchecked</span>
+          {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
+          {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
+          {% else %}<span class="pill">not self-hosted</span>{% endif %}
+          {% if controller.update_available %}<span class="pill">update available</span>{% endif %}
+        </summary>
+        <div class="stackrow-body">
+          <p class="summary">LHPC's own checkout — managed only here (Update), never
+            installed/built/started like a stack.</p>
+          <details class="stackrow" id="controller-update"{% if confirm or controller.update_available %} open{% endif %}>
+            <summary>Update</summary>
+            <div class="stackrow-body">
+              {% include "_update.html" %}
+            </div>
+          </details>
+        </div>
+      </details>
+      {% endif %}
       {% for g in groups %}
         <details class="stackrow"{% if g.jobs %} open{% endif %}>
           <summary>

@@ -1,0 +1,28 @@
+# LoRaHAM Pi Control — one-click self-update helper (TEMPLATE; install.sh generates the
+# per-target copy). Started ON DEMAND by the web console's confirmed "Update now" (or
+# `systemctl --user start lhpc-selfupdate`); never enabled at boot.
+#
+# PARAMETER-FREE BY DESIGN: the web passes no input into this unit — consent for the
+# destructive overwrite variant selects the SEPARATE fixed unit
+# lhpc-selfupdate-overwrite.service instead. The fixed job here is:
+#   stop lhpc-web -> apply (exclusive lock, LIVE identity gate, dirty refusal) ->
+#   sync the venv when the checkout advanced -> ALWAYS start lhpc-web again.
+[Unit]
+Description=LoRaHAM Pi Control self-update (stop web, update, restart web)
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
+# Never run two updaters at once (the self-update lock also enforces this).
+Conflicts=lhpc-selfupdate-overwrite.service
+
+[Service]
+Type=oneshot
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc self-update --run-service
+# A hung fetch/pip must never leave the box headless: kill after 15 min ...
+TimeoutStartSec=900
+# ... and bring the console back on EVERY exit path (success, failure, timeout, kill) —
+# the second layer of the "web always comes back" guarantee (run-service also restarts it).
+ExecStopPost=/usr/bin/systemctl --user start --no-block lhpc-web.service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-selfupdate

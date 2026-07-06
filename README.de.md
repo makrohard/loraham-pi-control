@@ -71,6 +71,22 @@ weiter, bis du sie stoppst. `./uninstall.sh` entfernt Code, venv, State und den 
 inkl. Config. Die Skripte liegen im Checkout unter `~/loraham-pi-control/src/loraham-pi-control/`,
 nicht im Laufzeitverzeichnis.
 
+**Controller-Status & Updates:** Die Controller-Zeile (erster Eintrag unter **Apps**) und die
+Versionsanzeige in der Fußzeile sind bei jedem Seitenaufruf **nur aus dem Cache** — kein
+Zugriff auf den Checkout, `.git`, das Netz oder die Identität beim Rendern. Die Konsole prüft
+**automatisch im Hintergrund** auf Updates (Standard: alle 12 h, einstellbar über
+`[web] update_check_hours` in `config/local.toml`, `0` = aus) — „Update →" erscheint von
+selbst in der Fußzeile. **Updaten ist ein Klick**: Nach der Bestätigung (Warnung vor dem
+automatischen Neustart; bei lokalen Änderungen ausdrückliche Verwerfen-Zustimmung) stoppt
+eine parameterlose systemd-Helper-Unit die Konsole, wendet das Update an — mit frischer
+Live-Identitätsprüfung und allen Locks —, synchronisiert das venv und startet die Konsole
+wieder; der Browser verbindet sich selbst neu. Der manuelle Weg
+(`systemctl --user stop lhpc-web && lhpc self-update --apply`) funktioniert weiterhin.
+Der systemd-Dienst ist **least-privilege**:
+Dateisystem nur lesbar außer Laufzeitverzeichnis und `/tmp`, kein breiter Schreibzugriff auf
+`$HOME`/`/var`; Build-/Tool-Caches liegen laufzeit-eigen unter `build/tool-cache/` (nie
+`~/.platformio`, `~/.espressif` oder `~/.cache`).
+
 Rufzeichen einmalig auf der Web-Konfigseite setzen; bis dahin nutzen die Apps
 `N0CALL`.
 

@@ -640,7 +640,7 @@ def test_load_manifest_absent_controller_unchanged(tmp_path):
     assert len(stacks) == 1 and mf.load_controller(p) is None
 
 
-# --------- P2-3: cached-only controller CARD on the dashboard (not /stacks) ---------------
+# --------- P2-3: cached-only controller row is the FIRST /stacks entry (not the dashboard) --
 
 _NO_CONTROLLER_MANIFEST = _GOOD_STACK           # a stack, no [controller] table
 
@@ -656,36 +656,76 @@ def _app(tmp_path, manifest=None):
     return create_app(service_factory=factory).test_client()
 
 
-def test_dashboard_renders_controller_card_when_declared(tmp_path):
-    body = _app(tmp_path).get("/").get_data(as_text=True)   # packaged manifest HAS a controller
-    assert "controller-row" in body and "LoRaHAM Pi Control" in body and "Self-Update" in body
+def _seed_available_cache(tmp_path):
+    """Write a cached self-update envelope that renders the controller as an available git
+    checkout — mirrors what the startup refresh writes, so status_view needs no live probe."""
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path),
+                           {"local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                      "branch": "main"}, "upstream": {}, "checked_at": 1})
 
 
-def test_dashboard_omits_controller_card_when_absent(tmp_path):
+def test_stacks_renders_controller_row_first_with_embedded_update(tmp_path):
+    _seed_available_cache(tmp_path)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)   # packaged manifest HAS a controller
+    assert 'id="controller-row"' in body and "LoRaHAM Pi Control" in body
+    assert "/self-update/check" in body and "Self-Update" not in body   # embedded Update UI, renamed
+    # it is the FIRST entry — before the first managed stack's log link
+    assert body.index('id="controller-row"') < body.index('logslink')
+
+
+def test_stacks_omits_controller_row_when_absent(tmp_path):
     p = tmp_path / "m.toml"
     p.write_text(_NO_CONTROLLER_MANIFEST)
-    resp = _app(tmp_path, manifest=p).get("/")
-    assert resp.status_code == 200 and "controller-row" not in resp.get_data(as_text=True)
+    resp = _app(tmp_path, manifest=p).get("/stacks")
+    assert resp.status_code == 200 and 'id="controller-row"' not in resp.get_data(as_text=True)
 
 
-def test_dashboard_controller_card_is_cached_only(tmp_path, monkeypatch):
-    """The dashboard GET renders the controller card from cached data even when EVERY live
-    controller/self-update function would fail — no git/network/live-identity on GET."""
+def test_stacks_controller_row_is_cached_only(tmp_path, monkeypatch):
+    """The /stacks GET renders the controller row from cached data even when EVERY live
+    controller/self-update function would fail — no git/network/live-identity/source-tree probe
+    on GET. `repo_root` is included: status_view must NOT probe the live checkout / .git."""
     def _boom(*a, **k):
-        raise AssertionError("a live git/network/identity call ran during a cached GET")
+        raise AssertionError("a live git/network/identity/source-tree call ran during a cached GET")
 
+    monkeypatch.setattr(selfupdate, "repo_root", _boom)          # <- the Issue-A regression guard
     monkeypatch.setattr(selfupdate, "local_state", _boom)
     monkeypatch.setattr(selfupdate, "check_upstream", _boom)
     monkeypatch.setattr(ControllerService, "controller_identity_live", _boom)
-    resp = _app(tmp_path).get("/")
-    assert resp.status_code == 200
-    assert "controller-row" in resp.get_data(as_text=True)
+    resp = _app(tmp_path).get("/stacks")
+    assert resp.status_code == 200 and 'id="controller-row"' in resp.get_data(as_text=True)
 
 
-def test_stacks_page_has_no_hardcoded_self_stack(tmp_path):
-    """The old unconditional always-'running' self-stack row is gone from /stacks."""
+def test_all_get_pages_and_footer_are_cached_only(tmp_path, monkeypatch):
+    """Every GET route AND the footer context processor must render with no live controller
+    probe: repo_root / local_state / check_upstream / controller_identity_live all raise."""
+    def _boom(*a, **k):
+        raise AssertionError("live controller probe on a GET")
+
+    monkeypatch.setattr(selfupdate, "repo_root", _boom)
+    monkeypatch.setattr(selfupdate, "local_state", _boom)
+    monkeypatch.setattr(selfupdate, "check_upstream", _boom)
+    monkeypatch.setattr(ControllerService, "controller_identity_live", _boom)
+    client = _app(tmp_path)
+    # The footer (context processor -> self_update_status -> status_view) renders on all of these.
+    for path in ("/", "/stacks", "/stacks/daemon", "/logs/loraham-daemon", "/healthz"):
+        resp = client.get(path)
+        assert resp.status_code in (200, 404), (path, resp.status_code)
+        if resp.status_code == 200 and path != "/healthz":
+            assert "LoRaHAM Pi Control" in resp.get_data(as_text=True)   # footer rendered
+
+
+def test_dashboard_has_no_controller_card(tmp_path):
+    """The controller lives on /stacks (with its embedded Update UI) — NOT on the dashboard."""
+    assert "controller-row" not in _app(tmp_path).get("/").get_data(as_text=True)
+
+
+def test_stacks_controller_row_not_falsely_running(tmp_path):
+    """The controller row must not claim a stack run-state (no running badge)."""
     body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert 'id="self-stack"' not in body
+    i = body.index('id="controller-row"')
+    assert "badge-running" not in body[i:body.index("</details>", i)]
 
 
 # --------- P2-4: deps-sync uses the deployment interpreter + checkout, shell-quoted -------

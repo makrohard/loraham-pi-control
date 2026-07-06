@@ -117,10 +117,29 @@ def test_status_version_ahead_is_red(env):
     assert v["deps_changed"] is True          # pyproject changed -> pip hint
 
 
-def test_status_view_no_check_is_grey(env):
+def test_status_view_no_check_is_grey(env, monkeypatch):
+    # Never refreshed: status_view is CACHED-ONLY, so it must NOT probe the live checkout to
+    # decide availability — repo_root raising proves the GET path never calls it (Issue A).
+    monkeypatch.setattr(selfupdate, "repo_root",
+                        lambda: (_ for _ in ()).throw(AssertionError("live repo_root on a GET")))
     v = selfupdate.status_view(env["paths"])                  # never refreshed
     assert v["ver_color"] == "grey" and v["commit_color"] == "grey"
     assert v["update_available"] is False and v["version"] == selfupdate.__version__
+    # No cache yet -> availability is unknown/unavailable until a refresh writes local.is_git;
+    # it does NOT fall back to a live .git probe.
+    assert v["available"] is False and v["is_git"] is False
+
+
+def test_status_view_legacy_cache_without_is_git_is_unavailable(env, monkeypatch):
+    # A pre-existing cache written before `is_git` existed in `local` must render unavailable
+    # (never a live fallback), per the backward-compat requirement.
+    monkeypatch.setattr(selfupdate, "repo_root",
+                        lambda: (_ for _ in ()).throw(AssertionError("live repo_root on a GET")))
+    selfupdate.write_cache(env["paths"], {"local": {"head": "a" * 40, "head_short": "aaaaaaaaa",
+                                                    "branch": "main"},
+                                          "upstream": {}, "checked_at": 1})
+    v = selfupdate.status_view(env["paths"])
+    assert v["available"] is False and v["is_git"] is False and v["update_available"] is False
 
 
 # --- apply ------------------------------------------------------------------------------------
@@ -1286,3 +1305,153 @@ def test_removed_param_preserved_despite_stale_service_cache(tmp_path, monkeypat
     res = svc.self_update_apply()                                       # REAL A->B in the SAME (stale) service
     assert res.ok and res.data.get("pending_migrations", 0) >= 1        # ropt unprovable in NEW -> pending
     assert cfgmod.load_stack_config(svc._paths, "s").get("ropt") == "OLD"   # stale cache must NOT delete it
+
+
+# --- last_apply envelope field (one-click web update outcome) ----------------------------------
+
+def test_record_last_apply_merges_and_survives_refresh(env):
+    selfupdate.refresh_cache(env["sys"], env["paths"])
+    selfupdate.record_last_apply(env["paths"], ok=True, summary="Update applied.", now=7)
+    v = selfupdate.status_view(env["paths"])
+    assert v["last_apply"] == {"ok": True, "summary": "Update applied.", "finished_at": 7}
+    # a later refresh (check/apply) CARRIES the outcome forward, like identity
+    selfupdate.refresh_cache(env["sys"], env["paths"])
+    assert selfupdate.status_view(env["paths"])["last_apply"]["summary"] == "Update applied."
+    # and the other envelope fields survived the merge
+    assert selfupdate.status_view(env["paths"])["available"] is True
+
+
+def test_record_last_apply_without_prior_cache(tmp_path):
+    from lhpc.core.paths import Paths
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    selfupdate.record_last_apply(p, ok=False, summary="x" * 9000, now=1)   # bounded
+    v = selfupdate.status_view(p)
+    assert v["last_apply"]["ok"] is False and len(v["last_apply"]["summary"]) <= 512
+
+
+def test_last_apply_malformed_is_rejected_safely(tmp_path):
+    from lhpc.core.paths import Paths
+    import json
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    # wrong-typed last_apply invalidates the WHOLE envelope (schema discipline) -> grey view
+    (tmp_path / "state" / "selfupdate.json").write_text(
+        json.dumps({"schema_version": 1, "local": {"is_git": True},
+                    "last_apply": {"ok": "yes"}}))
+    v = selfupdate.status_view(p)
+    assert v["last_apply"] is None and v["available"] is False
+
+
+# --- self_update_run_service (the updater unit's plumbing) -------------------------------------
+
+def _runsvc_svc(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import FakeSystem, CommandResult
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    fake = FakeSystem()
+    for argv in ((["systemctl", "--user", "stop", "lhpc-web.service"]),
+                 (["systemctl", "--user", "start", "--no-block", "lhpc-web.service"])):
+        fake.commands[tuple(argv)] = CommandResult(returncode=0, stdout="", stderr="")
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    return svc, fake
+
+
+def test_run_service_ordering_stop_apply_start(tmp_path, monkeypatch):
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    order = []
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: (order.append(("apply", force)),
+                                                      ActionResult(True, "Already up to date.",
+                                                                   data={"already": True}))[1])
+    res = svc.self_update_run_service(force=False)
+    assert res.ok
+    sysctl = [c for c in fake.calls if c[0] == "systemctl"]
+    assert sysctl[0][:3] == ["systemctl", "--user", "stop"]
+    assert order == [("apply", False)]
+    assert sysctl[-1][:4] == ["systemctl", "--user", "start", "--no-block"]
+    # up-to-date -> NO pip sync ran
+    assert not any("pip" in " ".join(c) for c in fake.calls)
+    # outcome recorded for the returning UI
+    assert selfupdate.status_view(svc._paths)["last_apply"]["ok"] is True
+
+
+def test_run_service_syncs_venv_when_advanced(tmp_path, monkeypatch):
+    import sys
+    from lhpc.core.probes.backends import CommandResult
+    from lhpc.core.services import ActionResult, ControllerService
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: tmp_path / "co")
+    pip_argv = (sys.executable, "-m", "pip", "install", "-e", str(tmp_path / "co"))
+    fake.commands[pip_argv] = CommandResult(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "Update applied.",
+                                                                  data={"already": False}))
+    res = svc.self_update_run_service(force=True)
+    assert res.ok and list(pip_argv) in fake.calls
+
+
+def test_run_service_always_restarts_web_on_failure(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    def boom(self, *, force=False):
+        raise RuntimeError("apply exploded")
+    monkeypatch.setattr(ControllerService, "self_update_apply", boom)
+    try:
+        svc.self_update_run_service()
+    except RuntimeError:
+        pass
+    assert ["systemctl", "--user", "start", "--no-block", "lhpc-web.service"] in fake.calls
+
+
+def test_run_service_aborts_when_web_keeps_lock(tmp_path, monkeypatch):
+    """If lhpc-web never releases its SHARED lock, run_service refuses without mutating —
+    and still restarts the web."""
+    from lhpc.core.services import ControllerService
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    monkeypatch.setattr(ControllerService, "_WEB_STOP_WAIT_S", 0.2)
+    from contextlib import contextmanager
+    @contextmanager
+    def busy(paths, *, exclusive):
+        raise selfupdate.ControllerRuntimeBusy("held")
+        yield
+    monkeypatch.setattr(selfupdate, "controller_runtime_lock", busy)
+    applied = []
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: applied.append(1))
+    res = svc.self_update_run_service()
+    assert not res.ok and res.data.get("web_running") and not applied
+    assert ["systemctl", "--user", "start", "--no-block", "lhpc-web.service"] in fake.calls
+
+
+def test_trigger_starts_fixed_unit_only(tmp_path, monkeypatch):
+    """The web trigger runs a FIXED argv — unit choice is the only degree of freedom."""
+    import json
+    from lhpc.core.probes.backends import CommandResult
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    (tmp_path / "state" / "selfupdate.json").write_text(
+        json.dumps({"schema_version": 1, "local": {"is_git": True}}))
+    for unit in ("lhpc-selfupdate.service", "lhpc-selfupdate-overwrite.service"):
+        fake.commands[("systemctl", "--user", "start", "--no-block", unit)] = \
+            CommandResult(returncode=0, stdout="", stderr="")
+    r1 = svc.self_update_trigger()
+    r2 = svc.self_update_trigger(overwrite=True)
+    assert r1.ok and r1.data["unit"] == "lhpc-selfupdate.service"
+    assert r2.ok and r2.data["unit"] == "lhpc-selfupdate-overwrite.service"
+    starts = [c for c in fake.calls if c[:4] == ["systemctl", "--user", "start", "--no-block"]]
+    assert all(len(c) == 5 for c in starts)                     # nothing else rides along
+
+
+def test_trigger_refuses_unavailable_and_unsafe(tmp_path, monkeypatch):
+    import json
+    svc, fake = _runsvc_svc(tmp_path, monkeypatch)
+    # no cache -> unavailable
+    assert svc.self_update_trigger().data.get("unavailable")
+    # unsafe cached identity -> refused before any systemctl
+    (tmp_path / "state" / "selfupdate.json").write_text(
+        json.dumps({"schema_version": 1, "local": {"is_git": True},
+                    "identity": {"ok": False, "status": "unsafe", "reason": "bad", "checked_at": 1}}))
+    assert svc.self_update_trigger().data.get("identity_unsafe")
+    assert not any(c[:3] == ["systemctl", "--user", "start"] for c in fake.calls)

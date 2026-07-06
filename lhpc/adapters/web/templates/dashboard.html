@@ -31,29 +31,6 @@
       {% endfor %}
     </div>
   {% endif %}
-  {% if controller %}
-    {# Controller (LHPC's own checkout) — a distinct NON-stack card. CACHED data only:
-       version/head/identity/update come from the self-update envelope, never a live call. #}
-    <div class="card controller-row">
-      <header><h2>Controller <span class="pill">{{ controller.display_name }}</span></h2></header>
-      <div class="body">
-        <span class="ver ver-grey">v{{ controller.version }}</span>{% if controller.head_short %}
-        <span class="ver ver-grey" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}
-        {% if controller.identity is none %}
-          <span class="pill">identity unchecked</span>
-        {% elif controller.identity.status == 'ok' %}
-          <span class="ver ver-green">identity ok</span>
-        {% elif controller.identity.status == 'unsafe' %}
-          <span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
-          <span class="muted">{{ controller.identity.reason }}</span>
-        {% else %}
-          <span class="pill">not self-hosted</span>
-        {% endif %}
-        {% if controller.update_available %}<span class="pill">update available</span>{% endif %}
-        · <a href="{{ url_for('self_update_page') }}">Self-Update &rarr;</a>
-      </div>
-    </div>
-  {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
     {% for r in radios %}

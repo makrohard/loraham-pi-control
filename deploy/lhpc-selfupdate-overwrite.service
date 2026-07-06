@@ -1,0 +1,21 @@
+# LoRaHAM Pi Control — one-click self-update, OVERWRITE variant (TEMPLATE; install.sh
+# generates the per-target copy). Identical to lhpc-selfupdate.service except the apply
+# DISCARDS local changes in the controller checkout (modified + non-ignored untracked
+# files). The web starts this unit ONLY after a fresh dirty check and the operator's
+# explicit discard consent — and it is still parameter-free: consent selects THIS fixed
+# unit, no input rides along.
+[Unit]
+Description=LoRaHAM Pi Control self-update, discarding local changes
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
+Conflicts=lhpc-selfupdate.service
+
+[Service]
+Type=oneshot
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc self-update --run-service --overwrite
+TimeoutStartSec=900
+ExecStopPost=/usr/bin/systemctl --user start --no-block lhpc-web.service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-selfupdate

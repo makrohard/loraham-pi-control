@@ -99,10 +99,14 @@ def test_python_stacks_have_in_tree_venv_build_steps():
     q = comps["meshcom-qemu"]["build_steps"][-1]["env"]["XR_PASSWORD"]
     assert q == "@file?:{runtime}/config/secrets/xr_pw"          # OPTIONAL secret (legacy
     # `$(cat … 2>/dev/null)` semantics: absent -> HMAC disabled, never a blocked build)
-    # meshcore-pi's config BASE lives in-root (self-sufficient regardless of what the
-    # pinned clone ships — live finding: the old base only existed untracked in ~/src)
+    # meshcore-pi's config BASE is the loraham-daemon-interface example SHIPPED by the pinned
+    # clone (tracked on origin/loraham-daemon-interface: [interface.loraham868] with the daemon
+    # sockets + [device.companion] port 5000). The former `{runtime}/config/files/meshcore-pi-
+    # base.toml` was an un-seeded generated-output path — nothing ever created it, so config
+    # generation failed ('No such file or directory') and the node never opened TCP 5000.
     base = comps["meshcore-pi"]["config_file"]["base"]
-    assert base.startswith("{runtime}/config/files/"), base
+    assert base == "examples/config-loraham868.toml", base
+    assert not base.startswith("{runtime}/config/files/"), base   # never the generated-output dir
 
 
 def test_meshcom_secret_env_resolves_in_root(tmp_path):

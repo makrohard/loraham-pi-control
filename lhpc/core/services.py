@@ -1074,21 +1074,34 @@ class ControllerService:
                                        "into it (build it in that checkout)")
                     testable = [c for c in comps if c.test_argv
                                 and (c.source.strategy or "") != "link"]
+                    # Integration tests that need the stack RUNNING can't run in a build sweep
+                    # (nothing is started) — they are DEFERRED, never failed, here.
+                    auto = [c for c in testable if not c.test_requires_running]
+                    deferred = len(testable) - len(auto)
                     if tests and testable:
                         emit(f"==== {st.id}: host tests ====")
                         r["status"] = "testing"
                         bw()
                         t = self.test(st.id, tx=False, apply=True, bulk_ctx=ctx,
-                                      on_component_log=register_log)
+                                      on_component_log=register_log)   # runs `auto`, defers the rest
                         for line in t.details:
                             emit(line)
-                        r["tests"] = {"ran": True, "ok": bool(t.ok),
-                                      "detail": "passed" if t.ok else "FAILED"}
-                        if not t.ok:
-                            r["status"], r["detail"] = "fail", t.summary
-                            failed_stacks.add(st.id)
-                            bw()
-                            continue
+                        if auto:
+                            detail = "passed" if t.ok else "FAILED"
+                            if deferred:
+                                detail += (f"; {deferred} deferred (run `lhpc test {st.id}` "
+                                           "with it started)")
+                            r["tests"] = {"ran": True, "ok": bool(t.ok), "detail": detail}
+                            if not t.ok:
+                                r["status"], r["detail"] = "fail", t.summary
+                                failed_stacks.add(st.id)
+                                bw()
+                                continue
+                        else:   # only integration tests -> deferred, NOT "no host tests"
+                            r["tests"] = {"ran": False, "ok": None,
+                                          "detail": (f"deferred — {deferred} test(s) need the "
+                                                     f"running stack (run `lhpc test {st.id}` "
+                                                     "after starting it)")}
                     else:
                         r["tests"] = {"ran": False, "ok": None,
                                       "detail": ("skipped (tests disabled)" if not tests
@@ -4337,6 +4350,13 @@ class ControllerService:
             try:
                 with self._source_operation_guard(src_paths, op="host-test"):
                     for _, comp in items:
+                        # An integration test needs the stack already running. A bulk/install-all
+                        # sweep builds without starting, so DEFER it there (never a false failure);
+                        # an explicit `lhpc test` (no bulk_ctx) runs it against the running stack.
+                        if comp.test_argv and comp.test_requires_running and bulk_ctx is not None:
+                            details.append(f"  [deferred] {comp.id}: needs the running stack "
+                                           f"(run `lhpc test {target}` after starting it)")
+                            continue
                         # BULK: run-specific test-log base + DURABLE ordered registration
                         # BEFORE the test runs (same guarantees as the build path).
                         log_base = None
@@ -6560,6 +6580,105 @@ class ControllerService:
         details += [n for n in (migrated_note, pending_note) if n]
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
+
+    # One-click self-update: the running console cannot mutate its own code (it holds the
+    # controller-runtime lock SHARED for exactly that reason), so the web triggers a static,
+    # PARAMETER-FREE systemd user oneshot (lhpc-selfupdate[-overwrite].service) whose fixed
+    # job is: stop lhpc-web -> apply (all existing gates) -> sync the venv -> start lhpc-web.
+    SELFUPDATE_UNIT = "lhpc-selfupdate.service"
+    SELFUPDATE_OVERWRITE_UNIT = "lhpc-selfupdate-overwrite.service"
+    _SYSTEMCTL_TIMEOUT_S = 30.0
+    _WEB_STOP_WAIT_S = 30.0
+    _PIP_SYNC_TIMEOUT_S = 600.0
+
+    def self_update_local_dirty(self) -> bool:
+        """FRESH local dirty check for the one-click confirm step (git status only — local,
+        no network). POST-time only; GET rendering stays cached-only."""
+        from . import selfupdate
+        return bool(selfupdate.local_state(self._system).get("dirty") is True)
+
+    def self_update_trigger(self, *, overwrite: bool = False) -> ActionResult:
+        """WEB stage-2 entry: start the parameter-free updater unit (fire-and-forget). The
+        consent decision only SELECTS between the two fixed units — no free-form input ever
+        reaches the updater. All safety gates run inside the updater's apply."""
+        jobs = self.active_jobs()
+        if jobs:
+            return ActionResult(False, "An lhpc job is still running — finish it before self-updating.",
+                                data={"blocked_by_jobs": True})
+        st = self.self_update_status()
+        if not st.get("available"):
+            return ActionResult(False, "Self-update is unavailable — lhpc is not running from a "
+                                "git checkout.", data={"unavailable": True})
+        idv = st.get("identity")
+        if isinstance(idv, dict) and idv.get("status") == "unsafe":
+            return ActionResult(False, "Self-update blocked: unsafe controller identity "
+                                f"({idv.get('reason', '')}).", data={"identity_unsafe": True})
+        unit = self.SELFUPDATE_OVERWRITE_UNIT if overwrite else self.SELFUPDATE_UNIT
+        r = self._system.runner.run(["systemctl", "--user", "start", "--no-block", unit],
+                                    timeout=self._SYSTEMCTL_TIMEOUT_S)
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout or "").strip()[:200]
+            return ActionResult(False, f"Could not start the updater service ({unit}): "
+                                f"{detail or 'systemctl failed'}. Is it installed? "
+                                "(install.sh writes it; or run `lhpc self-update --apply` manually).",
+                                data={"trigger_failed": True})
+        return ActionResult(True, "Updater started — the console will stop, update itself and "
+                            "come back automatically.", data={"triggered": True, "unit": unit})
+
+    def self_update_run_service(self, *, force: bool = False) -> ActionResult:
+        """PLUMBING entry, run by the updater unit (never from the web process): stop lhpc-web,
+        wait for its shared controller-runtime lock to clear, apply (existing gates: exclusive
+        lock -> update lock -> LIVE identity -> dirty refusal unless force), sync the venv when
+        the checkout advanced, record the outcome in the cache envelope, and ALWAYS start
+        lhpc-web again — on every path, including failures."""
+        import sys
+        import time as _time
+        from . import selfupdate
+        res = ActionResult(False, "Self-update service did not run.", data={})
+        try:
+            self._system.runner.run(["systemctl", "--user", "stop", "lhpc-web.service"],
+                                    timeout=self._SYSTEMCTL_TIMEOUT_S)
+            # Wait (bounded) until the web's SHARED lock is really gone — probe by acquiring
+            # EXCLUSIVE and releasing immediately; apply re-acquires it properly afterwards.
+            deadline = _time.monotonic() + self._WEB_STOP_WAIT_S
+            while True:
+                try:
+                    with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
+                        break
+                except selfupdate.ControllerRuntimeBusy:
+                    if _time.monotonic() >= deadline:
+                        res = ActionResult(False, "lhpc-web did not release the controller-runtime "
+                                           "lock — aborting without changes.",
+                                           data={"web_running": True})
+                        return res
+                    _time.sleep(0.5)
+                except selfupdate.ControllerRuntimeLockError:
+                    res = ActionResult(False, "Could not acquire the controller-runtime lock "
+                                       "(unsafe runtime state) — aborting without changes.",
+                                       data={"lock_error": True})
+                    return res
+            res = self.self_update_apply(force=force)
+            # Keep the venv in sync when the checkout actually advanced: an editable install
+            # is idempotent and cheap, and removes the manual deps_changed step for the
+            # one-click flow. Run from the updater's own interpreter (the deployment venv).
+            if res.ok and not res.data.get("already"):
+                root = selfupdate.repo_root()
+                if root is not None:
+                    pip = self._system.runner.run(
+                        [sys.executable, "-m", "pip", "install", "-e", str(root)],
+                        timeout=self._PIP_SYNC_TIMEOUT_S)
+                    if pip.returncode != 0:
+                        tail = (pip.stderr or pip.stdout or "").strip()[-200:]
+                        res = ActionResult(True, res.summary + f" (venv sync FAILED: {tail} — run "
+                                           "pip install -e manually)", data=dict(res.data),
+                                           details=res.details)
+            return res
+        finally:
+            selfupdate.record_last_apply(self._paths, ok=bool(res.ok), summary=res.summary)
+            # The console must come back on EVERY path (the unit's ExecStopPost is the
+            # second layer of this guarantee).
+            self._system.runner.run(["systemctl", "--user", "start", "--no-block",
+                                     "lhpc-web.service"], timeout=self._SYSTEMCTL_TIMEOUT_S)
 
     def _write_envelope(self, completed, prepared) -> None:
         """Persist the two-slot envelope (or clear it when both slots are empty). Best-effort at

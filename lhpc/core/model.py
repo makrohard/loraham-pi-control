@@ -324,6 +324,10 @@ class Component:
     post_steps: tuple[dict, ...] = ()     # typed post-start steps (delay/exec)
     build_steps: tuple[dict, ...] = ()    # typed build steps ({argv, env, pkgconfig})
     test_argv: tuple[str, ...] = ()       # structured host-test argv (no shell)
+    test_requires_running: bool = False   # host test needs the stack already RUNNING (integration
+                                          # test, e.g. probing a running QEMU guest); bulk/install-all
+                                          # DEFERS it (can't start during a build sweep), `lhpc test`
+                                          # runs it. Without this it would fail in install-all.
     readiness: str = ""                   # process | endpoint | daemon-band | manual | external-systemd
     readiness_timeout: float = 0.0        # seconds to wait for ready=true endpoints at start
                                           # (0 = use the service default); raise it for a

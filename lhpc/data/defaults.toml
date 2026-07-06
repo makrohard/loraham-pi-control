@@ -7,6 +7,10 @@
 [web]
 host = "127.0.0.1"     # loopback only; non-loopback is rejected by the server
 port = 8770
+# Background upstream update check (git fetch) inside the web console, so the footer's
+# "Update ->" indicator appears without pressing "Check for updates". Hours between
+# checks; clamped 1..168; 0 disables the loop (one check at startup still runs).
+update_check_hours = 12
 
 [install]
 # How `lhpc install` obtains a component's source into the runtime root:

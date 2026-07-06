@@ -110,6 +110,18 @@ elif [ -f "$UNIT" ]; then
 else
 	note "no web service for this target"
 fi
+# The one-click updater helpers were installed alongside the web unit — same per-unit
+# provenance check; a helper belonging to another runtime root is left alone.
+for HU in "${HOME}/.config/systemd/user/lhpc-selfupdate.service" \
+          "${HOME}/.config/systemd/user/lhpc-selfupdate-overwrite.service"; do
+	if [ -f "$HU" ] && { grep -qxF "Environment=LHPC_RUNTIME_ROOT=${TARGET_DIR}" "$HU" \
+			|| grep -qF "ExecStart=${VENV}/bin/lhpc" "$HU"; }; then
+		command -v systemctl >/dev/null 2>&1 && systemctl --user stop "$(basename "$HU")" 2>/dev/null || true
+		rm -f "$HU"
+		command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
+		note "removed this target's updater helper ($(basename "$HU"))"
+	fi
+done
 
 # --------------------------------------------------------------------------- 2. PATH symlink
 step "Command integration"

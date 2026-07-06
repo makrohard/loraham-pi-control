@@ -1,0 +1,83 @@
+{# Controller UPDATE UI — embedded in the /stacks controller row. CACHED status (`st`) on
+   every GET; no live git/network/identity call while rendering. "Update now" is ONE-CLICK:
+   a confirmed POST starts the parameter-free updater unit, which stops the console, applies
+   the update (all safety gates), syncs the venv and starts the console again — the browser
+   shows updating.html and reconnects. The dirty state on the confirm step is checked FRESH
+   (POST-time, local git only); ticking discard-consent selects the fixed overwrite unit. #}
+{% if not st.available %}
+  <p class="flash flash-warn">Update is unavailable — lhpc is not running from a git
+    checkout. Reinstall from a git clone to enable it.</p>
+{% else %}
+  <table class="paramgrid">
+    <tr><th></th><th>Installed (local)</th><th>Upstream</th></tr>
+    <tr><th>Version</th>
+      <td><span class="ver ver-{{ st.ver_color }}">v{{ st.version }}</span></td>
+      <td>{{ ('v' ~ st.upstream_version) if st.upstream_version else '—' }}</td></tr>
+    <tr><th>Commit</th>
+      <td><span class="ver ver-{{ st.commit_color }}">@{{ st.head_short or '?' }}</span>{% if st.dirty %} <span class="pill">dirty</span>{% endif %}</td>
+      <td class="mono">{{ st.upstream_head_short or '—' }}</td></tr>
+    <tr><th>Branch</th><td class="mono">{{ st.branch or '—' }}</td><td></td></tr>
+  </table>
+  {# Controller identity (name/version/identity) is shown in the row summary above, not repeated
+     here. Keep the UNSAFE reason visible though — an apply is blocked when identity is unsafe. #}
+  {% if controller and controller.identity and controller.identity.status == 'unsafe' %}
+    <p class="flash flash-warn">Controller identity UNSAFE — update apply is blocked.
+      {{ controller.identity.reason }}</p>
+  {% endif %}
+  <p class="muted">
+    {% if not st.have_upstream %}Upstream not checked yet{% if st.upstream_error %} ({{ st.upstream_error }}){% endif %} — checked automatically in the background, or click <strong>Check for updates</strong>.
+    {% elif st.update_available %}An update is available.
+    {% else %}Up to date.{% endif %}
+  </p>
+
+  {# Outcome of the LAST one-click update (recorded by the updater service while the console
+     was down; cached-only read). #}
+  {% if st.last_apply %}
+    <p class="flash {{ 'flash-ok' if st.last_apply.ok else 'flash-warn' }}">
+      Last update run: {{ st.last_apply.summary }}</p>
+  {% endif %}
+
+  {# Stage-1 confirm: the console stops, updates itself and comes back automatically. #}
+  {% if confirm %}
+    <section class="cfgsec">
+      <p class="flash flash-warn">Updating will <strong>stop the web console</strong>, fast-forward
+        the checkout, and <strong>start the console again automatically</strong>. The page you
+        land on reconnects by itself once it is back.</p>
+      <form method="post" action="{{ url_for('self_update_apply') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="confirmed" value="yes">
+        {% if confirm.dirty %}
+          <p class="flash flash-warn"><strong>Local changes are present (modified or untracked
+            files).</strong> By default they are kept and the update is refused. Tick below to
+            discard modified <em>and</em> non-ignored untracked files (ignored artifacts such as
+            a <code>.venv/</code> are left untouched).</p>
+          <label><input type="checkbox" name="overwrite" value="yes"> Overwrite (discard) local changes</label>
+          <p></p>
+        {% endif %}
+        <button type="submit">Update &amp; restart now</button>
+        <a class="act" href="{{ url_for('stacks_overview') }}"><button type="button">Cancel</button></a>
+      </form>
+    </section>
+  {% endif %}
+
+  {% if jobs %}
+    <p class="flash flash-warn">An lhpc job is running ({{ jobs|length }}) — updates are blocked
+      until it finishes.</p>
+  {% endif %}
+
+  {# Actions. #}
+  {% if not confirm %}
+    <div class="actrow">
+      <form method="post" action="{{ url_for('self_update_check') }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit">Check for updates</button>
+      </form>
+      {% if st.update_available and not jobs %}
+        <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit">Update now</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endif %}

@@ -94,6 +94,20 @@ def test_self_update_check_cli(capsys, monkeypatch):
     assert "Update available" in capsys.readouterr().out
 
 
+def test_self_update_run_service_cli_plumbing(capsys, monkeypatch):
+    """`--run-service [--overwrite]` (called by the updater units) dispatches to
+    self_update_run_service, non-interactively (no confirm prompt)."""
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_run(self, *, force=False):
+        seen["force"] = force
+        return ActionResult(True, "Update applied; console restarted.")
+    monkeypatch.setattr(ControllerService, "self_update_run_service", fake_run)
+    assert main(["self-update", "--run-service"]) == 0 and seen["force"] is False
+    assert main(["self-update", "--run-service", "--overwrite"]) == 0 and seen["force"] is True
+    assert "console restarted" in capsys.readouterr().out
+
+
 def test_self_update_apply_cli_yes(capsys, monkeypatch):
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}

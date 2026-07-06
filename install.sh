@@ -181,15 +181,58 @@ RestartSec=3
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=lhpc-web
+# Least-privilege sandbox (equivalent to deploy/lhpc-web.service): read-only FS except the
+# runtime root + shared /tmp; build-tool caches redirected into the runtime-owned tool cache
+# so nothing writes ~/.platformio, ~/.espressif, ~/.cache or /var.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=${TARGET_DIR}
+ReadWritePaths=${TARGET_DIR} /tmp
+Environment=PLATFORMIO_CORE_DIR=${TARGET_DIR}/build/tool-cache/platformio
+Environment=IDF_TOOLS_PATH=${TARGET_DIR}/build/tool-cache/espressif
+Environment=XDG_CACHE_HOME=${TARGET_DIR}/build/tool-cache/cache
+Environment=PIP_CACHE_DIR=${TARGET_DIR}/build/tool-cache/pip
 PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+# AF_NETLINK: interface enumeration (getifaddrs) used by stack tools; AF_BLUETOOTH:
+# meshtasticd autodetects its node MAC from the Pi's BT adapter (HCI) — without it the
+# daemon aborts with 'Blank MAC Address' and its API port never opens.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH
+RestrictNamespaces=true
+LockPersonality=true
+# MemoryDenyWriteExecute omitted — QEMU (meshcom) TCG JIT needs W+X memory.
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=default.target
 UNIT
+		# One-click self-update helpers: static, PARAMETER-FREE oneshots the web console
+		# starts on demand (stop web -> apply -> sync venv -> ALWAYS restart web). The
+		# overwrite variant is a separate fixed unit selected only by explicit operator
+		# consent on a dirty tree. Written, never enabled (start-on-demand only).
+		for VARIANT in "" "-overwrite"; do
+			XFLAG=""
+			[ -n "$VARIANT" ] && XFLAG=" --overwrite"
+			cat > "${UNIT_DIR}/lhpc-selfupdate${VARIANT}.service" <<UNIT
+[Unit]
+Description=LoRaHAM Pi Control self-update${VARIANT:+, discarding local changes} (stop web, update, restart web)
+Documentation=file://${CHECKOUT}/docs/deployment.md
+Conflicts=lhpc-selfupdate$([ -n "$VARIANT" ] || echo "-overwrite").service
+
+[Service]
+Type=oneshot
+Environment=LHPC_RUNTIME_ROOT=${TARGET_DIR}
+WorkingDirectory=${CHECKOUT}
+ExecStart=${VENV}/bin/lhpc self-update --run-service${XFLAG}
+TimeoutStartSec=900
+ExecStopPost=/usr/bin/systemctl --user start --no-block lhpc-web.service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-selfupdate
+UNIT
+		done
 		systemctl --user daemon-reload 2>/dev/null || true
 		if systemctl --user enable --now lhpc-web.service 2>/dev/null; then
 			loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "could not enable lingering — the service may not start before login."

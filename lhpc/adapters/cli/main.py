@@ -199,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_su.add_argument("--overwrite", action="store_true",
                       help="Discard local changes (modified + non-ignored untracked files) if dirty")
     p_su.add_argument("--yes", action="store_true", help="Apply without an interactive confirm")
+    # PLUMBING, called by lhpc-selfupdate[-overwrite].service (the one-click web update):
+    # stop lhpc-web -> apply -> sync venv -> ALWAYS start lhpc-web again. Hidden: operators
+    # use --apply; the units are parameter-free by design.
+    p_su.add_argument("--run-service", action="store_true", help=argparse.SUPPRESS)
 
     p_web = sub.add_parser("web", help="Start the local operator web console")
     p_web.add_argument("--host", default="127.0.0.1", help="Bind host (loopback only)")
@@ -301,6 +305,9 @@ def main(argv: list[str] | None = None) -> int:
             lambda a: svc.test(args.target, tx=args.tx, apply=a),
             yes=args.yes)
     if args.command == "self-update":
+        if args.run_service:
+            # Unit plumbing (non-interactive by nature) — see self_update_run_service.
+            return _render(svc.self_update_run_service(force=args.overwrite))
         if not args.apply:
             return _render(svc.self_update_check())          # explicit upstream check + status
         if not args.yes and not _confirm(

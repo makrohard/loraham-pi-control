@@ -79,6 +79,31 @@ def test_path_component_rejects(bad):
         V.path_component(bad)
 
 
+@pytest.mark.parametrize("good", [
+    "{runtime}/state/meshtasticd/ssl/private_key.pem",   # the meshtastic ssl_key/ssl_cert case
+    "{runtime}/state/x/certificate.pem",
+    "{source}/build/out",
+    "{runtime}/logs/{band}/app.log",
+    "/tmp/loraconf.sock",                                 # a plain absolute path still works
+])
+def test_path_value_accepts_paths_and_controller_placeholders(good):
+    # A path may contain `/` and the exact controller placeholders {runtime}/{source}/{band}
+    # (expanded to real paths before use) — the value is returned unchanged for later expansion.
+    assert V.path_value(good) == good
+
+
+@pytest.mark.parametrize("bad", [
+    "{foo}/x",        # a NON-controller placeholder: stray braces still rejected
+    "x{runtime",      # partial/unbalanced brace
+    "a}b",
+    "{runtime}/../etc/passwd",   # traversal still blocked even with a placeholder
+    "a;b", "a|b", "a$b", "a`b`", "a>b", "a(b)",
+])
+def test_path_value_still_rejects_unsafe(bad):
+    with pytest.raises(ValidationError):
+        V.path_value(bad)
+
+
 # --- safe_text is the default str validator and blocks shell metacharacters ---
 
 @pytest.mark.parametrize("bad", [";", "|", "&", "$", "`", ">", "<", "(", ")",

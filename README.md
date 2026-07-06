@@ -149,8 +149,20 @@ and updatable via `lhpc self-update`, but never installed/built/started/cleaned/
 generic verb aimed at it refuses and points to `lhpc self-update`, and `lhpc status` shows a
 distinct `[controller]` row.
 
-Self-update requires the web service **stopped** (it takes an exclusive lock the running
-console holds shared), refuses a dirty checkout unless you overwrite, and — when a
-dependency change is reported — needs a manual `pip install -e …` before restart. See
+On the web console the controller row (first entry on **Apps**) and the footer version are
+**cached-only on every page load** — they never probe the checkout, `.git`, the network, or
+identity while rendering. The console **checks upstream in the background** (default every
+12 h, configurable via `[web] update_check_hours`, `0` = off), so "Update →" appears in the
+footer by itself; **“Check for updates”** does the same on demand.
+
+**Updating is one click**: after a confirm (which warns that the console restarts, and asks
+for explicit discard consent if the checkout is dirty), a parameter-free systemd helper unit
+stops the console, applies the update — with a fresh live identity check and all locks — syncs
+the venv, and starts the console again; the browser reconnects on its own. The equivalent
+manual path (`systemctl --user stop lhpc-web && lhpc self-update --apply`) still works.
+
+The web-service systemd unit is **least-privilege**: read-only filesystem except the runtime
+root and `/tmp`, no broad `$HOME`/`/var` write, and build/tool caches redirected into a
+runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.espressif` or `~/.cache`). See
 [`docs/deployment.md`](docs/deployment.md) and the operator relocation runbook in
 [`docs/deployment-migration.md`](docs/deployment-migration.md).

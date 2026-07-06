@@ -4,7 +4,33 @@ early rather than launching a misconfigured process."""
 
 import pytest
 
-from lhpc.core.manifest import parse_manifest, ManifestError
+from lhpc.core.manifest import parse_manifest, ManifestError, load_manifest, default_manifest_path
+
+
+def test_packaged_config_bases_are_not_unseeded_runtime_files():
+    """A config_file `base` must be a source-relative template (read from the managed repo) or
+    a properly-provisioned runtime path — NEVER a `{runtime}/config/files/*.toml`, which is the
+    GENERATED-output dir that nothing seeds. (Regression: meshcore-pi pointed its base at
+    `{runtime}/config/files/meshcore-pi-base.toml`, so config generation always failed with
+    'No such file or directory' and the node never opened TCP 5000.)"""
+    stacks = load_manifest(default_manifest_path())
+    bases = {c.id: c.config_file.base
+             for st in stacks for c in st.components if getattr(c, "config_file", None)}
+    assert bases.get("meshcore-pi") == "examples/config-loraham868.toml"
+    for cid, base in bases.items():
+        assert not base.startswith("{runtime}/config/files/"), (cid, base)
+
+
+def test_packaged_meshcom_host_test_is_recognized_at_component_level():
+    """meshcom-qemu declares `test = scripts/test.sh` — it MUST parse into a component-level
+    test_argv. (Regression: the key sat AFTER the [[…param]] sub-tables, so TOML bound it to the
+    last param table and the stack reported 'skipped (no host tests)'.)"""
+    stacks = {s.id: s for s in load_manifest(default_manifest_path())}
+    qemu = next(c for c in stacks["meshcom"].components if c.id == "meshcom-qemu")
+    assert qemu.test_argv == ("scripts/test.sh",), qemu.test_argv
+    testable = [c for c in stacks["meshcom"].components
+                if c.test_argv and (getattr(c.source, "strategy", "") or "") != "link"]
+    assert testable, "meshcom must have at least one testable component"
 
 
 def _manifest(comp: dict) -> dict:

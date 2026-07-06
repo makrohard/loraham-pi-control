@@ -11,6 +11,7 @@ locator  = "JO00aa"        # <- optional Maidenhead locator
 [web]
 # host = "127.0.0.1"       # loopback only
 # port = 8770
+# update_check_hours = 12  # background update-check cadence (1..168; 0 = off)
 
 [install]
 # source_strategy = "adopt"     # or "clone"

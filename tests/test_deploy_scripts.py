@@ -128,8 +128,8 @@ def test_install_refuses_symlinked_src(tmp_path):
 def test_install_full_creates_usable_layout_and_identity_ok(tmp_path):
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
-    fb = _fake_bin(tmp_path, git_src=REPO)      # clone served from this checkout, offline
-    r = _run(INSTALL, ["--target", str(root), "--no-service"], home, fb)
+    fb = _fake_bin(tmp_path, git_src=REPO)      # clone + fake systemctl, all offline
+    r = _run(INSTALL, ["--target", str(root)], home, fb)   # default: also installs the service
     assert r.returncode == 0, r.stdout + r.stderr
     out = r.stdout + r.stderr
     assert "identity: ok" in out and "Install complete" in out
@@ -139,6 +139,17 @@ def test_install_full_creates_usable_layout_and_identity_ok(tmp_path):
     # owner-only (no group/other write) on the whole chain
     for p in (root, root / "src", root / "src" / "loraham-pi-control", root / "venv" / "lhpc"):
         assert (p.stat().st_mode & 0o022) == 0
+    # The generated service unit is scoped to THIS target and uses the least-privilege sandbox
+    # (strict + ProtectHome=read-only), with build caches redirected into the runtime root.
+    unit = (home / ".config" / "systemd" / "user" / "lhpc-web.service").read_text()
+    active = [ln.strip() for ln in unit.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert f"Environment=LHPC_RUNTIME_ROOT={root}" in active
+    assert "ProtectSystem=strict" in active and "ProtectHome=read-only" in active
+    rw = [ln for ln in active if ln.startswith("ReadWritePaths=")]
+    assert len(rw) == 1 and str(root) in rw[0] and "/tmp" in rw[0] and "/var" not in rw[0]
+    for var in ("PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR"):
+        assert f"Environment={var}={root}/build/tool-cache/" in unit, var
+    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)
     # Independent confirmation via the DEPLOYMENT venv — CLEAN env (no dev VIRTUAL_ENV /
     # PYTHONPATH) so `import lhpc` resolves to the deployed checkout, not the dev one.
     v = subprocess.run([str(root / "venv" / "lhpc" / "bin" / "python"), "-c",
@@ -149,6 +160,51 @@ def test_install_full_creates_usable_layout_and_identity_ok(tmp_path):
                        cwd=str(home),   # NOT the dev checkout — `python -c` puts cwd on sys.path
                        capture_output=True, text=True)
     assert v.stdout.strip() == "ok", v.stdout + v.stderr
+
+
+def _sec_directives(text, root):
+    """The security-critical directives of a unit, normalised so the template (%h/loraham-pi-control)
+    and a generated unit (an absolute target dir) compare equal."""
+    keys = ("NoNewPrivileges", "ProtectSystem", "ProtectHome", "ReadWritePaths", "PrivateTmp",
+            "ProtectControlGroups", "ProtectKernelModules", "ProtectKernelTunables",
+            "RestrictAddressFamilies", "RestrictNamespaces", "LockPersonality",
+            "MemoryDenyWriteExecute", "SystemCallArchitectures",
+            "Environment=PLATFORMIO_CORE_DIR", "Environment=IDF_TOOLS_PATH",
+            "Environment=XDG_CACHE_HOME", "Environment=PIP_CACHE_DIR")
+    out = set()
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if ln.startswith("#") or not ln:
+            continue
+        for k in keys:
+            if ln.startswith(k + "=") or ln == k or ln.startswith(k):
+                out.add(ln.replace(str(root), "%h/loraham-pi-control"))
+    return out
+
+
+def test_template_and_generated_unit_have_equivalent_security_semantics(tmp_path):
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    fb = _fake_bin(tmp_path, git_src=REPO)
+    r = _run(INSTALL, ["--target", str(root)], home, fb)
+    assert r.returncode == 0, r.stdout + r.stderr
+    generated = (home / ".config" / "systemd" / "user" / "lhpc-web.service").read_text()
+    template = (REPO / "deploy" / "lhpc-web.service").read_text()
+    assert _sec_directives(generated, root) == _sec_directives(template, root)
+
+
+def test_service_template_is_least_privilege_with_runtime_owned_caches():
+    """The shipped template restores least privilege (no broad $HOME/ /var write) while routing
+    build-tool caches into the runtime root so builds + QEMU still work."""
+    t = (REPO / "deploy" / "lhpc-web.service").read_text()
+    active = [ln.strip() for ln in t.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert "ProtectSystem=strict" in active and "ProtectHome=read-only" in active
+    assert not any(ln.startswith("ProtectSystem=full") for ln in active)
+    for var in ("PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR"):
+        assert f"Environment={var}=%h/loraham-pi-control/build/tool-cache/" in t, var
+    # No ACTIVE directive points at an unrelated user-home cache (comments may name them).
+    assert not any(p in ln for ln in active for p in ("/.platformio", "/.espressif", "/.cache"))
+    assert not any(ln.startswith("MemoryDenyWriteExecute") for ln in active)   # QEMU W+X exception
 
 
 # =============================================================================== uninstall.sh
@@ -237,3 +293,48 @@ def test_uninstall_refuses_unsafe_target(tmp_path, bad):
         r = _run(UNINSTALL, ["--target", str(d), "--purge", "--yes"], home, fb)
         assert r.returncode != 0 and "does not look like" in (r.stdout + r.stderr)
         assert (d / "keep.txt").exists()
+
+
+# =============================================================================== updater helpers
+
+def test_install_generates_updater_helper_units(tmp_path):
+    """install.sh writes the two parameter-free one-click updater units (never enabled),
+    equivalent to the deploy/ templates in their security-critical lines."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    fb = _fake_bin(tmp_path, git_src=REPO)
+    r = _run(INSTALL, ["--target", str(root)], home, fb)
+    assert r.returncode == 0, r.stdout + r.stderr
+    ud = home / ".config" / "systemd" / "user"
+    for name, extra in (("lhpc-selfupdate.service", ""),
+                        ("lhpc-selfupdate-overwrite.service", " --overwrite")):
+        unit = (ud / name).read_text()
+        active = [ln.strip() for ln in unit.splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")]
+        assert "Type=oneshot" in active, name
+        assert f"ExecStart={root}/venv/lhpc/bin/lhpc self-update --run-service{extra}" in active
+        assert ("ExecStopPost=/usr/bin/systemctl --user start --no-block lhpc-web.service"
+                in active), name
+        assert any(ln.startswith("TimeoutStartSec=") for ln in active), name
+        assert f"Environment=LHPC_RUNTIME_ROOT={root}" in active         # provenance for uninstall
+        assert not any(ln.startswith("WantedBy=") for ln in active)      # start-on-demand only
+
+
+def test_uninstall_removes_this_targets_updater_helpers_only(tmp_path):
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = home / ".config" / "systemd" / "user"
+    for name in ("lhpc-selfupdate.service", "lhpc-selfupdate-overwrite.service"):
+        (ud / name).write_text(f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT={root}\n"
+                               f"ExecStart={root}/venv/lhpc/bin/lhpc self-update --run-service\n")
+    # a helper belonging to ANOTHER runtime root must survive
+    (ud / "lhpc-selfupdate-other.service").write_text(
+        "[Service]\nEnvironment=LHPC_RUNTIME_ROOT=/elsewhere\n"
+        "ExecStart=/elsewhere/venv/lhpc/bin/lhpc self-update --run-service\n")
+    fb = _fake_bin(tmp_path)
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (ud / "lhpc-selfupdate.service").exists()
+    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
+    assert (ud / "lhpc-selfupdate-other.service").exists()
