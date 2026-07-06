@@ -16,19 +16,17 @@ reiner Container, LHPCs eigener Checkout liegt darunter unter `src/loraham-pi-co
 die verwalteten Stacks), das venv außerhalb des Checkouts unter `venv/lhpc`. So sind
 `lhpc self-update` und der laufende Code ein Baum.
 
-**Ein-Kommando-Installation** — `install.sh` erledigt Klonen + venv + Editable-Install +
-Bootstrap, verlinkt `lhpc` nach `~/.local/bin` (beim nächsten Login im `PATH`), und mit
-`--service` wird der systemd-User-Dienst installiert und aktiviert (Web-Konsole startet beim
-Booten automatisch):
+**Ein-Kommando-Installation** — `install.sh` macht die komplette Neuinstallation aus dem
+kanonischen Repository (Branch `main`): Klonen → venv → Editable-Install → `bootstrap` →
+`lhpc`-Symlink nach `~/.local/bin` → Web-Konsolen-Dienst aktivieren → Identität prüfen. Nur
+für die **Erstinstallation** — verweigert einen vorhandenen Checkout, keine destruktiven
+git-Operationen; **Updates später mit `lhpc self-update`**.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash -s -- --service
-#   oder aus einem Checkout:  ./install.sh --service
-#   Optionen:  --source <git-url>  --target <verzeichnis>  --branch <name>  --service  --no-path  --force
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
+#   oder aus einem Checkout:  ./install.sh
+#   Optionen:  --target <verzeichnis>   --no-service (kein Web-Dienst)   --no-path (kein CLI-Symlink)
 ```
-
-Ohne `--service` ist das Deployment eingerichtet, aber nicht gestartet (`lhpc web`, oder den
-Dienst später einrichten — siehe [`docs/deployment.md`](docs/deployment.md)).
 
 <details><summary>Oder von Hand</summary>
 
@@ -56,8 +54,22 @@ lhpc build daemon           # … dann bauen
 User-Service siehe [`docs/deployment.md`](docs/deployment.md). Einen Stack hinzufügen oder
 pflegen? Siehe [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
 
-**Deinstallieren:** `./uninstall.sh` entfernt Code, venv, State und den Dienst, **behält aber
-`config/`** (Einstellungen + Secrets). `./uninstall.sh --purge` löscht alles, inkl. Config.
+**Dienst steuern** (mit `--service` läuft die Web-Konsole als systemd-User-Dienst, nicht im
+Terminal):
+
+```bash
+systemctl --user stop lhpc-web        # jetzt stoppen (nötig vor `lhpc self-update`)
+systemctl --user status lhpc-web      # Status prüfen
+systemctl --user start lhpc-web       # wieder starten
+systemctl --user disable lhpc-web     # Autostart beim Booten abschalten
+journalctl --user -u lhpc-web -f      # Live-Logs
+```
+
+**Deinstallieren** entfernt **LHPC selbst, nicht die verwalteten Stacks** — Daemon/Apps laufen
+weiter, bis du sie stoppst. `./uninstall.sh` entfernt Code, venv, State und den Dienst,
+**behält aber `config/`** (Einstellungen + Secrets); `./uninstall.sh --purge` löscht alles,
+inkl. Config. Die Skripte liegen im Checkout unter `~/loraham-pi-control/src/loraham-pi-control/`,
+nicht im Laufzeitverzeichnis.
 
 Rufzeichen einmalig auf der Web-Konfigseite setzen; bis dahin nutzen die Apps
 `N0CALL`.

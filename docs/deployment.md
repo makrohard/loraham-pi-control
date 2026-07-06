@@ -87,9 +87,9 @@ layout, it does not claim same-account race-proofness.
 
 ## Run it under systemd (user service, no root)
 
-The easiest path is `install.sh --service`, which generates a user unit with this install's
-absolute paths, enables it, and turns on lingering (so it starts on boot) — see the README.
-To do it by hand instead:
+`install.sh` already does this by default — it generates a user unit with the install's
+absolute paths, enables it, and turns on lingering (so it starts on boot); pass `--no-service`
+to skip it. To set it up by hand instead:
 
 A ready-to-adapt template lives at `deploy/lhpc-web.service`. It is a **user** unit — it
 runs as your normal user, needs no root, and is hardened to be compatible with the runtime

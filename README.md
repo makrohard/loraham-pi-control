@@ -32,18 +32,17 @@ Requires Python 3.11+. A deployment is **self-hosted**: the runtime root
 `src/loraham-pi-control` (just like the stacks it manages), with the venv OUTSIDE the
 checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are one tree.
 
-**One-command install** — `install.sh` does the clone + venv + editable install + bootstrap,
-symlinks `lhpc` into `~/.local/bin` (on `PATH` at next login), and with `--service` installs
-and enables the systemd user unit so the web console auto-starts on boot:
+**One-command install** — `install.sh` does the whole fresh install from the canonical
+repository (branch `main`): clone → venv → editable install → `bootstrap` → symlink `lhpc`
+into `~/.local/bin` → enable the web-console systemd service → verify the controller passes
+its identity check. It is **initial install only** — refuses an existing checkout and runs no
+destructive git; **update later with `lhpc self-update`**.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash -s -- --service
-#   or, from a checkout:  ./install.sh --service
-#   options:  --source <git-url>  --target <dir>  --branch <name>  --service  --no-path  --force
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
+#   or, from a checkout:  ./install.sh
+#   options:  --target <dir>   --no-service (skip the web service)   --no-path (skip the CLI symlink)
 ```
-
-Without `--service` the deployment is set up but not started (start it with `lhpc web`, or
-add the unit later — see [`docs/deployment.md`](docs/deployment.md)).
 
 <details><summary>Or do it by hand</summary>
 
@@ -77,9 +76,22 @@ Set your callsign once in a stack's web **Settings**; until then HAM apps defaul
 `N0CALL`. Secrets (passwords, HMAC keys) live only in
 `~/loraham-pi-control/config/secrets.toml`.
 
-**Uninstall:** `./uninstall.sh` removes the code, venv, state and the service but **keeps
-your `config/`** (settings + secrets). `./uninstall.sh --purge` wipes everything, config
-included. (`--target <dir>`, `--yes` to skip the prompt.)
+**Manage the service** — `install.sh` runs the web console as a systemd user service (not in
+your terminal); the installer prints these at the end too:
+
+```bash
+systemctl --user stop lhpc-web        # stop it now (also needed before `lhpc self-update`)
+systemctl --user status lhpc-web      # confirm it's stopped
+systemctl --user start lhpc-web       # start it again
+systemctl --user disable lhpc-web     # stop it auto-starting on boot
+journalctl --user -u lhpc-web -f      # live logs
+```
+
+**Uninstall** removes **LHPC itself, not your managed stacks** — the daemon/apps keep running
+until you stop them. `./uninstall.sh` removes the code, venv, state and the service but
+**keeps your `config/`** (settings + secrets); `./uninstall.sh --purge` wipes everything,
+config included. (`--target <dir>`, `--yes` to skip the prompt.) The scripts live in the
+checkout at `~/loraham-pi-control/src/loraham-pi-control/`, not the runtime root.
 
 > Working on LHPC itself? Clone anywhere and `pip install -e .` in a venv for a dev checkout
 > — that instance is intentionally *not* self-hosted (the controller row shows "not

@@ -1,209 +1,168 @@
 #!/usr/bin/env bash
 #
-# LoRaHAM Pi Control — self-hosted installer.
+# LoRaHAM Pi Control — controller INSTALLER (initial bootstrap only).
 #
-# Sets up a SELF-HOSTED deployment: the target runtime root is a plain container, LHPC's own
-# checkout lives under it at src/loraham-pi-control (like the managed stacks), and the venv is
-# OUTSIDE the checkout at venv/lhpc. That way `lhpc self-update` and the code it runs are one
-# tree, and self-update's `git clean` can never reach the venv.
+# Installs a NEW self-hosted LHPC controller deployment so that `lhpc` is usable:
 #
-# Usage:
-#   ./install.sh [--source <git-url>] [--target <dir>] [--branch <name>] [--force] [--no-waitress]
+#   <target>/                     runtime root (config/ state/ logs/ …)
+#   <target>/src/loraham-pi-control   LHPC's own checkout (clone of main)
+#   <target>/venv/lhpc                the venv, OUTSIDE the checkout
 #
-# Defaults:
-#   --source   https://github.com/makrohard/loraham-pi-control.git
-#   --target   ~/loraham-pi-control
-#   --branch   main
+# It ONLY performs a fresh install. It is NOT an updater, repair, migration or
+# stack-installer. Update an existing controller with:  lhpc self-update
 #
-# It is safe to re-run: it refuses to clobber an existing checkout unless --force is given.
-# Runs entirely as your normal user — no root, no sudo.
+# Usage:  ./install.sh [--target <dir>] [--no-service] [--no-path]
+#
+# Runs as your normal user — no root, no sudo. It refuses to touch an existing
+# checkout and never runs destructive git operations.
 
 set -euo pipefail
+umask 077          # everything this script creates is owner-only (0700/0600) — the
+                   # controller-identity boundary needs no group/other write.
 
-# Owner-only from the start. The controller-identity boundary requires the runtime root, src/
-# and the checkout to have NO group/other write; a default umask (0002) would make the fresh
-# `git clone` group-writable ("identity UNSAFE: checkout is group/other-writable"). Setting
-# umask here makes everything this script creates — checkout, venv, bootstrap dirs (bootstrap
-# inherits this umask) — mode 0700/0600, so the fix does not depend on the cloned code version.
-umask 077
+# --------------------------------------------------------------------------- fixed inputs
+readonly REPO_URL="https://github.com/makrohard/loraham-pi-control.git"   # canonical, fixed
+readonly BRANCH="main"                                                    # supported, fixed
 
-# --------------------------------------------------------------------------- defaults + args
-SOURCE_REPO="https://github.com/makrohard/loraham-pi-control.git"
 TARGET_DIR="${HOME}/loraham-pi-control"
-BRANCH="main"
-FORCE=0
-WITH_WAITRESS=1
-WITH_SERVICE=0
+WITH_SERVICE=1
 LINK_PATH=1
+SERVICE_UP=0
 
 usage() {
 	cat <<'EOF'
-LoRaHAM Pi Control — self-hosted installer.
-
-Sets up a SELF-HOSTED deployment: the target runtime root is a plain container, LHPC's own
-checkout lives under it at src/loraham-pi-control, and the venv is OUTSIDE the checkout at
-venv/lhpc — so `lhpc self-update` and the code it runs are one tree.
+LoRaHAM Pi Control — controller installer (INITIAL install only).
 
 Usage:
-  ./install.sh [--source <git-url>] [--target <dir>] [--branch <name>]
-               [--service] [--no-path] [--force] [--no-waitress]
+  ./install.sh [--target <dir>] [--no-service] [--no-path]
 
-Defaults:
-  --source   https://github.com/makrohard/loraham-pi-control.git
-  --target   ~/loraham-pi-control
-  --branch   main
+  --target <dir>  where to install (default: ~/loraham-pi-control)
+  --no-service    do not install/enable the web-console systemd user service
+  --no-path       do not symlink `lhpc` into ~/.local/bin
+  -h, --help      show this help
 
-  --service      install + enable the user systemd unit (auto-starts the web console on
-                 boot, with lingering) — otherwise it is set up but not started
-  --no-path      do NOT symlink `lhpc` into ~/.local/bin (leave it off PATH)
-  --force        update an existing checkout in place instead of refusing
-  --no-waitress  skip installing the production WSGI server
+Installs a fresh self-hosted controller from the canonical repository (branch `main`).
+It refuses to touch an existing checkout and runs no destructive git operations.
 
-Safe to re-run. Runs as your normal user — no root, no sudo.
+This is for INITIAL installation only. To UPDATE an existing controller, use:
+  lhpc self-update
 EOF
 	exit "${1:-0}"
 }
 
 die()  { printf 'ERR  %s\n' "$*" >&2; exit 1; }
 note() { printf 'OK   %s\n' "$*"; }
+warn() { printf 'WARN %s\n' "$*" >&2; }
 step() { printf '\n==> %s\n' "$*"; }
+no_symlink() { [ ! -L "$1" ] || die "$2 is a symlink — refusing (controller directories must not be symlinks)."; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--source)   SOURCE_REPO="${2:?--source needs a git URL}"; shift 2 ;;
-		--target)   TARGET_DIR="${2:?--target needs a directory}"; shift 2 ;;
-		--branch)   BRANCH="${2:?--branch needs a name}"; shift 2 ;;
-		--service)  WITH_SERVICE=1; shift ;;
-		--no-path)  LINK_PATH=0; shift ;;
-		--force)    FORCE=1; shift ;;
-		--no-waitress) WITH_WAITRESS=0; shift ;;
-		-h|--help)  usage 0 ;;
-		*)          die "unknown argument: $1 (try --help)" ;;
+		--target)      TARGET_DIR="${2:?--target needs a directory}"; shift 2 ;;
+		--no-service)  WITH_SERVICE=0; shift ;;
+		--no-path)     LINK_PATH=0; shift ;;
+		-h|--help)     usage 0 ;;
+		*)             die "unknown argument: $1 (try --help)" ;;
 	esac
 done
 
-# Expand a leading tilde (a quoted "~/x" argument does not expand on its own), then
-# normalize to an absolute path — without requiring the directory to exist yet.
+# Expand a leading tilde and make the target absolute (it need not exist yet).
 if [ "$TARGET_DIR" = "~" ]; then
 	TARGET_DIR="$HOME"
 elif [ "${TARGET_DIR#\~/}" != "$TARGET_DIR" ]; then
 	TARGET_DIR="${HOME}/${TARGET_DIR#\~/}"
 fi
 mkdir -p "$TARGET_DIR"
-TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+no_symlink "$TARGET_DIR" "runtime root $TARGET_DIR"
+TARGET_DIR="$(cd "$TARGET_DIR" && pwd -P)"
 
-CHECKOUT="${TARGET_DIR}/src/loraham-pi-control"
-VENV="${TARGET_DIR}/venv/lhpc"
+readonly CHECKOUT="${TARGET_DIR}/src/loraham-pi-control"
+readonly VENV="${TARGET_DIR}/venv/lhpc"
+readonly LOCAL_BIN="${HOME}/.local/bin"
+readonly UNIT_DIR="${HOME}/.config/systemd/user"
+readonly UNIT="${UNIT_DIR}/lhpc-web.service"
 
-# --------------------------------------------------------------------------- preflight checks
+# --------------------------------------------------------------------------- preflight
 step "Preflight"
-
 command -v git >/dev/null 2>&1 || die "git is not installed (sudo apt install git)"
-
 PY=""
 for cand in python3.13 python3.12 python3.11 python3; do
-	if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+	command -v "$cand" >/dev/null 2>&1 && { PY="$cand"; break; }
 done
 [ -n "$PY" ] || die "python3 not found"
+"$PY" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)' \
+	|| die "Python 3.11+ is required (found $("$PY" -V 2>&1))"
+"$PY" -c 'import venv, ensurepip' >/dev/null 2>&1 \
+	|| die "the venv module is missing (sudo apt install python3-venv)"
+note "using $("$PY" -V 2>&1); target $TARGET_DIR"
 
-# Require >= 3.11 (the codebase uses 3.11+ syntax / tomllib).
-if ! "$PY" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
-	die "Python 3.11+ is required (found $("$PY" -V 2>&1))"
-fi
-
-# `python3 -m venv` needs the venv module (python3-venv on Debian/Ubuntu).
-if ! "$PY" -c 'import venv, ensurepip' >/dev/null 2>&1; then
-	die "the venv module is missing (sudo apt install python3-venv)"
-fi
-
-note "git present, using $("$PY" -V 2>&1) at $(command -v "$PY")"
-note "target runtime root: $TARGET_DIR"
-note "checkout:            $CHECKOUT"
-note "venv:                $VENV"
-
-# The target root must not itself be a git checkout — that is the TANGLED layout this
-# installer exists to avoid (self-hosted keeps .git only under src/loraham-pi-control).
-if [ -e "${TARGET_DIR}/.git" ]; then
-	die "${TARGET_DIR} is itself a git checkout (tangled layout). Move it aside and re-run, so the runtime root stays a plain container."
-fi
-
+# --------------------------------------------------------------------------- safe target
+# Refuse a tangled layout and an existing checkout WITHOUT touching either; refuse a symlink
+# anywhere in the chain we manage (never mutate through a symlink / reused path).
+[ ! -e "${TARGET_DIR}/.git" ] || die "$TARGET_DIR is itself a git checkout (tangled) — move it aside and re-run."
+[ ! -e "${TARGET_DIR}/src" ]  || no_symlink "${TARGET_DIR}/src"  "src"
+[ ! -e "${TARGET_DIR}/venv" ] || no_symlink "${TARGET_DIR}/venv" "venv"
 if [ -e "$CHECKOUT" ]; then
-	if [ "$FORCE" -eq 1 ]; then
-		note "checkout exists — updating it in place (--force)"
-	else
-		die "$CHECKOUT already exists. Re-run with --force to update it in place, or remove it first."
-	fi
+	die "a controller checkout already exists at $CHECKOUT — refusing. This installer only does fresh installs and never touches an existing checkout; update it with: lhpc self-update"
 fi
 
-# --------------------------------------------------------------------------- 1. clone / update
-step "1/4  Fetch LHPC (${BRANCH}) into the checkout"
-
-if [ -d "${CHECKOUT}/.git" ]; then
-	git -C "$CHECKOUT" remote set-url origin "$SOURCE_REPO"
-	git -C "$CHECKOUT" fetch --quiet origin "$BRANCH"
-	git -C "$CHECKOUT" checkout --quiet "$BRANCH"
-	git -C "$CHECKOUT" reset --hard --quiet "origin/${BRANCH}"
-else
-	mkdir -p "${TARGET_DIR}/src"
-	git clone --quiet --branch "$BRANCH" "$SOURCE_REPO" "$CHECKOUT"
-fi
-note "at $(git -C "$CHECKOUT" rev-parse --short HEAD) on ${BRANCH}"
+# --------------------------------------------------------------------------- 1. clone (fresh)
+step "1/4  Clone LHPC (${BRANCH}) — fresh, non-destructive"
+mkdir -p "${TARGET_DIR}/src"
+git clone --quiet --branch "$BRANCH" --single-branch "$REPO_URL" "$CHECKOUT"
+note "cloned $(git -C "$CHECKOUT" rev-parse --short HEAD) on ${BRANCH}"
 
 # --------------------------------------------------------------------------- 2. venv (outside)
-step "2/4  Create the venv (outside the checkout)"
-
-if [ ! -x "${VENV}/bin/python" ]; then
-	mkdir -p "$(dirname "$VENV")"
-	"$PY" -m venv "$VENV"
-fi
+step "2/4  Create the venv (outside the checkout) + install"
+mkdir -p "$(dirname "$VENV")"
+"$PY" -m venv "$VENV"
 "${VENV}/bin/python" -m pip install --quiet --upgrade pip
+"${VENV}/bin/pip" install --quiet -e "$CHECKOUT"
+"${VENV}/bin/pip" install --quiet waitress 2>/dev/null || warn "waitress not installed — the dev-server fallback will be used."
 note "venv ready: ${VENV}"
 
-# --------------------------------------------------------------------------- 3. editable install
-step "3/4  Install LHPC (editable) into the venv"
-
-"${VENV}/bin/pip" install --quiet -e "$CHECKOUT"
-if [ "$WITH_WAITRESS" -eq 1 ]; then
-	"${VENV}/bin/pip" install --quiet waitress || \
-		printf 'WARN could not install waitress — the dev server fallback will be used.\n' >&2
-fi
-note "installed: $("${VENV}/bin/lhpc" --version 2>/dev/null || echo lhpc)"
-
-# --------------------------------------------------------------------------- 4. bootstrap root
-step "4/4  Bootstrap the runtime root"
-
+# --------------------------------------------------------------------------- 3. bootstrap root
+step "3/4  Bootstrap the runtime root"
 LHPC_RUNTIME_ROOT="$TARGET_DIR" "${VENV}/bin/lhpc" bootstrap --yes
 
-# --------------------------------------------------------------------------- put lhpc on PATH
-# A venv is NOT on PATH by default, and `export PATH=…` from this script cannot persist to
-# your shell. Symlink `lhpc` into ~/.local/bin (the standard user bin, added to PATH at
-# login on Pi OS/Debian) so `lhpc` just works in new shells / after reboot. Opt out: --no-path.
-LHPC_ON_PATH=0
-LOCAL_BIN="${HOME}/.local/bin"
+# --------------------------------------------------------------------------- 3b. command link
 if [ "$LINK_PATH" -eq 1 ]; then
-	step "Link lhpc onto PATH"
 	mkdir -p "$LOCAL_BIN"
 	ln -sfn "${VENV}/bin/lhpc" "${LOCAL_BIN}/lhpc"
 	note "symlinked ${LOCAL_BIN}/lhpc -> ${VENV}/bin/lhpc"
 	case ":${PATH}:" in
-		*":${LOCAL_BIN}:"*) LHPC_ON_PATH=1 ;;
-		*) printf 'WARN %s is not on PATH in THIS shell — open a new login shell (or reboot), or run: export PATH="%s:$PATH"\n' \
-			"$LOCAL_BIN" "$LOCAL_BIN" >&2 ;;
+		*":${LOCAL_BIN}:"*) : ;;
+		*) warn "${LOCAL_BIN} is not on PATH in this shell — open a new login shell (or reboot), or run: export PATH=\"${LOCAL_BIN}:\$PATH\"" ;;
 	esac
 fi
 
-# --------------------------------------------------------------------------- optional: service
-# The web console does NOT auto-start unless a systemd user service is installed + enabled.
-# `--service` sets that up (with lingering, so it survives logout/reboot). The unit is
-# generated with THIS install's absolute paths, so it is correct for any --target.
+# --------------------------------------------------------------------------- 4. verify identity
+# Before reporting success, prove the deployed controller passes LHPC's OWN controller-identity
+# rules (self-hosted, canonical origin, main, owner-only perms, repo == checkout == package).
+step "4/4  Verify controller identity"
+# `python -I` (isolated): do NOT put cwd / PYTHONPATH on sys.path, so running install.sh from
+# inside another checkout can't make `import lhpc` resolve to the wrong tree.
+if ! LHPC_RUNTIME_ROOT="$TARGET_DIR" "${VENV}/bin/python" -I - <<'PYIDENT'
+import sys
+from lhpc.core.probes import RealSystem
+from lhpc.core.services import ControllerService
+v = ControllerService(system=RealSystem()).controller_identity_live()
+print("     identity: %s — %s" % (v["status"], v["reason"]))
+sys.exit(0 if v["status"] == "ok" else 1)
+PYIDENT
+then
+	die "the installed controller did NOT pass identity validation (see the reason above). No service was enabled."
+fi
+note "controller identity: ok"
+
+# --------------------------------------------------------------------------- web service
 if [ "$WITH_SERVICE" -eq 1 ]; then
-	step "Install + enable the web console user service"
+	step "Install + enable the web-console user service"
 	if ! command -v systemctl >/dev/null 2>&1; then
-		printf 'WARN systemctl not available — skipping --service.\n' >&2
+		warn "systemctl not available — skipping the service (start manually with: lhpc web)."
 	else
-		UNIT_DIR="${HOME}/.config/systemd/user"
 		mkdir -p "$UNIT_DIR"
-		cat > "${UNIT_DIR}/lhpc-web.service" <<UNIT
+		cat > "$UNIT" <<UNIT
 [Unit]
 Description=LoRaHAM Pi Control web console (loopback-only)
 Documentation=file://${CHECKOUT}/docs/deployment.md
@@ -231,54 +190,58 @@ PrivateTmp=false
 [Install]
 WantedBy=default.target
 UNIT
-		# Best-effort: `systemctl --user` needs a user D-Bus session, which may be absent on
-		# a headless/SSH box. Never hard-abort the install — give the exact manual commands.
 		systemctl --user daemon-reload 2>/dev/null || true
 		if systemctl --user enable --now lhpc-web.service 2>/dev/null; then
-			loginctl enable-linger "$USER" >/dev/null 2>&1 || \
-				printf 'WARN could not enable lingering — the service may not start before login.\n' >&2
+			loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "could not enable lingering — the service may not start before login."
+			SERVICE_UP=1
 			note "lhpc-web.service enabled (http://127.0.0.1:8770/); logs: journalctl --user -u lhpc-web -f"
 		else
-			printf 'WARN could not enable the service now (no user systemd session?). The unit is written to %s.\n      Finish after login with:\n        systemctl --user daemon-reload && systemctl --user enable --now lhpc-web.service\n        loginctl enable-linger %s\n' \
-				"$UNIT_DIR" "$USER" >&2
+			warn "could not start the service now (no user systemd session?). The unit is at ${UNIT}. Finish after login with: systemctl --user enable --now lhpc-web.service && loginctl enable-linger ${USER}"
 		fi
 	fi
 fi
 
-# --------------------------------------------------------------------------- verify + next steps
-step "Verify"
-
-if LHPC_RUNTIME_ROOT="$TARGET_DIR" "${VENV}/bin/lhpc" status >/dev/null 2>&1; then
-	note "self-hosted deployment ready at ${TARGET_DIR}"
-else
-	printf 'WARN `lhpc status` returned non-zero — inspect it manually.\n' >&2
-fi
-
-# The command to use in the printed next-steps: bare `lhpc` if it is (or will be) on PATH.
-if [ "$LINK_PATH" -eq 1 ]; then LHPC="lhpc"; else LHPC="${VENV}/bin/lhpc"; fi
-
+# --------------------------------------------------------------------------- done
+LHPC="lhpc"; [ "$LINK_PATH" -eq 1 ] || LHPC="${VENV}/bin/lhpc"
 cat <<EOF
 
-Self-hosted install complete.
+Install complete — self-hosted controller at ${TARGET_DIR}
 
-  Runtime root : ${TARGET_DIR}
-  Checkout     : ${CHECKOUT}
-  Venv         : ${VENV}
-  CLI          : ${LOCAL_BIN}/lhpc$([ "$LINK_PATH" -eq 0 ] && echo " (skipped --no-path; use ${VENV}/bin/lhpc)")
-  Web service  : $([ "$WITH_SERVICE" -eq 1 ] && echo "enabled (auto-starts on boot)" || echo "not enabled (re-run with --service, or see docs/deployment.md)")
+  CLI : $([ "$LINK_PATH" -eq 1 ] && echo "${LOCAL_BIN}/lhpc (open a new shell if not yet on PATH)" || echo "${VENV}/bin/lhpc")
 
-EOF
-
-if [ "$LINK_PATH" -eq 1 ] && [ "$LHPC_ON_PATH" -eq 0 ]; then
-	printf 'Open a new login shell or reboot so `lhpc` is on PATH (or: export PATH="%s:$PATH").\n\n' "$LOCAL_BIN"
-fi
-
-cat <<EOF
 Next:
-  ${LHPC} status                 # the controller row should read: identity ok
-  ${LHPC} install daemon --yes   # adopt + verify a stack's source
-  ${LHPC} build daemon           # build it
+  ${LHPC} status              # controller row reads: identity ok
+  ${LHPC} install daemon --yes && ${LHPC} build daemon
+  ${LHPC} self-update         # update the controller later
 EOF
-if [ "$WITH_SERVICE" -eq 0 ]; then
-	printf '  %s web                    # http://127.0.0.1:8770/  (loopback only)\n' "$LHPC"
+
+# The web console status is the LAST thing the operator sees — running + link + controls.
+if [ "$SERVICE_UP" -eq 1 ]; then
+	cat <<EOF
+
+────────────────────────────────────────────────────────────────────────
+The web console is RUNNING:   http://127.0.0.1:8770/   (loopback only)
+
+  Stop it now                : systemctl --user stop lhpc-web
+  Start it again             : systemctl --user start lhpc-web
+  Status / live logs         : systemctl --user status lhpc-web
+                               journalctl --user -u lhpc-web -f
+  Do NOT auto-start on boot  : systemctl --user disable lhpc-web
+  Re-enable auto-start       : systemctl --user enable lhpc-web
+
+(It currently auto-starts on boot. Stop it before running \`${LHPC} self-update\`.)
+────────────────────────────────────────────────────────────────────────
+EOF
+else
+	cat <<EOF
+
+────────────────────────────────────────────────────────────────────────
+The web console is NOT running (no service enabled).
+
+  Start it manually (foreground; Ctrl-C to stop):  ${LHPC} web
+  It serves:                                        http://127.0.0.1:8770/   (loopback only)
+
+To run it as an auto-starting background service, re-run install.sh without --no-service.
+────────────────────────────────────────────────────────────────────────
+EOF
 fi
