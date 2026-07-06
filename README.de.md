@@ -12,8 +12,25 @@ Konfiguration jeder App und überwacht und tunt den LoRaHAM-Daemon live.
 ## Installation (self-hosted)
 
 Ein Deployment ist **self-hosted**: Das Laufzeitverzeichnis `~/loraham-pi-control` ist ein
-reiner Container, und LHPCs eigener Checkout liegt darunter unter `src/loraham-pi-control`
-(wie die verwalteten Stacks), das venv außerhalb des Checkouts unter `venv/lhpc`.
+reiner Container, LHPCs eigener Checkout liegt darunter unter `src/loraham-pi-control` (wie
+die verwalteten Stacks), das venv außerhalb des Checkouts unter `venv/lhpc`. So sind
+`lhpc self-update` und der laufende Code ein Baum.
+
+**Ein-Kommando-Installation** — `install.sh` erledigt Klonen + venv + Editable-Install +
+Bootstrap, verlinkt `lhpc` nach `~/.local/bin` (beim nächsten Login im `PATH`), und mit
+`--service` wird der systemd-User-Dienst installiert und aktiviert (Web-Konsole startet beim
+Booten automatisch):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash -s -- --service
+#   oder aus einem Checkout:  ./install.sh --service
+#   Optionen:  --source <git-url>  --target <verzeichnis>  --branch <name>  --service  --no-path  --force
+```
+
+Ohne `--service` ist das Deployment eingerichtet, aber nicht gestartet (`lhpc web`, oder den
+Dienst später einrichten — siehe [`docs/deployment.md`](docs/deployment.md)).
+
+<details><summary>Oder von Hand</summary>
 
 ```bash
 # 1. LHPC in src/ des Laufzeitverzeichnisses klonen (das macht es self-hosted)
@@ -33,6 +50,14 @@ export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc install daemon --yes   # Quelle übernehmen/prüfen …
 lhpc build daemon           # … dann bauen
 ```
+</details>
+
+`lhpc status` zeigt die Controller-Zeile dann als **identity ok**. Für den Dauerbetrieb als
+User-Service siehe [`docs/deployment.md`](docs/deployment.md). Einen Stack hinzufügen oder
+pflegen? Siehe [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
+
+**Deinstallieren:** `./uninstall.sh` entfernt Code, venv, State und den Dienst, **behält aber
+`config/`** (Einstellungen + Secrets). `./uninstall.sh --purge` löscht alles, inkl. Config.
 
 Rufzeichen einmalig auf der Web-Konfigseite setzen; bis dahin nutzen die Apps
 `N0CALL`.

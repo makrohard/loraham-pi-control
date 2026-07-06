@@ -83,6 +83,28 @@ def test_bootstrap_hardens_runtime_root_to_owner_only(tmp_path):
     assert (rt.stat().st_mode & 0o022) == 0
 
 
+def test_bootstrap_hardens_self_hosted_checkout(tmp_path):
+    """A self-hosted controller checkout (src/loraham-pi-control) left group/other-writable
+    by `git clone` under a 0002 umask is hardened to owner-only by bootstrap — fixing
+    "identity UNSAFE: checkout is group/other-writable". Absent (non-self-hosted) it is a
+    no-op."""
+    import os
+    rt = tmp_path / "rt"
+    inst = _installer(rt, (), tmp_path / "rt")
+    inst.apply_bootstrap()
+    # No checkout yet -> bootstrap plans no checkout-harden action.
+    assert not any("loraham-pi-control" in a.target for a in inst.plan_bootstrap().actions)
+    # Simulate the git clone: a group-writable checkout under src/.
+    co = rt / "src" / "loraham-pi-control"
+    co.mkdir(parents=True)
+    os.chmod(co, 0o775)
+    plan = inst.plan_bootstrap()
+    assert any(a.kind == "harden" and "loraham-pi-control" in a.target and a.status == "planned"
+               for a in plan.actions)
+    inst.apply_bootstrap()
+    assert (co.stat().st_mode & 0o022) == 0                 # checkout is now owner-only
+
+
 def test_adopt_clean_repo_verifies_pin_match(tmp_path):
     head = _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,

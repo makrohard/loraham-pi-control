@@ -1,11 +1,26 @@
 # Architecture
 
-## Two roots
+## The runtime root
 
-- **Dev checkout** (this repo) — the controller's own source.
-- **Runtime root** (`~/loraham-pi-control`, override `LHPC_RUNTIME_ROOT`) — created
-  by `lhpc bootstrap`. Holds adopted stack sources (`src/`), generated config
-  (`config/`), state (`state/`) and logs (`logs/`). Never written to the dev checkout.
+Everything lives under one **runtime root** (`~/loraham-pi-control`, override
+`LHPC_RUNTIME_ROOT`) — a plain container created by `lhpc bootstrap` (mode `0700`): adopted
+stack sources (`src/`), generated config (`config/`), state (`state/`), logs (`logs/`) and
+the venv (`venv/lhpc`).
+
+What differs between setups is only **where LHPC's own checkout sits** relative to that root:
+
+- **Self-hosted deployment (recommended)** — the checkout lives *inside* the runtime root at
+  `src/loraham-pi-control`, alongside the stacks it manages; the venv sits outside it at
+  `venv/lhpc`. `install.sh` sets this up, so `lhpc self-update` and the running code are one
+  tree.
+- **Dev checkout** — the checkout lives somewhere else entirely (you edit/commit/push from
+  it) with its own venv; the runtime root is separate. Intentionally *not* self-hosted.
+- **Tangled (legacy, tolerated)** — the checkout *is* the runtime root (older installs
+  cloned LHPC directly onto `~/loraham-pi-control`). Still works; self-update is only
+  unambiguous once migrated to self-hosted.
+
+LHPC never writes into a checkout except via `lhpc self-update`; the controller-identity
+check (below) reports which of these you are in.
 
 ## Package layout
 
@@ -98,3 +113,29 @@ propagate typed failures. End-to-end `CompResult` aggregation through the start 
 open — see `docs/hardening-0.1.md`. Manual `start/` wrappers are RETIRED: lhpc starts
 services itself, interactive components get their copy-paste command on the dashboard
 (rendered from the same structured spec), and bootstrap prunes legacy wrapper files.
+
+## Controller identity & self-update
+
+LHPC's own checkout is a **dedicated controller identity** — a top-level `[controller]`
+manifest table (strict allow-list; fixed `source_path = "src/loraham-pi-control"` and
+`branch = "main"`), NOT a stack. It is observable and self-updatable but never installed,
+built, started, cleaned, or bulk-processed: every generic verb aimed at its id refuses in
+the central service layer and points to `lhpc self-update`.
+
+`controller_identity_live()` reports a **tri-state** verdict, used only at startup refresh,
+explicit "check now", and immediately before an apply:
+
+- **ok** — self-hosted and verified: the checkout is under the runtime root, no symlink in
+  the `root → src → checkout` chain, owned by the service user with no group/other write,
+  its realpath equals both `repo_root()` and the imported package, on `main` with the
+  approved canonical `origin`.
+- **unsafe** — self-hosted but tampered/misconfigured (symlink, group-writable, wrong
+  branch/origin, mismatch). **Blocks apply.**
+- **not_applicable** — *not* self-hosted (a dev checkout or a plain/tangled deployment).
+  Neutral: does not block; self-update proceeds via the normal `repo_root()` mechanism.
+
+Status GETs are **cached-only**: they render the last verdict from a single versioned,
+schema-validated self-update envelope — never a live git/network/identity call. `lhpc web`
+holds a shared controller-runtime flock for its lifetime; `self-update --apply` takes it
+exclusive first (then the self-update lock), so a running server can never have its own
+source mutated underneath it.

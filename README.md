@@ -32,6 +32,21 @@ Requires Python 3.11+. A deployment is **self-hosted**: the runtime root
 `src/loraham-pi-control` (just like the stacks it manages), with the venv OUTSIDE the
 checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are one tree.
 
+**One-command install** — `install.sh` does the clone + venv + editable install + bootstrap,
+symlinks `lhpc` into `~/.local/bin` (on `PATH` at next login), and with `--service` installs
+and enables the systemd user unit so the web console auto-starts on boot:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash -s -- --service
+#   or, from a checkout:  ./install.sh --service
+#   options:  --source <git-url>  --target <dir>  --branch <name>  --service  --no-path  --force
+```
+
+Without `--service` the deployment is set up but not started (start it with `lhpc web`, or
+add the unit later — see [`docs/deployment.md`](docs/deployment.md)).
+
+<details><summary>Or do it by hand</summary>
+
 ```bash
 # 1. Clone LHPC into the runtime root's src/ — this is what makes it self-hosted
 mkdir -p ~/loraham-pi-control/src
@@ -52,6 +67,7 @@ lhpc install daemon --yes   # adopt + verify a stack's source …
 lhpc build daemon           # … then build it
 lhpc web                    # http://127.0.0.1:8770/  (loopback only)
 ```
+</details>
 
 `lhpc status` then shows the controller row as **identity ok**. To run it persistently as a
 user service, see [`docs/deployment.md`](docs/deployment.md) (the `deploy/lhpc-web.service`
@@ -61,9 +77,15 @@ Set your callsign once in a stack's web **Settings**; until then HAM apps defaul
 `N0CALL`. Secrets (passwords, HMAC keys) live only in
 `~/loraham-pi-control/config/secrets.toml`.
 
+**Uninstall:** `./uninstall.sh` removes the code, venv, state and the service but **keeps
+your `config/`** (settings + secrets). `./uninstall.sh --purge` wipes everything, config
+included. (`--target <dir>`, `--yes` to skip the prompt.)
+
 > Working on LHPC itself? Clone anywhere and `pip install -e .` in a venv for a dev checkout
 > — that instance is intentionally *not* self-hosted (the controller row shows "not
 > self-hosted"). Commit and push from there; deploy self-hosted as above.
+>
+> Adding or maintaining a stack? See [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
 
 ## CLI
 

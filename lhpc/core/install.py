@@ -160,6 +160,15 @@ class Installer:
         plan.actions.append(PlanAction(
             "harden", str(src), "restrict src/ to 0700 (owner-only)",
             status="planned" if (not src.is_dir() or self._needs_harden(src)) else "exists"))
+        # In a SELF-HOSTED deployment the controller's own checkout lives at
+        # src/loraham-pi-control (git clone leaves it group-writable under a 0002 umask,
+        # which trips "identity UNSAFE: checkout is group/other-writable"). Harden it too
+        # when present — a no-op for a non-self-hosted root where it does not exist.
+        checkout = src / "loraham-pi-control"
+        if checkout.is_dir():
+            plan.actions.append(PlanAction(
+                "harden", str(checkout), "restrict the controller checkout to 0700 (owner-only)",
+                status="planned" if self._needs_harden(checkout) else "exists"))
         # Local config + secrets: create from templates only if absent.
         local = self.subdir("config") / "local.toml"
         plan.actions.append(PlanAction(
