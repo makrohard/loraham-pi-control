@@ -535,6 +535,61 @@ def test_api_and_template_carry_component_log_window(tmp_path, monkeypatch):
     assert "logbox-half" in body                                 # main window halved
 
 
+def _seed_completed_marker(paths, run_id="a" * 32):
+    m = bulk_mod.new_marker(run_id, "install", "dev", True, False,
+                            [{"id": "daemon", "name": "LoRaHAM Daemon"}])
+    m["state"] = "completed"
+    m["finished_at"] = "2026-07-05T00:00:00Z"
+    assert bulk_mod.write_marker(paths, m)
+    return m
+
+
+def test_historical_run_seeds_component_log_window(tmp_path):
+    # The collapsed "Last run" card now carries the SAME detailed per-component window as a live
+    # run — seeded server-side (no JS), HTML-escaped, exactly one #bulk-complog.
+    paths = Paths(runtime_root=tmp_path)
+    rid = "a" * 32
+    m = _seed_completed_marker(paths, rid)
+    _register_log(paths, m, rid, "build-loraham-daemon", "LoRaHAM Daemon — Build log",
+                  "daemon build output\n")
+    _register_log(paths, m, rid, "test-loraham-daemon", "LoRaHAM Daemon — Test log",
+                  "test says <b>hi</b>\n")                        # untrusted HTML-ish content
+    c, svc = _client(tmp_path)
+    body = c.get("/install-all").data.decode()
+    assert "Last run " + "a" * 8 in body                          # collapsed historical card
+    assert body.count('id="bulk-complog"') == 1                   # exactly one window
+    assert "LoRaHAM Daemon — Build log" in body                   # framed titles seeded
+    assert "daemon build output" in body                          # component content seeded
+    assert "test says &lt;b&gt;hi&lt;/b&gt;" in body              # HTML-ESCAPED, not raw
+    assert "test says <b>hi</b>" not in body
+
+
+def test_component_log_seed_is_byte_capped(tmp_path):
+    # A huge build log must not bloat the page: the seed is front-trimmed to the cap with a notice.
+    from lhpc.core.services import ControllerService
+    paths = Paths(runtime_root=tmp_path)
+    rid = "a" * 32
+    m = _seed_completed_marker(paths, rid)
+    cap = ControllerService._COMPLOG_SEED_MAX_BYTES
+    _register_log(paths, m, rid, "build-loraham-daemon", "big build",
+                  ("line\n" * ((cap // 5) + 60000)))             # comfortably over the cap
+    c, svc = _client(tmp_path)
+    seed = svc.bulk_component_log_seed(rid)
+    assert len(seed) <= cap                                       # bounded
+    assert "[… older output trimmed …]" in seed                  # visible truncation notice
+
+
+def test_running_run_complog_empty_and_keeps_js(tmp_path, monkeypatch):
+    # A live run: the window is present but NOT pre-seeded (bulk.js fills it); JS still loaded.
+    paths = Paths(runtime_root=tmp_path)
+    _seed_running_marker(paths)
+    c, svc = _client(tmp_path)
+    monkeypatch.setattr(type(svc), "bulk_running", lambda self: True)
+    body = c.get("/install-all").data.decode()
+    assert 'id="bulk-complog"></pre>' in body                     # present but empty (no seed)
+    assert "bulk.js" in body                                      # live poller still loaded
+
+
 def test_spawn_refusal_output_is_shown(tmp_path):
     # LIVE FINDING: a spawned driver that REFUSES pre-claim (components running) exited
     # with its reason only in its own log — the page silently kept the starting card.

@@ -30,7 +30,7 @@
         <summary>
           <span class="ss-name">{{ controller.display_name }}</span>
           <span class="pill">controller</span>
-          <span class="ver ver-grey">v{{ controller.version }}</span>{% if controller.head_short %} <span class="ver ver-grey" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}
+          <span class="pill mono">v{{ controller.version }}</span>{% if controller.head_short %} <span class="pill mono" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}
           {% if controller.identity is none %}<span class="pill">identity unchecked</span>
           {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
           {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>

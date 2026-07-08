@@ -130,11 +130,12 @@
       </table>
       {% if st.error %}<p class="flash flash-warn">{{ st.error }}</p>{% endif %}
       <pre class="logbox logbox-half" id="bulk-logbox">{{ log_seed }}</pre>
-      {% if not collapsed %}
+      {# Second window — the per-component build/test detail. LIVE: filled by bulk.js. HISTORICAL:
+         seeded server-side (complog_seed), like the rollup above. Plain {{ }} keeps the untrusted
+         log output HTML-escaped inside the <pre>. #}
       <p class="muted" style="margin:.6rem 0 .2rem">Component build &amp; test logs
-        (live, in execution order)</p>
-      <pre class="logbox logbox-half" id="bulk-complog"></pre>
-      {% endif %}
+        {% if collapsed %}(historical, in execution order){% else %}(live, in execution order){% endif %}</p>
+      <pre class="logbox logbox-half" id="bulk-complog">{% if collapsed %}{{ complog_seed }}{% endif %}</pre>
     </div>
   {% if collapsed %}</details>{% else %}</div>{% endif %}
   {% endif %}

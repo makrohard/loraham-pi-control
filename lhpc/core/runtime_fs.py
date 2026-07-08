@@ -30,10 +30,10 @@ from pathlib import Path
 from .paths import Paths, PathContainmentError
 
 __all__ = [
-    "PathContainmentError", "resolve", "mkdir", "ensure_dir", "leaf", "atomic_write",
+    "PathContainmentError", "mkdir", "ensure_dir", "atomic_write",
     "write_marker", "write_launcher", "open_marker_excl", "open_existing_marker", "OwnedMarker", "open_log_append", "open_log_truncate", "open_lock",
     "unlink", "chmod", "replace_symlink", "read_bytes", "read_text", "tail", "listdir",
-    "scandir_nofollow", "fsync_dir",
+    "scandir_nofollow", "rename_leaf",
 ]
 
 
@@ -93,31 +93,6 @@ def _is_symlink_leaf(parent_fd: int, leaf: str) -> bool:
     except FileNotFoundError:
         return False
     return _stat.S_ISLNK(st.st_mode)
-
-
-def resolve(paths: Paths, *parts: str) -> Path:
-    """A containment-checked runtime path (lexical + symlink-parent). Raises on escape."""
-    return paths.under(*parts)
-
-
-def leaf(paths: Paths, *parts: str) -> Path:
-    """A mutable runtime leaf path: contained and not a pre-existing symlink leaf."""
-    return paths.mutable_leaf(paths.under(*parts))
-
-
-def fsync_dir(directory: Path) -> None:
-    """Best-effort fsync of a directory so a create/rename/delete is durable (used for an
-    EXTERNAL directory; runtime-owned operations fsync the held parent fd directly)."""
-    try:
-        dfd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
-    except OSError:
-        return
-    try:
-        os.fsync(dfd)
-    except OSError:
-        pass
-    finally:
-        os.close(dfd)
 
 
 def ensure_dir(paths: Paths, path: Path) -> Path:
@@ -502,6 +477,63 @@ def unlink(paths: Paths, path: Path) -> None:
                 pass
     except FileNotFoundError:
         pass
+
+
+def _renameat2_noreplace(parent_fd: int, src_name: str, dst_name: str) -> bool:
+    """Attempt a single-syscall no-overwrite rename via Linux `renameat2(RENAME_NOREPLACE)`
+    under the shared parent fd. Returns True on success; raises FileExistsError if the
+    destination already exists (EEXIST). Returns False (does nothing) when renameat2 is
+    unavailable on this libc/kernel (ENOSYS / no wrapper) so the caller can fall back."""
+    import ctypes
+    import ctypes.util
+    import errno as _errno
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        fn = libc.renameat2
+    except (OSError, AttributeError):
+        return False
+    fn.restype = ctypes.c_int
+    fn.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    RENAME_NOREPLACE = 1
+    ctypes.set_errno(0)
+    rc = fn(parent_fd, os.fsencode(src_name), parent_fd, os.fsencode(dst_name), RENAME_NOREPLACE)
+    if rc == 0:
+        return True
+    eno = ctypes.get_errno()
+    if eno == _errno.EEXIST:
+        raise FileExistsError(_errno.EEXIST, os.strerror(_errno.EEXIST), dst_name)
+    if eno in (_errno.ENOSYS, _errno.EINVAL):
+        return False                                  # unsupported flag/syscall -> fall back
+    raise OSError(eno, os.strerror(eno), dst_name)
+
+
+def rename_leaf(paths: Paths, src: Path, dst: Path, *, replace: bool = True) -> None:
+    """Rename a runtime leaf to a sibling in the SAME contained directory (descriptor-anchored,
+    no-follow on either leaf). Refuses a symlinked source leaf. Raises FileNotFoundError if the
+    source is absent. `src` and `dst` MUST share a parent dir.
+
+    `replace=True` (default): plain `os.rename` — atomically REPLACES an existing destination.
+    `replace=False`: CLAIM semantics — atomically fail-closed if the destination already exists
+    (raise FileExistsError), leaving BOTH leaves untouched. Used by the self-update helper to
+    claim `selfupdate.request` -> `selfupdate.inflight` without ever clobbering an in-flight
+    record. Atomicity is a single VFS op (Linux `renameat2(RENAME_NOREPLACE)`, with a
+    `link`+`unlink` fallback — never a racy check-then-rename)."""
+    if src.parent != dst.parent:
+        raise ValueError("rename_leaf requires src and dst in the same directory")
+    with _walk_parent(paths, src, create=False) as (parent_fd, src_name):
+        if _is_symlink_leaf(parent_fd, src_name):
+            raise PathContainmentError(f"refusing to rename a symlink leaf: {src}")
+        if replace:
+            os.rename(src_name, dst.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        elif not _renameat2_noreplace(parent_fd, src_name, dst.name):
+            # Fallback (renameat2 unavailable): hardlink is kernel-atomic (EEXIST if dst
+            # exists), then drop the source name — never a check-then-act race.
+            os.link(src_name, dst.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.unlink(src_name, dir_fd=parent_fd)
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
 
 
 def chmod(paths: Paths, path: Path, mode: int, *, create_dir: bool = False) -> None:

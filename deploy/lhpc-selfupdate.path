@@ -1,0 +1,12 @@
+# LoRaHAM Pi Control self-update request watcher — CANONICAL managed unit (generated).
+# Pulled up by lhpc-web.service (Wants=), so a running console always has an active watcher.
+[Unit]
+Description=LoRaHAM Pi Control self-update request watcher
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
+
+[Path]
+PathExists=%h/loraham-pi-control/state/selfupdate.request
+Unit=lhpc-selfupdate.service
+
+[Install]
+WantedBy=default.target

@@ -181,14 +181,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         needs_ack = bool(recovery)
         orphan_risk = "ORPHAN RISK" in recovery
         chunk = {"offset": 0, "data": ""}
+        complog_seed = ""
         if st and not st.get("unsafe"):
             chunk = service.bulk_log_chunk(st["run_id"], 0)
+            # Historical (collapsed) run: seed the detailed per-component log window server-side,
+            # exactly as log_seed seeds the rollup. Same condition the template uses for `collapsed`.
+            if (not running and not needs_ack
+                    and st.get("state") in ("completed", "completed-with-failures")):
+                complog_seed = service.bulk_component_log_seed(st["run_id"])
         return render_template(
             "install_all.html", version=__version__, runtime_root=_runtime_root(),
             st=st, mode=mode, running=running, gate=gate, needs_ack=needs_ack,
             recovery=recovery, orphan_risk=orphan_risk, starting=starting, starting_run=starting_run,
             spawn_failed=spawn_failed,
-            log_seed=chunk.get("data", ""), src_labels=_SRC_LABELS)
+            log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS)
 
     _TX_CONFIRM_TTL_S = 300.0
 
@@ -367,6 +373,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
             controller=service.controller_status(),
             st=service.self_update_status(), jobs=service.active_jobs(),
+            # One-click integration status (GET-safe file reads): gates the "Update now" button
+            # and drives recovery/guidance in _update.html.
+            updater=service.updater_integration(),
             confirm=None,
         )
         ctx.update(over)
@@ -399,11 +408,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # discard-consent checkbox is the operator's explicit agreement.
             return _render_stacks(confirm={"dirty": service.self_update_local_dirty(),
                                            "update_available": st.get("update_available")})
-        # Stage 2 — trigger. Consent only SELECTS between the two fixed units; a stale
-        # overwrite tick with a meanwhile-clean tree downgrades to the normal unit.
+        # Stage 2 — trigger. Consent only sets the request marker's payload bit
+        # (normal|overwrite); a stale overwrite tick with a meanwhile-clean tree drops to normal.
+        # repair_and_trigger delegates straight to the marker trigger when the units are already
+        # canonical, and otherwise migrates a legacy same-root deployment (old/%h units, no .path)
+        # to the canonical set first — all in this one click.
         overwrite = (request.form.get("overwrite") == "yes"
                      and service.self_update_local_dirty())
-        res = service.self_update_trigger(overwrite=overwrite)
+        res = service.self_update_repair_and_trigger(overwrite=overwrite)
         if not res.ok:
             flash(res.summary, "warn")
             return _render_stacks()

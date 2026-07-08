@@ -62,27 +62,34 @@ layout, it does not claim same-account race-proofness.
 
 ### Self-update operating rules
 
-- **One-click from the web console (the normal path).** "Update now" (confirm step included)
-  starts a static, **parameter-free** helper unit — `lhpc-selfupdate.service` — whose fixed
-  job is: stop `lhpc-web` → apply the update (exclusive lock, fresh live identity check,
-  dirty refusal) → sync the venv when the checkout advanced → **always start `lhpc-web`
-  again** (also on failure/timeout, enforced twice: in the updater and by the unit's
-  `ExecStopPost`). The browser shows a reconnecting page and returns on its own; the
-  controller row then shows the recorded outcome. No free-form input reaches the updater:
-  a **dirty** tree is detected fresh at the confirm step, and your explicit discard consent
-  merely selects the second fixed unit (`lhpc-selfupdate-overwrite.service`).
-- **Manual CLI path (equivalent, still supported).** The running console holds the
-  controller-runtime lock SHARED, so an in-process apply refuses while it is up:
+- **One-click (normal path).** The console **cannot** run `systemctl` — its unit blocks the
+  user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`), closing the sandbox-escape route.
+  "Update now" writes an exclusively-created request marker (`state/selfupdate.request`, payload
+  `normal`|`overwrite`); a static `lhpc-selfupdate.path` unit starts the sandboxed
+  `lhpc-selfupdate.service`, which claims it (rename to `selfupdate.inflight` with process
+  identity), applies (exclusive lock, live identity check, dirty refusal), syncs the venv, and
+  records the outcome. Console stop/restart is declarative (`Conflicts`/`After` +
+  `OnSuccess`/`OnFailure=lhpc-web.service`), not scripted — the helper never calls `systemctl`.
+  The browser reconnects on its own.
+- **Byte-exact units.** One-click ("Update now") is offered only when the console is the managed
+  unit (`INVOCATION_ID`) and all three units are byte-for-byte canonical. A legacy same-root
+  deployment (old/`%h` units, no `.path`) instead shows **"Repair & update"**, which migrates to
+  the canonical units and updates in one click -- it works while the console still has bus access
+  (the un-hardened unit); once migrated it is bus-blocked and further repair needs a shell
+  (`lhpc self-update --repair-integration`). A genuinely foreign/drop-in/masked unit is left for
+  manual resolution.
+- **Manual path.** With the console up its shared lock blocks an in-process apply:
   `systemctl --user stop lhpc-web`, then `lhpc self-update --apply`, then start it again.
-- **A dirty checkout blocks apply** unless you explicitly choose overwrite.
-- **Dependency sync:** the one-click updater runs the editable install automatically after a
-  real advance. On the manual path, when an update reports `deps_changed`, run it yourself
-  before restarting:
+- **Dirty checkout** blocks apply unless you choose overwrite.
+- **Venv sync** runs automatically after a real advance; if it fails the update is reported
+  failed (never half-applied). On the manual path, when it reports `deps_changed`, run:
   ```bash
   ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
   ```
-- The web unit is **operator-managed** — self-update never rewrites it. `install.sh` writes
-  the two updater helpers next to it (start-on-demand, never enabled at boot).
+- **Install / repair.** `install.sh` writes all three canonical units (never overwriting a
+  foreign one) and enables them; `lhpc self-update --repair-integration` restores the exact set on
+  an existing or `--no-service` deployment (and the web "Repair & update" does the same in one click
+  while the console still has bus access).
 
 ### Recovery
 
@@ -93,6 +100,12 @@ layout, it does not claim same-account race-proofness.
 - **Failed / interrupted update**: the existing migration-journal recovery applies; inspect
   `state/selfupdate-migrate.json` as the message directs. Nothing is applied on a blocked or
   recovery-required journal.
+- **Stuck one-click request** (`update recovery required` in the console): a request/in-flight
+  marker was left behind (e.g. the helper was killed mid-run). Run `lhpc self-update
+  --recover-request` — it clears a never-claimed request outright, and clears an interrupted
+  in-flight record **only after proving the helper process has actually stopped** (a
+  missing/unreadable identity is never auto-cleared; the command tells you what to check). It
+  records the interrupted run as incomplete. One-click is blocked until this is resolved.
 
 ## Run it under systemd (user service, no root)
 
@@ -127,9 +140,10 @@ loginctl enable-linger "$USER"     # optional: keep running after logout
 - **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only`, `RestrictNamespaces`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and related restrictions. The **only**
-  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the
-  shared `/tmp`. The service does **not** get broad write access to the rest of your home or
-  to `/var`.
+  writable areas are `ReadWritePaths=%h/loraham-pi-control %h/.meshcore_nm /tmp` — the runtime
+  root, the shared `/tmp`, and the `~/.meshcore_nm` data dir of the meshcore-nodegui stack GUI
+  (which persists its sessions/settings/favourites there). The service does **not** get broad
+  write access to the rest of your home or to `/var`.
 - **Runtime-owned build/tool caches**: the console orchestrates builds (cmake / PlatformIO /
   pip) and the QEMU emulator, which write toolchain caches. The unit points them at a
   runtime-owned location under `build/tool-cache/` via

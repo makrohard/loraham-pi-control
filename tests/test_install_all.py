@@ -87,6 +87,16 @@ def test_packaged_meshcom_test_runs_in_bulk(tmp_path):
     assert comp.test_requires_running is False
 
 
+def test_packaged_meshcom_bridge_runs_ctest_in_bulk(tmp_path):
+    """The meshcom-bridge component runs its own deterministic CTest suite (FakeBackend, no
+    hardware/daemon/QEMU) — built during install-all and run right after (regression: the bridge
+    tests were compiled but never executed because the component had no host test)."""
+    svc = _svc(tmp_path)
+    comp = next(c for st in svc.stacks() for c in st.components if c.id == "meshcom-bridge")
+    assert comp.test_argv == ("ctest", "--test-dir", "build", "--output-on-failure")
+    assert comp.test_requires_running is False           # standalone -> runs in the build sweep
+
+
 # ---- dry-run + flag coupling ------------------------------------------------------------
 
 def test_dry_run_names_scope_and_flags(tmp_path):

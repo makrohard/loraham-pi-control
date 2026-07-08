@@ -70,7 +70,8 @@ lhpc web                    # http://127.0.0.1:8770/  (loopback only)
 
 `lhpc status` then shows the controller row as **identity ok**. To run it persistently as a
 user service, see [`docs/deployment.md`](docs/deployment.md) (the `deploy/lhpc-web.service`
-template already uses this layout). Self-update requires the web service stopped.
+template already uses this layout). One-click update stops and restarts the console itself;
+only the manual `lhpc self-update --apply` needs it stopped first.
 
 Set your callsign once in a stack's web **Settings**; until then HAM apps default to
 `N0CALL`. Secrets (passwords, HMAC keys) live only in
@@ -80,7 +81,7 @@ Set your callsign once in a stack's web **Settings**; until then HAM apps defaul
 your terminal); the installer prints these at the end too:
 
 ```bash
-systemctl --user stop lhpc-web        # stop it now (also needed before `lhpc self-update`)
+systemctl --user stop lhpc-web        # stop it now (only needed before manual `self-update --apply`)
 systemctl --user status lhpc-web      # confirm it's stopped
 systemctl --user start lhpc-web       # start it again
 systemctl --user disable lhpc-web     # stop it auto-starting on boot
@@ -155,14 +156,18 @@ identity while rendering. The console **checks upstream in the background** (def
 12 h, configurable via `[web] update_check_hours`, `0` = off), so "Update →" appears in the
 footer by itself; **“Check for updates”** does the same on demand.
 
-**Updating is one click**: after a confirm (which warns that the console restarts, and asks
-for explicit discard consent if the checkout is dirty), a parameter-free systemd helper unit
-stops the console, applies the update — with a fresh live identity check and all locks — syncs
-the venv, and starts the console again; the browser reconnects on its own. The equivalent
-manual path (`systemctl --user stop lhpc-web && lhpc self-update --apply`) still works.
+**Updating is one click**: after a confirm, the console writes a request marker that a static
+`lhpc-selfupdate.path` unit turns into a run of the sandboxed helper — which stops the console,
+applies the update (live identity check, all locks), syncs the venv, and lets systemd bring it
+back. The console **cannot** call `systemctl` (its unit blocks the user D-Bus) and one-click runs
+only when the three managed units are proven byte-exact, so a tampered console can't escape or run
+an unvetted updater. Manual path: `systemctl --user stop lhpc-web && lhpc self-update --apply`;
+`lhpc self-update --repair-integration` (re)installs the managed units. Details:
+[`docs/deployment.md`](docs/deployment.md).
 
 The web-service systemd unit is **least-privilege**: read-only filesystem except the runtime
-root and `/tmp`, no broad `$HOME`/`/var` write, and build/tool caches redirected into a
-runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.espressif` or `~/.cache`). See
+root and `/tmp`, no broad `$HOME`/`/var` write, the user D-Bus blocked, and build/tool caches
+redirected into a runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.espressif` or
+`~/.cache`). See
 [`docs/deployment.md`](docs/deployment.md) and the operator relocation runbook in
 [`docs/deployment-migration.md`](docs/deployment-migration.md).

@@ -10,6 +10,7 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import sys
@@ -94,6 +95,34 @@ def _canon_git_url(url: str) -> str:
     u = u.rstrip("/")
     host, sep, rest = u.partition("/")
     return host.lower() + sep + rest             # host case-folded; path preserved
+
+
+class _StopRun(Exception):
+    """Internal control-flow signal to break out of the run-service body to the record/release
+    stage (keeps the finalization in one place)."""
+
+
+def _proc_start_time(pid: int) -> int:
+    """Field 22 of /proc/<pid>/stat (starttime, clock ticks since boot) — the stable half of a
+    (pid, start_time) process identity. 0 if unavailable."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+        # comm (field 2) is parenthesized and may contain spaces/parens — split after the LAST ')'.
+        fields = data[data.rindex(b")") + 2:].split()
+        return int(fields[19])                            # starttime = 22nd overall; index 19 here
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def _proc_ceased(pid, start_time) -> bool:
+    """True when the recorded (pid, start_time) process no longer exists (dead, or the PID was
+    reused by a different process). Conservative: unknown/malformed identity → NOT ceased."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if not os.path.exists(f"/proc/{pid}"):
+        return True
+    return _proc_start_time(pid) != (start_time if isinstance(start_time, int) else -1)
 
 
 class SourceTxnBlocked(Exception):
@@ -609,6 +638,53 @@ class ControllerService:
         except Exception:                        # noqa: BLE001 — a GET must never 500
             return {"index": 0, "offset": 0, "data": "",
                     "error": "component-log stream temporarily unavailable"}
+
+    # Keep in sync with COMPLOG_MAX in static/bulk.js (the live window's scrollback cap, 1.5 MB):
+    # a historical seed must not be larger than what the live view would keep.
+    _COMPLOG_SEED_MAX_BYTES = 1_500_000
+    _COMPLOG_SEED_MAX_READS = 512            # hard iteration bound (normal runs drain in <10 reads)
+
+    def bulk_component_log_seed(self, run_id: str) -> str:
+        """SERVER-SIDE seed of the historical component-log window (the '#bulk-complog' second
+        window): a bounded DRAIN of the live `bulk_component_log_chunk` cursor API for a FINISHED
+        run, so it inherits that method's run-id validation, safe no-follow reads, ASCII framing and
+        unsafe-leaf handling (it never opens component logs / paths itself). Terminates when the
+        cursor stops advancing (the chunk API exposes no explicit done flag — for a terminal run this
+        coincides with empty data) or on a returned `error`. Hard-bounded by BOTH a byte cap and a
+        read-count cap; front-trims with a visible notice on overflow. Fail-closed: returns "" (or the
+        framed diagnostic the chunk API already produced) — never raises through a GET."""
+        parts: list[str] = []
+        total = 0
+        index, offset = 0, 0
+        truncated_reads = False
+        try:
+            for _ in range(self._COMPLOG_SEED_MAX_READS):
+                chunk = self.bulk_component_log_chunk(run_id, index, offset)
+                data = chunk.get("data", "")
+                if data:
+                    parts.append(data)
+                    total += len(data)
+                ni, no = chunk.get("index", index), chunk.get("offset", offset)
+                if chunk.get("error"):
+                    break                                   # diagnostic already in `data`; stop
+                if ni == index and no == offset:            # cursor did not advance -> drained
+                    break
+                index, offset = ni, no
+                if total >= self._COMPLOG_SEED_MAX_BYTES:
+                    break
+            else:
+                truncated_reads = True                      # exhausted the read cap without draining
+        except Exception:                                   # noqa: BLE001 — a GET must never 500
+            return "".join(parts)
+        seed = "".join(parts)
+        if len(seed) > self._COMPLOG_SEED_MAX_BYTES:        # front-trim, keep the tail (matches bulk.js)
+            keep = self._COMPLOG_SEED_MAX_BYTES - 200_000
+            cut = len(seed) - keep
+            nl = seed.find("\n", cut)
+            seed = "[… older output trimmed …]\n" + seed[(nl + 1) if nl >= 0 else cut:]
+        if truncated_reads:
+            seed += "\n[… stream truncated (read cap) …]\n"
+        return seed
 
     def bulk_ack(self, confirm_orphan: bool = False) -> ActionResult:
         """EXPLICIT recovery/acknowledgement of dead/unsafe bulk state, SERIALIZED with
@@ -5978,7 +6054,10 @@ class ControllerService:
         """Validate ephemeral file-config overrides ({name: value}) against the TARGET's FileParams
         (a stack's whole set, or a direct component's own). Returns (clean, err); a non-mapping
         payload, an UNKNOWN name, or an invalid value is a TYPED start failure — never silently
-        discarded. A blank string is passed through (defaults apply downstream only when ABSENT)."""
+        discarded. A blank NON-FLAG value is treated as ABSENT (skipped -> the base/preset default
+        applies), mirroring `update_toml`'s blank rule — so e.g. leaving the Start-page Frequency
+        field empty lets the selected RF preset own the frequency instead of failing int validation.
+        Flags pass through (blank = off)."""
         if raw is None:
             return {}, ""
         if not isinstance(raw, dict):
@@ -5988,6 +6067,8 @@ class ControllerService:
             _c, p, err = self._param_ref(target, "file", key)      # rejects unqualified duplicates
             if err:
                 return {}, f"unknown file parameter {key!r}" if err.startswith("unknown") else err
+            if getattr(p, "kind", "") != "flag" and str(val).strip() == "":
+                continue                # blank non-flag -> no override (base/preset default wins)
             try:
                 clean[key] = validators.validate_param(p, str(val))
             except validators.ValidationError as exc:
@@ -6581,15 +6662,45 @@ class ControllerService:
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
 
-    # One-click self-update: the running console cannot mutate its own code (it holds the
-    # controller-runtime lock SHARED for exactly that reason), so the web triggers a static,
-    # PARAMETER-FREE systemd user oneshot (lhpc-selfupdate[-overwrite].service) whose fixed
-    # job is: stop lhpc-web -> apply (all existing gates) -> sync the venv -> start lhpc-web.
-    SELFUPDATE_UNIT = "lhpc-selfupdate.service"
-    SELFUPDATE_OVERWRITE_UNIT = "lhpc-selfupdate-overwrite.service"
-    _SYSTEMCTL_TIMEOUT_S = 30.0
-    _WEB_STOP_WAIT_S = 30.0
+    # ============================================================================================
+    # One-click self-update — ESCAPE-PROOF trigger. The running console cannot mutate its own code
+    # (it holds the controller-runtime lock SHARED), and it has NO user-systemd bus (its unit
+    # InaccessiblePaths=%t/bus %t/systemd/private). So the web writes an in-root request marker
+    # under EXCLUSIVE admission; a static lhpc-selfupdate.path unit starts the sandboxed helper;
+    # web stop/restart is declarative (Conflicts/After/OnSuccess/OnFailure). NOTHING here calls
+    # systemctl except the OPERATOR-shell repair/recover ops. See lhpc/core/updater_units.py.
+    # ============================================================================================
     _PIP_SYNC_TIMEOUT_S = 600.0
+    _LOCK_WAIT_S = 30.0
+
+    def _user_unit_dir(self):
+        from pathlib import Path
+        return Path(os.path.expanduser("~")) / ".config" / "systemd" / "user"
+
+    def _marker_present(self, name: str) -> bool:
+        from . import runtime_fs
+        try:
+            return runtime_fs.stat_leaf_nofollow(self._paths, self._paths.under(name)) is not None
+        except Exception:
+            return False
+
+    def updater_integration(self) -> dict:
+        """GET-safe (file reads only, no subprocess/bus): status of the managed web+updater unit
+        set for THIS runtime root, plus request-state so the UI can surface 'recovery required'."""
+        from . import updater_units
+        root = str(self._paths.runtime_root)
+        integ = updater_units.integration(self._user_unit_dir(), root)
+        req = self.classify_request()
+        if req in ("in_flight", "malformed") or self._marker_present(updater_units.UNINSTALL_GUARD):
+            integ = dict(integ, status="recovery_required", request=req)
+        else:
+            integ["request"] = req
+        # `fixable`: a non-canonical set the console can auto-migrate in one click — every unit is
+        # ok/missing/modified_ours (this deployment's), and no recovery is pending.
+        _fixable = (updater_units.OK, updater_units.MISSING, updater_units.MODIFIED_OURS)
+        integ["fixable"] = (integ["status"] != "recovery_required"
+                            and all(v in _fixable for v in integ["per_unit"].values()))
+        return integ
 
     def self_update_local_dirty(self) -> bool:
         """FRESH local dirty check for the one-click confirm step (git status only — local,
@@ -6597,12 +6708,30 @@ class ControllerService:
         from . import selfupdate
         return bool(selfupdate.local_state(self._system).get("dirty") is True)
 
+    # ---- web trigger: write the exclusive request marker (NO systemctl, NO bus) ---------------
+
     def self_update_trigger(self, *, overwrite: bool = False) -> ActionResult:
-        """WEB stage-2 entry: start the parameter-free updater unit (fire-and-forget). The
-        consent decision only SELECTS between the two fixed units — no free-form input ever
-        reaches the updater. All safety gates run inside the updater's apply."""
-        jobs = self.active_jobs()
-        if jobs:
+        """WEB stage-2: admit exactly one update request by EXCLUSIVELY creating the in-root
+        request marker (payload `normal`|`overwrite` — a 1-bit selector the helper re-validates).
+        A static .path unit consumes it. Refuses unless this process is the MANAGED web unit
+        (INVOCATION_ID) with a byte-exact integration, no active job, an available+safe checkout,
+        and no pending/in-flight/uninstall evidence — so a foreground console or a tampered unit
+        never writes a request nobody safely consumes."""
+        from . import runtime_fs, updater_units
+        if not os.environ.get("INVOCATION_ID"):
+            return ActionResult(False, "One-click update needs the managed web service (systemd). "
+                                "This console is running in the foreground — use `lhpc self-update "
+                                "--apply` from a shell instead.", data={"not_managed": True})
+        integ = self.updater_integration()
+        if integ["status"] == "recovery_required":
+            return ActionResult(False, "A previous update needs recovery first — run "
+                                "`lhpc self-update --recover-request`.", data={"recovery_required": True})
+        if integ["status"] != "ok":
+            return ActionResult(False, "One-click update is unavailable — the web/updater units are "
+                                f"not the canonical managed set ({integ['status']}). Run `lhpc "
+                                "self-update --repair-integration`, or `lhpc self-update --apply`.",
+                                data={"integration": integ["status"]})
+        if self.active_jobs():
             return ActionResult(False, "An lhpc job is still running — finish it before self-updating.",
                                 data={"blocked_by_jobs": True})
         st = self.self_update_status()
@@ -6613,72 +6742,363 @@ class ControllerService:
         if isinstance(idv, dict) and idv.get("status") == "unsafe":
             return ActionResult(False, "Self-update blocked: unsafe controller identity "
                                 f"({idv.get('reason', '')}).", data={"identity_unsafe": True})
-        unit = self.SELFUPDATE_OVERWRITE_UNIT if overwrite else self.SELFUPDATE_UNIT
-        r = self._system.runner.run(["systemctl", "--user", "start", "--no-block", unit],
-                                    timeout=self._SYSTEMCTL_TIMEOUT_S)
-        if r.returncode != 0:
-            detail = (r.stderr or r.stdout or "").strip()[:200]
-            return ActionResult(False, f"Could not start the updater service ({unit}): "
-                                f"{detail or 'systemctl failed'}. Is it installed? "
-                                "(install.sh writes it; or run `lhpc self-update --apply` manually).",
+        mode = "overwrite" if overwrite else "normal"
+        try:
+            m = runtime_fs.open_marker_excl(self._paths,
+                                            self._paths.under(*updater_units.REQUEST_REL),
+                                            mode + "\n")
+            m.close()
+        except FileExistsError:
+            return ActionResult(False, "An update request is already pending — the console is about "
+                                "to update.", data={"already_pending": True})
+        except Exception as exc:                               # containment / fs error
+            return ActionResult(False, f"Could not queue the update request: {exc}",
                                 data={"trigger_failed": True})
-        return ActionResult(True, "Updater started — the console will stop, update itself and "
-                            "come back automatically.", data={"triggered": True, "unit": unit})
+        return ActionResult(True, "Update queued — the console will stop, update itself and come "
+                            "back automatically.", data={"triggered": True, "mode": mode})
 
-    def self_update_run_service(self, *, force: bool = False) -> ActionResult:
-        """PLUMBING entry, run by the updater unit (never from the web process): stop lhpc-web,
-        wait for its shared controller-runtime lock to clear, apply (existing gates: exclusive
-        lock -> update lock -> LIVE identity -> dirty refusal unless force), sync the venv when
-        the checkout advanced, record the outcome in the cache envelope, and ALWAYS start
-        lhpc-web again — on every path, including failures."""
+    # ---- the helper (unit ExecStart): claim -> apply -> sync -> record -> release -------------
+
+    def self_update_run_service(self) -> ActionResult:
+        """PLUMBING, run ONLY by lhpc-selfupdate.service. Claims the request (atomic rename to an
+        in-flight record carrying the helper's process identity), applies (existing gates: web
+        already stopped by Conflicts+After -> EXCLUSIVE lock free; live identity; dirty refusal
+        unless overwrite), syncs the venv on a real advance, records the outcome, and releases the
+        in-flight record LAST. NO systemctl — the unit's OnSuccess/OnFailure restarts the console.
+        the strict record and the final release must BOTH succeed, else the run is INCOMPLETE and
+        the in-flight record is retained (one-click stays blocked until --recover-request)."""
         import sys
         import time as _time
-        from . import selfupdate
+        from . import runtime_fs, selfupdate, updater_units
+        req_path = self._paths.under(*updater_units.REQUEST_REL)
+        inflight = self._paths.under(*updater_units.INFLIGHT_REL)
+        # CLAIM: atomic NO-OVERWRITE rename request -> inflight. Absent request = stray start ->
+        # clean no-op. A pre-existing in-flight record (prior interrupted run) means the claim
+        # fails closed (FileExistsError) and BOTH markers are preserved for recovery — the helper
+        # is the security boundary and never clobbers in-flight evidence.
+        try:
+            runtime_fs.rename_leaf(self._paths, req_path, inflight, replace=False)
+        except FileNotFoundError:
+            return ActionResult(True, "No update request to service.", data={"noop": True})
+        except FileExistsError:
+            return ActionResult(False, "A previous update is already in flight — recovery required "
+                                "(`lhpc self-update --recover-request`).",
+                                data={"recovery_required": True})
+        except Exception as exc:
+            return ActionResult(False, f"Could not claim the update request: {exc}",
+                                data={"claim_failed": True})
+        # Read mode, then overwrite the in-flight record with a process-identity claim.
+        try:
+            mode = runtime_fs.read_text_regular(self._paths, inflight, max_bytes=4096).strip()
+        except Exception:
+            mode = ""
+        if mode not in ("normal", "overwrite"):
+            runtime_fs.write_marker(self._paths, inflight,
+                                    json.dumps({"mode": None, "error": "malformed-request"}))
+            selfupdate.record_last_apply_strict(self._paths, ok=False,
+                                                summary="Update request was malformed — recovery required.")
+            return ActionResult(False, "Malformed update request — recovery required.",
+                                data={"malformed": True})
+        force = (mode == "overwrite")
+        runtime_fs.write_marker(self._paths, inflight, json.dumps(self._helper_identity(mode)))
+
         res = ActionResult(False, "Self-update service did not run.", data={})
         try:
-            self._system.runner.run(["systemctl", "--user", "stop", "lhpc-web.service"],
-                                    timeout=self._SYSTEMCTL_TIMEOUT_S)
-            # Wait (bounded) until the web's SHARED lock is really gone — probe by acquiring
-            # EXCLUSIVE and releasing immediately; apply re-acquires it properly afterwards.
-            deadline = _time.monotonic() + self._WEB_STOP_WAIT_S
+            # Web is stopped (Conflicts+After) so its SHARED lock is released; take EXCLUSIVE with
+            # a short bounded retry to cover the stop-completion window, then apply.
+            deadline = _time.monotonic() + self._LOCK_WAIT_S
             while True:
                 try:
                     with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
                         break
                 except selfupdate.ControllerRuntimeBusy:
                     if _time.monotonic() >= deadline:
-                        res = ActionResult(False, "lhpc-web did not release the controller-runtime "
-                                           "lock — aborting without changes.",
-                                           data={"web_running": True})
-                        return res
+                        res = ActionResult(False, "The console did not release the controller-runtime "
+                                           "lock — no changes made.", data={"web_running": True})
+                        raise _StopRun()
                     _time.sleep(0.5)
                 except selfupdate.ControllerRuntimeLockError:
                     res = ActionResult(False, "Could not acquire the controller-runtime lock "
-                                       "(unsafe runtime state) — aborting without changes.",
+                                       "(unsafe runtime state) — no changes made.",
                                        data={"lock_error": True})
-                    return res
+                    raise _StopRun()
             res = self.self_update_apply(force=force)
-            # Keep the venv in sync when the checkout actually advanced: an editable install
-            # is idempotent and cheap, and removes the manual deps_changed step for the
-            # one-click flow. Run from the updater's own interpreter (the deployment venv).
             if res.ok and not res.data.get("already"):
                 root = selfupdate.repo_root()
                 if root is not None:
                     pip = self._system.runner.run(
                         [sys.executable, "-m", "pip", "install", "-e", str(root)],
                         timeout=self._PIP_SYNC_TIMEOUT_S)
-                    if pip.returncode != 0:
+                    if pip.returncode != 0:                     # P2: a failed sync FAILS the update
                         tail = (pip.stderr or pip.stdout or "").strip()[-200:]
-                        res = ActionResult(True, res.summary + f" (venv sync FAILED: {tail} — run "
-                                           "pip install -e manually)", data=dict(res.data),
-                                           details=res.details)
-            return res
-        finally:
-            selfupdate.record_last_apply(self._paths, ok=bool(res.ok), summary=res.summary)
-            # The console must come back on EVERY path (the unit's ExecStopPost is the
-            # second layer of this guarantee).
-            self._system.runner.run(["systemctl", "--user", "start", "--no-block",
-                                     "lhpc-web.service"], timeout=self._SYSTEMCTL_TIMEOUT_S)
+                        res = ActionResult(False, "Update applied, but the venv sync FAILED — run "
+                                           f"{sys.executable} -m pip install -e {root} manually, then "
+                                           f"restart the console. ({tail})",
+                                           data={**dict(res.data), "venv_sync_failed": True})
+        except _StopRun:
+            pass
+        # Record the outcome DURABLY, then release the in-flight record. If the STRICT record does
+        # not persist, retain in-flight and report incomplete (one-click blocked until recovery) —
+        # never delete the evidence on an unrecorded outcome.
+        if not selfupdate.record_last_apply_strict(self._paths, ok=bool(res.ok), summary=res.summary):
+            return ActionResult(False, "Update outcome could not be recorded durably — recovery "
+                                "required (`lhpc self-update --recover-request`).",
+                                data={**dict(res.data), "record_failed": True})
+        try:
+            runtime_fs.unlink(self._paths, inflight)
+        except Exception as exc:
+            return ActionResult(False, res.summary + f" (in-flight marker cleanup FAILED: {exc} — "
+                                "recovery required)", data={**dict(res.data), "cleanup_failed": True})
+        return res
+
+    def _helper_identity(self, mode: str) -> dict:
+        """Bounded process-identity record stored in the in-flight marker so recovery can prove
+        the original helper has ceased before clearing it (never age-based)."""
+        import hashlib
+        import sys
+        import time as _time
+        pid = os.getpid()
+        return {"mode": mode, "pid": pid, "start_time": _proc_start_time(pid),
+                "exe": (os.readlink(f"/proc/{pid}/exe") if os.path.exists(f"/proc/{pid}/exe") else ""),
+                "argv_hash": hashlib.sha256(("\0".join(sys.argv)).encode()).hexdigest()[:16],
+                "claimed_at": int(_time.time())}
+
+    # ---- request-state recovery (operator shell) ---------------------------------------------
+
+    def classify_request(self) -> str:
+        """`absent | pending | in_flight | malformed` — file reads only (GET-safe)."""
+        from . import runtime_fs, updater_units
+        inflight = self._paths.under(*updater_units.INFLIGHT_REL)
+        req = self._paths.under(*updater_units.REQUEST_REL)
+        try:
+            if runtime_fs.stat_leaf_nofollow(self._paths, inflight) is not None:
+                try:
+                    rec = json.loads(runtime_fs.read_text_regular(self._paths, inflight, max_bytes=4096))
+                    if isinstance(rec, dict) and isinstance(rec.get("pid"), int) and rec.get("mode"):
+                        return "in_flight"
+                except Exception:
+                    pass
+                return "malformed"
+            if runtime_fs.stat_leaf_nofollow(self._paths, req) is not None:
+                return "pending"
+        except Exception:
+            return "malformed"
+        return "absent"
+
+    def self_update_recover_request(self) -> ActionResult:
+        """OPERATOR: clear a stuck request/in-flight record SAFELY. A pending (unclaimed) request
+        is cleared. An in-flight record is cleared ONLY when its recorded helper identity is
+        proven ceased (never age-based); a missing/malformed identity stays recovery-required."""
+        from . import runtime_fs, updater_units
+        state = self.classify_request()
+        if state == "absent":
+            return ActionResult(True, "No stuck update request.", data={"state": "absent"})
+        inflight = self._paths.under(*updater_units.INFLIGHT_REL)
+        req = self._paths.under(*updater_units.REQUEST_REL)
+        if state == "pending":
+            runtime_fs.unlink(self._paths, req)
+            return ActionResult(True, "Cleared a pending update request (it was never claimed).",
+                                data={"cleared": "pending"})
+        if state == "malformed":
+            return ActionResult(False, "The in-flight update record is unreadable/malformed — its "
+                                "helper cannot be proven stopped. Ensure lhpc-selfupdate.service is "
+                                "not active, then remove state/selfupdate.inflight by hand.",
+                                data={"state": "malformed"})
+        # in_flight: verify the recorded process is gone.
+        rec = json.loads(runtime_fs.read_text_regular(self._paths, inflight, max_bytes=4096))
+        if not _proc_ceased(rec.get("pid"), rec.get("start_time")):
+            return ActionResult(False, "An update is still running (helper process alive) — wait "
+                                "for it to finish before recovering.", data={"state": "running"})
+        # Record the interrupted outcome DURABLY *before* removing the evidence — if the strict
+        # write fails, keep the in-flight marker so recovery can be retried (never silently clear).
+        from . import selfupdate as _su
+        if not _su.record_last_apply_strict(self._paths, ok=False,
+                summary="A previous update was interrupted and did not complete."):
+            return ActionResult(False, "Could not record the interrupted outcome durably — the "
+                                "in-flight record is kept; try recovery again.",
+                                data={"record_failed": True})
+        runtime_fs.unlink(self._paths, inflight)
+        return ActionResult(True, "Cleared an interrupted update (helper had stopped); recorded it "
+                            "as incomplete.", data={"cleared": "in_flight"})
+
+    # ---- integration repair (operator shell, HAS bus) ----------------------------------------
+
+    def self_update_repair_integration(self, *, restart: bool = True) -> ActionResult:
+        """OPERATOR / migration: install/restore the COMPLETE canonical unit set (web + helper +
+        path) for this runtime root, then daemon-reload, verify the active fragments, enable the
+        watcher (`--now`) + web. With `restart=True` (CLI default) also restart the console; with
+        `restart=False` (the web self-repair bridge) leave the running console alone so the update
+        itself bounces it. Refuses while an uninstall guard or request/in-flight evidence exists,
+        or when an existing unit is not provably this deployment's."""
+        from . import runtime_fs, updater_units
+        root = str(self._paths.runtime_root)
+        _, checkout, venv = updater_units.deployment_paths(root)
+        import os.path as _op
+        if not _op.isdir(_op.join(checkout, ".git")):
+            return ActionResult(False, "Not a self-hosted deployment (no checkout at "
+                                f"{checkout}) — cannot manage web/updater units.",
+                                data={"not_self_hosted": True})
+        if self._marker_present(updater_units.UNINSTALL_GUARD):
+            return ActionResult(False, "An uninstall is in progress (.lhpc-uninstalling present) — "
+                                "recover it first (`lhpc self-update --recover-request`).",
+                                data={"uninstalling": True})
+        if self.classify_request() != "absent":
+            return ActionResult(False, "An update request is pending/in-flight — run "
+                                "`lhpc self-update --recover-request` first.",
+                                data={"request_present": True})
+        ud = self._user_unit_dir()
+        try:
+            actions = updater_units.write_set(ud, root)
+        except ValueError as exc:
+            return ActionResult(False, str(exc), data={"write_refused": True})
+        S = 20.0
+        self._system.runner.run(["systemctl", "--user", "daemon-reload"], timeout=S)
+        # Authoritative loader check (operator shell HAS the bus): the ACTIVE fragment must be our
+        # file AND carry NO drop-ins — a drop-in can override the sandbox / ExecStart /
+        # InaccessiblePaths of the vetted unit, so either condition FAILS the repair before we
+        # enable/restart/write the marker.
+        for kind in updater_units.ALL_UNITS:
+            show = self._system.runner.run(
+                ["systemctl", "--user", "show", "-p", "FragmentPath", "-p", "DropInPaths", kind],
+                timeout=S)
+            out = (show.stdout or "")
+            props = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+            want = str(ud / kind)
+            if props.get("FragmentPath") != want:
+                return ActionResult(False, f"After writing units, {kind} still loads a different "
+                                    f"fragment ({out.strip()[:120]}). A higher-priority unit or "
+                                    "mask shadows it — resolve manually.", data={"shadowed": kind})
+            if props.get("DropInPaths", "").strip():
+                return ActionResult(False, f"{kind} has an active drop-in override "
+                                    f"({props['DropInPaths'].strip()[:120]}) — it can override the "
+                                    "sandbox; remove it, then repair.", data={"dropin": kind})
+        # Enable both, and START the watcher now so a request marker is caught even before the web
+        # is (re)started under the new unit.
+        en = self._system.runner.run(["systemctl", "--user", "enable", "--now",
+                                      updater_units.PATH_UNIT], timeout=S)
+        self._system.runner.run(["systemctl", "--user", "enable", updater_units.WEB_UNIT], timeout=S)
+        # Migration mode (restart=False): the still-running OLD web does NOT pull the watcher up
+        # via Wants=, so it MUST be active now — otherwise a queued request would never be consumed.
+        # Fail BEFORE writing the root marker (and thus before the caller triggers).
+        if not restart:
+            act = self._system.runner.run(["systemctl", "--user", "is-active", "--quiet",
+                                           updater_units.PATH_UNIT], timeout=S)
+            if en.returncode != 0 or act.returncode != 0:
+                return ActionResult(False, "Installed the units but could not start the request "
+                                    "watcher (lhpc-selfupdate.path) — not proceeding. Check "
+                                    "`systemctl --user status lhpc-selfupdate.path`.",
+                                    data={"path_watcher_failed": True})
+        ov_note = self._remove_stale_overwrite_unit(ud)
+        self._write_root_marker()
+        note = ""
+        if restart:
+            rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
+                                          timeout=S)
+            note = "" if rst.returncode == 0 else " (web restart returned nonzero — check journalctl)"
+        details = [f"  {k}: {a}" for k, a in actions]
+        if ov_note:
+            details.append(f"  {ov_note}")
+        return ActionResult(True, "Web + one-click updater integration installed/repaired." + note,
+                            details=tuple(details), data={"actions": dict(actions)})
+
+    def _remove_stale_overwrite_unit(self, ud) -> str | None:
+        """Remove the obsolete `lhpc-selfupdate-overwrite.service` ONLY when it is PROVABLY this
+        deployment's old overwrite helper variant — BOTH a same-root `LHPC_RUNTIME_ROOT` (literal
+        or `%h`) AND the old variant's exact `ExecStart` shape
+        (`<root>/venv/lhpc/bin/lhpc self-update --run-service --overwrite`). Anything else (edited /
+        foreign / unreadable / symlinked) is LEFT untouched. Returns a manual-cleanup note when a
+        same-named unit is present but not proven ours, else None."""
+        from . import updater_units
+        name = "lhpc-selfupdate-overwrite.service"
+        p = ud / name
+        try:
+            text = updater_units._read_unit(p)               # no-follow, bounded; None if absent
+        except Exception:
+            return f"{name} is present but unreadable/symlinked — remove it by hand if unused."
+        if text is None:
+            return None
+        home = os.path.expanduser("~")
+        root = str(self._paths.runtime_root)
+        lines = text.splitlines()
+        envs = [ln[len("Environment=LHPC_RUNTIME_ROOT="):] for ln in lines
+                if ln.startswith("Environment=LHPC_RUNTIME_ROOT=")]
+        execs = [ln[len("ExecStart="):] for ln in lines if ln.startswith("ExecStart=")]
+        want_exec = f"{root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite"
+        root_ours = any(updater_units._expand_h(v, home) == root for v in envs)
+        exec_ours = any(updater_units._expand_h(v, home) == want_exec for v in execs)
+        if not (root_ours and exec_ours):
+            return (f"{name} is present but not the recognised old overwrite helper — left in "
+                    "place; remove it by hand if unused.")
+        self._system.runner.run(["systemctl", "--user", "disable", "--now", name], timeout=20.0)
+        try:
+            os.remove(str(p))                                # regular file proven by _read_unit
+        except OSError:
+            pass
+        return None
+
+    def self_update_repair_and_trigger(self, *, overwrite: bool = False) -> ActionResult:
+        """WEB one-click that also MIGRATES a legacy same-root deployment (old/`%h` units, no
+        `.path`) to the canonical set, then updates — in one click. Compatibility bridge ONLY: it
+        needs the user bus, which succeeds only while the console runs the not-yet-hardened unit;
+        once the canonical bus-blocked web unit is active the bus preflight fails and this returns
+        shell guidance WITHOUT writing anything. Auto-repair is allowed ONLY for
+        `missing`/`modified_ours` units — never `ambiguous`/`foreign`/`overridden`/`unsafe`/
+        `unreadable`/recovery states."""
+        from . import updater_units
+        # Managed-service gate FIRST — the web->systemctl bridge must run only for the legacy
+        # managed unit, never a foreground `lhpc web`, so no units/marker are written by one.
+        if not os.environ.get("INVOCATION_ID"):
+            return ActionResult(False, "One-click update needs the managed web service (systemd). "
+                                "This console is running in the foreground — from a shell run "
+                                "`lhpc self-update --repair-integration` then `--apply`.",
+                                data={"not_managed": True})
+        integ = self.updater_integration()
+        status = integ["status"]
+        if status == "ok":
+            return self.self_update_trigger(overwrite=overwrite)         # nothing to migrate
+        # Refuse recovery / pending-request / uninstall BEFORE any preflight or write.
+        if status == "recovery_required":
+            return ActionResult(False, "A previous update needs recovery first — run "
+                                "`lhpc self-update --recover-request`.", data={"recovery_required": True})
+        if self._marker_present(updater_units.UNINSTALL_GUARD):
+            return ActionResult(False, "An uninstall is in progress — recover it first.",
+                                data={"uninstalling": True})
+        if self.classify_request() != "absent":
+            return ActionResult(False, "An update request is already pending — the console is about "
+                                "to update.", data={"request_present": True})
+        # Fixable ONLY when every non-OK unit is missing/modified_ours (an ambiguous/foreign/
+        # overridden/unsafe/unreadable unit is NOT auto-repairable).
+        fixable_set = (updater_units.OK, updater_units.MISSING, updater_units.MODIFIED_OURS)
+        per = integ.get("per_unit", {})
+        bad = {k: v for k, v in per.items() if v not in fixable_set}
+        if bad:
+            detail = ", ".join(f"{k}: {v}" for k, v in bad.items())
+            return ActionResult(False, "The web/updater units are not safely this deployment's "
+                                f"({detail}) — resolve them manually, then update.",
+                                data={"integration": status, "unfixable": bad})
+        # Bus preflight — cheap, read-only. A hardened (bus-blocked) console fails here BEFORE any
+        # write and gets shell guidance.
+        probe = self._system.runner.run(["systemctl", "--user", "show", "-p", "Version"], timeout=20.0)
+        if probe.returncode != 0:
+            return ActionResult(False, "This console can't install systemd units itself (the user "
+                                "bus is unavailable). From a shell on this machine run "
+                                "`lhpc self-update --repair-integration`, then click Update.",
+                                data={"bus_unavailable": True})
+        rep = self.self_update_repair_integration(restart=False)
+        if not rep.ok:
+            return rep
+        if self.updater_integration()["status"] != "ok":                # repair must have converged
+            return ActionResult(False, "Unit repair did not fully converge — run "
+                                "`lhpc self-update --repair-integration` from a shell.",
+                                data={"repair_incomplete": True})
+        return self.self_update_trigger(overwrite=overwrite)
+
+    def _write_root_marker(self) -> None:
+        from . import runtime_fs, updater_units
+        import time as _time
+        payload = json.dumps({"schema_version": 1, "root": str(self._paths.runtime_root),
+                              "created": int(_time.time())})
+        runtime_fs.write_marker(self._paths, self._paths.under(updater_units.ROOT_MARKER), payload)
 
     def _write_envelope(self, completed, prepared) -> None:
         """Persist the two-slot envelope (or clear it when both slots are empty). Best-effort at

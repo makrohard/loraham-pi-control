@@ -543,7 +543,7 @@ def refresh_cache(system: System, paths: Paths, branch: str = "",
     Called with `identity=None` (e.g. by `apply_update`, which cannot recompute it), the
     PRIOR envelope's identity verdict is CARRIED FORWARD rather than nulled — so an unrelated
     refresh never drops the verdict (single-envelope invariant). The `last_apply` outcome is
-    likewise carried forward (only `record_last_apply` writes it)."""
+    likewise carried forward (only `record_last_apply_strict` writes it)."""
     prior_env = read_cache(paths)
     if identity is None:
         prior = prior_env.get("identity")
@@ -558,16 +558,25 @@ def refresh_cache(system: System, paths: Paths, branch: str = "",
     return status_view(paths)
 
 
-def record_last_apply(paths: Paths, *, ok: bool, summary: str, now: int | None = None) -> None:
-    """Merge the outcome of a service-mediated apply into the existing envelope (single
-    atomic rewrite; every other field kept as-is). Bounded + best-effort like write_cache."""
+def record_last_apply_strict(paths: Paths, *, ok: bool, summary: str,
+                             now: int | None = None) -> bool:
+    """Merge the outcome of a service-mediated apply into the existing envelope (single atomic
+    rewrite; every other field kept as-is) and REQUIRE the write to be durable. Returns True
+    only when the envelope was persisted (atomic write + fsync via write_marker), False on any
+    write/containment error. The self-update helper uses this so it never deletes the in-flight
+    marker on an unrecorded outcome (a silently-lost `write_cache` would hide an incomplete
+    update)."""
     env = read_cache(paths)
     if not env:
         env = {"schema_version": CACHE_SCHEMA_VERSION}
     env["schema_version"] = CACHE_SCHEMA_VERSION
     env["last_apply"] = {"ok": bool(ok), "summary": str(summary)[:_STR_MAX],
                          "finished_at": int(time.time()) if now is None else int(now)}
-    write_cache(paths, env)
+    try:
+        runtime_fs.write_marker(paths, paths.under(*_MARKER), json.dumps(env), 0o600)
+        return True
+    except (OSError, PathContainmentError, ValueError, TypeError):
+        return False
 
 
 def _cstr(v) -> str:

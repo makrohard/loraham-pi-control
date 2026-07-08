@@ -285,3 +285,59 @@ def test_owned_marker_complete_write_under_partial_os_write(tmp_path, monkeypatc
         assert p.read_text() == payload                       # complete despite 1-byte writes
     finally:
         m.close()
+
+
+# --- rename_leaf: replace (overwrite) vs claim (no-overwrite, fail-closed) --------------------
+
+def test_rename_leaf_replace_true_overwrites(tmp_path):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    src = p.under("state", "a"); dst = p.under("state", "b")
+    src.write_text("SRC"); dst.write_text("DST")
+    runtime_fs.rename_leaf(p, src, dst)                       # default replace=True
+    assert not src.exists() and dst.read_text() == "SRC"      # dst replaced
+
+
+def test_rename_leaf_no_replace_moves_when_absent(tmp_path):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    src = p.under("state", "req"); dst = p.under("state", "inflight")
+    src.write_text("normal\n")
+    runtime_fs.rename_leaf(p, src, dst, replace=False)
+    assert not src.exists() and dst.read_text() == "normal\n"
+
+
+def test_rename_leaf_no_replace_refuses_existing_dst_preserving_both(tmp_path):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    src = p.under("state", "req"); dst = p.under("state", "inflight")
+    src.write_text("overwrite\n"); dst.write_text("EXISTING-INFLIGHT")
+    with pytest.raises(FileExistsError):
+        runtime_fs.rename_leaf(p, src, dst, replace=False)
+    # BOTH leaves untouched — the claim never clobbers in-flight evidence
+    assert src.read_text() == "overwrite\n" and dst.read_text() == "EXISTING-INFLIGHT"
+
+
+def test_rename_leaf_no_replace_refuses_symlink_source(tmp_path):
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "outside").write_text("x")
+    src = p.under("state", "req"); dst = p.under("state", "inflight")
+    os.symlink(tmp_path / "outside", src)
+    with pytest.raises(PathContainmentError):
+        runtime_fs.rename_leaf(p, src, dst, replace=False)
+
+
+def test_rename_leaf_no_replace_fallback_matches_renameat2(tmp_path, monkeypatch):
+    """The link+unlink fallback (renameat2 unavailable) has identical fail-closed semantics."""
+    monkeypatch.setattr(runtime_fs, "_renameat2_noreplace", lambda *a, **k: False)
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    src = p.under("state", "req"); dst = p.under("state", "inflight")
+    src.write_text("normal\n")
+    runtime_fs.rename_leaf(p, src, dst, replace=False)        # moves via fallback
+    assert not src.exists() and dst.read_text() == "normal\n"
+    src.write_text("again\n")
+    with pytest.raises(FileExistsError):                      # fallback also refuses existing dst
+        runtime_fs.rename_leaf(p, src, dst, replace=False)
+    assert src.read_text() == "again\n" and dst.read_text() == "normal\n"

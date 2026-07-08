@@ -38,9 +38,11 @@ def test_unit_has_least_privilege_hardening():
                       "ProtectKernelModules=true", "RestrictNamespaces=true", "PrivateTmp=false"):
         assert directive in active, directive
     assert any(ln.startswith("RestrictAddressFamilies=") for ln in active)
-    # Writable areas are the runtime root + /tmp ONLY — never broad $HOME or /var.
+    # Writable areas: the runtime root, /tmp, and the meshcore-nodegui data dir
+    # (%h/.meshcore_nm) ONLY — never broad $HOME or /var.
     rw = [ln for ln in active if ln.startswith("ReadWritePaths=")]
     assert len(rw) == 1 and "%h/loraham-pi-control" in rw[0] and "/tmp" in rw[0]
+    assert "%h/.meshcore_nm" in rw[0]
     assert "/var" not in rw[0] and "%h " not in rw[0] and not rw[0].rstrip().endswith("%h")
 
 
@@ -111,35 +113,36 @@ def test_run_server_refuses_non_loopback(host, capsys):
     assert "refusing to bind" in capsys.readouterr().out
 
 
-# --- one-click self-update helper units ------------------------------------------------------
+# --- one-click self-update units (canonical, sandboxed, escape-proof) -------------------------
+# (deploy/*.service|.path byte-equality with the renderer is covered by test_updater_units.py.)
 
-_HELPERS = (_ROOT / "deploy" / "lhpc-selfupdate.service",
-            _ROOT / "deploy" / "lhpc-selfupdate-overwrite.service")
-
-
-@pytest.mark.parametrize("unit", _HELPERS, ids=lambda p: p.name)
-def test_selfupdate_helper_units_are_safe_oneshots(unit):
-    """The one-click updater units: parameter-free oneshots that ALWAYS bring the console
-    back (ExecStopPost) and cannot hang forever (TimeoutStartSec)."""
-    active = _active_directives(unit.read_text())
-    assert "Type=oneshot" in active
-    assert any(ln.startswith("TimeoutStartSec=") for ln in active)
-    assert ("ExecStopPost=/usr/bin/systemctl --user start --no-block lhpc-web.service"
-            in active)
-    exec_start = next(ln for ln in active if ln.startswith("ExecStart="))
-    assert "--run-service" in exec_start
-    # PARAMETER-FREE: no instance templating, no EnvironmentFile, no ExecStart arguments
-    # beyond the fixed flags (overwrite variant differs ONLY by --overwrite).
-    assert "%i" not in unit.read_text() and not any(ln.startswith("EnvironmentFile=")
-                                                    for ln in active)
-    assert not any(ln.startswith("WantedBy=") for ln in active)   # start-on-demand, never enabled
+def test_helper_unit_is_sandboxed_declarative_no_systemctl():
+    """The helper: sandboxed at web parity + W^X + bus block; declarative console stop/restart
+    (Conflicts/After/OnSuccess/OnFailure) with NO systemctl; refuses manual start."""
+    active = _active_directives((_ROOT / "deploy" / "lhpc-selfupdate.service").read_text())
+    assert "Type=oneshot" in active and any(ln.startswith("TimeoutStartSec=") for ln in active)
+    assert next(ln for ln in active if ln.startswith("ExecStart=")).endswith("self-update --run-service")
+    for d in ("RefuseManualStart=yes", "Conflicts=lhpc-web.service", "After=lhpc-web.service",
+              "OnSuccess=lhpc-web.service", "OnFailure=lhpc-web.service",
+              "ProtectSystem=strict", "ProtectHome=read-only", "MemoryDenyWriteExecute=true",
+              "InaccessiblePaths=%t/bus %t/systemd/private"):
+        assert d in active, d
+    assert not any("systemctl" in ln for ln in active)
+    assert not any(ln.startswith("ExecStopPost") for ln in active)
 
 
-def test_selfupdate_helper_variants_differ_only_by_overwrite():
-    norm, over = (u.read_text() for u in _HELPERS)
-    n = next(ln for ln in norm.splitlines() if ln.startswith("ExecStart="))
-    o = next(ln for ln in over.splitlines() if ln.startswith("ExecStart="))
-    assert o == n + " --overwrite"
+def test_web_unit_blocks_bus_and_pulls_watcher():
+    active = _active_directives((_ROOT / "deploy" / "lhpc-web.service").read_text())
+    assert "InaccessiblePaths=%t/bus %t/systemd/private" in active
+    assert "Wants=network-online.target lhpc-selfupdate.path" in active
+    assert "ConditionPathExists=!%h/loraham-pi-control/.lhpc-uninstalling" in active
+    assert not any("systemctl" in ln for ln in active)   # web never calls systemctl
+
+
+def test_path_unit_watches_request_marker():
+    active = _active_directives((_ROOT / "deploy" / "lhpc-selfupdate.path").read_text())
+    assert "PathExists=%h/loraham-pi-control/state/selfupdate.request" in active
+    assert "Unit=lhpc-selfupdate.service" in active
 
 
 def test_update_check_interval_clamps_and_disables(tmp_path, monkeypatch):

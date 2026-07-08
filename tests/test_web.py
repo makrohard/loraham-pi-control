@@ -1226,7 +1226,7 @@ def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
     def fake_trigger(self, *, overwrite=False):
         triggered["overwrite"] = overwrite
         return ActionResult(True, "Updater started.", data={"triggered": True})
-    monkeypatch.setattr(ControllerService, "self_update_trigger", fake_trigger)
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger", fake_trigger)
     c = _real_app(tmp_path)
     tok = _csrf(c, "/stacks")
     r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
@@ -1247,7 +1247,7 @@ def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monk
                                 "branch": "main"}, {})
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: True)
     seen = {}
-    monkeypatch.setattr(ControllerService, "self_update_trigger",
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
                         lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
                                                           ActionResult(True, "started",
                                                                        data={"triggered": True}))[1])
@@ -1269,7 +1269,7 @@ def test_self_update_stale_overwrite_tick_downgrades_on_clean_tree(tmp_path, mon
                                 "branch": "main"}, {})
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     seen = {}
-    monkeypatch.setattr(ControllerService, "self_update_trigger",
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
                         lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
                                                           ActionResult(True, "started",
                                                                        data={"triggered": True}))[1])
@@ -1283,12 +1283,15 @@ def test_self_update_trigger_blocked_by_active_job(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService
     _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
                                 "branch": "main"}, {})
+    monkeypatch.setenv("INVOCATION_ID", "x")           # simulate the managed web unit
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "ok", "request": "absent"})
     monkeypatch.setattr(ControllerService, "active_jobs", lambda self: [{"op": "build", "target": "x"}])
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     c = _real_app(tmp_path)
     tok = _csrf(c, "/stacks")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "still running" in body                     # blocked; no unit started, no waiting page
+    assert "still running" in body                     # blocked; no request written, no waiting page
     assert "reconnects" not in body
 
 
@@ -1299,7 +1302,7 @@ def test_self_update_trigger_failure_flashes_and_stays(tmp_path, monkeypatch):
     _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
                                 "branch": "main"}, {})
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
-    monkeypatch.setattr(ControllerService, "self_update_trigger",
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
                         lambda self, *, overwrite=False: ActionResult(
                             False, "Could not start the updater service (lhpc-selfupdate.service).",
                             data={"trigger_failed": True}))
@@ -1316,7 +1319,7 @@ def test_last_apply_outcome_renders_from_cache(tmp_path):
     from lhpc.core.paths import Paths
     _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
                                 "branch": "main"}, {})
-    selfupdate.record_last_apply(Paths(runtime_root=tmp_path), ok=False,
+    selfupdate.record_last_apply_strict(Paths(runtime_root=tmp_path), ok=False,
                                  summary="Local uncommitted changes present.", now=5)
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     assert "Last update run:" in body and "Local uncommitted changes present." in body
@@ -1608,9 +1611,10 @@ def test_settings_page_rules_line_before_optional_component(tmp_path):
 
 
 def test_meshcore_power_frequency_defaults_start_clean(tmp_path):
-    # LIVE FINDING: 'blank = preset' labels lied — a blank txpower/frequency failed START
-    # validation. The params now carry the preset's REAL defaults (14 dBm / 869525000 Hz)
-    # with Hz-correct integer validation; blanks save (clear) and starts plan cleanly.
+    # frequency defaults to BLANK so the selected RF preset owns the frequency (eu_uk_narrow ->
+    # 869.618, matching the T-Deck; a 869525000 default would override it and 93 kHz-detune RX).
+    # A blank non-flag override no longer fails START validation (the ephemeral normalizer and the
+    # settings save both treat blank as "no override"); a real value still validates Hz-correctly.
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     from lhpc.core.paths import Paths
@@ -1620,8 +1624,8 @@ def test_meshcore_power_frequency_defaults_start_clean(tmp_path):
                 for c in s.components if c.id == "meshcore-pi")
     params = {p.name: p for p in comp.config_file.params}
     assert params["txpower"].default == "14"
-    assert params["frequency"].default == "869525000"
-    assert params["frequency"].kind == "int"                     # Hz-correct validation
+    assert params["frequency"].default == ""                     # blank -> preset owns the frequency
+    assert params["frequency"].kind == "int"                     # Hz-correct validation when set
     assert svc.save_config_bundle("meshcore", values={"file_txpower": "",
                                                       "file_frequency": ""}).ok
     plan = svc.start("meshcore", apply=False)
@@ -1696,3 +1700,58 @@ def test_dash_reload_not_vetoed_by_focused_button():
     js = pathlib.Path("lhpc/adapters/web/static/dash.js").read_text()
     assert "BUTTON" not in js.split("busy = ")[1].split(";")[0]
     assert "SELECT|INPUT|TEXTAREA" in js
+
+
+def test_web_and_updater_trigger_paths_never_call_systemctl():
+    """P0 invariant: the web adapter and the updater trigger/run-service paths must not shell out
+    to systemctl/systemd-run (the sandbox blocks the user bus; only the OPERATOR repair/recover
+    ops may). A static source check guards against a regression sneaking one back in."""
+    import inspect
+    from lhpc.adapters.web import app as web_app
+    from lhpc.core.services import ControllerService
+    # web adapter: no systemctl anywhere (it truly has none)
+    assert "systemctl" not in inspect.getsource(web_app)
+    assert "systemd-run" not in inspect.getsource(web_app)
+    # trigger/run-service/etc.: no systemctl in EXECUTABLE code (docstrings/comments may say "no
+    # systemctl"); scan non-comment, non-docstring lines.
+    for name in ("self_update_trigger", "self_update_run_service", "_helper_identity",
+                 "updater_integration", "classify_request"):
+        src = inspect.getsource(getattr(ControllerService, name))
+        parts = src.split('"""')
+        code = parts[0] + "".join(parts[2:]) if len(parts) >= 3 else src   # drop the docstring
+        for ln in code.splitlines():
+            if ln.strip().startswith("#"):
+                continue
+            assert "systemctl" not in ln and "systemd-run" not in ln, f"{name}: {ln.strip()}"
+
+
+# --- update UI: "Repair & update" for fixable legacy units; manual guidance for unsafe ---------
+
+def _selfcache_update_available(tmp_path):
+    _write_selfcache(tmp_path,
+                     {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+                     {"ok": True, "upstream_version": "9.9",
+                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
+
+
+def test_update_ui_shows_repair_and_update_for_fixable(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "incomplete", "fixable": True,
+                                      "per_unit": {}, "request": "absent"})
+    b = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Repair &amp; update" in b and "Update now" not in b
+    assert "self-update --apply" not in b            # no misleading unit-repair advice
+
+
+def test_update_ui_manual_guidance_for_unsafe_no_apply_advice(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    _selfcache_update_available(tmp_path)
+    monkeypatch.setattr(ControllerService, "updater_integration",
+                        lambda self: {"status": "foreign", "fixable": False,
+                                      "per_unit": {"lhpc-web.service": "foreign"}, "request": "absent"})
+    b = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Repair &amp; update" not in b and "Update now" not in b
+    assert "resolve them manually" in b
+    assert "self-update --apply" not in b            # the wrong advice is gone

@@ -65,6 +65,19 @@
       until it finishes.</p>
   {% endif %}
 
+  {# One-click integration state. Canonical units -> "Update now". A legacy same-root set
+     (old/%h units, no .path) is `fixable` -> "Repair & update" migrates + updates in one click.
+     recovery -> recovery command; genuinely-unsafe units -> resolve manually. #}
+  {% if updater and updater.status == 'recovery_required' %}
+    <p class="flash flash-warn"><strong>Update recovery required.</strong> A previous update did
+      not finish cleanly. From a shell on this machine, run
+      <code>lhpc self-update --recover-request</code>, then try again.</p>
+  {% elif updater and updater.status != 'ok' and st.update_available and not updater.fixable %}
+    <p class="flash flash-warn">One-click update needs attention ({{ updater.status }} web/updater
+      units). The systemd units aren't safely this deployment's — resolve them manually
+      (see <code>docs/deployment.md</code>), then update.</p>
+  {% endif %}
+
   {# Actions. #}
   {% if not confirm %}
     <div class="actrow">
@@ -72,10 +85,15 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <button type="submit">Check for updates</button>
       </form>
-      {% if st.update_available and not jobs %}
+      {% if st.update_available and not jobs and updater and updater.status == 'ok' %}
         <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <button type="submit">Update now</button>
+        </form>
+      {% elif st.update_available and not jobs and updater and updater.fixable %}
+        <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit">Repair &amp; update</button>
         </form>
       {% endif %}
     </div>

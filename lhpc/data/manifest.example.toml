@@ -1001,6 +1001,12 @@ main = "meshcom-qemu"
   readiness = "endpoint"
   run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"
   bin = "build/meshcom-loraham-bridge"
+  # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
+  # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
+  # build/CTestTestfile.cmake, so install-all runs this right after the build. COMPONENT-level key
+  # (must precede the [[…param]] sub-tables, else TOML binds it to the last param table and it is
+  # lost — same gotcha as meshcom-qemu's test).
+  test = "ctest --test-dir build --output-on-failure"
 
     # Bridge CLI (start-time). RF params are NOT CLI — they arrive from the firmware
     # over the XR protocol. The port must match the firmware's EXTERNAL_RADIO_PORT.
@@ -1096,8 +1102,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "f16a4568e5a402b336620022ec6b25958a014634"
-    pin_tag = "f16a456"
+    pin_commit = "9076d41dfc28f9f7c4d442940806541cec722a4c"
+    pin_tag = "9076d41"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1195,8 +1201,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "f16a4568e5a402b336620022ec6b25958a014634"
-    pin_tag = "f16a456"
+    pin_commit = "9076d41dfc28f9f7c4d442940806541cec722a4c"
+    pin_tag = "9076d41"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1324,7 +1330,11 @@ main = "meshcore-pi"
       key = "frequency"
       section = "interface.loraham868"
       kind = "int"
-      default = "869525000"
+      # Blank = let the selected RF preset own the frequency (eu_uk_narrow -> 869.618 MHz, matching
+      # the T-Deck MeshCore firmware). A non-blank value here is written as an explicit override and
+      # would clobber the preset's frequency (e.g. forcing 869.525 onto eu_uk_narrow's 869.618, which
+      # put the daemon 93 kHz off the T-Deck in a 62.5 kHz passband -> no RX either way).
+      default = ""
       min = 430000000
       max = 950000000
       label = "Frequency Hz"
@@ -1402,8 +1412,8 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-node-manager"
-    pin_commit = "ddafd42ca9d46f85756c7e37f0607059f1eb546f"
-    pin_tag = "v1.2.0-13-gddafd42"
+    pin_commit = "03b330e4eb5fc9030d08bcc360aa03eccd636539"
+    pin_tag = "v1.2.0-14-g03b330e"
     remote = "https://github.com/makrohard/meshcore-node-manager.git"
     branch = "meshcore-api-compat"
 

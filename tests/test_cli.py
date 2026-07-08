@@ -95,17 +95,28 @@ def test_self_update_check_cli(capsys, monkeypatch):
 
 
 def test_self_update_run_service_cli_plumbing(capsys, monkeypatch):
-    """`--run-service [--overwrite]` (called by the updater units) dispatches to
-    self_update_run_service, non-interactively (no confirm prompt)."""
+    """`--run-service` (called by the updater unit) dispatches to self_update_run_service with
+    NO arguments — the normal/overwrite mode is read from the claimed request marker, not a flag."""
     from lhpc.core.services import ControllerService, ActionResult
-    seen = {}
-    def fake_run(self, *, force=False):
-        seen["force"] = force
-        return ActionResult(True, "Update applied; console restarted.")
+    called = {}
+    def fake_run(self):
+        called["ran"] = True
+        return ActionResult(True, "Update applied; console back.")
     monkeypatch.setattr(ControllerService, "self_update_run_service", fake_run)
-    assert main(["self-update", "--run-service"]) == 0 and seen["force"] is False
-    assert main(["self-update", "--run-service", "--overwrite"]) == 0 and seen["force"] is True
-    assert "console restarted" in capsys.readouterr().out
+    assert main(["self-update", "--run-service"]) == 0 and called.get("ran")
+    assert "console back" in capsys.readouterr().out
+
+
+def test_self_update_repair_and_recover_cli(capsys, monkeypatch):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "self_update_repair_integration",
+                        lambda self: ActionResult(True, "integration installed"))
+    monkeypatch.setattr(ControllerService, "self_update_recover_request",
+                        lambda self: ActionResult(True, "recovered"))
+    assert main(["self-update", "--repair-integration"]) == 0
+    assert "integration installed" in capsys.readouterr().out
+    assert main(["self-update", "--recover-request"]) == 0
+    assert "recovered" in capsys.readouterr().out
 
 
 def test_self_update_apply_cli_yes(capsys, monkeypatch):

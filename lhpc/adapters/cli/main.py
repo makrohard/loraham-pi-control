@@ -199,9 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_su.add_argument("--overwrite", action="store_true",
                       help="Discard local changes (modified + non-ignored untracked files) if dirty")
     p_su.add_argument("--yes", action="store_true", help="Apply without an interactive confirm")
-    # PLUMBING, called by lhpc-selfupdate[-overwrite].service (the one-click web update):
-    # stop lhpc-web -> apply -> sync venv -> ALWAYS start lhpc-web again. Hidden: operators
-    # use --apply; the units are parameter-free by design.
+    p_su.add_argument("--repair-integration", action="store_true",
+                      help="Install/restore the managed web console + one-click updater units")
+    p_su.add_argument("--recover-request", action="store_true",
+                      help="Clear a stuck one-click update request/in-flight record (safe)")
+    # PLUMBING, run ONLY by lhpc-selfupdate.service (claims the request; mode comes from it).
+    # Operators use --apply; the unit is parameter-free by design.
     p_su.add_argument("--run-service", action="store_true", help=argparse.SUPPRESS)
 
     p_web = sub.add_parser("web", help="Start the local operator web console")
@@ -306,8 +309,12 @@ def main(argv: list[str] | None = None) -> int:
             yes=args.yes)
     if args.command == "self-update":
         if args.run_service:
-            # Unit plumbing (non-interactive by nature) — see self_update_run_service.
-            return _render(svc.self_update_run_service(force=args.overwrite))
+            # Unit plumbing (non-interactive) — mode is read from the claimed request marker.
+            return _render(svc.self_update_run_service())
+        if args.repair_integration:
+            return _render(svc.self_update_repair_integration())
+        if args.recover_request:
+            return _render(svc.self_update_recover_request())
         if not args.apply:
             return _render(svc.self_update_check())          # explicit upstream check + status
         if not args.yes and not _confirm(

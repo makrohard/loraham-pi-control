@@ -100,6 +100,42 @@ def test_normalize_file_overrides_validates(tmp_path):
     assert uerr                                                            # unknown -> typed error
 
 
+def test_blank_nonflag_file_override_is_skipped(tmp_path):
+    # Start-page regression: leaving the meshcore Frequency field empty must NOT fail int validation
+    # — a blank non-flag override is treated as absent so the selected RF preset owns the frequency.
+    svc = _svc(tmp_path)
+    assert svc._normalize_file_overrides("meshcore", {"frequency": ""}) == ({}, "")   # skipped, no error
+    ok, err = svc._normalize_file_overrides("meshcore", {"frequency": "869618000"})
+    assert not err and ok["frequency"] == "869618000"                     # real value still validated/kept
+    assert svc._normalize_file_overrides("meshcore", {"frequency": "abc"})[1]   # bad value -> typed error
+    # a flag is NOT skipped when blank (blank flag = off, still an explicit override)
+    assert svc._normalize_file_overrides("meshcore", {"enable_tx": ""}) == ({"enable_tx": ""}, "")
+
+
+def test_meshcore_preset_owns_frequency_for_all_presets(tmp_path):
+    # Blank frequency default -> the generated meshcore config sets the chosen preset and writes NO
+    # frequency override, so lorahaminterface uses that preset's frequency (eu_uk_long/medium 869.525,
+    # eu_uk_narrow 869.618 — the T-Deck's). An explicit override still writes an active line.
+    svc = _svc(tmp_path)
+    base = tmp_path / "src" / "meshcore-pi" / "examples" / "config-loraham868.toml"
+    base.parent.mkdir(parents=True)
+    base.write_text('[interface.loraham868]\npreset = "eu_uk_medium"\n'
+                    "# frequency = 869525000\n# sf = 11\n"
+                    '[device.companion]\nname = "N0CALL"\n')
+    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    for preset in ("eu_uk_long", "eu_uk_medium", "eu_uk_narrow"):
+        res = svc.write_config_files("meshcore", overrides={"preset": preset})
+        assert any(w.status == "written" for w in res), [(w.component, w.status, w.detail) for w in res]
+        out = gen.read_text()
+        assert f'preset = "{preset}"' in out                               # preset selected
+        assert not any(ln.strip().startswith("frequency ") or ln.strip().startswith("frequency=")
+                       for ln in out.splitlines())                          # NO active frequency override
+        assert "# frequency = 869525000" in out                            # commented example remains
+    svc.write_config_files("meshcore", overrides={"preset": "eu_uk_narrow", "frequency": "869618000"})
+    out = gen.read_text()
+    assert any(ln.strip() == "frequency = 869618000" for ln in out.splitlines())   # explicit override writes it
+
+
 def test_start_blocks_licensed_without_call_backstop(tmp_path):
     # Direct/CLI start (authoritative) refuses a licensed stack with no callsign, carrying the
     # field to highlight; nothing is launched.

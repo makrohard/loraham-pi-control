@@ -54,11 +54,11 @@ lhpc build daemon           # … dann bauen
 User-Service siehe [`docs/deployment.md`](docs/deployment.md). Einen Stack hinzufügen oder
 pflegen? Siehe [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
 
-**Dienst steuern** (mit `--service` läuft die Web-Konsole als systemd-User-Dienst, nicht im
-Terminal):
+**Dienst steuern** (`install.sh` betreibt die Web-Konsole standardmäßig als systemd-User-Dienst,
+nicht im Terminal):
 
 ```bash
-systemctl --user stop lhpc-web        # jetzt stoppen (nötig vor `lhpc self-update`)
+systemctl --user stop lhpc-web        # jetzt stoppen (nur vor manuellem `self-update --apply` nötig)
 systemctl --user status lhpc-web      # Status prüfen
 systemctl --user start lhpc-web       # wieder starten
 systemctl --user disable lhpc-web     # Autostart beim Booten abschalten
@@ -76,16 +76,20 @@ Versionsanzeige in der Fußzeile sind bei jedem Seitenaufruf **nur aus dem Cache
 Zugriff auf den Checkout, `.git`, das Netz oder die Identität beim Rendern. Die Konsole prüft
 **automatisch im Hintergrund** auf Updates (Standard: alle 12 h, einstellbar über
 `[web] update_check_hours` in `config/local.toml`, `0` = aus) — „Update →" erscheint von
-selbst in der Fußzeile. **Updaten ist ein Klick**: Nach der Bestätigung (Warnung vor dem
-automatischen Neustart; bei lokalen Änderungen ausdrückliche Verwerfen-Zustimmung) stoppt
-eine parameterlose systemd-Helper-Unit die Konsole, wendet das Update an — mit frischer
-Live-Identitätsprüfung und allen Locks —, synchronisiert das venv und startet die Konsole
-wieder; der Browser verbindet sich selbst neu. Der manuelle Weg
-(`systemctl --user stop lhpc-web && lhpc self-update --apply`) funktioniert weiterhin.
+selbst in der Fußzeile. **Updaten ist ein Klick**: Nach der Bestätigung schreibt die Konsole
+eine Anforderungs-Markierung, die eine statische `lhpc-selfupdate.path`-Unit in einen Lauf der
+gesandboxten Helper-Unit umsetzt — diese stoppt die Konsole, wendet das Update an
+(Live-Identitätsprüfung, alle Locks), synchronisiert das venv und lässt systemd sie wieder
+starten. Die Konsole kann **kein** `systemctl` aufrufen (ihre Unit sperrt den Benutzer-D-Bus),
+und One-Click läuft nur, wenn die drei verwalteten Units byte-genau kanonisch sind — ein
+manipuliertes Frontend kann so nicht ausbrechen. Manueller Weg:
+`systemctl --user stop lhpc-web && lhpc self-update --apply`;
+`lhpc self-update --repair-integration` installiert die verwalteten Units (neu). Details:
+[`docs/deployment.md`](docs/deployment.md).
 Der systemd-Dienst ist **least-privilege**:
 Dateisystem nur lesbar außer Laufzeitverzeichnis und `/tmp`, kein breiter Schreibzugriff auf
-`$HOME`/`/var`; Build-/Tool-Caches liegen laufzeit-eigen unter `build/tool-cache/` (nie
-`~/.platformio`, `~/.espressif` oder `~/.cache`).
+`$HOME`/`/var`, Benutzer-D-Bus gesperrt; Build-/Tool-Caches liegen laufzeit-eigen unter
+`build/tool-cache/` (nie `~/.platformio`, `~/.espressif` oder `~/.cache`).
 
 Rufzeichen einmalig auf der Web-Konfigseite setzen; bis dahin nutzen die Apps
 `N0CALL`.
