@@ -28,6 +28,12 @@ PATH_UNIT = "lhpc-selfupdate.path"
 NGINX_UNIT = "lhpc-nginx.service"
 ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT)
 
+# On-disk log files the controller units append to (StandardOutput/StandardError below). These are
+# the controller's OWN process logs — read by the GUI controller-logs page (the box's user journal
+# is not always populated, so file logging is the reliable source). Owned here beside the units.
+WEB_LOG_REL = ("logs", "lhpc-web.log")
+HELPER_LOG_REL = ("logs", "lhpc-selfupdate.log")
+
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")
 INFLIGHT_REL = ("state", "selfupdate.inflight")
@@ -63,15 +69,15 @@ WorkingDirectory={checkout}
 ExecStart={venv}/bin/lhpc web --socket
 Restart=on-failure
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:{root}/logs/lhpc-web.log
+StandardError=append:{root}/logs/lhpc-web.log
 SyslogIdentifier=lhpc-web
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 # runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under this
 # unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded by systemd.
-ReadWritePaths={root} %h/.meshcore_nm /tmp
+ReadWritePaths={root} -%h/.meshcore_nm /tmp
 Environment=PLATFORMIO_CORE_DIR={root}/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH={root}/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME={root}/build/tool-cache/cache
@@ -120,8 +126,8 @@ Environment=LHPC_RUNTIME_ROOT={root}
 WorkingDirectory={checkout}
 ExecStart={venv}/bin/lhpc self-update --run-service
 TimeoutStartSec=900
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:{root}/logs/lhpc-selfupdate.log
+StandardError=append:{root}/logs/lhpc-selfupdate.log
 SyslogIdentifier=lhpc-selfupdate
 NoNewPrivileges=true
 ProtectSystem=strict

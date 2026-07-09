@@ -4316,11 +4316,13 @@ class ControllerService:
         return ActionResult(ok, f"Build {'succeeded' if ok else 'FAILED'} for '{target}'.",
                             details=details, next_commands=["lhpc status " + target])
 
-    def log_tail(self, target: str, lines: int = 300, job: str | None = None):
+    def log_tail(self, target: str, lines: int = 300, job: str | None = None,
+                 band: str = ""):
         """Raw (path, lines) for `target`'s log — for the live web log view.
 
         With `job` (a logs/<name>.log filename) it tails that specific job log
-        (e.g. a build/test run); otherwise it tails the component's process log.
+        (e.g. a build/test run); otherwise it tails the component's process log —
+        `band` selects the instance of a band-scoped component (empty = newest).
         """
         from .jobs import tail_log
         if job:
@@ -4351,7 +4353,7 @@ class ControllerService:
             if target not in idx:
                 return "", []
             comp = idx[target][1]
-        return self._lifecycle().logs(comp, lines)
+        return self._lifecycle().logs(comp, lines, band=band)
 
     def webserver_log_tail(self, source: str = "error", lines: int = 300):
         """Raw (path, lines) for the LHPC-managed nginx front-end's on-disk logs. `source`
@@ -4362,6 +4364,26 @@ class ControllerService:
         const = _ws._ACC_LOG if source == "access" else _ws._ERR_LOG
         try:
             n = max(1, min(int(lines), 5000))             # clamp to a sane bounded range
+        except (TypeError, ValueError):
+            n = 300
+        try:
+            p = self._paths.under(*const)
+        except PathContainmentError:
+            return "", []
+        if p.is_symlink() or (p.exists() and not p.is_file()):
+            return str(p), []
+        return str(p), runtime_fs.tail(self._paths, p, n)
+
+    def controller_log_tail(self, source: str = "web", lines: int = 300):
+        """Raw (path, lines) for the controller's OWN process logs — the lhpc-web / lhpc-selfupdate
+        units now log to on-disk FILES under logs/ (StandardOutput=append:), so the GUI reads them
+        the same way as the nginx logs (the box's user journal is not reliably populated). `source`
+        selects the file: 'selfupdate' -> lhpc-selfupdate.log, anything else -> lhpc-web.log. Same
+        containment-safe, O_NOFOLLOW, bounded read as `webserver_log_tail`; never raises into GET."""
+        from . import runtime_fs, updater_units
+        const = updater_units.HELPER_LOG_REL if source == "selfupdate" else updater_units.WEB_LOG_REL
+        try:
+            n = max(1, min(int(lines), 5000))                 # clamp to a sane bounded range
         except (TypeError, ValueError):
             n = 300
         try:
@@ -4681,14 +4703,14 @@ class ControllerService:
                     pass
         return out
 
-    def logs(self, target: str, lines: int = 200) -> ActionResult:
+    def logs(self, target: str, lines: int = 200, band: str = "") -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
         life = self._lifecycle()
         details = []
         for _, comp in items:
-            path, tail = life.logs(comp, lines)
+            path, tail = life.logs(comp, lines, band=band)
             if not path:
                 details.append(f"[{comp.id}] no log found")
                 continue
@@ -7066,6 +7088,10 @@ class ControllerService:
         _fixable = (updater_units.OK, updater_units.MISSING, updater_units.MODIFIED_OURS)
         integ["fixable"] = (integ["status"] != "recovery_required"
                             and all(v in _fixable for v in integ["per_unit"].values()))
+        # Is THIS console the managed systemd unit? (INVOCATION_ID is set only by systemd.) The unit
+        # FILES can verify 'ok' while the console actually runs in a foreground shell — one-click
+        # update and boot autostart both need the managed service, so surface the distinction.
+        integ["managed"] = bool(os.environ.get("INVOCATION_ID"))
         return integ
 
     def self_update_local_dirty(self) -> bool:
@@ -7092,9 +7118,14 @@ class ControllerService:
         never writes a request nobody safely consumes."""
         from . import runtime_fs, updater_units
         if not os.environ.get("INVOCATION_ID"):
-            return ActionResult(False, "One-click update needs the managed web service (systemd). "
-                                "This console is running in the foreground — use `lhpc self-update "
-                                "--apply` from a shell instead.", data={"not_managed": True})
+            return ActionResult(
+                False, "One-click update needs the managed web service (systemd). This console is "
+                "running in the foreground.",
+                details=["  lhpc self-update --repair-integration   "
+                         "# installs + enables + starts the service, and enables boot autostart",
+                         "  lhpc self-update --apply                # then update"],
+                next_commands=["lhpc self-update --repair-integration", "lhpc self-update --apply"],
+                data={"not_managed": True})
         integ = self.updater_integration()
         if integ["status"] == "recovery_required":
             return ActionResult(False, "A previous update needs recovery first — run "
@@ -7322,6 +7353,13 @@ class ControllerService:
                                 "`lhpc self-update --recover-request` first.",
                                 data={"request_present": True})
         ud = self._user_unit_dir()
+        # The units log with StandardOutput=append:{root}/logs/... — systemd creates the FILE but not
+        # the directory, and a repaired root may predate/have lost it (bootstrap normally makes it).
+        # Without this the web unit fails to start on `append:` open.
+        try:
+            runtime_fs.mkdir(self._paths, "logs")
+        except Exception:                                    # noqa: BLE001 — best effort, never fatal
+            pass
         try:
             actions = updater_units.write_set(ud, root)
         except ValueError as exc:
@@ -7373,8 +7411,28 @@ class ControllerService:
         details = [f"  {k}: {a}" for k, a in actions]
         if ov_note:
             details.append(f"  {ov_note}")
+        details.append(self._enable_linger(S))
         return ActionResult(True, "Web + one-click updater integration installed/repaired." + note,
                             details=tuple(details), data={"actions": dict(actions)})
+
+    def _enable_linger(self, timeout: float) -> str:
+        """Boot autostart: a `systemctl --user` unit only starts at LOGIN unless the user lingers.
+        Installed roots get this from install.sh; a repaired one did not — so repair enables it too.
+
+        ALWAYS attempted (never gated on INVOCATION_ID): the web self-repair bridge runs from a
+        managed LEGACY web unit that still has the user bus, and gating would silently deny it boot
+        autostart. FAIL-SOFT by contract — a linger failure NEVER fails the repair/update; where the
+        bus is unavailable (the canonical web unit blocks %t/bus) we return the shell command."""
+        import getpass
+        try:
+            user = getpass.getuser()
+        except Exception:                                    # noqa: BLE001 — no pwent / no env
+            return "  linger: could not resolve the user — run: loginctl enable-linger $USER"
+        r = self._system.runner.run(["loginctl", "enable-linger", user], timeout=timeout)
+        if getattr(r, "not_found", False) or r.returncode != 0:
+            return (f"  linger: NOT enabled (no user bus here) — for autostart at boot run: "
+                    f"loginctl enable-linger {user}")
+        return f"  linger: enabled for {user} — the console now autostarts at boot"
 
     def _remove_stale_overwrite_unit(self, ud) -> str | None:
         """Remove the obsolete `lhpc-selfupdate-overwrite.service` ONLY when it is PROVABLY this
@@ -7423,10 +7481,14 @@ class ControllerService:
         # Managed-service gate FIRST — the web->systemctl bridge must run only for the legacy
         # managed unit, never a foreground `lhpc web`, so no units/marker are written by one.
         if not os.environ.get("INVOCATION_ID"):
-            return ActionResult(False, "One-click update needs the managed web service (systemd). "
-                                "This console is running in the foreground — from a shell run "
-                                "`lhpc self-update --repair-integration` then `--apply`.",
-                                data={"not_managed": True})
+            return ActionResult(
+                False, "One-click update needs the managed web service (systemd). This console is "
+                "running in the foreground.",
+                details=["  lhpc self-update --repair-integration   "
+                         "# installs + enables + starts the service, and enables boot autostart",
+                         "  lhpc self-update --apply                # then update"],
+                next_commands=["lhpc self-update --repair-integration", "lhpc self-update --apply"],
+                data={"not_managed": True})
         integ = self.updater_integration()
         status = integ["status"]
         if status == "ok":
@@ -7509,19 +7571,39 @@ class ControllerService:
                 if c.optional and c.kind == ComponentKind.SERVICE
                 and not getattr(c, "interactive", False)]
 
+    # Feed scan window. The RX/TX lines are a SMALL fraction of the daemon's stdout, so we must
+    # scan far more than we display and filter FIRST — tailing 400 lines and filtering afterwards
+    # made "recent" mean "within the last 400 log lines", not "recent in time", and a chatty igate
+    # (beacons + digipeat + RX) evicted a seconds-old TX while a quiet chat kept it for minutes.
+    # Bounded + no-follow; ~200 KB typical per 3 s poll, which stays cheap on a Pi.
+    _FEED_SCAN_LINES = 2000
+    _FEED_SCAN_BYTES = 512 * 1024
+
     def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
         """Bounded tail of the daemon's activity, filtered to RX/TX lines. The v111a
-        multi-instance daemon logs to stdout, which LHPC captures into the per-band
-        process log `logs/start-<daemon>-<band>.log` — the ONLY feed source (in-root;
-        LHPC reads no external log files)."""
+        multi-instance daemon logs to stdout, which LHPC captures into the per-band process
+        log `logs/start-<daemon>-<band>.log` (in-root; LHPC reads no external log files).
+
+        EXACTLY ONE source file, never a concatenation: the per-band log when it exists, else
+        the legacy band-less `start-<daemon>.log` — written by a pre-upgrade daemon that has not
+        been restarted since the rename. Reading both would double-count every match, because the
+        band-agnostic tokens ([TX], [RX], TXOK, ...) match either band's lines.
+        """
         raws: list[str] = []
         for name in (f"start-{self.DAEMON_ID}-{band}.log",
                      f"start-{self.DAEMON_ID}.log"):
             try:
-                raws += runtime_fs.tail(self._paths,
-                                        self._paths.under("logs", name), 400)
+                p = self._paths.under("logs", name)
+            except PathContainmentError:
+                continue
+            if not p.is_file():
+                continue
+            try:
+                raws = runtime_fs.tail(self._paths, p, self._FEED_SCAN_LINES,
+                                       self._FEED_SCAN_BYTES)
             except (OSError, PathContainmentError, ValueError):
-                pass                             # absent/symlinked/escaping -> no lines
+                raws = []                        # symlinked/escaping -> no lines
+            break                                # first existing candidate wins
         out: list[str] = []
         for raw in raws:
             if any(tok in raw for tok in (f"[TX{band}]", f"[RX{band}]", "TX_RESULT",

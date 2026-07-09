@@ -181,6 +181,45 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stackrow-body { padding: .3rem .8rem 1rem; }
 .ss-name { font-weight: 600; }
 .ss-main { font-size: .8rem; }
+/* Nested rows (Update, Webserver) keep the flex summary; pin their logs link right. */
+.stackrow > summary .logslink { margin-left: auto; }
+
+/* TOP-LEVEL row headers (controller + each stack, direct children of .stacklist) lay out as fixed
+   columns so the SAME field lines up vertically across rows: marker | name | status | source |
+   version | head | extra | logs. Fixed track widths (not `auto`) because each summary is its own grid
+   container, so only fixed tracks align across rows. Missing fields leave their cell empty. */
+.stacklist > .stackrow > summary {
+  display: grid;
+  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 6em 1fr auto;
+  align-items: center;
+  column-gap: .5rem;
+  row-gap: .2rem;
+}
+.stacklist > .stackrow > summary .col-name    { grid-column: 2; min-width: 0; overflow: hidden;
+                                                 text-overflow: ellipsis; white-space: nowrap; }
+.stacklist > .stackrow > summary .col-status  { grid-column: 3; }
+.stacklist > .stackrow > summary .col-source  { grid-column: 4; }
+.stacklist > .stackrow > summary .col-version { grid-column: 5; }
+.stacklist > .stackrow > summary .col-head    { grid-column: 6; }
+.stacklist > .stackrow > summary .col-extra   { grid-column: 7; min-width: 0; display: flex;
+                                                 gap: .4rem; flex-wrap: wrap; align-items: center; }
+.stacklist > .stackrow > summary .col-logs    { grid-column: 8; margin-left: 0; justify-self: end; }
+/* Small screens (phones/tablets): the fixed column grid can't shrink and would be clipped by the
+   card. Reflow the row header to a wrapping flex layout so it FITS the viewport — no horizontal
+   cut-off, no whole-page sideways scroll. Wide config tables scroll inside their own box. */
+@media (max-width: 860px) {
+  .stacklist > .stackrow > summary { display: flex; flex-wrap: wrap; column-gap: .5rem; row-gap: .25rem; }
+  .stacklist > .stackrow > summary .col-name,
+  .stacklist > .stackrow > summary .col-status,
+  .stacklist > .stackrow > summary .col-source,
+  .stacklist > .stackrow > summary .col-version,
+  .stacklist > .stackrow > summary .col-head,
+  .stacklist > .stackrow > summary .col-extra,
+  .stacklist > .stackrow > summary .col-logs { grid-column: auto; }
+  .stacklist > .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
+  .stacklist > .stackrow > summary .col-logs { margin-left: auto; }
+  .paramgrid, .dptab, table.deps { display: block; overflow-x: auto; max-width: 100%; }
+}
 .stackrow-link { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                  padding: .6rem .8rem; border-bottom: 1px solid var(--line);
                  text-decoration: none; color: var(--ink); }

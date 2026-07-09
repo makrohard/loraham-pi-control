@@ -36,7 +36,7 @@
 {% if installed %}
   <div class="actline">
     <span class="grouplabel">Setup</span>
-    <span class="act"><a href="{{ url_for('stack_detail', stack_id=stack_id, cfg=1) ~ '#stack-settings' }}"><button type="button">Configure</button></a></span>
+    <span class="act"><a href="{{ url_for('stacks_overview', cfg=stack_id) ~ '#stack-settings-' ~ stack_id }}"><button type="button">Configure</button></a></span>
     {{ action_btn('build', stack_id, 'Build') }}
     {{ action_btn('test', stack_id, 'Test') }}
   </div>
@@ -49,17 +49,22 @@
 {% endmacro %}
 
 {# Compact one-line stack summary used on the Stacks list. #}
+{# Row-header summary laid out in aligned columns (name | status | source | version | extra | logs).
+   Each field is wrapped in a col-* cell so the same field lines up vertically across rows; the
+   caller adds the logs link (.col-logs). #}
 {% macro stack_summary(g) %}
-<span class="ss-name">{{ g.stack.name }}</span>
-<span class="pill">{{ g.stack.id }}</span>
+<span class="col-name"><span class="ss-name">{{ g.stack.name }}</span></span>
 {% if g.main %}{% set comp, st = g.main %}
-  <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
-  <span class="pill">src: {{ st.source_state.value }}</span>
-  {% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}
-  <span class="ss-main muted">{{ comp.id }}</span>
+  <span class="col-status"><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></span>
+  <span class="col-source"><span class="pill">src: {{ st.source_state.value }}</span></span>
+  <span class="col-version">{% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}</span>
+  <span class="col-head">{% if st.source_head %}<span class="pill mono">@{{ st.source_head[:9] }}</span>{% endif %}</span>
 {% else %}
-  <span class="badge badge-{{ g.state }}">{{ g.state }}</span>
+  <span class="col-status"><span class="badge badge-{{ g.state }}">{{ g.state }}</span></span>
 {% endif %}
+<span class="col-extra">
+  {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
+</span>
 {% endmacro %}
 
 {# A copyable command box (needs copy.js, loaded globally). #}

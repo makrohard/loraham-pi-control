@@ -49,8 +49,10 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
         assert "InaccessiblePaths=%t/bus %t/systemd/private" in t
         assert "ProtectHome=read-only" in t and "ProtectSystem=strict" in t
     # web also grants the stack GUI (meshcore-nodegui) its %h/.meshcore_nm data dir; the
-    # helper (no stack GUIs) stays minimal.
-    assert f"ReadWritePaths={ROOT} %h/.meshcore_nm /tmp" in web
+    # helper (no stack GUIs) stays minimal. The `-` prefix makes that OPTIONAL path ignorable when
+    # missing — an absent non-prefixed ReadWritePaths entry fails namespace setup (226/NAMESPACE)
+    # and would hard-fail the web console on a box where meshcore has never run.
+    assert f"ReadWritePaths={ROOT} -%h/.meshcore_nm /tmp" in web
     assert f"ReadWritePaths={ROOT} /tmp" in helper
     assert "%h/.meshcore_nm" not in helper
     # helper: no QEMU -> W^X; no systemctl; declarative restart; refuse manual start

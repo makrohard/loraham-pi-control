@@ -1,0 +1,51 @@
+{# Pure per-component INFOBOX (status + declared resources + runtime deps + endpoints + evidence).
+   No header, no action buttons — the caller supplies the wrapping <details>/<summary> and (for
+   dependency components) the action bar. Requires: comp, st. Ported from the former stack.html. #}
+<p>{{ comp.purpose }}</p>
+<table>
+  <tbody>
+    <tr><th>Run state</th><td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td></tr>
+    <tr><th>Source / profile</th><td>{{ st.source_state.value }} / {{ st.profile_state.value }}</td></tr>
+    <tr><th>TX</th><td class="tx-{{ st.tx_state.value }}">{{ st.tx_state.value }}{% if comp.tx_capable %} <span class="muted">(TX-capable)</span>{% endif %}</td></tr>
+    {% if st.pids %}<tr><th>PIDs</th><td class="mono">{{ st.pids|join(', ') }}</td></tr>{% endif %}
+  </tbody>
+</table>
+
+{% if comp.resources %}
+  <div class="panel">
+    <h4>Declared resources</h4>
+    <ul class="clean">{% for r in comp.resources %}
+      <li><span class="mono">{{ r.key }}</span>
+        <span class="pill">{{ r.mode.value }}{% if r.requirement %} = {{ r.requirement }}{% endif %}</span>
+        {% if r.note %}<span class="muted">— {{ r.note }}</span>{% endif %}</li>
+    {% endfor %}</ul>
+  </div>
+{% endif %}
+
+{% if st.dependencies %}
+  <div class="panel">
+    <h4>Runtime dependencies</h4>
+    <ul class="clean">{% for d in st.dependencies %}
+      <li>{{ d.component_id }}: <span class="badge badge-{{ d.run_state.value }}">{{ d.run_state.value }}</span>{% if d.band %} <span class="muted">({{ d.band }} MHz)</span>{% endif %}</li>
+    {% endfor %}</ul>
+  </div>
+{% endif %}
+
+{% if st.endpoints %}
+  <div class="panel">
+    <h4>Endpoints</h4>
+    <ul class="clean">{% for e in st.endpoints %}
+      <li><span class="mono">{{ e.spec.address }}</span> <span class="muted">({{ e.spec.kind }})</span> —
+        <span class="{{ 'endpoint-ok' if e.present else 'endpoint-bad' }}">{{ e.detail }}</span></li>
+    {% endfor %}</ul>
+  </div>
+{% endif %}
+
+{% if st.evidence %}
+  <details>
+    <summary>Evidence ({{ st.evidence|length }})</summary>
+    <ul class="clean mono">{% for k, v in st.evidence.items() %}<li>{{ k }} = {{ v }}</li>{% endfor %}</ul>
+  </details>
+{% endif %}
+
+{% if comp.note %}<p class="muted">{{ comp.note }}</p>{% endif %}

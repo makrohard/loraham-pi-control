@@ -2,8 +2,9 @@
    every GET; no live git/network/identity call while rendering. "Update now" is ONE-CLICK:
    a confirmed POST starts the parameter-free updater unit, which stops the console, applies
    the update (all safety gates), syncs the venv and starts the console again — the browser
-   shows updating.html and reconnects. The dirty state on the confirm step is checked FRESH
-   (POST-time, local git only); ticking discard-consent selects the fixed overwrite unit. #}
+   lands on the STATIC updating.html (no JS, no auto-reconnect); the operator clicks its
+   "Return to the console" link once it is back. The dirty state on the confirm step is checked
+   FRESH (POST-time, local git only); ticking discard-consent selects the fixed overwrite unit. #}
 {% if not st.available %}
   <p class="flash flash-warn">Update is unavailable — lhpc is not running from a git
     checkout. Reinstall from a git clone to enable it.</p>
@@ -30,19 +31,19 @@
     {% else %}Up to date.{% endif %}
   </p>
 
-  {# Outcome of the LAST one-click update (recorded by the updater service while the console
-     was down; cached-only read). #}
-  {% if st.last_apply %}
-    <p class="flash flash-pre {{ 'flash-ok' if st.last_apply.ok else 'flash-warn' }}">
-      Last update run: {{ st.last_apply.summary }}</p>
+  {# Outcome of the LAST one-click update (recorded while the console was down; cached-only read).
+     A SUCCESS is redundant with the green/matching-version indicator above, so only a FAILURE is
+     shown here (that is not redundant — there is no green to convey it). #}
+  {% if st.last_apply and not st.last_apply.ok %}
+    <p class="flash flash-pre flash-warn">Last update run: {{ st.last_apply.summary }}</p>
   {% endif %}
 
   {# Stage-1 confirm: the console stops, updates itself and comes back automatically. #}
   {% if confirm %}
     <section class="cfgsec">
       <p class="flash flash-warn">Updating will <strong>stop the web console</strong>, fast-forward
-        the checkout, and <strong>start the console again automatically</strong>. The page you
-        land on reconnects by itself once it is back.</p>
+        the checkout, and <strong>start the console again automatically</strong>. The next page is
+        static — when the console is back, use its &ldquo;Return to the console&rdquo; link.</p>
       <form method="post" action="{{ url_for('self_update_apply') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="confirmed" value="yes">
@@ -67,6 +68,14 @@
   {% if jobs %}
     <p class="flash flash-warn">An lhpc job is running ({{ jobs|length }}) — updates are blocked
       until it finishes.</p>
+  {% endif %}
+
+  {# Not the managed systemd unit: the unit FILES can verify 'ok' while this console runs in a
+     foreground shell, so surface WHY one-click / boot autostart are unavailable, and how to fix it. #}
+  {% if updater and not updater.managed %}
+    <p class="flash flash-warn"><strong>This console is running in the foreground.</strong>
+      One-click update and boot autostart require the managed service. Run:
+      <code>lhpc self-update --repair-integration</code></p>
   {% endif %}
 
   {# One-click integration state. Canonical units -> "Update now". A legacy same-root set

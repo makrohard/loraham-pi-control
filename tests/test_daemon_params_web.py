@@ -15,13 +15,20 @@ def _app(tmp_path):
     return create_app(service_factory=factory).test_client()
 
 
-def _csrf(client, path):
+def _csrf(client, path="/stacks"):
     m = re.search(r'name="_csrf" value="([^"]+)"', client.get(path).get_data(as_text=True))
     return m.group(1) if m else ""
 
 
+def _row(body, sid):
+    # Slice a single stack's row out of the combined /stacks page (all stacks render inline now).
+    start = body.index('id="stackrow-' + sid + '"')
+    nxt = body.find('id="stackrow-', start + 1)
+    return body[start:(nxt if nxt != -1 else len(body))]
+
+
 def test_meshcom_config_shows_daemon_params_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks/meshcom").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     assert "Daemon radio parameters (433 MHz)" in body       # meshcom runs on 433
     assert 'value="28"' in body                              # meshcom CADIDLE default = 28
     assert 'name="dp_SF"' in body and 'value="10"' in body   # every param editable (SF too)
@@ -29,7 +36,7 @@ def test_meshcom_config_shows_daemon_params_panel(tmp_path):
 
 
 def test_txmode_renders_as_dropdown(tmp_path):
-    body = _app(tmp_path).get("/stacks/voice").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     assert '<select name="dp_TXMODE"' in body                 # dropdown, not a text input
     assert 'name="dp_TXMODE" value=' not in body              # ...so no text input for it
     assert '<option value="DIRECT" selected>' in body         # voice default = DIRECT preselected
@@ -37,7 +44,7 @@ def test_txmode_renders_as_dropdown(tmp_path):
 
 
 def test_new_params_use_correct_widgets(tmp_path):
-    body = _app(tmp_path).get("/stacks/daemon").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     for enum in ("MODE", "CRC", "LDRO", "TXQUEUE", "CADMONITOR", "CADTXAFTERTIMEOUT", "SF", "BW", "CR"):
         assert f'<select name="dp_{enum}"' in body                # enums/small ranges -> dropdown
     for num in ("FREQ", "POWER", "PREAMBLE", "CADWAIT", "CADIDLE"):
@@ -58,7 +65,7 @@ def test_server_side_validation_rejects_bad_values(tmp_path):
 def test_live_mode_fsk_confirm_warns(tmp_path):
     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon")
+    tok = _csrf(c)
     body = c.post("/radio/433/set",
                   data={"_csrf": tok, "key": "MODE", "value": "FSK"}).get_data(as_text=True)
     assert "MODE=FSK" in body and "break LoRa" in body        # FSK warning present
@@ -69,10 +76,10 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
 
 
 def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
-    c = _app(tmp_path)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     disabled = 'disabled title="Available only while the stack is running"'
-    assert disabled in c.get("/stacks/meshcom").get_data(as_text=True)     # app, not running
-    assert disabled not in c.get("/stacks/daemon").get_data(as_text=True)  # daemon: always on
+    assert disabled in _row(body, "meshcom")       # app, not running
+    assert disabled not in _row(body, "daemon")    # daemon: always on
 
 
 def test_apply_live_rejected_server_side_when_not_running(tmp_path):
@@ -82,57 +89,79 @@ def test_apply_live_rejected_server_side_when_not_running(tmp_path):
 
 
 def test_meshtastic_has_no_daemon_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks/meshtastic").get_data(as_text=True)
-    assert "Daemon radio parameters" not in body             # direct-SPI: no daemon panel
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Daemon radio parameters" not in _row(body, "meshtastic")   # direct-SPI: no daemon panel
 
 
 def test_daemon_panel_follows_upper_band_switch(tmp_path):
     c = _app(tmp_path)
-    assert "(433 MHz)" in c.get("/stacks/daemon").get_data(as_text=True)          # default
-    assert "(868 MHz)" in c.get("/stacks/daemon?band=868").get_data(as_text=True)  # switched
+    assert "(433 MHz)" in c.get("/stacks").get_data(as_text=True)          # default
+    assert "(868 MHz)" in c.get("/stacks?band=868").get_data(as_text=True)  # switched
 
 
 def test_apply_live_saves_then_reports(tmp_path):
     # Daemon unreachable in tests: Apply persists the values, then reports it can't reach it.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom")
+    tok = _csrf(c)
     r = c.post("/stacks/meshcom/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "33"})
     assert r.status_code in (302, 303)
-    assert 'value="33"' in c.get("/stacks/meshcom").get_data(as_text=True)  # saved
+    assert 'value="33"' in c.get("/stacks").get_data(as_text=True)  # saved
 
 
 def test_save_then_reset_daemon_params(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom")
+    tok = _csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
     assert r.status_code in (302, 303)
-    body = c.get("/stacks/meshcom").get_data(as_text=True)
+    body = c.get("/stacks").get_data(as_text=True)
     assert 'value="40"' in body                              # override persisted + shown
     c.post("/stacks/meshcom/daemon-params/reset", data={"_csrf": tok, "band": "433"})
-    body = c.get("/stacks/meshcom").get_data(as_text=True)
+    body = c.get("/stacks").get_data(as_text=True)
     assert 'value="28"' in body and 'value="40"' not in body  # back to default
 
 
 def test_panel_stays_open_after_save(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom")
+    tok = _csrf(c)
     r = c.post("/stacks/meshcom/daemon-params",
-               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "next": "/stacks/meshcom"})
-    assert r.status_code in (302, 303) and "dp=1" in r.headers["Location"]   # redirect keeps it open
-    body = c.get(r.headers["Location"]).get_data(as_text=True)
-    assert '<details class="advcfg dparams" open>' in body                   # panel expanded
-    assert '<details class="advcfg dparams">' in c.get(              # ...but collapsed by default
-        "/stacks/meshcom").get_data(as_text=True)
+               data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
+    loc = r.headers["Location"]
+    assert r.status_code in (302, 303)
+    # TARGET-SPECIFIC: reopen only meshcom's row + its panel (no generic dp=1).
+    assert "open=meshcom" in loc and "dp=meshcom" in loc and loc.endswith("#stack-daemon-params-meshcom")
+    body = c.get(loc).get_data(as_text=True)
+    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom" open data-force-open="1">' in body
+    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom">' in c.get(   # collapsed default
+        "/stacks").get_data(as_text=True)
+
+
+def test_dp_target_specific_opens_only_matching_panel(tmp_path):
+    import re
+    body = _app(tmp_path).get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True)
+    # ONLY meshcom's daemon panel is forced open; the daemon stack's own panel stays collapsed.
+    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom" open data-force-open="1">' in body
+    assert '<details class="advcfg dparams" id="stack-daemon-params-daemon">' in body
+    assert not re.search(r'id="stack-daemon-params-daemon"[^>]*\sopen', body)
+
+
+def test_dp1_no_longer_opens_every_daemon_panel(tmp_path):
+    # Regression: the old ?dp=1 opened EVERY daemon-params panel globally. `dp` must now match a
+    # stack id, so a non-matching value opens NONE.
+    import re
+    body = _app(tmp_path).get("/stacks?dp=1").get_data(as_text=True)
+    assert 'class="advcfg dparams"' in body                  # panels present...
+    assert not re.search(r'class="advcfg dparams"[^>]*\sopen', body)   # ...but none forced open
+    assert "data-force-open" not in body                     # nothing server-forced by dp=1
 
 
 def test_save_rejects_out_of_range(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/meshcom")
+    tok = _csrf(c)
     c.post("/stacks/meshcom/daemon-params",
            data={"_csrf": tok, "band": "433", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
-    body = c.get("/stacks/meshcom").get_data(as_text=True)
+    body = c.get("/stacks").get_data(as_text=True)
     assert 'value="99999"' not in body                       # rejected, not stored
 
 
@@ -198,7 +227,7 @@ def test_apply_live_reports_confirmed_vs_sent_unconfirmed(tmp_path):
 def test_apply_live_failure_flashes_warning(tmp_path):
     # Daemon unreachable in _app: save persists, apply fails -> the flash is a warning, not green.
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon")
+    tok = _csrf(c)
     r = c.post("/stacks/daemon/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40"})
     body = c.get(r.headers["Location"]).get_data(as_text=True)
@@ -275,7 +304,7 @@ def test_apply_live_other_band_not_blocked(tmp_path):
 def test_cadrssi_in_daemon_params_panel(tmp_path):
     from lhpc.core import daemon_params as dp, daemon_control as dc
     assert "CADRSSI" in dp.ALL_PARAMS and dc.validate_set("CADRSSI", dp.default_value("daemon", "433", "CADRSSI")) is None
-    body = _app(tmp_path).get("/stacks/daemon").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     assert '<input type="number" name="dp_CADRSSI"' in body   # editable number input in the panel
 
 
@@ -304,9 +333,9 @@ def test_lowercase_enum_canonicalized(tmp_path):
 
 def test_lowercase_fsk_displays_as_fsk_in_panel(tmp_path):
     c = _app(tmp_path)
-    tok = _csrf(c, "/stacks/daemon")
+    tok = _csrf(c)
     c.post("/stacks/daemon/daemon-params", data={"_csrf": tok, "band": "433", "dp_MODE": "fsk"})
-    body = c.get("/stacks/daemon").get_data(as_text=True)
+    body = c.get("/stacks").get_data(as_text=True)
     assert '<option value="FSK" selected>' in body       # canonical FSK preselected
 
 
@@ -381,7 +410,7 @@ def test_crafted_web_post_invalid_override_warns(tmp_path):
     b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
     c = create_app(service_factory=lambda: ControllerService(
         system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks/daemon").get_data(as_text=True)).group(1)
+    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
                                 "confirmed": "yes", "p_radio": "433", "dp_433_SF": "99"},
                follow_redirects=True)
@@ -403,7 +432,7 @@ def test_confirm_both_renders_two_band_scoped_panels(tmp_path):
     b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
     c = create_app(service_factory=lambda: ControllerService(
         system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks/daemon").get_data(as_text=True)).group(1)
+    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
     body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
                                     "p_radio": "both"}).get_data(as_text=True)
     assert "(433 MHz)" in body and "(868 MHz)" in body                          # two panels
@@ -432,12 +461,12 @@ def test_confirm_mode_selectors_carry_fsk_warn_attribute(tmp_path):
     b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
     c = create_app(service_factory=lambda: ControllerService(
         system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks/daemon").get_data(as_text=True)).group(1)
+    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
     body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
                                     "p_radio": "both"}).get_data(as_text=True)
     assert body.count("data-mode-warn") == 2                                    # one per band panel
     # config page (saved-profile Save/Apply) also carries the warn attribute
-    cfg = c.get("/stacks/daemon").get_data(as_text=True)
+    cfg = c.get("/stacks").get_data(as_text=True)
     assert "data-mode-warn" in cfg
 
 
@@ -471,7 +500,7 @@ def _daemon_web(tmp_path):
 
 def _start_post(c, extra):
     tok = re.search(r'name="_csrf" value="([^"]+)"',
-                    c.get("/stacks/daemon").get_data(as_text=True)).group(1)
+                    c.get("/stacks").get_data(as_text=True)).group(1)
     data = {"_csrf": tok, "op": "start", "target": "daemon", "confirmed": "yes", "p_radio": "433"}
     data.update(extra)
     return c.post("/action", data=data, follow_redirects=True)

@@ -35,6 +35,9 @@ NGINX_PID = ("state", "run", "nginx.pid")
 NGINX_TEMP = ("state", "run", "nginx")
 _ERR_LOG = ("logs", "nginx-error.log")
 _ACC_LOG = ("logs", "nginx-access.log")
+# Static "console is restarting" page nginx serves on a 502/503/504 (e.g. during a self-update when
+# the Waitress upstream is briefly gone) — no JS, no upstream, so it always renders.
+_UPDATING_PAGE = ("config", "nginx", "_lhpc_updating.html")
 
 _NGINX_VALIDATE_TIMEOUT_S = 15.0
 
@@ -212,6 +215,14 @@ http {{
         # Source-address gate (real peer; loopback always, remote only from allowed CIDRs).
         {_allow_deny(cfg)}
 
+        # When the Waitress upstream is gone (e.g. mid self-update restart), serve a branded static
+        # page instead of nginx's raw "502 Bad Gateway". Served from disk, no upstream, no JS.
+        error_page 502 503 504 /_lhpc_updating.html;
+        location = /_lhpc_updating.html {{
+            internal;
+            alias {_abs(paths, _UPDATING_PAGE)};
+        }}
+
         location / {{
             # Access-mode enforcement (revoked client cert => FAILED => rejected here).
             if ($lhpc_need_auth) {{ return 403; }}
@@ -266,10 +277,38 @@ def stage_and_validate(system, paths: Paths, cfg: WebserverConfig) -> tuple:
     # systemd unit needs no runtime-dir setup of its own.
     runtime_fs.mkdir(paths, "state", "run", "nginx")
     runtime_fs.mkdir(paths, "logs")
+    # The branded 502/503/504 fallback page nginx serves from disk (no upstream, no JS).
+    runtime_fs.atomic_write(paths, paths.under(*_UPDATING_PAGE), _UPDATING_PAGE_HTML, mode=0o644)
     staged = paths.under(*NGINX_CONF_STAGED)
     runtime_fs.atomic_write(paths, staged, render_nginx_config(paths, cfg), mode=0o644)
     ok, msg = validate_config(system, paths, str(staged))
     return ok, msg, staged
+
+
+# Standalone (no Jinja, no script) page nginx returns when the console upstream is briefly gone —
+# e.g. while a self-update stops+restarts lhpc-web. The user clicks the link when it is back.
+_UPDATING_PAGE_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Console restarting — LoRaHAM Pi Control</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f6f9; color: #223; margin: 0;
+         display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  .card { background: #fff; border: 1px solid #dbe1e8; border-radius: 12px; padding: 2rem 2.4rem;
+          box-shadow: 0 2px 10px rgba(0,0,0,.06); max-width: 30rem; text-align: center; }
+  h1 { font-size: 1.3rem; margin: 0 0 .6rem; }
+  p { color: #556; line-height: 1.5; }
+  a.btn { display: inline-block; margin-top: 1rem; padding: .7rem 1.4rem; background: #1a7f37;
+          color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+</style></head>
+<body><div class="card">
+  <h1>The console is restarting&hellip;</h1>
+  <p>LoRaHAM Pi Control is updating or restarting and will be back shortly (usually well under a
+     minute). This page does not refresh on its own &mdash; click below when you are ready, and
+     reload once more if it is still coming up.</p>
+  <a class="btn" href="/">Return to the console &rarr;</a>
+</div></body></html>
+"""
 
 
 def promote_config(paths: Paths) -> Path:

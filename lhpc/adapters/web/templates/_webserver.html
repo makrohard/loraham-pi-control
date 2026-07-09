@@ -2,11 +2,11 @@
    (a nested collapsible at the same level as Update). Requires: mon (webserver_monitor data),
    modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
 {% from "_macros.html" import flash_classes %}
-<details class="stackrow ws-comp" id="webserver-row">
-  <summary>Webserver (HTTPS / mTLS)</summary>
+<details class="stackrow ws-comp" id="webserver-row" open>
+  <summary>Webserver (HTTPS / mTLS)<a class="logslink" href="{{ url_for('webserver_logs', src='access') }}">logs</a></summary>
 
-  {# ---- Monitor (shown by default; cached evidence only) ---- #}
-  <details class="advcfg" open>
+  {# ---- Monitor (cached evidence only; collapsed by default) ---- #}
+  <details class="advcfg">
     <summary>Monitor</summary>
     <section class="cfgsec">
       {% for w in mon.warnings %}
@@ -165,15 +165,4 @@
     </section>
   </details>
 
-  {# ---- Logs (collapsed) — the nginx front-end's on-disk logs ---- #}
-  <details class="advcfg">
-    <summary>Logs</summary>
-    <section class="cfgsec">
-      <p>nginx front-end logs (on disk):
-        <a href="{{ url_for('webserver_logs', src='error') }}">error log</a> ·
-        <a href="{{ url_for('webserver_logs', src='access') }}">access log</a></p>
-      <p class="muted">The controller's own process logs go to the systemd journal —
-        <code>journalctl --user -u lhpc-web</code> / <code>-u lhpc-selfupdate</code>.</p>
-    </section>
-  </details>
 </details>

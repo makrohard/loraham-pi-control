@@ -42,6 +42,35 @@ def test_webserver_log_tail_reads_nginx_logs(tmp_path):
     assert up.endswith("logs/nginx-error.log") and ul == ["e1", "e2"]
 
 
+def test_controller_log_tail_files(tmp_path):
+    # The controller's own logs are on-disk FILES (StandardOutput=append:), read like the nginx logs.
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    runtime_fs.mkdir(svc._paths, "logs")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "lhpc-web.log"), "w1\nw2\n", 0o644)
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "lhpc-selfupdate.log"), "s1\n", 0o644)
+    wp, wl = svc.controller_log_tail("web")
+    sp, sl = svc.controller_log_tail("selfupdate")
+    assert wp.endswith("logs/lhpc-web.log") and wl == ["w1", "w2"]
+    assert sp.endswith("logs/lhpc-selfupdate.log") and sl == ["s1"]
+    # unknown source -> web log; missing file -> (path, []); huge/non-int counts don't raise.
+    assert svc.controller_log_tail("bogus")[0].endswith("logs/lhpc-web.log")
+    assert svc.controller_log_tail("web", 10 ** 9)[1] == ["w1", "w2"]
+    assert svc.controller_log_tail("web", "oops")[1] == ["w1", "w2"]
+
+
+def test_controller_log_tail_missing_and_symlink(tmp_path):
+    import os
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    p, lines = svc.controller_log_tail("web")                 # missing -> resolved path + empty
+    assert p.endswith("logs/lhpc-web.log") and lines == []
+    runtime_fs.mkdir(svc._paths, "logs")
+    (tmp_path / "secret.txt").write_text("TOP SECRET\n")
+    os.symlink(tmp_path / "secret.txt", tmp_path / "logs" / "lhpc-web.log")
+    assert svc.controller_log_tail("web")[1] == []            # symlink not followed
+
+
 def test_webserver_init_default_sans_match_endpoint(tmp_path):
     # First-run init with NO SANs must produce a cert whose SANs match the advertised
     # https://127.0.0.1:8443/ endpoint: DNS 'localhost' + IP '127.0.0.1', persisted to desired config.

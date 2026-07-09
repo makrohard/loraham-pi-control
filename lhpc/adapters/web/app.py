@@ -23,6 +23,7 @@ from flask import (
     Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for,
 )
 
+from lhpc.core import validators
 from lhpc.core.outcomes import manual_required_only
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
@@ -349,11 +350,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             out["complog"] = service.bulk_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
-    def _stack_groups():
-        """Per-stack overview rows for the Stacks page."""
+    def _stack_groups(band=""):
+        """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
+        detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
+        dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
+        and stack-scoped conflicts — all read-only, GET-safe. `band` is threaded (as the detail page
+        did) into the band-aware views."""
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
+        all_conflicts = service.observed_conflicts(snapshot)
         index = {}
         for ss in snapshot.stacks:
             for comp in ss.stack.components:
@@ -378,9 +384,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             installed = bool(has_source and main_status and main_status.source_state.value
                              in ("match", "dirty", "differs", "unknown", "not-a-repo"))
             interactive = bool(main and main.interactive)
+            member_ids = {c.id for c in stack.components}
             groups.append({
                 "stack": stack,
                 "main": index.get(main.id) if main else None,
+                "main_status": main_status,
+                "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
                 "installed": installed,
                 "has_source": has_source,
                 "deps": own + cross,
@@ -392,8 +401,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "command": service.manual_start_command(main) if interactive else "",
                 # Per-stack Settings section rendered inline on the Apps list (same data the
                 # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                "view": service.config_view(stack.id),
-                "config_groups": service.config_param_groups(stack.id),
+                "view": service.config_view(stack.id, band),
+                "config_groups": service.config_param_groups(stack.id, band),
+                # Folded-in detail sections (all read-only / GET-safe):
+                "system_deps": service.system_deps(stack.id),
+                "deps_report": service.deps_report(stack.id),
+                "needs_build": service.unbuilt_components(stack.id),
+                "daemon_params": service.daemon_params_view(stack.id, band),
+                "kw_offer": service.known_working_offer(stack.id, snapshot),
+                "restart_required": service.restart_required(stack.id),
+                "conflicts": [c for c in all_conflicts
+                              if any(h in member_ids for h in c.holders)],
             })
         jobs_by_stack = {}
         for job in service.active_jobs():
@@ -408,7 +426,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # are CACHED (status envelope + local job list); `confirm`/`result`/`apply_data` are
         # only set when the update apply flow renders back here. All controller data is
         # cached-only — no live git/network/identity on a GET.
-        groups, snapshot = _stack_groups()
+        groups, snapshot = _stack_groups(request.args.get("band", ""))
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
@@ -482,50 +500,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/stacks/<stack_id>")
     def stack_detail(stack_id: str):  # noqa: ANN202
-        snapshot = service.build_snapshot()
-        stack_status = snapshot.stack(stack_id)
-        if stack_status is None:
+        # The per-stack detail page was folded into the /stacks overview (collapsible sections
+        # per stack). This URL is kept as a redirect so bookmarks/links survive: it opens the
+        # stack's row on the overview. Unknown stack -> 404 (as before).
+        if service.build_snapshot().stack(stack_id) is None:
             abort(404)
-        member_ids = {x.id for x in stack_status.stack.components}
-        main = stack_status.stack.main_component
-        main_status = stack_status.components.get(main.id) if main else None
-        has_source = bool(main and main.source)
-        installed = bool(has_source and main_status and main_status.source_state.value
-                         in ("match", "dirty", "differs", "unknown", "not-a-repo"))
-        return render_template(
-            "stack.html",
-            version=__version__,
-            runtime_root=_runtime_root(),
-            stack=stack_status.stack,
-            statuses=stack_status.components,
-            installed=installed,
-            has_source=has_source,
-            # GET pages do NO network: freshness ("update available?") is an explicit
-            # action (`lhpc update --check`), never a page-load git ls-remote.
-            update_status="unknown",
-            conflicts=[c for c in service.observed_conflicts(snapshot)   # band-aware (no false 433/868)
-                       if any(h in member_ids for h in c.holders)],
-            system_deps=service.system_deps(stack_id),
-            # Grouped dependency diagnosis (system / build / runtime) — read-only, no network.
-            deps=service.deps_report(stack_id),
-            # Components installed but whose compiled binary is missing (e.g. dropped
-            # by a fresh clone) -> they need a Build before they can run.
-            needs_build=[c.id for c in stack_status.stack.components
-                         if c.source and service._lifecycle().source_dir(c).exists()
-                         and not service.is_built(c)],
-            # Collapsed daemon-parameter panel, pre-populated from the config file.
-            daemon_params=service.daemon_params_view(stack_id, request.args.get("band", "")),
-            # Collapsed Settings section (the former per-stack Config page, moved here): operator,
-            # component-scoped run/file params, source remotes, autostart, band switch + live radio.
-            view=service.config_view(stack_id, request.args.get("band", "")),
-            config_groups=service.config_param_groups(stack_id, request.args.get("band", "")),
-            # Yellow "Confirm this stack as working" offer — FILE READS ONLY (candidate marker
-            # + known-working store + the snapshot above); shown after a healthy start of a
-            # composition that is not yet operator-confirmed.
-            kw_offer=service.known_working_offer(stack_id, snapshot),
-            # Durable restart-required flag (file read only): yellow "Restart now" action.
-            restart_required=service.restart_required(stack_id),
-        )
+        return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
 
     @app.post("/stacks/<stack_id>/known-working/confirm")
     def known_working_confirm(stack_id: str):  # noqa: ANN202
@@ -535,7 +515,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)
         res = service.confirm_known_working(stack_id)
         flash(res.summary, "ok" if res.ok else "warn")
-        return redirect(url_for("stack_detail", stack_id=stack_id))
+        return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
 
     @app.post("/interactive/<stack_id>/dismiss")
     def interactive_dismiss(stack_id: str):  # noqa: ANN202
@@ -590,15 +570,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # not report back — an unconfirmed SET is flashed as a warning, not success.
         confirmed = bool(result.data.get("confirmed")) if result.data else False
         flash(result.summary, "ok" if (result.ok and confirmed) else "warn")
-        return redirect(url_for("stack_detail", stack_id="daemon", cfg=1) + "#stack-settings")
+        return redirect(url_for("stacks_overview", band=band, cfg="daemon") + "#stack-settings-daemon")
 
     def _redirect_for(target: str):
-        # Actions launched from the dashboard return to the dashboard; otherwise
-        # land on the target's stack detail page.
+        # Actions launched from the dashboard return to the dashboard; otherwise land on the
+        # target's stack row on the /stacks overview (the detail page was folded in there).
         if request.form.get("from") == "dash":
             return redirect(url_for("dashboard"))
         sid = service.stack_of(target)
-        return redirect(url_for("stack_detail", stack_id=sid) if sid else url_for("dashboard"))
+        return (redirect(url_for("stacks_overview", open=sid) + "#stackrow-" + sid)
+                if sid else redirect(url_for("dashboard")))
+
+    def _install_back(stack_id: str):
+        # TARGET-SPECIFIC: reopen ONLY this stack's row + its Install panel and scroll there, so a
+        # refused start lands on the Install/Build buttons instead of wherever the page last was.
+        # Always /stacks — even for a dashboard-launched start, since the buttons only exist here.
+        return redirect(url_for("stacks_overview", open=stack_id, inst=stack_id)
+                        + "#stack-install-" + stack_id)
 
     # START-confirm run/file/daemon params share the daemon-flag hide set + the confirm form.
     _HIDE_RUN = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
@@ -714,20 +702,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
         save_mode = request.form.get("_save", "")           # "stack" | "daemon" | ""
-        # Refuse to start an app that isn't installed or built yet — send the
-        # operator to its page (which has the Install/Build buttons) with a warning
-        # and the CLI command, rather than spawning a doomed start.
+        # Refuse to start an app that isn't installed or built yet — send the operator to THIS
+        # stack's Install section (which has the Install/Build buttons, and repeats the reason in a
+        # banner) with a warning and the CLI command, rather than spawning a doomed start.
+        # `open=` forces the row, `inst=` forces + scrolls to the Install panel (cf. `_dp_back`).
         if op == "start" and service.stack(target) is not None:
             if not service.is_installed(target):
                 flash(f"'{target}' is not installed yet — install it on this page "
                       f"(or run: lhpc install {target}).", "warn")
-                return redirect(url_for("stack_detail", stack_id=target))
+                return _install_back(target)
             unbuilt = service.unbuilt_components(target)
             if unbuilt:
                 flash(f"'{target}' needs building before it can run — its binary is "
                       f"missing ({', '.join(unbuilt)}). Build it on this page "
                       f"(or run: lhpc build {target}).", "warn")
-                return redirect(url_for("stack_detail", stack_id=target))
+                return _install_back(target)
         # Panel "Save" / "Save & start". FAIL CLOSED: for Save & start the requested start happens
         # ONLY after EVERY selected persistence succeeds. Any failure (parse, stack or per-band
         # daemon write) blocks the start and re-renders the confirm with the SUBMITTED values +
@@ -854,9 +843,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                     stop_owners=stop_owners, cascade=cascade, band=band,
                                     daemon_overrides=daemon_overrides, file_overrides=file_over,
                                     purge=purge)
-        # An interactive/systemd start whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
+        # An interactive/systemd START whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
         # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
-        ok_flash = result.ok or manual_required_only(result.results)
+        # START-ONLY: on a stop/restart, MANUAL_REQUIRED means "a foreign process is still running,
+        # kill it yourself" — a WARNING. `stop` already returns ok=False; only this display lied.
+        ok_flash = result.ok or (op == "start" and manual_required_only(result.results))
         flash(f"{result.summary} {' '.join(result.details[:6])}",
               "ok" if ok_flash else "warn")
         # Start note(s) for a just-started component (boot expectations, connect hints):
@@ -871,12 +862,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # only a plain logs/<name>.log filename, never a path
         return value if value and "/" not in value and ".." not in value else None
 
+    def _safe_band(value):
+        # `band` picks the instance of a band-scoped component and reaches a FILENAME
+        # (start-<id>-<band>.log), so it must pass the canonical whitelist, never raw input.
+        # Empty/invalid -> "" (the resolver then picks the newest band's log).
+        if not value:
+            return ""
+        try:
+            return validators.band(value, allow_both=False)
+        except validators.ValidationError:
+            return ""
+
     @app.get("/logs/<target>")
     def logs_view(target: str):  # noqa: ANN202
         if service.stack_of(target) is None:
             abort(404)
         job = _safe_job(request.args.get("job"))
-        path, lines = service.log_tail(target, 300, job=job)
+        band = _safe_band(request.args.get("band"))
+        path, lines = service.log_tail(target, 300, job=job, band=band)
         return render_template("logs.html", version=__version__,
                                runtime_root=_runtime_root(), target=target, job=job,
                                stack_id=service.stack_of(target), path=path, lines=lines,
@@ -887,7 +890,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if service.stack_of(target) is None:
             abort(404)
         job = _safe_job(request.args.get("job"))
-        path, lines = service.log_tail(target, 300, job=job)
+        band = _safe_band(request.args.get("band"))
+        path, lines = service.log_tail(target, 300, job=job, band=band)
         return jsonify(target=target, path=path, lines=lines,
                        running=service.log_running(target, job))
 
@@ -929,19 +933,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             locator=request.form.get("op_locator"), band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
-        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1) + "#stack-settings")
+        return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)
+                        + "#stack-settings-" + stack_id)
 
     def _daemon_param_form():  # (band, {PARAM: value}) from the submitted panel
         from lhpc.core import daemon_params as _dp
         band = request.form.get("band", "")
         return band, {name: request.form.get("dp_" + name, "") for name in _dp.ALL_PARAMS}
 
-    def _dp_back(stack_id: str, band: str):  # redirect to the submitting page (local-only)
-        nxt = request.form.get("next", "")
-        if nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt:
-            sep = "&" if "?" in nxt else "?"                  # keep the panel expanded (dp=1)
-            return redirect(nxt + sep + "dp=1")               # open-redirect-safe local path
-        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1, dp=1) + "#stack-settings")
+    def _dp_back(stack_id: str, band: str):
+        # TARGET-SPECIFIC: reopen ONLY this stack's row + its daemon-params panel (never every
+        # daemon panel on the page). `dp=<stack_id>` opens just the matching per-stack panel; the
+        # `open=<stack_id>` forces the row and the anchor scrolls to it.
+        return redirect(url_for("stacks_overview", band=band or None,
+                                open=stack_id, dp=stack_id)
+                        + "#stack-daemon-params-" + stack_id)
 
     @app.post("/stacks/<stack_id>/daemon-params")
     def daemon_params_save(stack_id: str):  # noqa: ANN202
@@ -993,7 +999,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = request.form.get("band", "")
         result = service.reset_config(stack_id, band)
         flash(result.summary, "ok" if result.ok else "warn")
-        return redirect(url_for("stack_detail", stack_id=stack_id, band=band or None, cfg=1) + "#stack-settings")
+        return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)
+                        + "#stack-settings-" + stack_id)
 
     @app.get("/healthz")
     def healthz():  # noqa: ANN202
@@ -1037,6 +1044,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         path, lines = service.webserver_log_tail(src, 300)
         return render_template("webserver_logs.html", version=__version__,
                                runtime_root=_runtime_root(), src=src, path=path, lines=lines)
+
+    @app.get("/controller/logs")
+    def controller_logs():  # noqa: ANN202
+        # The controller's OWN process logs — on-disk files under logs/ (StandardOutput=append:).
+        # Read-only, non-network, bounded no-follow file tail; `src` whitelisted to web|selfupdate.
+        src = "selfupdate" if request.args.get("src") == "selfupdate" else "web"
+        unit = "lhpc-selfupdate.service" if src == "selfupdate" else "lhpc-web.service"
+        path, lines = service.controller_log_tail(src, 300)
+        return render_template("controller_logs.html", version=__version__,
+                               runtime_root=_runtime_root(), src=src, unit=unit,
+                               path=path, lines=lines)
 
     def _ws_back():
         return redirect(url_for("stacks_overview") + "#webserver-row")

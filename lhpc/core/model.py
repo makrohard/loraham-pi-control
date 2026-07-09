@@ -414,6 +414,7 @@ class ComponentStatus:
     run_state: RunState = RunState.UNKNOWN
     source_state: SourceState = SourceState.UNKNOWN
     source_version: str = ""     # git describe of the installed source
+    source_head: str = ""        # full HEAD commit of the installed source (display: short @…)
     tx_state: TxState = TxState.UNKNOWN
     profile_state: ProfileState = ProfileState.UNKNOWN
     endpoints: list[EndpointObservation] = field(default_factory=list)

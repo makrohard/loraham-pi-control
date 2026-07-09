@@ -19,15 +19,15 @@ WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
 ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc web --socket
 Restart=on-failure
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:%h/loraham-pi-control/logs/lhpc-web.log
+StandardError=append:%h/loraham-pi-control/logs/lhpc-web.log
 SyslogIdentifier=lhpc-web
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 # runtime root + /tmp for lhpc itself; %h/.meshcore_nm because a stack GUI started under this
 # unit (meshcore-nodegui) keeps its sessions/settings/favourites there. %h expanded by systemd.
-ReadWritePaths=%h/loraham-pi-control %h/.meshcore_nm /tmp
+ReadWritePaths=%h/loraham-pi-control -%h/.meshcore_nm /tmp
 Environment=PLATFORMIO_CORE_DIR=%h/loraham-pi-control/build/tool-cache/platformio
 Environment=IDF_TOOLS_PATH=%h/loraham-pi-control/build/tool-cache/espressif
 Environment=XDG_CACHE_HOME=%h/loraham-pi-control/build/tool-cache/cache

@@ -6,7 +6,7 @@
   {# Inline (start-confirm) inputs are band-scoped (dp_<band>_<PARAM>) so 433/868 stay separate;
      the config/stack form uses the per-panel dp_<PARAM> save route. #}
   {% set dp_pref = ("dp_" + daemon_params.band + "_") if dp_inline else "dp_" %}
-  <details class="advcfg dparams"{% if request.args.get('dp') %} open{% endif %}>
+  <details class="advcfg dparams" id="stack-daemon-params-{{ stack_id }}"{% if request.args.get('dp') == stack_id %} open data-force-open="1"{% endif %}>
     <summary>Daemon radio parameters ({{ daemon_params.band }} MHz)</summary>
     <p class="muted">
       {% if dp_inline %}The values lhpc will apply to the daemon for <strong>this start</strong>
@@ -24,7 +24,6 @@
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="band" value="{{ daemon_params.band }}">
-      <input type="hidden" name="next" value="{{ dp_next | default(request.path) }}">
     {% endif %}
       <table class="paramgrid dptab">
         {% for r in daemon_params.rows %}

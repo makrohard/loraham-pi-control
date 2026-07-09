@@ -152,3 +152,20 @@ def test_stage_and_validate_creates_rootless_runtime_dirs(tmp_path):
     assert (tmp_path / "state" / "run" / "nginx").is_dir()   # temp-path parent nginx needs
     assert (tmp_path / "logs").is_dir()                       # error/access log parent
     assert staged.exists()                                    # config was staged for the -t
+
+
+def test_nginx_serves_static_updating_page_on_502(tmp_path):
+    # On a 502/503/504 (e.g. the Waitress upstream gone mid self-update) nginx serves a branded
+    # static page from disk (no upstream, no JS) instead of the raw "502 Bad Gateway".
+    paths = _paths(tmp_path)
+    conf = webserver.render_nginx_config(paths, WebserverConfig())
+    assert "error_page 502 503 504 /_lhpc_updating.html;" in conf
+    assert "location = /_lhpc_updating.html" in conf and "internal;" in conf and "alias " in conf
+    # stage_and_validate must WRITE the actual static file at the served path.
+    staged = paths.under(*webserver.NGINX_CONF_STAGED)
+    fake = FakeSystem(commands={("nginx", "-t", "-c", str(staged)): CommandResult(0, "", "ok")})
+    webserver.stage_and_validate(fake.system, paths, WebserverConfig())
+    page = tmp_path / "config" / "nginx" / "_lhpc_updating.html"
+    assert page.is_file()
+    html = page.read_text()
+    assert "Return to the console" in html and "<script" not in html

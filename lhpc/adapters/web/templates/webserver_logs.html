@@ -19,8 +19,9 @@
       <p class="muted">{{ path or '(no log file yet)' }}</p>
       <pre class="logbox">{% for line in lines %}{{ line }}
 {% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
-      <p class="muted">The controller's own process logs go to the journal:
-        <code>journalctl --user -u lhpc-web</code> · <code>journalctl --user -u lhpc-nginx</code></p>
+      <p class="muted">The controller's own process logs are separate:
+        <a href="{{ url_for('controller_logs', src='web') }}">web console</a> ·
+        <a href="{{ url_for('controller_logs', src='selfupdate') }}">self-update</a>.</p>
     </div>
   </div>
 {% endblock %}

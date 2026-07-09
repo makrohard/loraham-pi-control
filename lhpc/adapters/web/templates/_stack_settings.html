@@ -4,7 +4,7 @@
    default; opens on `?cfg=1` only when THIS section's id is the page's single 'stack-settings'. #}
 {% from "_macros.html" import action_btn %}
 {% set _sid = settings_id | default('stack-settings') %}
-<details class="advcfg settings" id="{{ _sid }}"{% if _sid == 'stack-settings' and request.args.get('cfg') %} open{% endif %}>
+<details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id %} open data-force-open="1"{% endif %}>
   <summary>Settings</summary>
   <div class="body">
     {% if view.bands %}
@@ -12,7 +12,7 @@
         <span class="bandswitch">
           {% for b in view.bands %}
             <a class="{{ 'sel' if b == view.band else '' }}"
-               href="{{ url_for('stack_detail', stack_id=stack.id, band=b, cfg=1) }}#stack-settings">{{ b }} MHz</a>
+               href="{{ url_for('stacks_overview', band=b, cfg=stack.id) }}#stack-settings-{{ stack.id }}">{{ b }} MHz</a>
           {% endfor %}
         </span>
         {% if view.live_band %}

@@ -133,7 +133,7 @@ def test_unsafe_marker_renders_safe_side_on_stack_and_dashboard(tmp_path):
     from lhpc.core.paths import Paths
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     c = create_app(service_factory=lambda: svc).test_client()
-    body = c.get("/stacks/chat").get_data(as_text=True)
+    body = c.get("/stacks").get_data(as_text=True)               # banner now in the stack's Install section
     assert "Restart required (safe-side)" in body and "Restart now" in body
     dash = c.get("/").get_data(as_text=True)
     assert "Restart required" in dash and "Restart chat now" in dash

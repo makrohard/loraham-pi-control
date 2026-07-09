@@ -50,7 +50,7 @@
 
           {# --- radio config (only when the daemon serves this band) --- #}
           {% if r.daemon.reachable %}
-            <h4><a href="{{ url_for('stack_detail', stack_id='daemon', cfg=1) ~ '#stack-settings' }}">Radio config</a>
+            <h4><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="stop">
@@ -61,7 +61,7 @@
               </form>
             </h4>
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
             </p>
             <details class="monitor" open>
               <summary>Monitor</summary>
@@ -91,7 +91,7 @@
                independent instance per band, so don't reference the other band. #}
             {% if not r.daemon.installed %}
               <p class="muted">Daemon not installed. Install &amp; build the
-                <a href="{{ url_for('stack_detail', stack_id='daemon') }}">daemon stack</a> first.</p>
+                <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
             {% else %}
               <p class="muted">Daemon not running on {{ r.band }} MHz. Start a stack below
                 (it auto-starts the daemon for this band), or start the daemon alone:</p>
@@ -112,13 +112,13 @@
           {% if r.running %}
             {% for s in r.running %}
               <div class="runstack">
-                <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
                 <ul class="complist">
                   {% for c in s.components %}
                     <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
-                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stack_detail', stack_id=s.id, cfg=1) }}#stack-settings">config</a>{% endif %}
+                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}">log</a>{% endif %}
                       {% for itf in c.interfaces %}
                         {% if itf.link %}
@@ -174,7 +174,7 @@
             {% for s in r.interactive %}
               <div class="runstack">
                 {% if s.running %}
-                  <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                  <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-running">&#10003; running</span>
                     <form method="post" action="{{ url_for('action') }}" class="act">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -184,7 +184,7 @@
                       <button type="submit">Stop</button>
                     </form></p>
                 {% else %}
-                  <p><a href="{{ url_for('stack_detail', stack_id=s.id) }}"><strong>{{ s.name }}</strong></a>
+                  <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-stopped">not running</span>
                     <form method="post" action="{{ url_for('interactive_dismiss', stack_id=s.id) }}" class="act dismiss" title="Dismiss">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -218,7 +218,7 @@
 
           {% if r.daemon.process_up and not r.daemon.reachable %}
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon') }}">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
             </p>
           {% endif %}
         </div>

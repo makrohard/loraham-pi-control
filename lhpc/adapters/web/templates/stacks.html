@@ -26,23 +26,30 @@
          "LoRaHAM Pi Control" with its cached controller/version/identity fields in the summary.
          Its Update UI is a NESTED "Update" collapsible inside (no duplicated name/fields).
          CACHED data only on this GET (no live git/network/identity). #}
-      <details class="stackrow" id="controller-row"{% if confirm or controller.update_available %} open{% endif %}>
+      {# Collapsed on a first load: only the forced self-update confirm flow opens it (an available
+         update is signalled by the 'update available' pill, not by auto-expanding the row). #}
+      <details class="stackrow" id="controller-row"{% if confirm %} open{% endif %}>
         <summary>
-          <span class="ss-name">{{ controller.display_name }}</span>
-          <span class="pill">controller</span>
-          {# No run-state badge: the controller is NOT a tracked managed process — claiming
-             'running' would be a false run-state (truthfulness invariant / test_controller). #}
-          <span class="pill">src: {{ 'match' if controller.identity and controller.identity.status == 'ok'
-                                     else (controller.identity.status if controller.identity else 'unchecked') }}</span>
-          <span class="pill mono">v{{ controller.version }}</span>{% if controller.head_short %} <span class="pill mono" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}
-          {% if controller.identity is none %}<span class="pill">identity unchecked</span>
-          {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
-          {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
-          {% else %}<span class="pill">not self-hosted</span>{% endif %}
-          {% if controller.update_available %}<span class="pill">update available</span>{% endif %}
+          <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
+          {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
+             is demonstrably up whenever it serves this page — without claiming a managed run-state, so
+             the truthfulness invariant (no badge-running on the controller row) is preserved. #}
+          <span class="col-status"><span class="badge badge-ok">console up</span></span>
+          <span class="col-source"><span class="pill">src: {{ 'match' if controller.identity and controller.identity.status == 'ok'
+                                     else (controller.identity.status if controller.identity else 'unchecked') }}</span></span>
+          <span class="col-version"><span class="pill mono">v{{ controller.version }}</span></span>
+          <span class="col-head">{% if controller.head_short %}<span class="pill mono" title="controller checkout commit">@{{ controller.head_short }}</span>{% endif %}</span>
+          <span class="col-extra">
+            {% if controller.identity is none %}<span class="pill">identity unchecked</span>
+            {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
+            {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
+            {% else %}<span class="pill">not self-hosted</span>{% endif %}
+            {% if controller.update_available %}<span class="pill">update available</span>{% endif %}
+          </span>
+          <a class="logslink col-logs" href="{{ url_for('controller_logs') }}">logs</a>
         </summary>
         <div class="stackrow-body">
-          <details class="stackrow" id="controller-update"{% if confirm or controller.update_available %} open{% endif %}>
+          <details class="stackrow" id="controller-update"{% if confirm %} open{% endif %}>
             <summary>Update</summary>
             <div class="stackrow-body">
               <p class="summary">LHPC's own checkout — managed only here (Update / Webserver), never
@@ -59,59 +66,13 @@
       </details>
       {% endif %}
       {% for g in groups %}
-        <details class="stackrow"{% if g.jobs %} open{% endif %}>
+        {% set _forced = g.jobs or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
+        <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
           <summary>
             {{ stack_summary(g) }}
-            {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}">logs</a>{% endif %}
-            {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
+            {% if g.main %}<a class="logslink col-logs" href="{{ url_for('logs_view', target=g.main[0].id) }}">logs</a>{% endif %}
           </summary>
-          <div class="stackrow-body">
-            <p class="summary">{{ g.stack.summary }}</p>
-
-            {% for job in g.jobs %}
-              <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
-                <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
-            {% endfor %}
-
-            {{ stack_actions(g.stack.id, g.installed, g.has_source) }}
-
-            {% if g.interactive %}
-              {{ cmdbox('appcmd-' ~ g.stack.id, g.command) }}
-              <p class="muted">{% if g.running %}<span class="badge badge-running">&#10003; running</span>{% else %}
-                Interactive — click <strong>Run</strong> to ensure the daemon, then run this in a terminal.{% endif %}</p>
-            {% endif %}
-
-            {% if g.deps %}
-              <hr class="sep">
-              <table class="deps">
-                <thead><tr><th>Dependency component</th><th>Run</th><th>Install</th><th>Version</th><th>Logs</th></tr></thead>
-                <tbody>
-                  {% for comp, st in g.deps %}
-                    <tr>
-                      <td>{{ comp.id }}{% if comp.optional %} <span class="pill">optional</span>{% endif %}</td>
-                      <td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td>
-                      <td>{{ st.source_state.value }}</td>
-                      <td class="mono">{{ st.source_version or '—' }}</td>
-                      <td><a href="{{ url_for('logs_view', target=comp.id) }}">log</a></td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% endif %}
-
-            {# Per-stack Settings (the former Config page), inline after the dependency components,
-               bracketed by horizontal rules to separate it from the deps and the footer links. #}
-            <hr class="sep">
-            {% with stack = g.stack, view = g.view, config_groups = g.config_groups,
-                    settings_id = 'stack-settings-' ~ g.stack.id %}
-              {% include "_stack_settings.html" %}
-            {% endwith %}
-            <hr class="sep">
-
-            <p class="links">
-              <a href="{{ url_for('stack_detail', stack_id=g.stack.id) }}">Open details &rarr;</a>
-            </p>
-          </div>
+          {% include "_stack_body.html" %}
         </details>
       {% endfor %}
     </div>
@@ -128,4 +89,8 @@
         {% else %}Install and update all stacks{% endif %}</button></a></p>
     </div>
   </div>
+{% endblock %}
+{% block scripts %}
+  {# Preserve the tree's open/close + scroll across form-POST actions (external per CSP). #}
+  <script src="{{ url_for('static', filename='stacks_state.js') }}" defer></script>
 {% endblock %}

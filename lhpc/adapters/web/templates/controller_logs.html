@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}controller logs ({{ src }}) — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# LoRaHAM Pi Control's OWN process logs — the lhpc-web / lhpc-selfupdate units append to on-disk
+     files under logs/, tailed here at request time (same as the nginx front-end logs). #}
+  <p><a href="{{ url_for('stacks_overview') }}#controller-row">&larr; back to LoRaHAM Pi Control</a></p>
+  <div class="card">
+    <header>
+      <h2>Controller logs <span class="pill">{{ unit }}</span></h2>
+      <span class="tabs">
+        <a href="{{ url_for('controller_logs', src='web') }}"
+           class="pill{{ ' mono' if src == 'web' else '' }}">web console</a>
+        <a href="{{ url_for('controller_logs', src='selfupdate') }}"
+           class="pill{{ ' mono' if src == 'selfupdate' else '' }}">self-update</a>
+        <a href="{{ url_for('controller_logs', src=src) }}" class="pill">reload</a>
+      </span>
+    </header>
+    <div class="body">
+      <p class="muted">{{ path or '(no log file yet)' }}</p>
+      <pre class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+    </div>
+  </div>
+{% endblock %}

@@ -320,6 +320,92 @@ def test_self_update_apply_operator_refuses_in_managed_unit(tmp_path, monkeypatc
     assert not r.ok and "managed unit" in r.summary
 
 
+# --- managed-service integration: logs dir, boot autostart (linger), foreground guidance --------
+
+def _repair_env(tmp_path, monkeypatch, *, linger_ok=True):
+    """A repairable self-hosted root whose `systemctl --user` calls all succeed."""
+    import getpass
+    from lhpc.core import updater_units as U
+    from lhpc.core.probes.backends import CommandResult as CR
+    home = tmp_path / "home"
+    (home / ".config" / "systemd" / "user").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    root = tmp_path / "rt"
+    _, checkout, _ = U.deployment_paths(str(root))
+    (Path(checkout) / ".git").mkdir(parents=True)
+    ud = home / ".config" / "systemd" / "user"
+    cmds = {("systemctl", "--user", "daemon-reload"): CR(0, "", ""),
+            ("systemctl", "--user", "enable", "--now", U.PATH_UNIT): CR(0, "", ""),
+            ("systemctl", "--user", "enable", U.WEB_UNIT): CR(0, "", ""),
+            ("systemctl", "--user", "restart", U.WEB_UNIT): CR(0, "", ""),
+            # restart=False (the web self-repair bridge) additionally proves the watcher is live
+            ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT): CR(0, "", "")}
+    for kind in U.ALL_UNITS:
+        cmds[("systemctl", "--user", "show", "-p", "FragmentPath", "-p", "DropInPaths", kind)] = \
+            CR(0, f"FragmentPath={ud / kind}\nDropInPaths=\n", "")
+    if linger_ok:                                    # else: unmocked -> not_found (no user bus)
+        cmds[("loginctl", "enable-linger", getpass.getuser())] = CR(0, "", "")
+    return _op_svc(root, cmds) + (root, getpass.getuser())
+
+
+def test_repair_integration_creates_logs_dir_and_enables_linger(tmp_path, monkeypatch):
+    # `append:{root}/logs/...` — systemd creates the FILE, not the dir; and boot autostart needs
+    # linger (install.sh does it; a repaired root never did).
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc, fake, root, user = _repair_env(tmp_path, monkeypatch)
+    r = svc.self_update_repair_integration()
+    assert r.ok, r.summary
+    assert (root / "logs").is_dir()
+    assert ["loginctl", "enable-linger", user] in fake.calls
+    assert any("linger: enabled" in d and "autostarts at boot" in d for d in r.details)
+
+
+def test_repair_integration_attempts_linger_even_when_managed(tmp_path, monkeypatch):
+    # NEVER gated on INVOCATION_ID: the GUI "Repair & update" bridge runs from a managed LEGACY web
+    # unit that still has the user bus — gating would silently deny it boot autostart.
+    monkeypatch.setenv("INVOCATION_ID", "managed-legacy-web")
+    svc, fake, _root, user = _repair_env(tmp_path, monkeypatch)
+    r = svc.self_update_repair_integration(restart=False)
+    assert r.ok, r.summary
+    assert ["loginctl", "enable-linger", user] in fake.calls
+
+
+def test_repair_integration_linger_failure_is_fail_soft(tmp_path, monkeypatch):
+    # Under the canonical sandboxed web unit (InaccessiblePaths=%t/bus) loginctl cannot reach the
+    # bus. That must NEVER fail the repair — it discloses the shell command instead.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc, fake, _root, user = _repair_env(tmp_path, monkeypatch, linger_ok=False)
+    r = svc.self_update_repair_integration()
+    assert r.ok                                                    # repair still succeeded
+    assert ["loginctl", "enable-linger", user] in fake.calls       # attempted
+    assert any("NOT enabled" in d and f"loginctl enable-linger {user}" in d for d in r.details)
+
+
+def test_updater_integration_managed_flag_follows_invocation_id(tmp_path, monkeypatch):
+    # The unit FILES can verify 'ok' while this console runs in a foreground shell.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert svc.updater_integration()["managed"] is False
+    monkeypatch.setenv("INVOCATION_ID", "abc")
+    assert svc.updater_integration()["managed"] is True
+
+
+def test_foreground_refusals_name_repair_integration(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for r in (svc.self_update_trigger(), svc.self_update_repair_and_trigger()):
+        assert not r.ok and "foreground" in r.summary
+        assert r.data.get("not_managed") is True
+        assert any("--repair-integration" in d for d in r.details)   # a WAY OUT, not a dead end
+        assert "lhpc self-update --repair-integration" in r.next_commands
+
+
 def test_cache_read_write_roundtrip(env):
     selfupdate.write_cache(env["paths"], {"local": {"is_git": True, "version": "9.9"}, "checked_at": 1})
     assert selfupdate.read_cache(env["paths"])["local"]["version"] == "9.9"

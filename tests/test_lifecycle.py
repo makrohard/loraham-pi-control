@@ -84,6 +84,69 @@ def test_logs_tails_component_log(tmp_path):
     assert path == str(log) and tail == ["line7", "line8", "line9"]
 
 
+def _start_log_comp():
+    return Component(id="c", name="c", kind=ComponentKind.SERVICE)
+
+
+def test_start_writes_a_band_suffixed_log_only_when_banded(tmp_path):
+    # The `no run_argv` early return surfaces the resolved log path without spawning anything.
+    from lhpc.core.model import Stack
+    life = _life(FakeSystem().system, tmp_path)
+    comp = _start_log_comp()
+    stack = Stack(id="s", name="s", components=(comp,))
+    banded = life.start(stack, comp, band="868")
+    assert not banded.ok and banded.log_path.endswith("logs/start-c-868.log")
+    plain = life.start(stack, comp)                            # band-agnostic -> legacy name
+    assert not plain.ok and plain.log_path.endswith("logs/start-c.log")
+
+
+def test_start_log_resolves_exact_band_then_newest_then_legacy(tmp_path):
+    # The daemon runs one instance PER BAND at once, so each band gets its own captured log.
+    # A band-less reader (`lhpc logs`, the GUI "logs" link) has no band to offer and must still
+    # find something — the newest band's log — before falling back to the pre-rename name.
+    import os
+    life = _life(FakeSystem().system, tmp_path)
+    comp = _start_log_comp()
+    d = tmp_path / "logs"
+    d.mkdir(parents=True)
+    assert life.start_log(comp) is None                       # nothing at all
+
+    (d / "start-c.log").write_text("legacy\n")
+    assert life.start_log(comp) == d / "start-c.log"          # 3. legacy fallback
+
+    (d / "start-c-433.log").write_text("433\n")
+    (d / "start-c-868.log").write_text("868\n")
+    os.utime(d / "start-c-433.log", (1000, 1000))             # make 868 the newest
+    os.utime(d / "start-c-868.log", (2000, 2000))
+    assert life.start_log(comp) == d / "start-c-868.log"      # 2. newest band, not the legacy
+    assert life.start_log(comp, "433") == d / "start-c-433.log"   # 1. exact band wins
+
+
+def test_start_log_skips_symlinked_band_entries(tmp_path):
+    life = _life(FakeSystem().system, tmp_path)
+    comp = _start_log_comp()
+    d = tmp_path / "logs"
+    d.mkdir(parents=True)
+    (d / "start-c.log").write_text("legacy\n")
+    (d / "start-c-868.log").symlink_to("start-c.log")
+    assert life.start_log(comp) == d / "start-c.log"          # symlinked band entry ignored
+
+
+def test_logs_reads_the_band_suffixed_start_log(tmp_path):
+    life = _life(FakeSystem().system, tmp_path)
+    comp = _start_log_comp()
+    d = tmp_path / "logs"
+    d.mkdir(parents=True)
+    (d / "start-c-868.log").write_text("a\nb\n")
+    path, tail = life.logs(comp, lines=5, band="868")
+    assert path == str(d / "start-c-868.log") and tail == ["a", "b"]
+    # still finds a legacy band-less log when that is all there is (pre-upgrade process)
+    (d / "start-c-868.log").unlink()
+    (d / "start-c.log").write_text("legacy\n")
+    path, tail = life.logs(comp, lines=5)
+    assert path == str(d / "start-c.log") and tail == ["legacy"]
+
+
 def test_tx_test_send_failure_is_handled(tmp_path):
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": b"STATS TXOK=0\n"},
                       unix_errors={"/tmp/lora433.sock": "broken pipe"})

@@ -1,0 +1,186 @@
+{# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
+   sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
+   no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox %}
+<div class="stackrow-body">
+  <p class="summary">{{ g.stack.summary }}</p>
+
+  {% for job in g.jobs %}
+    <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
+      <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
+  {% endfor %}
+
+  {% if g.interactive %}
+    {{ cmdbox('appcmd-' ~ g.stack.id, g.command) }}
+    <p class="muted">{% if g.running %}<span class="badge badge-running">&#10003; running</span>{% else %}
+      Interactive — click <strong>Run</strong> to ensure the daemon, then run this in a terminal.{% endif %}</p>
+  {% endif %}
+
+  {# ===== Install (open by default) — all stack actions + dependency sub-menus =====
+     Addressable (`#stack-install-<id>`) so a REFUSED start can land the operator here. `?inst=<id>`
+     force-opens it against a stale sessionStorage map, and data-force-scroll makes stacks_state.js
+     scroll here (see A in the plan) — the reason lives in the banners below, not only in the top
+     flash, which scrolls out of view. #}
+  <details class="advcfg" id="stack-install-{{ g.stack.id }}" open
+    {%- if request.args.get('inst') == g.stack.id %} data-force-open="1" data-force-scroll="1"{% endif %}>
+    <summary>Install</summary>
+    <div class="body">
+      {% if g.installed and g.has_source %}
+        <p>Installed version: <span class="pill">remote status unknown</span></p>
+      {% elif g.has_source %}
+        <p class="flash flash-warn"><strong>Not installed yet:</strong> the source for
+          {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.</p>
+      {% endif %}
+      {% if g.needs_build %}
+        <p class="flash flash-warn"><strong>Build needed:</strong>
+          {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }}
+          installed but the compiled binary is missing (a fresh clone drops it).
+          Run <strong>Build</strong> before starting.</p>
+      {% endif %}
+      {% if g.restart_required %}
+        <div class="flash flash-warn">
+          {% if g.restart_required.unsafe %}
+            <span class="ver ver-yellow">Restart required (safe-side)</span> — {{ g.restart_required.reason }}
+          {% else %}
+            <span class="ver ver-yellow">Restart required</span> — saved
+            {{ 'compile-time' if g.restart_required.mode == 'build' else 'start-time' }} settings
+            ({{ g.restart_required.params|join(', ') }}) differ from what the running stack uses.
+            {% if g.restart_required.mode == 'build' %}Run <strong>Build</strong>, then restart.{% endif %}
+          {% endif %}
+          <form method="post" action="{{ url_for('action') }}" class="act">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="restart">
+            <input type="hidden" name="target" value="{{ g.stack.id }}">
+            <button type="submit" class="warnbtn">Restart now</button>
+          </form>
+        </div>
+      {% endif %}
+      {% if g.kw_offer %}
+        <div class="flash flash-warn">
+          This stack started healthy with a source composition that is not yet recorded as known
+          working ({{ g.kw_offer.components|join(', ') }}).
+          <form method="post" class="act" action="{{ url_for('known_working_confirm', stack_id=g.stack.id) }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit" class="warnbtn">Confirm this stack as working</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {{ stack_actions(g.stack.id, g.installed, g.has_source) }}
+
+      {# ----- Dependencies (collapsed): full per-component card + actions + Info evidence ----- #}
+      {% if g.deps %}
+        <details class="advcfg">
+          <summary>Dependencies</summary>
+          <div class="body">
+            {% for comp, st in g.deps %}
+              <details class="advcfg">
+                <summary>{{ comp.id }}
+                  <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
+                  {% if comp.optional %}<span class="pill">optional</span>{% endif %}
+                  <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+                  <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}">logs</a></summary>
+                <div class="body">
+                  <div class="actbar">
+                    {% if comp.kind.value == 'service' %}
+                      {{ action_btn('start', comp.id, 'Start') }}{{ action_btn('stop', comp.id, 'Stop') }}
+                    {% endif %}
+                    {# Source: `update` on a component clones its source when missing (adopt_source)
+                       and refreshes it when present — one button covers first-install and update. #}
+                    {% if comp.source %}
+                      {{ action_btn('update', comp.id,
+                                    'Update' if st.source_state.value in ('match', 'differs', 'dirty') else 'Install') }}
+                    {% endif %}
+                    {# Build runs `build_steps` (build_cmd is only a doc string) — gate on either so a
+                       build_steps-only component (e.g. RadioLib) gets a working Build button. #}
+                    {% if comp.build_steps or comp.build_cmd %}{{ action_btn('build', comp.id, 'Build') }}{% endif %}
+                    {% if comp.test_cmd %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
+                    {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
+                    {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', band=comp.band, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
+                  </div>
+                  <details class="advcfg">
+                    <summary>Info</summary>
+                    <div class="body">{% with comp = comp, st = st %}{% include "_component_card.html" %}{% endwith %}</div>
+                  </details>
+                </div>
+              </details>
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+
+      {# ----- System dependencies (collapsed): apt deps + build deps + runtime ordering ----- #}
+      <details class="advcfg">
+        <summary>System dependencies</summary>
+        <div class="body">
+          {% if g.system_deps %}
+            <p class="muted">Commands shown are <strong>not executed by LHPC</strong> — run them yourself.</p>
+            <ul class="clean">
+              {% for d in g.system_deps %}
+                <li>
+                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'satisfied' if d.satisfied else 'not found' }}</span>
+                  {{ d.what }}
+                  {% if not d.satisfied and d.install %}
+                    <div class="muted">install it:</div>{{ cmdbox('dep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install) }}
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="muted">None required for this stack.</p>
+          {% endif %}
+          {% if g.deps_report and g.deps_report.build %}
+            <h4>Build dependencies</h4>
+            <ul class="clean">
+              {% for d in g.deps_report.build %}
+                <li>
+                  <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'installed' if d.satisfied else 'missing' }}</span>
+                  {{ d.label }} <span class="muted">(needed by {{ d.component }})</span>
+                  {% if not d.satisfied and d.install_cmd %}
+                    <div class="muted">{{ d.note }}:</div>{{ cmdbox('bdep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install_cmd) }}
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if g.deps_report and g.deps_report.runtime %}
+            <h4>Runtime ordering</h4>
+            <ul class="clean">
+              {% for d in g.deps_report.runtime %}
+                <li><span class="pill">{{ d.component }}</span> {{ d.label }} <span class="muted">({{ d.detail }})</span></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </div>
+      </details>
+    </div>
+  </details>
+
+  {# ===== Info (main component evidence — NO action buttons) + stack-scoped conflicts ===== #}
+  {% if g.main %}
+    <details class="advcfg">
+      <summary>Info</summary>
+      <div class="body">
+        {% with comp = g.main[0], st = g.main[1] %}{% include "_component_card.html" %}{% endwith %}
+        {% if g.conflicts %}
+          <h4>Resource conflicts</h4>
+          <ul class="clean">{% for c in g.conflicts %}
+            <li{% if c.observed %} class="conflict"{% endif %}>{{ c.message }}{% if c.observed %} <strong>[OBSERVED]</strong>{% endif %}</li>
+          {% endfor %}</ul>
+        {% endif %}
+      </div>
+    </details>
+  {% endif %}
+
+  {# ===== Settings (existing partial — reused, not duplicated) ===== #}
+  {% with stack = g.stack, view = g.view, config_groups = g.config_groups, settings_id = 'stack-settings-' ~ g.stack.id %}
+    {% include "_stack_settings.html" %}
+  {% endwith %}
+
+  {# ===== Daemon parameters (the partial supplies its own collapsible header) ===== #}
+  {% if g.daemon_params %}
+    {% with stack_id = g.stack.id, daemon_params = g.daemon_params %}
+      {% include "_daemon_params.html" %}
+    {% endwith %}
+  {% endif %}
+</div>

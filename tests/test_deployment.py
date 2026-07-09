@@ -28,7 +28,10 @@ def test_unit_serves_unix_socket_no_tcp_bind():
 def test_unit_has_bounded_restart_and_journald():
     t = _UNIT.read_text()
     assert "Restart=on-failure" in t and "StartLimitBurst=" in t and "RestartSec=" in t
-    assert "StandardOutput=journal" in t and "StandardError=journal" in t
+    # The controller logs to an on-disk file (read by the GUI controller-logs page) — the box's
+    # user journal is not reliably populated.
+    assert "StandardOutput=append:%h/loraham-pi-control/logs/lhpc-web.log" in t
+    assert "StandardError=append:%h/loraham-pi-control/logs/lhpc-web.log" in t
 
 
 def _active_directives(text: str) -> list[str]:

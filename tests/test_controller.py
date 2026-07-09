@@ -711,7 +711,7 @@ def test_all_get_pages_and_footer_are_cached_only(tmp_path, monkeypatch):
     # The footer (context processor -> self_update_status -> status_view) renders on all of these.
     for path in ("/", "/stacks", "/stacks/daemon", "/logs/loraham-daemon", "/healthz"):
         resp = client.get(path)
-        assert resp.status_code in (200, 404), (path, resp.status_code)
+        assert resp.status_code in (200, 302, 404), (path, resp.status_code)
         if resp.status_code == 200 and path != "/healthz":
             assert "LoRaHAM Pi Control" in resp.get_data(as_text=True)   # footer rendered
 

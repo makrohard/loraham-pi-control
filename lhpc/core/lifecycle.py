@@ -230,7 +230,10 @@ class Lifecycle:
         # PathContainmentError, which must become a typed StartLaunch failure, never an
         # exception leaked to the service/web layer.
         try:
-            log = self.logs_dir() / f"start-{comp.id}.log"
+            # BAND-SCOPED log: the daemon runs one instance PER BAND simultaneously, and they must
+            # not append to one shared file (it mixes bands and doubles the volume the RX/TX feed
+            # has to scan). `band` is "" for band-agnostic components -> unchanged legacy name.
+            log = self.logs_dir() / f"start-{comp.id}{('-' + band) if band else ''}.log"
             runtime_fs.ensure_dir(self.paths, self.logs_dir())
         except (OSError, PathContainmentError) as exc:
             return StartLaunch(False, "", f"runtime log setup failed: {exc}")
@@ -887,13 +890,54 @@ class Lifecycle:
                           "records retained", killed, notes)
         return result(Outcome.STOPPED, "; ".join(notes) if notes else "no owned process", killed)
 
-    def logs(self, comp: Component, lines: int = 200) -> tuple[str, list[str]]:
+    def start_log(self, comp: Component, band: str = "") -> Path | None:
+        """The captured process log for `comp`, band-aware. A band-scoped start writes
+        `start-<id>-<band>.log`; a band-agnostic one writes `start-<id>.log`. Resolution order:
+
+          1. the EXACT band's log, when the caller knows the band (the RX/TX feed, `?band=`);
+          2. else the NEWEST `start-<id>-*.log` — a band-less caller (`lhpc logs`, the GUI "logs"
+             link) has no band to offer and must not come up empty for a banded component;
+          3. else the legacy band-less name — still being written by a pre-upgrade process that
+             has not been restarted since the rename.
+
+        Returns None when nothing exists. Symlinked entries are skipped (`runtime_fs.tail` would
+        refuse them anyway); the read stays no-follow.
+        """
+        d = self.logs_dir()
+        if band:
+            p = d / f"start-{comp.id}-{band}.log"
+            if p.is_file():
+                return p
+        prefix = f"start-{comp.id}-"
+        newest: Path | None = None
+        newest_mtime = -1.0
+        try:
+            entries = runtime_fs.scandir_nofollow(self.paths, d)
+        except (OSError, PathContainmentError):
+            entries = []
+        for name, is_symlink in entries:
+            if is_symlink or not name.startswith(prefix) or not name.endswith(".log"):
+                continue
+            p = d / name
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:                       # vanished between scandir and stat
+                continue
+            if mtime > newest_mtime:
+                newest, newest_mtime = p, mtime
+        if newest is not None:
+            return newest
+        legacy = d / f"start-{comp.id}.log"
+        return legacy if legacy.is_file() else None
+
+    def logs(self, comp: Component, lines: int = 200,
+             band: str = "") -> tuple[str, list[str]]:
         for path in comp.log_paths:
             p = Path(path)
             if p.exists():
                 return str(p), tail_log(p, lines)
-        job_log = self.logs_dir() / f"start-{comp.id}.log"
-        if job_log.exists():
+        job_log = self.start_log(comp, band)
+        if job_log is not None:
             # runtime-owned log -> no-follow tail through the authoritative API.
             return str(job_log), runtime_fs.tail(self.paths, job_log, lines)
         return "", []

@@ -133,6 +133,7 @@ class StatusProber:
         src = self._assess_source(comp)
         status.source_state = src.state
         status.source_version = src.version
+        status.source_head = src.head
         status.profile_state = self._profile_state(comp, src)
 
         # Libraries/firmware have no run state. Oneshots normally don't either —

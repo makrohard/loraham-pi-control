@@ -23,8 +23,8 @@ Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
 WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
 ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc self-update --run-service
 TimeoutStartSec=900
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:%h/loraham-pi-control/logs/lhpc-selfupdate.log
+StandardError=append:%h/loraham-pi-control/logs/lhpc-selfupdate.log
 SyslogIdentifier=lhpc-selfupdate
 NoNewPrivileges=true
 ProtectSystem=strict

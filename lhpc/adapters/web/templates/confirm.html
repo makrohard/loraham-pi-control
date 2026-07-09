@@ -2,7 +2,7 @@
 {% from "_macros.html" import cmdbox, param_input %}
 {% block title %}confirm {{ op }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('stack_detail', stack_id=target) if target else url_for('dashboard') }}">&larr; back</a></p>
+  <p><a href="{{ (url_for('stacks_overview', open=target) ~ '#stackrow-' ~ target) if target else url_for('dashboard') }}">&larr; back</a></p>
   <div class="card">
     <header><h2>Confirm: {{ op }} <span class="pill">{{ target }}{% if band %} {{ band }}{% endif %}</span></h2></header>
     <div class="body">

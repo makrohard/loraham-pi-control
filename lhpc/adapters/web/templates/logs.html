@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('stack_detail', stack_id=stack_id) if stack_id else url_for('dashboard') }}">&larr; back</a></p>
+  <p><a href="{{ (url_for('stacks_overview', open=stack_id) ~ '#stackrow-' ~ stack_id) if stack_id else url_for('dashboard') }}">&larr; back</a></p>
   <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}">
     <header>
       <h2>Logs <span class="pill">{{ target }}</span></h2>
