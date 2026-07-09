@@ -84,6 +84,7 @@ readonly UNIT_DIR="${HOME}/.config/systemd/user"
 readonly WEB_UNIT="${UNIT_DIR}/lhpc-web.service"
 readonly HELPER_UNIT="${UNIT_DIR}/lhpc-selfupdate.service"
 readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
+readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
 GUARD="${TARGET_DIR}/.lhpc-uninstalling"
 
 # --------------------------------------------------------------------------- identity proof
@@ -157,7 +158,8 @@ owns_root() {                             # $1=file — provenance names THIS ro
 # byte-exact canonical units are stopped/removed; a noncanonical same-root unit is left + warned.
 step "Managed systemd units"
 UNITS_REMOVED=0
-for spec in "lhpc-selfupdate.path:${PATH_UNIT}" \
+for spec in "lhpc-nginx.service:${NGINX_UNIT}" \
+            "lhpc-selfupdate.path:${PATH_UNIT}" \
             "lhpc-selfupdate.service:${HELPER_UNIT}" \
             "lhpc-web.service:${WEB_UNIT}"; do
 	kind="${spec%%:*}"; file="${spec#*:}"
@@ -177,7 +179,8 @@ done
 # clear any pending/in-flight request AFTER the watcher + helper are down
 rm -f "${TARGET_DIR}/state/selfupdate.request" "${TARGET_DIR}/state/selfupdate.inflight" 2>/dev/null || true
 # now remove ONLY the canonical unit files, then reload
-for spec in "lhpc-selfupdate.path:${PATH_UNIT}" \
+for spec in "lhpc-nginx.service:${NGINX_UNIT}" \
+            "lhpc-selfupdate.path:${PATH_UNIT}" \
             "lhpc-selfupdate.service:${HELPER_UNIT}" \
             "lhpc-web.service:${WEB_UNIT}"; do
 	kind="${spec%%:*}"; file="${spec#*:}"

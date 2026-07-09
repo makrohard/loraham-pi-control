@@ -14,6 +14,7 @@ stricter, field-specific rules on top.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 
 MAX_LEN = 256
@@ -93,6 +94,35 @@ def port(value, *, field: str = "port") -> str:
     if not re.fullmatch(r"[0-9]{1,5}", s) or not (1 <= int(s) <= 65535):
         raise ValidationError(f"{field}: invalid port {s!r}")
     return s
+
+
+def cidr(value, *, field: str = "cidr", allow_ipv6: bool = False) -> str:
+    """A single allowed-source CIDR block (network/prefix), parsed and NORMALIZED to
+    canonical network form (`192.168.0.5/24` -> `192.168.0.0/24`) via stdlib `ipaddress`.
+
+    IPv6 remote CIDRs are REJECTED by default (the webserver's explicit IPv6 policy: `::1`
+    loopback is honored for LOCAL access only; remote IPv6 exposure is not supported this
+    milestone). A prefix length is REQUIRED — a bare address is rejected, so a config can
+    never silently widen to a single host or (worse) a default route. `0.0.0.0/0` parses
+    here (it is a syntactically valid CIDR); the DANGER of exposing it is gated by an
+    elevated confirmation in the service/adapters, not by this syntactic check."""
+    s = str(value).strip()
+    if not s:
+        raise ValidationError(f"{field}: empty CIDR")
+    if len(s) > 64:
+        raise ValidationError(f"{field}: too long")
+    _reject_control(s, field)
+    # CIDR is digits/hex, dots, colons and exactly one '/prefix' — no shell metacharacters.
+    if not re.fullmatch(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", s):
+        raise ValidationError(f"{field}: invalid CIDR {s!r} (expected network/prefix)")
+    try:
+        net = ipaddress.ip_network(s, strict=False)   # normalize; host bits allowed then masked
+    except ValueError as exc:
+        raise ValidationError(f"{field}: invalid CIDR {s!r}") from exc
+    if net.version == 6 and not allow_ipv6:
+        raise ValidationError(
+            f"{field}: IPv6 remote CIDRs are not supported (IPv4 only) — got {s!r}")
+    return str(net)
 
 
 _BANDS = ("433", "868")
@@ -210,6 +240,7 @@ _NAMED = {
     "freq": freq,
     "host": host,
     "port": port,
+    "cidr": cidr,
     "band": band,
     "node": node_name,
     "path": path_value,

@@ -42,7 +42,10 @@ local config by default.
 
 ## Web console
 
-Loopback only (`127.0.0.1`/`::1`, default `:8770`). GET routes are read-only.
+Productive mode: HTTPS via nginx (default `127.0.0.1:8443`) → Waitress over a protected Unix
+socket (the managed `lhpc-web.service` runs `lhpc web --socket`, no TCP listener). A bare
+`lhpc web` (loopback TCP, default `:8770`) is a non-productive interactive mode for local use.
+See `docs/webserver.md`. GET routes are read-only.
 Mutating routes follow one pattern — **POST + CSRF token + explicit confirm**,
 dispatched through the same service layer as the CLI: stack/component actions show
 a dry-run plan first (TX-capable ones add an RF/dummy-load warning); daemon live

@@ -176,6 +176,148 @@ def test_apply_diverged_history_refused_without_force(env):
     _git(env["work"], "commit", "-m", "local")
     res = selfupdate.apply_update(env["sys"], env["paths"])
     assert res["ok"] is False and "diverged" in res["message"]
+    assert "\n" not in res["message"]                          # single clean line (no raw git block)
+
+
+# --- garble fix: command-output summarizer -----------------------------------------------------
+
+def test_summarize_output_collapses_multiline_and_box_drawing():
+    raw = ("\x1b[31merror:\x1b[0m Your local changes would be overwritten\n"
+           "hint: commit or stash them.\n"
+           "╭─ pip ─╮\n│ ERROR │\n╰───────╯\n")
+    out = selfupdate._summarize_output(raw)
+    assert "\n" not in out                                     # newlines collapsed
+    assert "\x1b" not in out and "─" not in out and "│" not in out   # ANSI + box glyphs stripped
+    assert out.startswith("error: Your local changes")        # readable, first line preserved
+    assert selfupdate._summarize_output("") == ""             # empty -> empty
+    assert selfupdate._summarize_output("x" * 500, limit=200).endswith("…")   # bounded
+
+
+# --- warn-then-override: network-free diverged (fast-forward-blocked) detection -----------------
+
+def test_ff_blocked_true_when_diverged(env):
+    _upstream_commit(env["up"])                                # origin/main advances
+    w = env["work"]
+    (w / "diverge.txt").write_text("local commit\n")           # local commit -> diverged
+    _git(w, "add", "-A"); _git(w, "commit", "-m", "local")
+    _git(w, "fetch", "origin", "main")                         # 'check for updates' populates origin/main
+    assert selfupdate.ff_blocked(env["sys"]) is True           # ff-only would be refused -> needs force
+
+
+def test_ff_blocked_false_when_fast_forwardable(env):
+    _upstream_commit(env["up"])                                # origin advances; HEAD is its ancestor
+    _git(env["work"], "fetch", "origin", "main")
+    assert selfupdate.ff_blocked(env["sys"]) is False          # a plain fast-forward works -> not blocked
+
+
+def test_ff_blocked_false_when_up_to_date(env):
+    assert selfupdate.ff_blocked(env["sys"]) is False          # HEAD == origin/main -> not blocked
+
+
+def test_ff_blocked_false_when_not_a_checkout(env, monkeypatch):
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: None)
+    assert selfupdate.ff_blocked(env["sys"]) is False          # fail-soft, nothing to warn about
+
+
+def _ff_cmds(root, merge_base_rc):
+    from lhpc.core.probes.backends import CommandResult as CR
+    g = lambda *a: ("git", "-C", str(root), *a)
+    return {
+        g("rev-parse", "HEAD"): CR(0, "a" * 40 + "\n", ""),
+        g("rev-parse", "--abbrev-ref", "HEAD"): CR(0, "main\n", ""),
+        g("status", "--porcelain"): CR(0, "", ""),
+        g("rev-parse", "origin/main"): CR(0, "b" * 40 + "\n", ""),   # differs -> not up to date
+        g("merge-base", "--is-ancestor", "HEAD", "origin/main"): CR(merge_base_rc, "", "err"),
+    }
+
+
+def test_ff_blocked_exit_code_semantics(tmp_path, monkeypatch):
+    # merge-base --is-ancestor: 0 = ancestor (ff-able), 1 = diverged, ANYTHING else = real error.
+    from lhpc.core.probes.backends import FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: tmp_path)
+    assert selfupdate.ff_blocked(FakeSystem(commands=_ff_cmds(tmp_path, 1)).system) is True   # diverged
+    assert selfupdate.ff_blocked(FakeSystem(commands=_ff_cmds(tmp_path, 0)).system) is False  # ff-able
+    # real git errors must FAIL SOFT (never masquerade as divergence / offer a force):
+    for rc in (128, 129, 2):
+        assert selfupdate.ff_blocked(FakeSystem(commands=_ff_cmds(tmp_path, rc)).system) is False
+
+
+def test_check_upstream_fetch_error_is_sanitized(tmp_path, monkeypatch):
+    # A noisy multi-line/ANSI/box-drawing fetch failure must become ONE clean bounded line, and stay
+    # clean when it flows into apply_update()'s recorded message.
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.probes.backends import FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: tmp_path)
+    g = lambda *a: ("git", "-C", str(tmp_path), *a)
+    noisy = ("\x1b[31mfatal:\x1b[0m unable to access remote\n"
+             "╭────────╮\n│ boom   │\n╰────────╯\nhint: check your network\n")
+    cmds = {
+        g("rev-parse", "HEAD"): CR(0, "h\n", ""),
+        g("rev-parse", "--abbrev-ref", "HEAD"): CR(0, "main\n", ""),
+        g("status", "--porcelain"): CR(0, "", ""),
+        g("fetch", "--quiet", "origin", "--", "main"): CR(1, "", noisy),
+    }
+    out = selfupdate.check_upstream(FakeSystem(commands=cmds).system)
+    assert out["ok"] is False
+    err = out["error"]
+    assert "\n" not in err and "\x1b" not in err and "─" not in err and "│" not in err
+    assert err.startswith("fatal: unable to access remote")
+    res = selfupdate.apply_update(FakeSystem(commands=cmds).system, _paths(tmp_path))
+    assert res["ok"] is False and "\n" not in res["message"] and "─" not in res["message"]
+
+
+# --- CLI operator apply: WARN-then-DO (stop web -> apply -> restart) ----------------------------
+
+def _op_svc(tmp_path, cmds):
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    fake = FakeSystem(commands=cmds)
+    return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path)), fake
+
+
+def test_self_update_apply_operator_stops_and_restarts_web(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    seen = []
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: (seen.append(force),
+                                                      ActionResult(True, "Update applied.",
+                                                                   data={"already": True}))[1])
+    cmds = {
+        ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),  # active
+        ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),
+        ("systemctl", "--user", "start", "lhpc-web.service"): CR(0, "", ""),
+    }
+    svc, fake = _op_svc(tmp_path, cmds)
+    r = svc.self_update_apply_operator(force=True)
+    assert r.ok and seen == [True]
+    assert ["systemctl", "--user", "stop", "lhpc-web.service"] in fake.calls
+    assert ["systemctl", "--user", "start", "lhpc-web.service"] in fake.calls   # restarted after
+
+
+def test_self_update_apply_operator_web_inactive_delegates(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.setattr(ControllerService, "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "plain apply", data={}))
+    cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(1, "", "")}  # off
+    svc, fake = _op_svc(tmp_path, cmds)
+    r = svc.self_update_apply_operator()
+    assert r.ok and r.summary == "plain apply"
+    assert not any(c[:3] == ["systemctl", "--user", "stop"] for c in fake.calls)   # no service control
+
+
+def test_self_update_apply_operator_refuses_in_managed_unit(tmp_path, monkeypatch):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    monkeypatch.setenv("INVOCATION_ID", "managed")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    r = svc.self_update_apply_operator()
+    assert not r.ok and "managed unit" in r.summary
 
 
 def test_cache_read_write_roundtrip(env):

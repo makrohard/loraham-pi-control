@@ -21,11 +21,12 @@ import os
 import stat as _stat
 from pathlib import Path
 
-# --- unit names (fixed; the web console + one-click integration is exactly these three) -------
+# --- unit names (fixed canonical set: web console, self-update helper+watcher, nginx front-end) ---
 WEB_UNIT = "lhpc-web.service"
 HELPER_UNIT = "lhpc-selfupdate.service"
 PATH_UNIT = "lhpc-selfupdate.path"
-ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT)
+NGINX_UNIT = "lhpc-nginx.service"
+ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT)
 
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")
@@ -59,7 +60,7 @@ StartLimitBurst=5
 Type=simple
 Environment=LHPC_RUNTIME_ROOT={root}
 WorkingDirectory={checkout}
-ExecStart={venv}/bin/lhpc web --host 127.0.0.1 --port 8770
+ExecStart={venv}/bin/lhpc web --socket
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
@@ -155,7 +156,50 @@ Unit=lhpc-selfupdate.service
 WantedBy=default.target
 """
 
-_TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH}
+_NGINX = """\
+# LoRaHAM Pi Control nginx TLS front-end — CANONICAL managed unit (generated; do not hand-edit).
+# Rootless USER service: terminates HTTPS/mTLS on the configured high port (default 8443) and
+# reverse-proxies to the Waitress unix socket. LHPC GENERATES + VALIDATES the config; runtime
+# reloads use `nginx -s reload` (never systemctl). Install/enable/start happen in OPERATOR
+# context only (installer / --repair-integration / CLI) — the web process never starts it.
+[Unit]
+Description=LoRaHAM Pi Control nginx TLS front-end
+Documentation=file://{checkout}/docs/webserver.md
+After=network-online.target lhpc-web.service
+Wants=network-online.target lhpc-web.service
+# Do not run until LHPC has generated a proxy config (webserver apply/init writes it).
+ConditionPathExists={root}/config/nginx/lhpc.conf
+
+[Service]
+Type=forking
+Environment=LHPC_RUNTIME_ROOT={root}
+PIDFile={root}/state/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -c {root}/config/nginx/lhpc.conf
+ExecStart=/usr/sbin/nginx -c {root}/config/nginx/lhpc.conf
+ExecReload=/usr/sbin/nginx -s reload -c {root}/config/nginx/lhpc.conf
+ExecStop=/usr/sbin/nginx -s quit -c {root}/config/nginx/lhpc.conf
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-nginx
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={root} /tmp
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
+"""
+
+_TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT: _NGINX}
 
 
 def render(kind: str, root: str, checkout: str, venv: str) -> str:
@@ -249,6 +293,16 @@ def _classify_mismatch(kind: str, text: str, root: str) -> str:
         if ours:
             return MODIFIED_OURS
         if watched:                                      # a request-watch naming ANOTHER root
+            return FOREIGN
+        return AMBIGUOUS
+    if kind == NGINX_UNIT:
+        # The nginx unit's ExecStart is the system nginx binary (not the venv lhpc), so its
+        # provenance is proven by the runtime-root env alone (normalized for a `%h` spelling).
+        envs = [ln[len("Environment=LHPC_RUNTIME_ROOT="):] for ln in lines
+                if ln.startswith("Environment=LHPC_RUNTIME_ROOT=")]
+        if any(_expand_h(v, home) == root for v in envs):
+            return MODIFIED_OURS
+        if any(_expand_h(v, home) != root for v in envs):
             return FOREIGN
         return AMBIGUOUS
     # web / helper services

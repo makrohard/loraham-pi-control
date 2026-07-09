@@ -142,6 +142,29 @@ def _git(system: System, root: Path, args: list[str], timeout: float):
     return system.runner.run(["git", "-C", str(root), *args], timeout=timeout)
 
 
+# Strip ANSI/OSC escapes, C0/C1 control chars, and Unicode box-drawing/block glyphs — the noise that
+# makes a raw git/pip tail render as garbage in an HTML flash. Kept module-level so the sanitizer is
+# tested directly.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_NOISE_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f─-▟]")
+
+
+def _summarize_output(text: str, limit: int = 200) -> str:
+    """Reduce raw command output (git/pip stderr, possibly multi-line with ANSI colour, indented
+    `hint:` blocks, or Unicode box-drawing) to ONE clean, bounded, single-line human string safe to
+    drop into a status summary. Empty input → ''. This is presentation hygiene only; the underlying
+    command result is unchanged."""
+    if not text:
+        return ""
+    cleaned = _NOISE_RE.sub(" ", _ANSI_RE.sub("", text))
+    # Collapse every whitespace run (incl. the now-stripped newlines) to single spaces, so nothing
+    # depends on HTML/terminal whitespace handling downstream.
+    collapsed = " ".join(cleaned.split())
+    if len(collapsed) > limit:
+        collapsed = collapsed[:limit].rstrip() + "…"
+    return collapsed
+
+
 def local_state(system: System) -> dict:
     """NETWORK-FREE local snapshot: version + HEAD + branch + dirtiness. `is_git` is False when lhpc
     is not a git checkout (self-update unavailable)."""
@@ -163,6 +186,31 @@ def local_state(system: System) -> dict:
     s = _git(system, root, ["status", "--porcelain"], _LOCAL_TIMEOUT)
     st["dirty"] = bool(s.returncode == 0 and s.stdout.strip())
     return st
+
+
+def ff_blocked(system: System, branch: str = "") -> bool:
+    """NETWORK-FREE: would a normal (fast-forward-only) update be REFUSED because the local history
+    has diverged? True when HEAD is NOT an ancestor of the already-fetched upstream ref AND differs
+    from it — i.e. `git merge --ff-only` would fail and only a force (reset --hard) can update. Uses
+    the remote-tracking ref populated by the last 'check for updates' fetch, so it makes no network
+    call. Fail-soft: any git error / missing ref / not-a-checkout → False (nothing to warn about)."""
+    root = repo_root()
+    if root is None:
+        return False
+    local = local_state(system)
+    br = branch or local.get("branch") or "main"
+    ref = f"{_REMOTE}/{br}"
+    up = _git(system, root, ["rev-parse", ref], _LOCAL_TIMEOUT)
+    if up.returncode != 0:
+        return False                                  # upstream ref not present locally → can't tell
+    up_head = up.stdout.strip()
+    if not up_head or up_head == local.get("head"):
+        return False                                  # up to date → not blocked
+    anc = _git(system, root, ["merge-base", "--is-ancestor", "HEAD", ref], _LOCAL_TIMEOUT)
+    # `merge-base --is-ancestor` uses EXACTLY: 0 = ancestor (ff-able), 1 = NOT an ancestor
+    # (diverged). Any other code (128 bad/ missing ref, runner failure, …) is a real error — fail
+    # SOFT to False so a transient git problem never masquerades as divergence and offers a force.
+    return anc.returncode == 1
 
 
 def _version_at(system: System, root: Path, ref: str) -> str:
@@ -196,11 +244,11 @@ def check_upstream(system: System, branch: str = "") -> dict:
     if getattr(f, "not_found", False):
         return {"ok": False, "error": "git not found"}
     if f.returncode != 0:
-        return {"ok": False, "error": (f.stderr or "fetch failed").strip()[:200]}
+        return {"ok": False, "error": _summarize_output(f.stderr) or "fetch failed"}
     ref = f"{_REMOTE}/{br}"
     h = _git(system, root, ["rev-parse", ref], _LOCAL_TIMEOUT)
     if h.returncode != 0:
-        return {"ok": False, "error": (h.stderr or "no upstream ref").strip()[:200]}
+        return {"ok": False, "error": _summarize_output(h.stderr) or "no upstream ref"}
     head = h.stdout.strip()
     return {"ok": True, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],
             "upstream_version": _version_at(system, root, ref),
@@ -722,12 +770,13 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
             cl = _git(system, root, ["clean", "-ffd"], _LOCAL_TIMEOUT)
             if cl.returncode != 0:
                 cleanup_failed = True
-                cleanup_error = (cl.stderr or cl.stdout or "git clean failed").strip()[:200]
+                cleanup_error = _summarize_output(cl.stderr or cl.stdout) or "git clean failed"
     else:
         m = _git(system, root, ["merge", "--ff-only", ref], _LOCAL_TIMEOUT)
     if m.returncode != 0:
+        detail = _summarize_output(m.stderr)
         return {"ok": False, "message": "Update could not be applied — the local branch has diverged "
-                "from upstream. " + (m.stderr or "").strip()[:200]}
+                "from upstream." + (f" {detail}" if detail else "")}
     refresh_cache(system, paths, br)
     out = {"ok": True, "deps_changed": bool(up.get("deps_changed", False)),
            "new_head_short": up.get("upstream_head_short", ""),

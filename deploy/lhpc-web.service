@@ -16,7 +16,7 @@ StartLimitBurst=5
 Type=simple
 Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
 WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
-ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc web --host 127.0.0.1 --port 8770
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc web --socket
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

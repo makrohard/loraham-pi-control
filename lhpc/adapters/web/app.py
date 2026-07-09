@@ -32,6 +32,19 @@ _RUNNING = ("running", "degraded")
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1"}
 
+
+def peer_is_loopback() -> bool:
+    """Loopback-vs-remote decision for loopback-only actions (e.g. a new `.p12` download).
+
+    Trusts ONLY the nginx-set `X-LHPC-Peer` header — nginx strips any client-supplied copy
+    and sets it from the real `$remote_addr`. When the header is absent the app is not behind
+    nginx (bare interactive loopback-TCP mode / tests), which is loopback by construction, so
+    treat it as loopback. A REMOTE client always traverses nginx, which always sets the header
+    to `remote`, so a remote peer can never appear loopback here."""
+    from flask import request
+    hdr = request.headers.get("X-LHPC-Peer", "")
+    return hdr == "loopback" if hdr else True
+
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -73,10 +86,20 @@ def _parse_start_daemon_overrides(form):
 def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     """Build the Flask app. `service_factory` is injectable for tests."""
     app = Flask(__name__)
-    # Per-process secret for signed sessions / CSRF tokens (local console only).
-    app.secret_key = _secrets.token_bytes(32)
     factory: ServiceFactory = service_factory or ControllerService
     service = factory()
+    # PERSISTENT signed-session/CSRF secret (survives restarts; not reset by "Reset to
+    # default"). Fail-safe: if the runtime secret can't be read/created, fall back to a
+    # per-process secret so the console still starts (sessions just won't survive restart).
+    try:
+        app.secret_key = service.web_session_secret()
+    except Exception:
+        app.secret_key = _secrets.token_bytes(32)
+    # Cookie hardening. Secure (HTTPS-only) cookies are correct behind the nginx TLS boundary;
+    # disabled only when a caller explicitly marks the app non-productive (e.g. the bare
+    # interactive TCP mode / tests) so an http test client still round-trips the session.
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                      SESSION_COOKIE_SECURE=bool(app.config.get("LHPC_SECURE_COOKIES", False)))
 
     def _csrf_token() -> str:
         if "_csrf" not in session:
@@ -105,6 +128,25 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for key, value in _SECURITY_HEADERS.items():
             response.headers[key] = value
         return response
+
+    @app.before_request
+    def _trusted_host():  # noqa: ANN202
+        # Explicit trusted-host policy — ENFORCED only in productive HTTPS mode (Secure cookies),
+        # so the interactive loopback-TCP console and the test client (plain http) are unaffected.
+        # The allowlist is loopback names + the operator-configured server SANs/bind; the Host
+        # header is compared, never a client-supplied X-Forwarded-Host.
+        if not app.config.get("SESSION_COOKIE_SECURE"):
+            return None
+        host = (request.host or "").split(":")[0].lower()
+        allowed = {"localhost", "127.0.0.1", "::1"}
+        try:
+            ws = service.config().webserver
+            allowed |= {h.lower() for h in ws.dns_sans} | set(ws.ip_sans) | {ws.bind}
+        except Exception:
+            pass
+        if host and host not in allowed:
+            abort(400)
+        return None
 
     def _runtime_root() -> str:
         return str(service.runtime_root)  # display only
@@ -367,11 +409,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # only set when the update apply flow renders back here. All controller data is
         # cached-only — no live git/network/identity on a GET.
         groups, snapshot = _stack_groups()
+        # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
+        # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
+        from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
+        try:
+            _ws = service.webserver_monitor().data
+        except Exception:
+            _ws = None
         ctx = dict(
             version=__version__, runtime_root=_runtime_root(), snapshot=snapshot,
             summary=summarize(snapshot), groups=groups, bulk_mode=service.bulk_mode(),
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
             controller=service.controller_status(),
+            ws_mon=_ws, ws_certs=(_ws or {}).get("pki", {}).get("clients", []),
+            ws_modes=list(_WS_MODES), ws_loopback=peer_is_loopback(),
             st=service.self_update_status(), jobs=service.active_jobs(),
             # One-click integration status (GET-safe file reads): gates the "Update now" button
             # and drives recovery/guidance in _update.html.
@@ -393,28 +444,35 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("stacks_overview") + "#controller-row")
 
-    @app.post("/self-update/apply")
+    @app.route("/self-update/apply", methods=["GET", "POST"])
     def self_update_apply():  # noqa: ANN202
         # One-click self-update. The running console cannot apply in-process (it holds the
         # controller-runtime lock SHARED so its own code is never mutated underneath it);
         # a confirmed request starts the PARAMETER-FREE updater unit, which stops this
         # service, applies (all gates), syncs the venv and starts the console again.
+        if request.method == "GET":
+            # Both stages render INLINE at this URL, so the browser tab stays on /self-update/apply.
+            # A stray GET (reload, Back button, or the browser re-requesting through the restart
+            # outage) must NOT 405 — send it to the controller row instead.
+            return redirect(url_for("stacks_overview") + "#controller-row")
         if not _csrf_ok():
             abort(400)
         st = service.self_update_status()
         if request.form.get("confirmed") != "yes":
-            # Stage 1 — confirm: warn about the automatic stop/update/restart. The dirty
-            # state is checked FRESH here (local git only, POST-time) — if dirty, the
-            # discard-consent checkbox is the operator's explicit agreement.
+            # Stage 1 — confirm: warn about the automatic stop/update/restart. The dirty AND
+            # diverged states are checked FRESH here (local git only, POST-time) — if either holds,
+            # a normal update is refused and the discard-consent checkbox is the operator's explicit
+            # agreement to force (reset --hard + clean).
             return _render_stacks(confirm={"dirty": service.self_update_local_dirty(),
+                                           "diverged": service.self_update_ff_blocked(),
                                            "update_available": st.get("update_available")})
         # Stage 2 — trigger. Consent only sets the request marker's payload bit
-        # (normal|overwrite); a stale overwrite tick with a meanwhile-clean tree drops to normal.
-        # repair_and_trigger delegates straight to the marker trigger when the units are already
-        # canonical, and otherwise migrates a legacy same-root deployment (old/%h units, no .path)
-        # to the canonical set first — all in this one click.
+        # (normal|overwrite); a stale overwrite tick with a meanwhile-clean, fast-forwardable tree
+        # drops to normal. repair_and_trigger delegates straight to the marker trigger when the units
+        # are already canonical, and otherwise migrates a legacy same-root deployment (old/%h units,
+        # no .path) to the canonical set first — all in this one click.
         overwrite = (request.form.get("overwrite") == "yes"
-                     and service.self_update_local_dirty())
+                     and (service.self_update_local_dirty() or service.self_update_ff_blocked()))
         res = service.self_update_repair_and_trigger(overwrite=overwrite)
         if not res.ok:
             flash(res.summary, "warn")
@@ -965,6 +1023,166 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template("error.html", code=500,
                                message="Internal error — see the server log."), 500
 
+    # ---- Webserver: controller-owned component, rendered INLINE in the controller row on
+    # /stacks (no separate page). This route only redirects old bookmarks to that anchor.
+    @app.route("/stacks/loraham-pi-control")
+    def controller_webserver():  # noqa: ANN202
+        return redirect(url_for("stacks_overview") + "#webserver-row")
+
+    @app.get("/webserver/logs")
+    def webserver_logs():  # noqa: ANN202
+        # The LHPC-managed nginx front-end's on-disk access/error logs. Read-only, cached-only:
+        # a bounded no-follow tail (no service probe). `src` is whitelisted to error|access.
+        src = "access" if request.args.get("src") == "access" else "error"
+        path, lines = service.webserver_log_tail(src, 300)
+        return render_template("webserver_logs.html", version=__version__,
+                               runtime_root=_runtime_root(), src=src, path=path, lines=lines)
+
+    def _ws_back():
+        return redirect(url_for("stacks_overview") + "#webserver-row")
+
+    @app.route("/webserver/configure", methods=["POST"])
+    def webserver_configure():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        f = request.form
+        fields = {}
+        if f.get("bind"):
+            fields["bind"] = f["bind"]
+        if f.get("port"):
+            fields["port"] = f["port"]
+        if f.get("access_mode"):
+            fields["access_mode"] = f["access_mode"]
+        if "dns_sans" in f:
+            fields["dns_sans"] = [x.strip() for x in f.get("dns_sans", "").split(",") if x.strip()]
+        if "ip_sans" in f:
+            fields["ip_sans"] = [x.strip() for x in f.get("ip_sans", "").split(",") if x.strip()]
+        r = service.webserver_configure(**fields)
+        flash(r.summary, "ok" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/expose", methods=["POST"])
+    def webserver_expose():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        f = request.form
+        cidrs = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
+        # Typed confirmation (not a checkbox): 'enable-remote' for a normal LAN range,
+        # 'enable-remote-danger' for the elevated case (public 0.0.0.0/0 or no-auth remote).
+        phrase = f.get("confirm_phrase", "").strip()
+        r = service.webserver_expose(cidrs, access_mode=(f.get("access_mode") or None),
+                                     confirm=phrase in ("enable-remote", "enable-remote-danger"),
+                                     confirm_public=(phrase == "enable-remote-danger"))
+        flash(r.summary, "ok" if r.ok else "err")
+        for d in r.details:
+            flash(d, "info" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/disable-remote", methods=["POST"])
+    def webserver_disable_remote():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        r = service.webserver_disable_remote()
+        flash(r.summary, "ok" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/reset", methods=["POST"])
+    def webserver_reset():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        if request.form.get("confirm_phrase", "") != "reset":
+            flash("type 'reset' to confirm reset-to-default", "err")
+            return _ws_back()
+        r = service.webserver_reset_defaults()
+        flash(r.summary, "ok" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/verify", methods=["POST"])
+    def webserver_verify():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        r = service.webserver_verify()
+        flash(r.summary, "ok" if r.ok else "warn")
+        return _ws_back()
+
+    @app.route("/webserver/apply", methods=["POST"])
+    def webserver_apply():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        r = service.webserver_apply()
+        flash(r.summary, "ok" if r.ok else "err")
+        for d in r.details:
+            flash(d, "warn")
+        return _ws_back()
+
+    @app.route("/webserver/init", methods=["POST"])
+    def webserver_init():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        # First-time init on a fresh PKI needs no phrase; RE-initializing (destructive) requires
+        # the typed phrase 'recreate'.
+        confirm = request.form.get("confirm_phrase", "").strip() == "recreate"
+        r = service.webserver_init(confirm=confirm)
+        flash(r.summary, "ok" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/tls-renew", methods=["POST"])
+    def webserver_tls_renew():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        r = service.webserver_tls_renew()
+        flash(r.summary, "ok" if r.ok else "err")
+        return _ws_back()
+
+    @app.route("/webserver/cert", methods=["POST"])
+    def webserver_cert():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        f = request.form
+        op, label = f.get("op", ""), f.get("label", "")
+        if op in ("issue", "reissue"):
+            pw = _secrets.token_urlsafe(18)     # one-time; shown once, never persisted/logged
+            fn = service.webserver_cert_issue if op == "issue" else service.webserver_cert_reissue
+            r = fn(label, pw)
+            if r.ok:
+                flash(f"{r.summary}. One-time passphrase (record it now): {pw}", "ok")
+                if peer_is_loopback():
+                    flash("Bundle ready — download it now from this loopback session.", "info")
+                else:
+                    flash("Bundle created; a NEW bundle can be downloaded only from a "
+                          "loopback session (remote download is refused).", "warn")
+            else:
+                flash(r.summary, "err")
+        elif op == "revoke":
+            # Typed confirmation: the operator must type the exact certificate label to revoke it.
+            if f.get("confirm_phrase", "").strip() != label:
+                flash(f"type the certificate label '{label}' to confirm revocation", "err")
+            else:
+                r = service.webserver_cert_revoke(label)
+                flash(r.summary, "ok" if r.ok else "err")
+        elif op == "discard":
+            flash(service.webserver_cert_discard_export(label).summary, "ok")
+        else:
+            flash("unknown certificate action", "err")
+        return _ws_back()
+
+    @app.route("/webserver/cert/<label>/download")
+    def webserver_cert_download(label):  # noqa: ANN202
+        # LOOPBACK-ONLY: a remotely-authenticated browser must never pull a new private key.
+        if not peer_is_loopback():
+            abort(403)
+        try:
+            blob = service.webserver_cert_export_bytes(label)
+        except Exception:
+            abort(404)
+        if not blob:
+            abort(404)
+        from flask import Response
+        safe = label.replace('"', "").replace("\\", "")
+        return Response(blob, mimetype="application/x-pkcs12",
+                        headers={"Content-Disposition": f'attachment; filename="{safe}.p12"',
+                                 "Cache-Control": "no-store"})
+
     return app
 
 
@@ -994,9 +1212,18 @@ def update_check_interval_s() -> float:
     return float(min(max(raw, UPDATE_CHECK_MIN_HOURS), UPDATE_CHECK_MAX_HOURS)) * 3600.0
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
-    """Run the console, refusing any non-loopback bind. No debug, no reloader."""
-    if host not in _LOOPBACK_HOSTS:
+def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) -> int:
+    """Run the console. Two serving modes:
+
+      * PRODUCTIVE (``socket=True``): serve over a protected Unix-domain socket under the
+        runtime root (``state/run/lhpc-web.sock``, 0600) — NO TCP listener. This is the
+        backend behind the Nginx TLS/mTLS boundary. Waitress is MANDATORY here: if it is
+        absent we FAIL CLOSED (never the Flask dev server) — productive serving must never
+        silently degrade.
+      * INTERACTIVE (default, ``socket=False``): a loopback-only TCP bind for bare local use;
+        Waitress preferred, Flask dev server only as a loud non-productive fallback.
+    """
+    if not socket and host not in _LOOPBACK_HOSTS:
         print(
             f"ERR  refusing to bind '{host}': the operator console is loopback-only "
             f"(allowed: {', '.join(sorted(_LOOPBACK_HOSTS))}).\n"
@@ -1023,6 +1250,9 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
         return 1
     try:
         app = create_app()
+        if socket:
+            # Productive mode is HTTPS behind nginx -> Secure cookies.
+            app.config.update(SESSION_COOKIE_SECURE=True)
         # Best-effort, NON-BLOCKING upstream freshness checks (process startup + a slow
         # periodic loop — NOT GET routes) so the footer's "Update →" indicator appears
         # without the operator pressing "Check for updates". One check right away (existing
@@ -1048,23 +1278,43 @@ def run_server(host: str = "127.0.0.1", port: int = 8770) -> int:
                     time.sleep(min(30.0, max(0.1, deadline - time.monotonic())))
 
         threading.Thread(target=_selfcheck_loop, name="lhpc-selfcheck", daemon=True).start()
-        print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
-        print("     Loopback-only. Press Ctrl-C to stop.")
-        # Supported deployment uses a production-capable WSGI server (waitress): one process,
-        # multi-threaded, no debug, no reloader. The Flask dev server is a fallback for bare
-        # interactive use only (still loopback-only, no debug, no reloader). waitress is NOT a
-        # hard dependency — if it is absent we fall back and say so.
         try:
             from waitress import serve as _waitress_serve
         except ImportError:
             _waitress_serve = None
+        if socket:
+            # PRODUCTIVE: Unix socket only, Waitress MANDATORY. No TCP, no dev-server fallback.
+            if _waitress_serve is None:
+                print("ERR  waitress is required for productive (Unix-socket) serving but is "
+                      "not installed — refusing to start (productive serving must not fall back "
+                      "to the Flask development server). Install the declared 'waitress' "
+                      "dependency in the venv.")
+                return 1
+            from lhpc.core import runtime_fs as _rfs
+            from lhpc.core.webserver import WAITRESS_SOCK as _SOCK
+            paths = _resolve_paths()
+            _rfs.mkdir(paths, "state", "run")
+            sock_path = str(paths.under(*_SOCK))
+            # Clear a stale socket leaf (no-follow, contained) so bind() cannot fail on leftovers.
+            try:
+                _rfs.unlink(paths, paths.under(*_SOCK))
+            except (FileNotFoundError, OSError):
+                pass
+            print(f"OK   LoRaHAM Pi Control console on unix socket {sock_path} (behind nginx).")
+            print("     No TCP listener. Press Ctrl-C to stop.")
+            _waitress_serve(app, unix_socket=sock_path, unix_socket_perms="600",
+                            threads=8, ident="lhpc")
+            return 0
+        # INTERACTIVE loopback TCP (bare local use). Waitress preferred; Flask dev server only
+        # as a loud, explicitly non-productive fallback.
+        print(f"OK   LoRaHAM Pi Control console at http://{host}:{port}/")
+        print("     Loopback-only. Press Ctrl-C to stop.")
         if _waitress_serve is not None:
-            # Single listening process; threads let live monitor polling + actions overlap.
             _waitress_serve(app, host=host, port=port, threads=8, ident="lhpc")
         else:
             print("WARN waitress not installed — using the Flask dev server (OK for local "
-                  "interactive use only).\n"
-                  "     For the supported systemd deployment, install 'waitress' in the venv "
+                  "interactive use only, NOT the supported productive mode).\n"
+                  "     For the systemd deployment, install 'waitress' in the venv "
                   "(see docs/deployment.md).")
             app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
         return 0

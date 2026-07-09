@@ -25,6 +25,7 @@ def _install(tmp_path, **units) -> Path:
     (U.WEB_UNIT, "lhpc-web.service"),
     (U.HELPER_UNIT, "lhpc-selfupdate.service"),
     (U.PATH_UNIT, "lhpc-selfupdate.path"),
+    (U.NGINX_UNIT, "lhpc-nginx.service"),
 ])
 def test_deploy_templates_are_exact_renders(kind, fname):
     r = "%h/loraham-pi-control"
@@ -69,10 +70,7 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
 # --- verify() class taxonomy -----------------------------------------------------------------
 
 def _canon(tmp_path):
-    return _install(tmp_path,
-                    **{U.WEB_UNIT: U.render(U.WEB_UNIT, ROOT, CO, VENV),
-                       U.HELPER_UNIT: U.render(U.HELPER_UNIT, ROOT, CO, VENV),
-                       U.PATH_UNIT: U.render(U.PATH_UNIT, ROOT, CO, VENV)})
+    return _install(tmp_path, **{k: U.render(k, ROOT, CO, VENV) for k in U.ALL_UNITS})
 
 
 def test_verify_ok_and_integration_ok(tmp_path):
@@ -176,7 +174,9 @@ def _pct_units(tail="loraham-pi-control"):
     helper = (f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/{tail}\n"
               f"ExecStart=%h/{tail}/venv/lhpc/bin/lhpc self-update --run-service\n")
     path = f"[Path]\nPathExists=%h/{tail}/state/selfupdate.request\nUnit=lhpc-selfupdate.service\n"
-    return {U.WEB_UNIT: web, U.HELPER_UNIT: helper, U.PATH_UNIT: path}
+    nginx = (f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/{tail}\n"
+             f"ExecStart=/usr/sbin/nginx -c %h/{tail}/config/nginx/lhpc.conf\n")
+    return {U.WEB_UNIT: web, U.HELPER_UNIT: helper, U.PATH_UNIT: path, U.NGINX_UNIT: nginx}
 
 
 def test_verify_pct_h_same_root_is_modified_ours(tmp_path):
@@ -217,3 +217,28 @@ def test_write_set_overwrites_pct_h_modified_ours(tmp_path):
     actions = dict(U.write_set(ud, root))
     assert actions[U.WEB_UNIT] == "restored"                 # %h modified_ours -> overwritten
     assert U.verify(ud, U.WEB_UNIT, root, co, venv) == U.OK  # now canonical literal
+
+
+# --- nginx front-end unit --------------------------------------------------------------------
+
+def test_nginx_unit_shape():
+    n = U.render(U.NGINX_UNIT, ROOT, CO, VENV)
+    assert f"Environment=LHPC_RUNTIME_ROOT={ROOT}" in n
+    assert f"ExecStart=/usr/sbin/nginx -c {ROOT}/config/nginx/lhpc.conf" in n
+    assert f"ExecReload=/usr/sbin/nginx -s reload -c {ROOT}/config/nginx/lhpc.conf" in n
+    assert f"ConditionPathExists={ROOT}/config/nginx/lhpc.conf" in n     # no config -> no start
+    assert "ProtectHome=read-only" in n and "ProtectSystem=strict" in n
+    # no systemctl in any ACTIVE directive (declarative reloads use `nginx -s reload`)
+    assert not any("systemctl" in ln for ln in n.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_nginx_classify_ours_vs_foreign(tmp_path):
+    import os
+    home = os.path.expanduser("~"); root = f"{home}/loraham-pi-control"
+    _, co, venv = U.deployment_paths(root)
+    ours = "[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control\nExecStart=/usr/sbin/nginx\n"
+    foreign = "[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/other-root\nExecStart=/usr/sbin/nginx\n"
+    ud = _install(tmp_path, **{U.NGINX_UNIT: ours})
+    assert U.verify(ud, U.NGINX_UNIT, root, co, venv) == U.MODIFIED_OURS
+    ud2 = _install(tmp_path / "b", **{U.NGINX_UNIT: foreign})
+    assert U.verify(ud2, U.NGINX_UNIT, root, co, venv) == U.FOREIGN

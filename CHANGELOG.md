@@ -1,5 +1,8 @@
 # Changelog
 
+## unreleased
+- Webserver hardening
+
 ## 0.1.3
 - self-hosting
 - install-all

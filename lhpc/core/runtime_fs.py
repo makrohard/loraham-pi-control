@@ -30,7 +30,7 @@ from pathlib import Path
 from .paths import Paths, PathContainmentError
 
 __all__ = [
-    "PathContainmentError", "mkdir", "ensure_dir", "atomic_write",
+    "PathContainmentError", "mkdir", "ensure_dir", "atomic_write", "atomic_write_bytes",
     "write_marker", "write_launcher", "open_marker_excl", "open_existing_marker", "OwnedMarker", "open_log_append", "open_log_truncate", "open_lock",
     "unlink", "chmod", "replace_symlink", "read_bytes", "read_text", "tail", "listdir",
     "scandir_nofollow", "rename_leaf",
@@ -148,6 +148,42 @@ def atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None
             os.chmod(tmp, mode, dir_fd=parent_fd)
             os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             os.fsync(parent_fd)                       # durable rename (parent dir entry)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+
+
+def atomic_write_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Atomically write BINARY `data` to a contained runtime leaf — the byte-oriented peer of
+    `atomic_write` (same descriptor-anchored, no-follow, unique-temp, fsync+rename+parent-fsync
+    guarantees). Used for secret-bearing binary artifacts (e.g. encrypted PKCS#12 bundles);
+    defaults to 0600."""
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        if _is_symlink_leaf(parent_fd, name):
+            raise PathContainmentError(f"refusing to write through a symlink leaf: {path}")
+        tmp, fd = None, None
+        for _ in range(64):
+            cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             mode, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError(f"could not create a unique temp file for {path}")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, mode, dir_fd=parent_fd)
+            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
         except BaseException:
             try:
                 os.unlink(tmp, dir_fd=parent_fd)

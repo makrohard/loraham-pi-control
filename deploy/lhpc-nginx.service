@@ -1,0 +1,40 @@
+# LoRaHAM Pi Control nginx TLS front-end — CANONICAL managed unit (generated; do not hand-edit).
+# Rootless USER service: terminates HTTPS/mTLS on the configured high port (default 8443) and
+# reverse-proxies to the Waitress unix socket. LHPC GENERATES + VALIDATES the config; runtime
+# reloads use `nginx -s reload` (never systemctl). Install/enable/start happen in OPERATOR
+# context only (installer / --repair-integration / CLI) — the web process never starts it.
+[Unit]
+Description=LoRaHAM Pi Control nginx TLS front-end
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/webserver.md
+After=network-online.target lhpc-web.service
+Wants=network-online.target lhpc-web.service
+# Do not run until LHPC has generated a proxy config (webserver apply/init writes it).
+ConditionPathExists=%h/loraham-pi-control/config/nginx/lhpc.conf
+
+[Service]
+Type=forking
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+PIDFile=%h/loraham-pi-control/state/run/nginx.pid
+ExecStartPre=/usr/sbin/nginx -t -c %h/loraham-pi-control/config/nginx/lhpc.conf
+ExecStart=/usr/sbin/nginx -c %h/loraham-pi-control/config/nginx/lhpc.conf
+ExecReload=/usr/sbin/nginx -s reload -c %h/loraham-pi-control/config/nginx/lhpc.conf
+ExecStop=/usr/sbin/nginx -s quit -c %h/loraham-pi-control/config/nginx/lhpc.conf
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lhpc-nginx
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/loraham-pi-control /tmp
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target

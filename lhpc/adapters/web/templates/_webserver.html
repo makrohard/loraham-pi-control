@@ -1,0 +1,179 @@
+{# Controller-owned Webserver component, rendered INLINE in the controller row on /stacks
+   (a nested collapsible at the same level as Update). Requires: mon (webserver_monitor data),
+   modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
+{% from "_macros.html" import flash_classes %}
+<details class="stackrow ws-comp" id="webserver-row">
+  <summary>Webserver (HTTPS / mTLS)</summary>
+
+  {# ---- Monitor (shown by default; cached evidence only) ---- #}
+  <details class="advcfg" open>
+    <summary>Monitor</summary>
+    <section class="cfgsec">
+      {% for w in mon.warnings %}
+        <p class="flash {{ flash_classes(w.level) }}">{{ w.text }}</p>
+      {% endfor %}
+      <ul class="kv">
+        <li>Local IP address: <code>{{ mon.local_ip or 'unknown' }}</code>
+          {% if mon.local_ip %}<span class="muted">→ https://{{ mon.local_ip }}:{{ mon.desired.port }}/ (remote)</span>{% endif %}</li>
+        <li>Bind (desired): <code>{{ mon.desired.bind }}:{{ mon.desired.port }}</code></li>
+        <li>Access mode: <code>{{ mon.desired.access_mode }}</code></li>
+        <li>Remote exposure (desired): <code>{{ mon.desired.remote_exposed }}</code></li>
+        <li>Allowed CIDRs: <code>{{ mon.desired.allowed_cidrs|join(', ') or '(none)' }}</code></li>
+        <li>Effective remote listener (proven):
+          <code>{{ mon.effective.remote_listener if mon.effective else 'unknown' }}</code></li>
+        <li>Last verified: <code>{{ mon.last_verified or 'never' }}</code></li>
+        <li>PKI:
+          server-CA {{ 'present' if mon.pki.server_ca.present else 'absent' }} ·
+          client-CA {{ 'present' if mon.pki.client_ca.present else 'absent' }} ·
+          server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
+          CRL {{ 'present' if mon.pki.crl_present else 'absent' }}</li>
+      </ul>
+      <h4>System dependencies</h4>
+      <ul class="kv sysdeps">
+        {% for d in mon.system_deps %}
+        <li>{{ d.name }}: <code>{{ d.status }}</code> — {{ d.purpose }}
+          {% if d.status != 'present' %}· install: <code>{{ d.install }}</code>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('webserver_verify') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit">Verify now</button>
+      </form>
+    </section>
+  </details>
+
+  {# ---- Settings (collapsed) — one setting per line: name, input, short description ---- #}
+  <details class="advcfg settings">
+    <summary>Settings</summary>
+    <section class="cfgsec">
+      <form method="post" action="{{ url_for('webserver_configure') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p class="setting"><label>Bind</label>
+          <input name="bind" value="{{ mon.desired.bind }}">
+          <span class="muted">127.0.0.1 (loopback) or 0.0.0.0 (remote)</span></p>
+        <p class="setting"><label>Port</label>
+          <input name="port" value="{{ mon.desired.port }}">
+          <span class="muted">HTTPS port (default 8443)</span></p>
+        <p class="setting"><label>Access mode</label>
+          <select name="access_mode">
+            {% for m in modes %}
+              <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}>{{ m }}</option>
+            {% endfor %}
+          </select>
+          <span class="muted">Client-certificate (mTLS) policy</span></p>
+        <p class="setting"><label>DNS SANs</label>
+          <input name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}">
+          <span class="muted">Comma-separated hostnames for the server certificate</span></p>
+        <p class="setting"><label>IP SANs</label>
+          <input name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}">
+          <span class="muted">Comma-separated LAN IPs (never 0.0.0.0)</span></p>
+        <button type="submit">Save desired config</button>
+      </form>
+      <form method="post" action="{{ url_for('webserver_apply') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit">Apply (validate + reload)</button>
+      </form>
+
+      <h4>Remote exposure</h4>
+      <form method="post" action="{{ url_for('webserver_expose') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p class="setting"><label>Allowed CIDRs</label>
+          <input name="cidrs" placeholder="192.168.0.0/24">
+          <span class="muted">At least one required for remote exposure</span></p>
+        <p class="setting"><label>Access mode</label>
+          <select name="access_mode">
+            <option value="">(keep)</option>
+            {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+          </select></p>
+        <p class="setting"><label>Confirm</label>
+          <input name="confirm_phrase" autocomplete="off">
+          <span class="muted">Type <code>enable-remote</code> — or <code>enable-remote-danger</code>
+            for public <code>0.0.0.0/0</code> / no-auth remote</span></p>
+        <button type="submit">Enable remote exposure</button>
+      </form>
+      <form method="post" action="{{ url_for('webserver_disable_remote') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit">Disable remote</button>
+      </form>
+
+      <h4>Reset</h4>
+      <form method="post" action="{{ url_for('webserver_reset') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p class="setting"><label>Confirm</label>
+          <input name="confirm_phrase" autocomplete="off">
+          <span class="muted">Type <code>reset</code> to confirm</span></p>
+        <button type="submit">Reset to default</button>
+      </form>
+      <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off;
+        it never deletes CAs, certificates, CRL, revocation history, exports, or the session
+        secret. Verify to prove the remote listener has ceased.</p>
+    </section>
+  </details>
+
+  {# ---- Certificates (collapsed) ---- #}
+  <details class="advcfg">
+    <summary>Certificates</summary>
+    <section class="cfgsec">
+      <form method="post" action="{{ url_for('webserver_init') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p class="setting"><label>Initialize PKI</label>
+          <input name="confirm_phrase" autocomplete="off">
+          <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
+        <button type="submit">Initialize / recreate PKI</button>
+      </form>
+      <form method="post" action="{{ url_for('webserver_tls_renew') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit">Renew server certificate</button>
+      </form>
+      <form method="post" action="{{ url_for('webserver_cert') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="op" value="issue">
+        <p class="setting"><label>Issue client cert</label>
+          <input name="label" placeholder="laptop">
+          <span class="muted">Device label; prints a one-time bundle passphrase</span></p>
+        <button type="submit">Issue</button>
+      </form>
+      {% if not loopback %}
+        <p class="flash flash-warn">Remote session: a NEW private-key bundle can be downloaded
+          only from a loopback session. You may still manage existing certificates.</p>
+      {% endif %}
+      <table class="certs">
+        <tr><th>Label</th><th>State</th><th>Serial</th><th>Expires</th><th>Actions</th></tr>
+        {% for c in certs %}
+        <tr>
+          <td>{{ c.label }}</td><td>{{ c.state }}</td>
+          <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}</td>
+          <td>
+            {% if c.state == 'active' %}
+              <form method="post" action="{{ url_for('webserver_cert') }}" style="display:inline">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="op" value="revoke">
+                <input type="hidden" name="label" value="{{ c.label }}">
+                <input name="confirm_phrase" placeholder="type '{{ c.label }}'" size="10" autocomplete="off">
+                <button type="submit">Revoke</button>
+              </form>
+              {% if c.export and loopback %}
+                <a href="{{ url_for('webserver_cert_download', label=c.label) }}">Download .p12</a>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">(no client certificates)</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  </details>
+
+  {# ---- Logs (collapsed) — the nginx front-end's on-disk logs ---- #}
+  <details class="advcfg">
+    <summary>Logs</summary>
+    <section class="cfgsec">
+      <p>nginx front-end logs (on disk):
+        <a href="{{ url_for('webserver_logs', src='error') }}">error log</a> ·
+        <a href="{{ url_for('webserver_logs', src='access') }}">access log</a></p>
+      <p class="muted">The controller's own process logs go to the systemd journal —
+        <code>journalctl --user -u lhpc-web</code> / <code>-u lhpc-selfupdate</code>.</p>
+    </section>
+  </details>
+</details>

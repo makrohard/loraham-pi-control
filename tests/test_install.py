@@ -158,3 +158,17 @@ def test_plan_install_reports_present_and_absent(tmp_path):
     assert inst.plan_install().actions[0].kind == "verify"  # present -> verify
 
 
+
+
+def test_install_sh_preflight_covers_all_four_units():
+    """The fresh-install unit preflight must refuse an existing unit AND its .d drop-in for ALL
+    FOUR managed units (the 4th, lhpc-nginx.service, was added with the webserver feature)."""
+    import re
+    src = Path(__file__).resolve().parents[1] / "install.sh"
+    text = src.read_text()
+    m = re.search(r"for _u in ([^\n;]*); do", text)
+    assert m, "preflight unit loop not found in install.sh"
+    loop = m.group(1)
+    for v in ("WEB_UNIT", "HELPER_UNIT", "PATH_UNIT", "NGINX_UNIT"):
+        assert f'"${v}"' in loop, f"{v} missing from the unit preflight loop"
+    assert "already exists" in text and '"${_u}.d"' in text     # refuses unit + its drop-in dir

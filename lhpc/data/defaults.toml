@@ -28,3 +28,24 @@ adopt_search_root = ""
 # Filled in only in the runtime-local config/local.toml (never here):
 #   callsign = "YOURCALL"
 #   locator  = "JO00aa"
+
+[webserver]
+# DESIRED production-webserver configuration (Nginx -> Waitress/Unix-socket -> Flask).
+# This is intent only; whether the proxy is actually active/exposed is proven separately
+# in state/webserver.json and is never inferred from these values.
+bind = "127.0.0.1"          # default loopback; "0.0.0.0" only after explicit remote exposure
+port = 8443                 # standard high port (no root / privileged bind required)
+# Client-certificate (mTLS) policy. There are NO user accounts — a client cert is a named
+# device credential with equal full access. One of:
+#   local-open-remote-auth  loopback open; non-loopback requires a valid client cert (default)
+#   auth-everywhere         every client (incl. loopback) requires a valid client cert
+#   no-auth                 HTTPS only, no client cert anywhere (dangerous when exposed)
+access_mode = "local-open-remote-auth"
+remote_exposed = false      # remote access is opt-in and stays off until explicitly enabled + proven
+# Lists are stored as comma-separated scalars (local.toml is flat-scalar). IPv4 CIDRs only
+# for remote allowed sources (IPv6 remote exposure is rejected this milestone; ::1 is local).
+allowed_cidrs = ""          # e.g. "192.168.0.0/24" — at least one required before remote exposure
+dns_sans = ""               # e.g. "pi.local,lhpc.example" — real hostnames for the server cert
+ip_sans = ""                # e.g. "192.168.0.10" — LAN IP SANs (never 0.0.0.0)
+server_cert_days = 825      # HTTPS server leaf lifetime (renewed under the same server TLS CA)
+client_cert_days = 825      # client/device certificate lifetime

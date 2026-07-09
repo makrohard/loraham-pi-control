@@ -16,6 +16,13 @@ authors = [{ name = "Johannes Loose (DJ0CHE)", email = "410733@gmail.com" }]
 # Jinja templates — a small, dependency-light foundation (no SPA, no Node).
 dependencies = [
     "flask>=3,<4",
+    # Productive WSGI server (mandatory — the web console must not fall back to
+    # Flask's development server for productive serving).
+    "waitress>=3,<4",
+    # Local PKI: X.509 CA/leaf certificates, PKCS#12 client bundles, and CRLs are
+    # generated with this well-maintained library — never by building OpenSSL shell
+    # command strings for security-sensitive material.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

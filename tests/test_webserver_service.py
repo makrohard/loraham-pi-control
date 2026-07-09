@@ -1,0 +1,157 @@
+"""M10: ControllerService webserver facade — init, configure, exposure gating, reset
+(preserves PKI), certificate lifecycle, verify. Thin delegation, validated + fail-closed."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from lhpc.core import pki, webserver
+from lhpc.core.paths import Paths
+from lhpc.core.probes.backends import CommandResult, FakeSystem
+from lhpc.core.services import ControllerService
+
+
+def _svc(tmp_path: Path, fake: FakeSystem | None = None) -> ControllerService:
+    return ControllerService(system=(fake or FakeSystem()).system,
+                             paths=Paths(runtime_root=tmp_path))
+
+
+def test_init_bootstraps_pki(tmp_path):
+    svc = _svc(tmp_path)
+    r = svc.webserver_init(dns_sans=["pi.local"])
+    assert r.ok
+    st = pki.pki_status(svc._paths)
+    assert st["server_ca"]["present"] and st["client_ca"]["present"] and st["server_cert"]["present"]
+    assert pki.cas_are_distinct(svc._paths)
+
+
+def test_webserver_log_tail_reads_nginx_logs(tmp_path):
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    runtime_fs.mkdir(svc._paths, "logs")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-error.log"),
+                            "e1\ne2\n", 0o644)
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-access.log"),
+                            "a1\na2\n", 0o644)
+    ep, el = svc.webserver_log_tail("error")
+    ap, al = svc.webserver_log_tail("access")
+    assert ep.endswith("logs/nginx-error.log") and el == ["e1", "e2"]
+    assert ap.endswith("logs/nginx-access.log") and al == ["a1", "a2"]
+    # unknown selector degrades to the error log (never an arbitrary path)
+    up, ul = svc.webserver_log_tail("../../etc/passwd")
+    assert up.endswith("logs/nginx-error.log") and ul == ["e1", "e2"]
+
+
+def test_webserver_init_default_sans_match_endpoint(tmp_path):
+    # First-run init with NO SANs must produce a cert whose SANs match the advertised
+    # https://127.0.0.1:8443/ endpoint: DNS 'localhost' + IP '127.0.0.1', persisted to desired config.
+    from cryptography import x509
+    svc = _svc(tmp_path)
+    assert svc.webserver_init().ok
+    cfg = svc.config().webserver
+    assert cfg.dns_sans == ("localhost",) and cfg.ip_sans == ("127.0.0.1",)     # persisted
+    cert = x509.load_pem_x509_certificate(
+        (tmp_path / "config" / "tls" / "server" / "server.crt").read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert "localhost" in san.get_values_for_type(x509.DNSName)
+    assert "127.0.0.1" in [str(i) for i in san.get_values_for_type(x509.IPAddress)]
+    # tls-renew preserves both SANs
+    assert svc.webserver_tls_renew().ok
+    cert2 = x509.load_pem_x509_certificate(
+        (tmp_path / "config" / "tls" / "server" / "server.crt").read_bytes())
+    san2 = cert2.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    assert "localhost" in san2.get_values_for_type(x509.DNSName)
+    assert "127.0.0.1" in [str(i) for i in san2.get_values_for_type(x509.IPAddress)]
+
+
+def test_webserver_log_tail_line_count_is_clamped(tmp_path):
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    runtime_fs.mkdir(svc._paths, "logs")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-error.log"), "x\n", 0o644)
+    assert svc.webserver_log_tail("error", 10 ** 9)[1] == ["x"]     # absurd count clamped, no crash
+    assert svc.webserver_log_tail("error", -5)[1] == ["x"]          # negative clamped to >=1
+    assert svc.webserver_log_tail("error", "oops")[1] == ["x"]      # non-int -> default, no raise
+
+
+def test_webserver_log_tail_missing_and_symlink(tmp_path):
+    import os
+    from lhpc.core import runtime_fs
+    svc = _svc(tmp_path)
+    # missing file -> resolved path, empty tail (no crash)
+    p, lines = svc.webserver_log_tail("error")
+    assert p.endswith("logs/nginx-error.log") and lines == []
+    # a symlinked log leaf is refused (empty), never followed
+    runtime_fs.mkdir(svc._paths, "logs")
+    (tmp_path / "secret.txt").write_text("TOP SECRET\n")
+    os.symlink(tmp_path / "secret.txt", tmp_path / "logs" / "nginx-error.log")
+    p2, lines2 = svc.webserver_log_tail("error")
+    assert lines2 == []                                   # symlink not followed
+
+
+def test_configure_validates(tmp_path):
+    svc = _svc(tmp_path)
+    assert not svc.webserver_configure(access_mode="bogus").ok
+    assert not svc.webserver_configure(allowed_cidrs=["nope"]).ok
+    ok = svc.webserver_configure(dns_sans=["pi.local"], port=8443)
+    assert ok.ok and svc.config().webserver.dns_sans == ("pi.local",)
+
+
+def test_expose_gating(tmp_path):
+    svc = _svc(tmp_path)
+    assert not svc.webserver_expose([], confirm=True).ok                       # no CIDR
+    assert not svc.webserver_expose(["192.168.0.0/24"]).ok                     # no confirm
+    # public route needs elevated confirmation
+    assert not svc.webserver_expose(["0.0.0.0/0"], confirm=True).ok
+    assert svc.webserver_expose(["0.0.0.0/0"], confirm=True, confirm_public=True).ok
+    assert svc.config().webserver.remote_exposed is True
+    # no-auth remote also needs elevated confirmation
+    svc.webserver_disable_remote()
+    assert not svc.webserver_expose(["192.168.0.0/24"], access_mode="no-auth", confirm=True).ok
+    assert svc.webserver_expose(["192.168.0.0/24"], access_mode="no-auth",
+                                confirm=True, confirm_public=True).ok
+
+
+def test_disable_remote_and_reset_preserve_pki(tmp_path):
+    svc = _svc(tmp_path)
+    svc.webserver_init(dns_sans=["pi.local"])
+    svc.webserver_cert_issue("laptop", "pw")
+    svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    assert svc.config().webserver.remote_exposed is True
+    r = svc.webserver_reset_defaults()
+    # Without a running nginx master (FakeSystem has no nginx) cessation cannot be proven, so
+    # reset is truthfully NOT ok — but the DESIRED reset is applied and PKI preserved (below).
+    assert not r.ok and "UNPROVEN" in r.summary
+    cfg = svc.config().webserver
+    assert cfg.remote_exposed is False and cfg.bind == "127.0.0.1" and cfg.allowed_cidrs == ()
+    # PKI + client inventory preserved by reset
+    assert pki.pki_status(svc._paths)["server_ca"]["present"]
+    assert any(c["label"] == "laptop" for c in pki.list_client_certs(svc._paths))
+
+
+def test_cert_lifecycle(tmp_path):
+    svc = _svc(tmp_path)
+    svc.webserver_init()
+    issued = svc.webserver_cert_issue("tablet", "pw")
+    assert issued.ok and issued.data["label"] == "tablet"
+    assert any(c["label"] == "tablet" for c in svc.webserver_cert_list().data["certs"])
+    rev = svc.webserver_cert_revoke("tablet")
+    assert rev.ok and "RECORDED" in rev.summary
+    assert svc.webserver_cert_discard_export("tablet").ok
+
+
+def test_verify_uses_runner(tmp_path):
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    conf_path = str(svc0._paths.under(*webserver.NGINX_CONF_STAGED))
+    fake = FakeSystem(commands={
+        ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
+        ("nginx", "-t", "-c", conf_path): CommandResult(0, "", "successful"),
+    })
+    svc = ControllerService(system=fake.system, paths=svc0._paths)
+    r = svc.webserver_verify()
+    assert r.ok and r.data["checks"]["nginx_config_valid"] == "ok"
+    # cached-only monitor reflects it, never inferring active
+    mon = svc.webserver_monitor().data
+    assert mon["last_verified"] == r.data["checked_at"]
+    assert mon["effective"]["remote_listener"] is False

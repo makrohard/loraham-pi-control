@@ -197,7 +197,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_su.add_argument("--apply", action="store_true",
                       help="Apply the update (fast-forward); restart the console afterwards")
     p_su.add_argument("--overwrite", action="store_true",
-                      help="Discard local changes (modified + non-ignored untracked files) if dirty")
+                      help="Reset the checkout to upstream: discard local changes (modified + "
+                           "non-ignored untracked files) or a diverged history that can't fast-forward")
     p_su.add_argument("--yes", action="store_true", help="Apply without an interactive confirm")
     p_su.add_argument("--repair-integration", action="store_true",
                       help="Install/restore the managed web console + one-click updater units")
@@ -210,6 +211,51 @@ def build_parser() -> argparse.ArgumentParser:
     p_web = sub.add_parser("web", help="Start the local operator web console")
     p_web.add_argument("--host", default="127.0.0.1", help="Bind host (loopback only)")
     p_web.add_argument("--port", type=int, default=8770, help="Bind port")
+    p_web.add_argument("--socket", action="store_true",
+                       help="Productive mode: serve on the protected Unix socket behind nginx "
+                            "(no TCP listener; requires waitress)")
+
+    # Webserver (controller-owned): production Nginx + Waitress + TLS/mTLS control.
+    _WS_MODES = ["local-open-remote-auth", "auth-everywhere", "no-auth"]
+    p_ws = sub.add_parser("webserver", help="Production webserver (HTTPS/mTLS) control")
+    ws_sub = p_ws.add_subparsers(dest="ws_cmd")
+    ws_sub.add_parser("status", help="Cached webserver status (read-only)")
+    ws_sub.add_parser("verify", help="Verify effective state + persist evidence")
+    ws_sub.add_parser("apply", help="Validate + activate (reload) the current config")
+    ws_sub.add_parser("start-service", help="Operator-context: generate config + enable/start nginx")
+    ws_sub.add_parser("disable-remote", help="Disable remote exposure (bind loopback)")
+    ws_sub.add_parser("reset-defaults", help="Reset desired config to safe defaults")
+    ws_sub.add_parser("tls-renew", help="Renew the HTTPS server certificate")
+    p_ws_logs = ws_sub.add_parser("logs", help="Tail the nginx front-end access/error log")
+    p_ws_logs.add_argument("--access", action="store_true", help="Access log (default: error log)")
+    p_ws_logs.add_argument("--lines", type=int, default=300, help="Lines to tail (default 300)")
+    p_ws_init = ws_sub.add_parser("init", help="Bootstrap PKI (two CAs + server cert + CRL)")
+    p_ws_init.add_argument("--dns", action="append", default=[], help="DNS SAN (repeatable)")
+    p_ws_init.add_argument("--ip", action="append", default=[], help="IP SAN (repeatable)")
+    p_ws_init.add_argument("--confirm-recreate", action="store_true",
+                           help="Confirm DESTRUCTIVE re-init when a CA already exists")
+    p_ws_cfg = ws_sub.add_parser("configure", help="Set desired webserver config")
+    p_ws_cfg.add_argument("--bind")
+    p_ws_cfg.add_argument("--port", type=int)
+    p_ws_cfg.add_argument("--access-mode", choices=_WS_MODES)
+    p_ws_cfg.add_argument("--dns", action="append")
+    p_ws_cfg.add_argument("--ip", action="append")
+    p_ws_exp = ws_sub.add_parser("expose", help="Enable remote exposure (opt-in)")
+    p_ws_exp.add_argument("--cidr", action="append", default=[], help="Allowed source CIDR (repeatable)")
+    p_ws_exp.add_argument("--access-mode", choices=_WS_MODES)
+    p_ws_exp.add_argument("--confirm-phrase", default="",
+                          help="Type 'enable-remote' to confirm; 'enable-remote-danger' for the "
+                               "elevated case (public 0.0.0.0/0 or a no-auth remote mode)")
+    p_ws_cert = ws_sub.add_parser("cert", help="Client (device) certificate lifecycle")
+    cert_sub = p_ws_cert.add_subparsers(dest="cert_cmd")
+    cert_sub.add_parser("list", help="List client certificates")
+    for _n in ("issue", "reissue", "discard-export"):
+        _pc = cert_sub.add_parser(_n)
+        _pc.add_argument("label")
+    p_ws_rev = cert_sub.add_parser("revoke")
+    p_ws_rev.add_argument("label")
+    p_ws_rev.add_argument("--confirm-label", default="",
+                          help="Must equal <label> to confirm revocation")
 
     return parser
 
@@ -318,15 +364,102 @@ def main(argv: list[str] | None = None) -> int:
         if not args.apply:
             return _render(svc.self_update_check())          # explicit upstream check + status
         if not args.yes and not _confirm(
-                "This fast-forwards lhpc to the upstream version and then the web console must be "
-                "restarted to load it. Proceed? [y/N] "):
+                "This fast-forwards lhpc to the upstream version. If the web console is running it "
+                "will be STOPPED, updated, and STARTED again automatically. Proceed? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(svc.self_update_apply(force=args.overwrite))
+        return _render(svc.self_update_apply_operator(force=args.overwrite))
     if args.command == "web":
         from lhpc.adapters.web.app import run_server
 
-        return run_server(host=args.host, port=args.port)
+        return run_server(host=args.host, port=args.port, socket=args.socket)
+
+    if args.command == "webserver":
+        import secrets as _secrets
+        cmd = getattr(args, "ws_cmd", None)
+        if cmd == "status":
+            d = svc.webserver_monitor().data
+            des = d["desired"]
+            print("OK    webserver (cached status; no live probing)")
+            print(f"  bind {des['bind']}:{des['port']}  mode {des['access_mode']}  "
+                  f"remote_exposed {des['remote_exposed']}")
+            print(f"  allowed CIDRs: {', '.join(des['allowed_cidrs']) or '(none)'}")
+            eff = d.get("effective", {})
+            print(f"  effective: remote_listener={eff.get('remote_listener')}  "
+                  f"last_verified={d.get('last_verified')}")
+            for dep in d.get("system_deps", []):
+                extra = "" if dep["status"] == "present" else f"  -> {dep['install']}"
+                print(f"  system dep {dep['name']}: {dep['status']}{extra}")
+            for w in d.get("warnings", []):
+                print(f"  [{w['level']}] {w['text']}")
+            return 0
+        if cmd == "verify":
+            return _render(svc.webserver_verify())
+        if cmd == "apply":
+            return _render(svc.webserver_apply())
+        if cmd == "start-service":
+            return _render(svc.webserver_start_service())
+        if cmd == "init":
+            return _render(svc.webserver_init(dns_sans=args.dns or None, ip_sans=args.ip or None,
+                                              confirm=args.confirm_recreate))
+        if cmd == "configure":
+            fields = {k: v for k, v in (
+                ("bind", args.bind), ("port", args.port), ("access_mode", args.access_mode),
+                ("dns_sans", args.dns), ("ip_sans", args.ip)) if v is not None}
+            return _render(svc.webserver_configure(**fields))
+        if cmd == "expose":
+            phrase = (args.confirm_phrase or "").strip()
+            return _render(svc.webserver_expose(
+                args.cidr, access_mode=args.access_mode,
+                confirm=phrase in ("enable-remote", "enable-remote-danger"),
+                confirm_public=(phrase == "enable-remote-danger")))
+        if cmd == "disable-remote":
+            return _render(svc.webserver_disable_remote())
+        if cmd == "reset-defaults":
+            return _render(svc.webserver_reset_defaults())
+        if cmd == "tls-renew":
+            return _render(svc.webserver_tls_renew())
+        if cmd == "logs":
+            path, ls = svc.webserver_log_tail("access" if args.access else "error", args.lines)
+            print(path or "(no log file yet)")
+            for line in ls:
+                print(line)
+            if not ls:
+                print("(no output yet)")
+            return 0
+        if cmd == "cert":
+            cc = getattr(args, "cert_cmd", None)
+            if cc == "list":
+                certs = svc.webserver_cert_list().data["certs"]
+                if not certs:
+                    print("  (no client certificates)")
+                for c in certs:
+                    print(f"  {c.get('state', '?'):8} {c.get('label', '?'):16} "
+                          f"{c.get('serial', '')[:16]}  exp {c.get('not_after', '')}")
+                return 0
+            if cc in ("issue", "reissue"):
+                pw = _secrets.token_urlsafe(18)   # one-time; shown once, never persisted/logged
+                fn = svc.webserver_cert_issue if cc == "issue" else svc.webserver_cert_reissue
+                res = fn(args.label, pw)
+                if res.ok:
+                    print(f"OK    {res.summary}")
+                    for line in res.details:
+                        print(f"  {line}")
+                    print("\n  ONE-TIME bundle passphrase (not stored — record it now):"
+                          f"\n    {pw}")
+                    return 0
+                return _render(res)
+            if cc == "revoke":
+                if (args.confirm_label or "").strip() != args.label:
+                    print(f"ERR   revocation refused — pass --confirm-label {args.label} "
+                          "to confirm revoking this exact certificate")
+                    return 1
+                return _render(svc.webserver_cert_revoke(args.label))
+            if cc == "discard-export":
+                return _render(svc.webserver_cert_discard_export(args.label))
+        print("Usage: lhpc webserver {status|verify|init|configure|expose|disable-remote|"
+              "reset-defaults|tls-renew|logs|cert ...}")
+        return 2
 
     parser.print_help()
     return 1

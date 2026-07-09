@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}webserver logs ({{ src }}) — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# LHPC-managed nginx front-end logs (on disk under the runtime root). Static tail — reload to
+     refresh; no polling and no liveness probe (the controller-owned component is read-only). #}
+  <p><a href="{{ url_for('stacks_overview') }}#webserver-row">&larr; back to Webserver</a></p>
+  <div class="card">
+    <header>
+      <h2>Webserver logs <span class="pill">nginx {{ src }}</span></h2>
+      <span class="tabs">
+        <a href="{{ url_for('webserver_logs', src='error') }}"
+           class="pill{{ ' mono' if src == 'error' else '' }}">error log</a>
+        <a href="{{ url_for('webserver_logs', src='access') }}"
+           class="pill{{ ' mono' if src == 'access' else '' }}">access log</a>
+        <a href="{{ url_for('webserver_logs', src=src) }}" class="pill">reload</a>
+      </span>
+    </header>
+    <div class="body">
+      <p class="muted">{{ path or '(no log file yet)' }}</p>
+      <pre class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+      <p class="muted">The controller's own process logs go to the journal:
+        <code>journalctl --user -u lhpc-web</code> · <code>journalctl --user -u lhpc-nginx</code></p>
+    </div>
+  </div>
+{% endblock %}

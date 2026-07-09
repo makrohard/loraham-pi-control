@@ -240,6 +240,294 @@ class ControllerService:
         except OSError:
             return None
 
+    def web_session_secret(self) -> bytes:
+        """The persistent web-console session secret (generated once, 0600, survives restart;
+        not cleared by 'Reset to default'). Thin delegation to config — the web adapter calls
+        this instead of reaching into runtime paths."""
+        from . import config as _config
+        return _config.web_session_secret(self._paths)
+
+    # ---- webserver (controller-owned component; NOT a managed stack) ----------
+    #
+    # Thin delegation to pki/webserver/config. Every mutation validates before writing and
+    # fails closed; status reads cached evidence only. These are controller-owned and are
+    # NEVER routed through the generic stack/component verbs (install/build/test/...): the
+    # Webserver "component" is presentation only, so controller isolation is unaffected.
+
+    def webserver_monitor(self) -> "ActionResult":
+        """READ-ONLY cached status (Monitor/GET): desired config + last-proven effective
+        evidence + PKI state + warnings. No probing, no mutation."""
+        from . import webserver as _ws
+        view = _ws.monitor_view(self._paths, self.config().webserver)
+        return ActionResult(True, "webserver monitor", data=view)
+
+    def webserver_verify(self) -> "ActionResult":
+        """Explicit verification: assemble + persist the effective-evidence checklist."""
+        from . import webserver as _ws
+        ev = _ws.verify(self._system, self._paths, self.config().webserver)
+        failed = [k for k, v in ev["checks"].items() if v == "failed"]
+        ok = not failed
+        summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"
+        return ActionResult(ok, summary, data=ev)
+
+    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> "ActionResult":
+        """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
+        initial (empty) CRL. Remote exposure stays disabled until explicitly enabled + proven.
+        RE-initializing when a CA already exists is DESTRUCTIVE (invalidates every issued
+        certificate) and requires explicit `confirm`."""
+        from . import pki as _pki
+        st = _pki.pki_status(self._paths)
+        if (st["server_ca"].get("present") or st["client_ca"].get("present")) and not confirm:
+            return ActionResult(False, "PKI already exists — recreating the CAs is DESTRUCTIVE "
+                                "(invalidates all issued client/server certificates). Confirm to "
+                                "proceed.", next_commands=["lhpc webserver init --confirm-recreate"])
+        cfg = self.config().webserver
+        dns = list(dns_sans) if dns_sans is not None else list(cfg.dns_sans)
+        ips = list(ip_sans) if ip_sans is not None else list(cfg.ip_sans)
+        if not dns and not ips:
+            dns = ["localhost"]                    # usable loopback default SANs — must match the
+            ips = ["127.0.0.1"]                    # advertised https://127.0.0.1:8443/ endpoint
+        # Persist the SANs into DESIRED config (correction 3) so productive trusted-host
+        # enforcement AND `tls-renew` use them. FAIL CLOSED (correction A): if persistence fails
+        # for ANY reason (validation, ConfigError/lock, unsafe path, malformed local.toml, I/O)
+        # we abort BEFORE touching any PKI material — no CA/cert/CRL/inventory is created or
+        # replaced, and no success is reported.
+        from . import config as _config
+        try:
+            _config.save_webserver_config(self._paths, dns_sans=dns, ip_sans=ips)
+        except Exception as exc:
+            return ActionResult(False, f"webserver init aborted — could not persist SANs to "
+                                f"config ({exc}); no PKI was created or replaced")
+        self._invalidate_config()
+        try:
+            _pki.init_server_ca(self._paths, force=True)
+            _pki.init_client_ca(self._paths, force=True)
+            _pki.issue_server_cert(self._paths, dns_sans=dns, ip_sans=ips,
+                                   days=cfg.server_cert_days)
+            _pki.build_crl(self._paths)
+        except _pki.PKIError as exc:
+            return ActionResult(False, f"webserver init failed: {exc}")
+        return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL)",
+                            next_commands=["lhpc webserver verify"])
+
+    def webserver_configure(self, **fields) -> "ActionResult":
+        from . import config as _config
+        from .validators import ValidationError
+        try:
+            _config.save_webserver_config(self._paths, **fields)
+        except (ValidationError, _config.ConfigError) as exc:
+            return ActionResult(False, f"invalid webserver config: {exc}")
+        self._invalidate_config()
+        return ActionResult(True, "webserver configuration saved (desired; run verify/apply)",
+                            next_commands=["lhpc webserver verify"])
+
+    def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
+                         confirm_public=False) -> "ActionResult":
+        """Enable remote exposure. Requires >=1 CIDR; a public default route (0.0.0.0/0) or
+        a no-auth remote mode needs elevated confirmation. Writes desired config only — the
+        listener is not proven active until verify/apply."""
+        from . import config as _config, webserver as _ws
+        from .config import WebserverConfig
+        from .validators import ValidationError
+        cidrs = list(cidrs or [])
+        mode = access_mode or self.config().webserver.access_mode
+        probe = WebserverConfig(bind="0.0.0.0", port=self.config().webserver.port,
+                                access_mode=mode, remote_exposed=True,
+                                allowed_cidrs=tuple(cidrs))
+        plan = _ws.plan_exposure(probe)
+        if plan["problems"]:
+            return ActionResult(False, "cannot enable remote exposure",
+                                details=plan["problems"])
+        if plan["danger"] == "elevated" and not confirm_public:
+            what = "no client authentication" if plan.get("no_auth") else "a public source range (0.0.0.0/0)"
+            return ActionResult(False, f"remote exposure with {what} needs elevated confirmation",
+                                details=["re-run with the elevated confirmation to proceed"])
+        if not confirm:
+            return ActionResult(False, "remote exposure needs explicit confirmation",
+                                details=["re-run with confirmation to proceed"])
+        try:
+            _config.save_webserver_config(self._paths, bind="0.0.0.0", remote_exposed=True,
+                                          allowed_cidrs=cidrs, access_mode=mode)
+        except (ValidationError, _config.ConfigError) as exc:
+            return ActionResult(False, f"invalid exposure config: {exc}")
+        self._invalidate_config()
+        return ActionResult(
+            True, "remote exposure enabled (desired) — now APPLY to rebind the listener to "
+            f"0.0.0.0:{self.config().webserver.port} and reload nginx (until then it stays on "
+            "loopback and remote clients get connection refused)",
+            details=["lhpc webserver apply           # reload a running nginx with the new bind",
+                     "lhpc webserver start-service   # if nginx is not running yet"],
+            next_commands=["lhpc webserver apply"])
+
+    def webserver_disable_remote(self) -> "ActionResult":
+        from . import config as _config
+        _config.save_webserver_config(self._paths, bind="127.0.0.1", remote_exposed=False)
+        self._invalidate_config()
+        return ActionResult(True, "remote exposure disabled (bind reset to loopback) — "
+                            "verify to prove the remote listener has ceased",
+                            next_commands=["lhpc webserver verify"])
+
+    def webserver_reset_defaults(self) -> "ActionResult":
+        """Reset to safe defaults AND prove remote exposure has ceased. Writes DESIRED defaults
+        (loopback:8443, local unauthenticated, remote off, CIDRs cleared), stages + VALIDATES a
+        loopback-only nginx config, and — if a proven LHPC-owned nginx master exists — reloads
+        it (a successful reload of the loopback-only config is the cessation proof: the new
+        config has no remote listener). Reports success ONLY when cessation is proven; otherwise
+        stays truthful ('reset requested; remote cessation unproven'). NEVER deletes CA keys,
+        certificates, CRL, revocation history, `.p12` exports, or the session secret."""
+        from . import config as _config, runtime_fs as _rfs, webserver as _ws
+        _config.save_webserver_config(self._paths, bind="127.0.0.1", port=8443,
+                                      access_mode="local-open-remote-auth",
+                                      remote_exposed=False, allowed_cidrs=[])
+        self._invalidate_config()
+        cfg = self.config().webserver
+        # Stage + validate the loopback-only config; promote only on success (never clobber a
+        # proven live config with an invalid one).
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
+        ev = _ws.verify(self._system, self._paths, cfg)
+        if not ok:
+            return ActionResult(False, "reset requested; loopback config invalid — remote "
+                                f"cessation UNPROVEN ({msg})", data=ev)
+        _ws.promote_config(self._paths)
+        if _ws.nginx_master_active(self._paths):
+            state, rmsg = _ws.reload(self._system, self._paths)
+            if state == "reloaded":
+                ev["effective"] = {**ev.get("effective", {}),
+                                   "remote_listener": False, "remote_cessation_proven": True}
+                _ws.write_evidence(self._paths, ev)
+                return ActionResult(True, "webserver reset to defaults — remote exposure ceased "
+                                    "(loopback-only config reloaded and proven)", data=ev)
+            return ActionResult(False, f"reset requested; nginx reload failed — remote cessation "
+                                f"UNPROVEN ({rmsg})", data=ev)
+        ev["effective"] = {**ev.get("effective", {}), "remote_cessation_proven": False}
+        _ws.write_evidence(self._paths, ev)
+        return ActionResult(False, "reset requested; no active nginx master to reload — remote "
+                            "cessation UNPROVEN (start/repair the service to prove it)",
+                            next_commands=["lhpc webserver verify"], data=ev)
+
+    def webserver_tls_renew(self) -> "ActionResult":
+        from . import pki as _pki
+        cfg = self.config().webserver
+        try:
+            summ = _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                          ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
+        except _pki.PKIError as exc:
+            return ActionResult(False, f"server certificate renewal failed: {exc}")
+        return ActionResult(True, f"server certificate renewed (serial {summ['serial']})",
+                            data=summ)
+
+    def webserver_cert_issue(self, label, passphrase) -> "ActionResult":
+        from . import pki as _pki
+        cfg = self.config().webserver
+        try:
+            summ = _pki.issue_client_cert(self._paths, label, days=cfg.client_cert_days,
+                                          passphrase=passphrase)
+        except Exception as exc:
+            return ActionResult(False, f"client certificate issue failed: {exc}")
+        return ActionResult(True, f"issued client certificate '{summ['label']}'",
+                            details=[f"export: {summ['export']}",
+                                     f"sha256: {summ['export_sha256']}",
+                                     f"expires: {summ['not_after']}"], data=summ)
+
+    def webserver_cert_reissue(self, label, passphrase) -> "ActionResult":
+        from . import pki as _pki
+        cfg = self.config().webserver
+        try:
+            summ = _pki.reissue_client_cert(self._paths, label, days=cfg.client_cert_days,
+                                            passphrase=passphrase)
+        except Exception as exc:
+            return ActionResult(False, f"reissue failed: {exc}")
+        return ActionResult(True, f"reissued client certificate '{summ['label']}'", data=summ)
+
+    def webserver_cert_list(self) -> "ActionResult":
+        from . import pki as _pki
+        return ActionResult(True, "client certificates",
+                            data={"certs": _pki.list_client_certs(self._paths)})
+
+    def webserver_cert_revoke(self, label) -> "ActionResult":
+        from . import pki as _pki
+        try:
+            _pki.revoke_client_cert(self._paths, label)
+        except Exception as exc:
+            return ActionResult(False, f"revoke failed: {exc}")
+        return ActionResult(True, f"revocation RECORDED for '{label}' and CRL regenerated — "
+                            "not proven effective until the proxy reloads and rejects it",
+                            next_commands=["lhpc webserver verify"])
+
+    def webserver_cert_discard_export(self, label) -> "ActionResult":
+        from . import pki as _pki
+        removed = _pki.discard_export(self._paths, label)
+        return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
+
+    def webserver_cert_export_bytes(self, label) -> "bytes | None":
+        """Raw `.p12` bytes for a label (or None). The WEB route must gate this on a
+        loopback-origin session; the CLI locates the file directly."""
+        from . import pki as _pki
+        return _pki.read_export(self._paths, label)
+
+    def webserver_apply(self) -> "ActionResult":
+        """Activate the DESIRED config: render + validate the nginx config FIRST (never
+        activate an invalid one), then reload an already-running LHPC-owned nginx master
+        (never systemctl, never start the unit), then verify + persist evidence. A missing/
+        inactive master returns a typed 'service not active / repair required' result — the
+        web process performs no start and no package install."""
+        from . import webserver as _ws
+        if not _ws.nginx_installed(self._system):
+            return ActionResult(False, "nginx is not installed — required system dependency for "
+                                "the production webserver", details=[_ws.NGINX_INSTALL_CMD],
+                                next_commands=[_ws.NGINX_INSTALL_CMD])
+        cfg = self.config().webserver
+        # Stage + validate BEFORE touching the live config; promote atomically only on success
+        # (a failed nginx -t leaves the previous proven live config byte-for-byte intact).
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
+        if not ok:
+            return ActionResult(False, "nginx config validation failed; previous proven "
+                                f"configuration remains active ({msg})")
+        _ws.promote_config(self._paths)
+        state, rmsg = _ws.reload(self._system, self._paths)
+        ev = _ws.verify(self._system, self._paths, cfg)
+        if state == "repair_required":
+            return ActionResult(False, "config valid but the nginx service is not active — "
+                                "repair required (operator context)",
+                                details=[rmsg], data=ev)
+        if state == "failed":
+            return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
+        return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+
+    def webserver_start_service(self) -> "ActionResult":
+        """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx
+        config, then ENABLE + START the rootless nginx user unit via `systemctl --user`. This is
+        the only path that STARTS nginx — it REFUSES to run from a managed unit (the web process
+        never starts a listener), so after `init` the operator runs this once to bring the HTTPS
+        console up. Prerequisites (nginx installed, server cert present, config valid) are
+        checked and reported truthfully."""
+        import os as _os
+        from . import pki as _pki, webserver as _ws
+        if _os.environ.get("INVOCATION_ID"):
+            return ActionResult(False, "refusing to start nginx from a managed unit — run "
+                                "`lhpc webserver start-service` from an interactive operator shell")
+        if not _ws.nginx_installed(self._system):
+            return ActionResult(False, "nginx is not installed", details=[_ws.NGINX_INSTALL_CMD],
+                                next_commands=[_ws.NGINX_INSTALL_CMD])
+        if not _pki.pki_status(self._paths)["server_cert"].get("present"):
+            return ActionResult(False, "no HTTPS server certificate — run `lhpc webserver init` "
+                                "first", next_commands=["lhpc webserver init"])
+        cfg = self.config().webserver
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
+        if not ok:
+            return ActionResult(False, f"nginx config invalid — not starting ({msg})")
+        _ws.promote_config(self._paths)
+        r = self._system.runner.run(
+            ["systemctl", "--user", "enable", "--now", "lhpc-nginx.service"], 20.0)
+        if getattr(r, "not_found", False) or r.returncode != 0:
+            detail = (r.stderr or r.stdout or "systemctl failed").strip().splitlines()
+            return ActionResult(False, "could not enable/start lhpc-nginx.service",
+                                details=[detail[-1] if detail else "systemctl failed"],
+                                next_commands=["systemctl --user enable --now lhpc-nginx.service"])
+        ev = _ws.verify(self._system, self._paths, cfg)
+        return ActionResult(True, f"nginx enabled + started — HTTPS console at "
+                            f"https://{cfg.bind}:{cfg.port}/", data=ev)
+
     def _invalidate_config(self) -> None:
         """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
         after every successful config mutation so a saved callsign/locator/remote/param is
@@ -4065,6 +4353,25 @@ class ControllerService:
             comp = idx[target][1]
         return self._lifecycle().logs(comp, lines)
 
+    def webserver_log_tail(self, source: str = "error", lines: int = 300):
+        """Raw (path, lines) for the LHPC-managed nginx front-end's on-disk logs. `source`
+        selects the access or (default) error log — an unknown selector degrades to the error
+        log so it can never name an arbitrary path. Read-only: a bounded, O_NOFOLLOW disk tail
+        (same guard as `log_tail`), no systemctl/network probe."""
+        from . import runtime_fs, webserver as _ws
+        const = _ws._ACC_LOG if source == "access" else _ws._ERR_LOG
+        try:
+            n = max(1, min(int(lines), 5000))             # clamp to a sane bounded range
+        except (TypeError, ValueError):
+            n = 300
+        try:
+            p = self._paths.under(*const)
+        except PathContainmentError:
+            return "", []
+        if p.is_symlink() or (p.exists() and not p.is_file()):
+            return str(p), []
+        return str(p), runtime_fs.tail(self._paths, p, n)
+
     def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
         """Spawn detached build/test/install job(s) for `target`; return
         (job_log_name, error). The web redirects to a live view of the log."""
@@ -6530,8 +6837,13 @@ class ControllerService:
                 with selfupdate.update_lock(self._paths):
                     return self._self_update_locked(force)
         except selfupdate.ControllerRuntimeBusy:
-            return ActionResult(False, "lhpc-web.service is running — stop it, then run self-update.",
-                                data={"web_running": True})
+            return ActionResult(
+                False, "lhpc-web.service is running — stop it, update, then start it again.",
+                details=["systemctl --user stop lhpc-web",
+                         "lhpc self-update --apply",
+                         "systemctl --user start lhpc-web",
+                         "(or just click 'Update now' in the web console — it does all this)"],
+                data={"web_running": True})
         except selfupdate.ControllerRuntimeLockError:
             return ActionResult(False, "Could not acquire the controller-runtime lock (unsafe runtime "
                                 "state) — aborting without changes.", data={"lock_error": True})
@@ -6541,6 +6853,60 @@ class ControllerService:
         except selfupdate.UpdateLockError:
             return ActionResult(False, "Could not acquire the self-update lock (unsafe runtime state) "
                                 "— aborting without changes.", data={"lock_error": True})
+
+    def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
+        """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO. If the managed web console is
+        running it holds the controller-runtime lock SHARED, so an in-process apply refuses. Here —
+        in an interactive operator shell — we STOP lhpc-web, apply, sync the venv on a real advance
+        (mirroring the one-click helper), then START lhpc-web again. When the console is NOT running
+        this is exactly the plain in-process apply (no service control). REFUSES inside a managed
+        unit: a managed process must never drive systemctl."""
+        import os as _os
+        import sys as _sys
+        from . import selfupdate, updater_units
+        if _os.environ.get("INVOCATION_ID"):
+            return ActionResult(False, "refusing to stop/start services from a managed unit — run "
+                                "`lhpc self-update --apply` from an interactive operator shell")
+        _S = 30.0
+        act = self._system.runner.run(
+            ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)
+        web_active = (not getattr(act, "not_found", False)) and act.returncode == 0
+        if not web_active:
+            return self.self_update_apply(force=force)         # nothing to orchestrate
+        stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
+        if getattr(stop, "not_found", False) or stop.returncode != 0:
+            return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
+                                details=["systemctl --user stop lhpc-web",
+                                         "lhpc self-update --apply",
+                                         "systemctl --user start lhpc-web"],
+                                data={"stop_failed": True})
+        restart_failed = False
+        try:
+            res = self.self_update_apply(force=force)
+            # Venv sync on a real advance so the restarted console has any new deps (the managed
+            # helper does the same). Only when we actually stopped the console (full managed-style
+            # flow) — a no-op apply or the web-not-running path never touches the venv.
+            if res.ok and not res.data.get("already"):
+                root = selfupdate.repo_root()
+                if root is not None:
+                    pip = self._system.runner.run(
+                        [_sys.executable, "-m", "pip", "install", "-e", str(root)],
+                        self._PIP_SYNC_TIMEOUT_S)
+                    if pip.returncode != 0:
+                        detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
+                        res = ActionResult(False, "Update applied but the venv sync FAILED — run "
+                                           f"{_sys.executable} -m pip install -e {root} manually."
+                                           + (f" ({detail})" if detail else ""),
+                                           data={**dict(res.data), "venv_sync_failed": True})
+        finally:
+            start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
+            restart_failed = getattr(start, "not_found", False) or start.returncode != 0
+        if restart_failed:
+            return ActionResult(res.ok, res.summary + "  WARNING: lhpc-web did NOT restart — run "
+                                "`systemctl --user start lhpc-web`.",
+                                details=tuple(res.details), data={**dict(res.data),
+                                                                  "web_restart_failed": True})
+        return res
 
     def _self_update_locked(self, force: bool) -> ActionResult:
         from . import selfupdate
@@ -6708,6 +7074,13 @@ class ControllerService:
         from . import selfupdate
         return bool(selfupdate.local_state(self._system).get("dirty") is True)
 
+    def self_update_ff_blocked(self) -> bool:
+        """FRESH check for the one-click confirm step: has the local history DIVERGED so a normal
+        fast-forward update would be refused (only a force/reset can update)? Network-free (uses the
+        already-fetched remote-tracking ref). POST-time only; GET rendering stays cached-only."""
+        from . import selfupdate
+        return selfupdate.ff_blocked(self._system)
+
     # ---- web trigger: write the exclusive request marker (NO systemctl, NO bus) ---------------
 
     def self_update_trigger(self, *, overwrite: bool = False) -> ActionResult:
@@ -6830,10 +7203,12 @@ class ControllerService:
                         [sys.executable, "-m", "pip", "install", "-e", str(root)],
                         timeout=self._PIP_SYNC_TIMEOUT_S)
                     if pip.returncode != 0:                     # P2: a failed sync FAILS the update
-                        tail = (pip.stderr or pip.stdout or "").strip()[-200:]
+                        # First line of pip's diagnostics, stripped of box-drawing/ANSI so the
+                        # persisted summary reads cleanly in the GUI flash (never a mid-box tail).
+                        detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
                         res = ActionResult(False, "Update applied, but the venv sync FAILED — run "
                                            f"{sys.executable} -m pip install -e {root} manually, then "
-                                           f"restart the console. ({tail})",
+                                           f"restart the console." + (f" ({detail})" if detail else ""),
                                            data={**dict(res.data), "venv_sync_failed": True})
         except _StopRun:
             pass

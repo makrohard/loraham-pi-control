@@ -72,7 +72,7 @@ layout, it does not claim same-account race-proofness.
   `OnSuccess`/`OnFailure=lhpc-web.service`), not scripted — the helper never calls `systemctl`.
   The browser reconnects on its own.
 - **Byte-exact units.** One-click ("Update now") is offered only when the console is the managed
-  unit (`INVOCATION_ID`) and all three units are byte-for-byte canonical. A legacy same-root
+  unit (`INVOCATION_ID`) and all four units are byte-for-byte canonical. A legacy same-root
   deployment (old/`%h` units, no `.path`) instead shows **"Repair & update"**, which migrates to
   the canonical units and updates in one click -- it works while the console still has bus access
   (the un-hardened unit); once migrated it is bus-blocked and further repair needs a shell
@@ -86,7 +86,9 @@ layout, it does not claim same-account race-proofness.
   ```bash
   ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
   ```
-- **Install / repair.** `install.sh` writes all three canonical units (never overwriting a
+- **Install / repair.** `install.sh` writes all four canonical units — the web console, the
+  self-update helper + watcher, and the `lhpc-nginx.service` TLS front-end (enabled but only
+  started once `lhpc webserver apply` has generated its config) — (never overwriting a
   foreign one) and enables them; `lhpc self-update --repair-integration` restores the exact set on
   an existing or `--no-service` deployment (and the web "Repair & update" does the same in one click
   while the console still has bus access).

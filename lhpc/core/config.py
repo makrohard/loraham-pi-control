@@ -105,12 +105,44 @@ class OperatorConfig:
         return bool(self.callsign)
 
 
+# Webserver access modes (browser client-certificate authentication policy). There are
+# NO user accounts/roles — a client certificate is a named device credential with equal
+# full access. See the webserver plan/docs.
+WEBSERVER_ACCESS_MODES = (
+    "local-open-remote-auth",   # default: loopback open; non-loopback requires a client cert
+    "auth-everywhere",          # every client (incl. loopback) requires a client cert
+    "no-auth",                  # HTTPS only, no client cert anywhere (dangerous when remote)
+)
+WEBSERVER_DEFAULT_BIND = "127.0.0.1"
+WEBSERVER_DEFAULT_PORT = 8443
+
+
+@dataclass(frozen=True)
+class WebserverConfig:
+    """DESIRED webserver configuration (config/local.toml `[webserver]`). This is intent
+    only — it is NEVER the source of truth for whether the proxy is actually active/exposed;
+    that lives in the separate last-proven effective evidence (state/webserver.json). List
+    fields are persisted as comma-separated scalar strings (local.toml is flat-scalar) and
+    surfaced here as normalized tuples."""
+
+    bind: str = WEBSERVER_DEFAULT_BIND
+    port: int = WEBSERVER_DEFAULT_PORT
+    access_mode: str = "local-open-remote-auth"
+    remote_exposed: bool = False
+    allowed_cidrs: tuple = ()
+    dns_sans: tuple = ()
+    ip_sans: tuple = ()
+    server_cert_days: int = 825
+    client_cert_days: int = 825
+
+
 @dataclass
 class Config:
     """Effective configuration after merging defaults + local overrides."""
 
     values: dict = field(default_factory=dict)
     operator: OperatorConfig = field(default_factory=OperatorConfig)
+    webserver: WebserverConfig = field(default_factory=WebserverConfig)
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -170,6 +202,97 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _split_csv(value) -> list:
+    """Split a comma-separated scalar (the flat-scalar local.toml representation of a list)
+    into stripped, non-empty tokens. A non-string is treated as empty."""
+    if not isinstance(value, str):
+        return []
+    return [tok.strip() for tok in value.split(",") if tok.strip()]
+
+
+def _valid_ip_san(tok: str):
+    """Return the normalized IP literal for a certificate SAN, or None if invalid.
+    `0.0.0.0` is rejected — it is a bind wildcard, never a certificate SAN."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(tok)
+    except ValueError:
+        return None
+    if int(ip) == 0:                       # 0.0.0.0 / :: — never a SAN
+        return None
+    return str(ip)
+
+
+def _parse_webserver(merged: dict, diagnostics: list) -> "WebserverConfig":
+    """Structure-validate the merged `[webserver]` section into a typed, NORMALIZED
+    `WebserverConfig`. A wrong-typed section or field becomes a diagnostic + safe default;
+    malformed list entries (CIDR/SAN) are DROPPED with a diagnostic. Never crashes, never
+    leaks an unsafe value downstream. This is DESIRED config only — not proof of effective
+    state."""
+    from . import validators
+    d = WebserverConfig()
+    ws = merged.get("webserver", {})
+    if not isinstance(ws, dict):
+        diagnostics.append(f"ignored non-table [webserver] ({type(ws).__name__}); using defaults")
+        ws = {}
+
+    bind = d.bind
+    try:
+        bind = validators.host(ws.get("bind", d.bind), field="webserver.bind")
+    except validators.ValidationError as exc:
+        diagnostics.append(f"ignored invalid webserver.bind ({exc}); using {d.bind}")
+
+    port_v = d.port
+    raw_port = ws.get("port", d.port)
+    if isinstance(raw_port, bool) or not isinstance(raw_port, int) or not (1 <= raw_port <= 65535):
+        diagnostics.append(f"ignored invalid webserver.port {raw_port!r}; using {d.port}")
+    else:
+        port_v = raw_port
+
+    mode = ws.get("access_mode", d.access_mode)
+    if mode not in WEBSERVER_ACCESS_MODES:
+        diagnostics.append(f"ignored unknown webserver.access_mode {mode!r}; using {d.access_mode}")
+        mode = d.access_mode
+
+    exposed = ws.get("remote_exposed", d.remote_exposed)
+    if not isinstance(exposed, bool):
+        diagnostics.append("ignored non-bool webserver.remote_exposed; using false")
+        exposed = False
+
+    def _list(key, validate):
+        out = []
+        for tok in _split_csv(ws.get(key, "")):
+            try:
+                out.append(validate(tok))
+            except validators.ValidationError as exc:
+                diagnostics.append(f"dropped invalid {key} entry {tok!r} ({exc})")
+        return tuple(dict.fromkeys(out))    # de-dup, preserve order
+
+    cidrs = _list("allowed_cidrs", lambda t: validators.cidr(t, field="webserver.allowed_cidrs"))
+    dns = _list("dns_sans", lambda t: validators.host(t, field="webserver.dns_sans"))
+    ips = []
+    for tok in _split_csv(ws.get("ip_sans", "")):
+        norm = _valid_ip_san(tok)
+        if norm is None:
+            diagnostics.append(f"dropped invalid ip_sans entry {tok!r}")
+        else:
+            ips.append(norm)
+    ips = tuple(dict.fromkeys(ips))
+
+    def _days(key, dflt):
+        v = ws.get(key, dflt)
+        if isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= 3650):
+            diagnostics.append(f"ignored invalid webserver.{key} {v!r}; using {dflt}")
+            return dflt
+        return v
+
+    return WebserverConfig(
+        bind=bind, port=port_v, access_mode=mode, remote_exposed=exposed,
+        allowed_cidrs=cidrs, dns_sans=dns, ip_sans=ips,
+        server_cert_days=_days("server_cert_days", d.server_cert_days),
+        client_cert_days=_days("client_cert_days", d.client_cert_days))
+
+
 def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     """Merge tracked defaults with the runtime-local override layer (read-only)."""
     defaults = _load_toml(defaults_path or _DEFAULTS_PATH)
@@ -219,9 +342,12 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         diagnostics.append(f"ignored non-table [sources] ({type(sources).__name__}); using defaults")
         sources = {}
 
+    webserver = _parse_webserver(merged, diagnostics)
+
     return Config(
         values=merged,
         operator=operator,
+        webserver=webserver,
         sources=sources,
         remotes=remotes,
         local_path=local_path,
@@ -233,6 +359,51 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 def load_secrets(paths: Paths) -> dict:
     """Read the local secrets layer (never tracked). Returns {} if absent."""
     return _load_runtime_toml(paths, paths.runtime_root / "config" / "secrets.toml")
+
+
+_WEB_SESSION_KEY = ("config", "secrets", "web_session.key")
+
+
+def _web_session_path(paths: Paths) -> Path:
+    return paths.runtime_root.joinpath(*_WEB_SESSION_KEY)
+
+
+def web_session_secret(paths: Paths) -> bytes:
+    """Return the PERSISTENT web session secret (>=32 bytes), generating + persisting it once
+    at 0600 if absent/short. Survives restarts (so sessions/CSRF tokens are not invalidated on
+    every process restart) and is NEVER cleared by 'Reset to default'. Never logged. An
+    unsafe/symlinked leaf raises out of `atomic_write_bytes` (the caller fails safe)."""
+    from . import runtime_fs
+    import secrets as _secrets
+    p = _web_session_path(paths)
+    try:
+        raw = runtime_fs.read_bytes(paths, p)
+        if len(raw) >= 32:
+            return raw
+    except FileNotFoundError:
+        pass
+    except (OSError, PathContainmentError):
+        pass
+    secret = _secrets.token_bytes(48)
+    # Persist ONLY on an existing (bootstrapped) runtime root. Never create the runtime root
+    # just to store a secret — so constructing the web app against an absent/unbootstrapped
+    # root mutates nothing (the console never serves there). Ephemeral fallback otherwise.
+    if paths.runtime_root.exists():
+        try:
+            runtime_fs.atomic_write_bytes(paths, p, secret, mode=0o600)
+        except (OSError, PathContainmentError):
+            pass
+    return secret
+
+
+def rotate_web_session_secret(paths: Paths) -> bytes:
+    """Explicitly rotate the persistent session secret — a deliberate operator action that
+    invalidates every existing session (all clients must re-establish)."""
+    from . import runtime_fs
+    import secrets as _secrets
+    secret = _secrets.token_bytes(48)
+    runtime_fs.atomic_write_bytes(paths, _web_session_path(paths), secret, mode=0o600)
+    return secret
 
 
 def _toml_value(kind: str, value: str) -> str:
@@ -379,6 +550,59 @@ def save_operator_config(paths: Paths, callsign: str, locator: str) -> Path:
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"operator": {"callsign": callsign, "locator": locator}})
+
+
+def _cert_days(value, field: str) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"invalid {field} {value!r}") from None
+    if not (1 <= n <= 3650):
+        raise ConfigError(f"{field} out of range 1..3650: {n}")
+    return n
+
+
+def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=None,
+                          remote_exposed=None, allowed_cidrs=None, dns_sans=None,
+                          ip_sans=None, server_cert_days=None, client_cert_days=None) -> Path:
+    """Persist DESIRED webserver settings into the runtime-local layer (git-ignored).
+    Every supplied value is validated BEFORE any write (fail closed); a ``None`` argument
+    means 'leave that key unchanged'. List fields are stored as comma-separated scalar
+    strings (local.toml is flat-scalar). This writes INTENT only — it activates nothing and
+    is never the source of truth for effective/exposed state."""
+    from . import validators
+    patch: dict = {}
+    if bind is not None:
+        patch["bind"] = validators.host(bind, field="webserver.bind")
+    if port is not None:
+        patch["port"] = int(validators.port(port, field="webserver.port"))
+    if access_mode is not None:
+        if access_mode not in WEBSERVER_ACCESS_MODES:
+            raise ConfigError(f"invalid access_mode {access_mode!r}")
+        patch["access_mode"] = access_mode
+    if remote_exposed is not None:
+        patch["remote_exposed"] = bool(remote_exposed)
+    if allowed_cidrs is not None:
+        norm = [validators.cidr(c, field="webserver.allowed_cidrs") for c in allowed_cidrs]
+        patch["allowed_cidrs"] = ",".join(dict.fromkeys(norm))
+    if dns_sans is not None:
+        norm = [validators.host(h, field="webserver.dns_sans") for h in dns_sans]
+        patch["dns_sans"] = ",".join(dict.fromkeys(norm))
+    if ip_sans is not None:
+        out = []
+        for t in ip_sans:
+            v = _valid_ip_san(str(t).strip())
+            if v is None:
+                raise ConfigError(f"invalid IP SAN {t!r}")
+            out.append(v)
+        patch["ip_sans"] = ",".join(dict.fromkeys(out))
+    if server_cert_days is not None:
+        patch["server_cert_days"] = _cert_days(server_cert_days, "server_cert_days")
+    if client_cert_days is not None:
+        patch["client_cert_days"] = _cert_days(client_cert_days, "client_cert_days")
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"webserver": patch})
 
 
 def save_component_remote(paths: Paths, component_id: str, url: str) -> Path:

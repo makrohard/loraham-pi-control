@@ -16,9 +16,10 @@
     </div>
   </header>
   <div class="wrap">
+    {% from "_macros.html" import flash_classes %}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, msg in messages %}
-        <p class="flash flash-{{ category }}">{{ msg }}</p>
+        <p class="flash {{ flash_classes(category) }}">{{ msg }}</p>
       {% endfor %}
     {% endwith %}
     {% block content %}{% endblock %}

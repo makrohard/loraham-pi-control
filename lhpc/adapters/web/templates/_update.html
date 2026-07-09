@@ -33,7 +33,7 @@
   {# Outcome of the LAST one-click update (recorded by the updater service while the console
      was down; cached-only read). #}
   {% if st.last_apply %}
-    <p class="flash {{ 'flash-ok' if st.last_apply.ok else 'flash-warn' }}">
+    <p class="flash flash-pre {{ 'flash-ok' if st.last_apply.ok else 'flash-warn' }}">
       Last update run: {{ st.last_apply.summary }}</p>
   {% endif %}
 
@@ -46,12 +46,16 @@
       <form method="post" action="{{ url_for('self_update_apply') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="confirmed" value="yes">
-        {% if confirm.dirty %}
-          <p class="flash flash-warn"><strong>Local changes are present (modified or untracked
-            files).</strong> By default they are kept and the update is refused. Tick below to
-            discard modified <em>and</em> non-ignored untracked files (ignored artifacts such as
-            a <code>.venv/</code> are left untouched).</p>
-          <label><input type="checkbox" name="overwrite" value="yes"> Overwrite (discard) local changes</label>
+        {% if confirm.dirty or confirm.diverged %}
+          <p class="flash flash-warn">
+            {% if confirm.dirty %}<strong>Local changes are present (modified or untracked
+              files).</strong>{% endif %}
+            {% if confirm.diverged %}<strong>The local history has diverged from upstream</strong> —
+              a normal update can only fast-forward, so it is refused.{% endif %}
+            By default nothing is discarded and the update stops. Tick below to <strong>reset the
+            checkout to upstream</strong>: this discards modified <em>and</em> non-ignored untracked
+            files (ignored artifacts such as a <code>.venv/</code> are left untouched).</p>
+          <label><input type="checkbox" name="overwrite" value="yes"> Overwrite: discard local changes / reset to upstream</label>
           <p></p>
         {% endif %}
         <button type="submit">Update &amp; restart now</button>

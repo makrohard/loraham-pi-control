@@ -1,3 +1,19 @@
+{# Canonical flash colouring: map a category/level to exactly one severity class —
+   green = success, yellow = warning, red = failure, grey = neutral/info — so every message is
+   coloured consistently regardless of which category string a route used. The FIRST token is the
+   severity; any remaining tokens (e.g. "transient"/"transient-long" used by flash.js to auto-dismiss)
+   are preserved verbatim as extra classes. #}
+{% macro flash_classes(category) -%}
+{%- set parts = ((category or '')|string).split() -%}
+{%- set sev = parts[0]|lower if parts else '' -%}
+{%- if sev in ('ok', 'success', 'good') -%}flash-ok
+{%- elif sev in ('warn', 'warning') -%}flash-warn
+{%- elif sev in ('err', 'error', 'bad', 'danger', 'fail', 'failed', 'critical') -%}flash-bad
+{%- else -%}flash-info
+{%- endif -%}
+{{- (' ' ~ parts[1:]|join(' ')) if parts[1:] else '' -}}
+{%- endmacro %}
+
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">
   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

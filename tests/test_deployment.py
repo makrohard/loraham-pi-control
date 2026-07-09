@@ -16,9 +16,12 @@ def test_unit_template_exists():
     assert _UNIT.is_file()
 
 
-def test_unit_is_loopback_and_no_public_bind():
+def test_unit_serves_unix_socket_no_tcp_bind():
+    # Productive topology: the managed web unit serves the protected Unix socket (behind nginx),
+    # exposing NO TCP listener at all (strictly stronger than the former loopback-TCP bind).
     t = _UNIT.read_text()
-    assert "--host 127.0.0.1" in t
+    assert "lhpc web --socket" in t
+    assert "--host" not in t and "--port" not in t
     assert "0.0.0.0" not in t
 
 

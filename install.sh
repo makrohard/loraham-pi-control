@@ -28,6 +28,8 @@ TARGET_DIR="${HOME}/loraham-pi-control"
 WITH_SERVICE=1
 LINK_PATH=1
 SERVICE_UP=0
+HTTPS_UP=0
+MANUAL_STEPS=""          # mandatory operator commands, printed as ONE block at the very bottom
 ROLLBACK_ARMED=0
 TARGET_CREATED=0
 PRE_ENTRIES=""
@@ -91,6 +93,7 @@ readonly UNIT_DIR="${HOME}/.config/systemd/user"
 readonly WEB_UNIT="${UNIT_DIR}/lhpc-web.service"
 readonly HELPER_UNIT="${UNIT_DIR}/lhpc-selfupdate.service"
 readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
+readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
 
 # --------------------------------------------------------------------------- target safety
 step "Target safety"
@@ -132,7 +135,7 @@ if [ -e "$LOCAL_BIN_LINK" ] || [ -L "$LOCAL_BIN_LINK" ]; then
 fi
 if [ "$WITH_SERVICE" -eq 1 ] && [ -e "$UNIT_DIR" ]; then
 	no_symlink "$UNIT_DIR" "$UNIT_DIR"
-	for _u in "$WEB_UNIT" "$HELPER_UNIT" "$PATH_UNIT"; do
+	for _u in "$WEB_UNIT" "$HELPER_UNIT" "$PATH_UNIT" "$NGINX_UNIT"; do
 		if [ -e "$_u" ] || [ -L "$_u" ]; then
 			die "$_u already exists — a fresh install never overwrites systemd units. Remove it, or pass --no-service and later run: lhpc self-update --repair-integration"
 		fi
@@ -195,7 +198,25 @@ mkdir -p "$(dirname "$VENV")"
 "$PY" -m venv "$VENV"
 "${VENV}/bin/python" -m pip install --quiet --upgrade pip
 "${VENV}/bin/pip" install --quiet -e "$CHECKOUT"
-"${VENV}/bin/pip" install --quiet waitress 2>/dev/null || warn "waitress not installed — the dev-server fallback will be used."
+# waitress + cryptography are DECLARED dependencies (installed by the editable install above);
+# waitress is required for productive serving (no dev-server fallback on the socket path).
+"${VENV}/bin/python" -c 'import waitress, cryptography' 2>/dev/null || \
+	warn "waitress/cryptography missing — reinstall the venv (both are required dependencies)."
+# nginx is a REQUIRED SYSTEM dependency of the production HTTPS/mTLS webserver. LHPC never
+# installs system packages itself (see docs/webserver.md, lhpc.core.deps) — detect + instruct
+# in operator context. Absence does NOT abort the base install (the loopback console + radio
+# stacks run without it); the production webserver is gated on it at `lhpc webserver apply`.
+if command -v nginx >/dev/null 2>&1; then
+	HAVE_NGINX=1
+else
+	HAVE_NGINX=0
+	warn "REQUIRED system dependency 'nginx' is not installed — the HTTPS/mTLS webserver stays off until you install it (exact commands repeated at the very end)."
+	# Record the mandatory manual steps; they are printed as one block at the bottom so they are
+	# the LAST thing on screen, not lost in the middle of the log.
+	MANUAL_STEPS="$(printf '%s\n%s' \
+		'sudo apt install -y nginx' \
+		'lhpc webserver init && lhpc webserver start-service   # -> https://127.0.0.1:8443/ (local: no auth)')"
+fi
 note "venv ready: ${VENV}"
 
 # --------------------------------------------------------------------------- 3. bootstrap root
@@ -246,17 +267,43 @@ if [ "$WITH_SERVICE" -eq 1 ]; then
 		render_unit lhpc-web.service        > "$WEB_UNIT"
 		render_unit lhpc-selfupdate.service > "$HELPER_UNIT"
 		render_unit lhpc-selfupdate.path    > "$PATH_UNIT"
-		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT"
+		render_unit lhpc-nginx.service      > "$NGINX_UNIT"
+		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT"
 		systemctl --user daemon-reload 2>/dev/null || true
 		# Enable the request watcher + the console (the .path is also pulled up by the web unit's
 		# Wants=, but enabling it makes it survive a manual `systemctl stop lhpc-web`).
 		systemctl --user enable lhpc-selfupdate.path >/dev/null 2>&1 || true
+		# Enable the nginx TLS front-end ONLY when nginx is installed (NOT --now: it starts once
+		# LHPC has generated a proxy config via `lhpc webserver init && lhpc webserver start-service`; a
+		# ConditionPathExists gates it until then). If nginx is absent the unit file is still
+		# written (byte-exact canonical) but not enabled — install nginx then re-run integration.
+		if [ "${HAVE_NGINX:-0}" -eq 1 ]; then
+			systemctl --user enable lhpc-nginx.service >/dev/null 2>&1 || true
+		else
+			warn "lhpc-nginx.service written but NOT enabled (nginx missing) — after 'sudo apt install -y nginx' run: systemctl --user enable lhpc-nginx.service"
+		fi
 		if systemctl --user enable --now lhpc-web.service 2>/dev/null; then
 			loginctl enable-linger "$USER" >/dev/null 2>&1 || warn "could not enable lingering — the service may not start before login."
 			SERVICE_UP=1
-			note "lhpc-web.service enabled (http://127.0.0.1:8770/); one-click self-update ready."
+			# The managed web unit serves a Unix socket (no TCP) behind nginx — NOT :8770.
+			note "lhpc-web.service enabled (Waitress on a Unix socket, behind nginx); one-click self-update ready."
 		else
 			warn "could not start the service now (no user systemd session?). Finish after login with: systemctl --user enable --now lhpc-web.service && loginctl enable-linger ${USER}"
+		fi
+		# HTTPS bring-up: when nginx is present, generate the PKI + proxy config and start the TLS
+		# front-end NOW, so the console is reachable at https://127.0.0.1:8443/ (loopback OPEN, no
+		# auth; remote requires a client cert) right after install — the default profile. `init`
+		# is idempotent (keeps existing PKI); `start-service` validates + promotes the config and
+		# starts lhpc-nginx.service. Loopback bind only — nothing is exposed to the network.
+		if [ "${HAVE_NGINX:-0}" -eq 1 ]; then
+			"${VENV}/bin/lhpc" webserver init >/dev/null 2>&1 || true
+			if WS_OUT="$("${VENV}/bin/lhpc" webserver start-service 2>&1)"; then
+				HTTPS_UP=1
+				note "HTTPS console started: https://127.0.0.1:8443/  (local: no auth; remote: client cert required)"
+			else
+				warn "HTTPS front-end could not start yet: ${WS_OUT##*$'\n'}"
+				MANUAL_STEPS='lhpc webserver init && lhpc webserver start-service   # -> https://127.0.0.1:8443/ (local: no auth)'
+			fi
 		fi
 	fi
 fi
@@ -277,17 +324,32 @@ Next:
   ${LHPC} self-update         # (or one-click Update in the web console)
 EOF
 
-if [ "$SERVICE_UP" -eq 1 ]; then
+if [ "$HTTPS_UP" -eq 1 ]; then
 	cat <<EOF
 
 ────────────────────────────────────────────────────────────────────────
-The web console is RUNNING:   http://127.0.0.1:8770/   (loopback only)
+The HTTPS console is RUNNING:   https://127.0.0.1:8443/
+  Local access is OPEN (no client certificate); remote access requires a
+  client cert and is OFF until you explicitly expose it. Your browser will
+  warn about the self-signed CA on first visit — that is expected.
 
   Update the controller      : click "Update now" in the console (one-click), or
                                run \`${LHPC} self-update --apply\`
-  Stop / start / status      : systemctl --user stop|start|status lhpc-web
+  Stop / start / status      : systemctl --user stop|start|status lhpc-nginx lhpc-web
   Live logs                  : journalctl --user -u lhpc-web -f
-  Do NOT auto-start on boot  : systemctl --user disable lhpc-web
+  Do NOT auto-start on boot  : systemctl --user disable lhpc-nginx lhpc-web
+────────────────────────────────────────────────────────────────────────
+EOF
+elif [ "$SERVICE_UP" -eq 1 ]; then
+	cat <<EOF
+
+────────────────────────────────────────────────────────────────────────
+The managed web service is running (behind nginx, on a Unix socket).
+The HTTPS front-end at https://127.0.0.1:8443/ is not up yet — see the
+commands below to finish it.
+
+  Quick local console (no nginx): ${LHPC} web   (loopback http://127.0.0.1:8770/, non-productive)
+  Live logs                     : journalctl --user -u lhpc-web -f
 ────────────────────────────────────────────────────────────────────────
 EOF
 else
@@ -303,4 +365,13 @@ To run it as an auto-starting service WITH one-click self-update, run:
   ${LHPC} self-update --repair-integration
 ────────────────────────────────────────────────────────────────────────
 EOF
+fi
+
+# Mandatory operator commands — ALWAYS the very last thing printed, so nothing manual is missed.
+if [ -n "$MANUAL_STEPS" ]; then
+	printf '\n'
+	printf '========================================================================\n'
+	printf 'TO FINISH SETUP — run these commands, in order:\n\n'
+	printf '%s\n' "$MANUAL_STEPS" | while IFS= read -r _cmd; do printf '  %s\n' "$_cmd"; done
+	printf '========================================================================\n'
 fi

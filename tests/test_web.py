@@ -1232,11 +1232,21 @@ def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
     r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
     assert "stop the web console" in r1 and "automatically" in r1
     assert "Update &amp; restart now" in r1
-    assert "Overwrite (discard)" not in r1                      # clean tree -> no consent box
+    assert "reset to upstream" not in r1                        # clean, ff-able tree -> no consent box
     r2 = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
     assert "reconnects" in r2 and "/healthz" in r2              # updating.html waiting page
     assert triggered["overwrite"] is False
     assert c.post("/self-update/apply", data={"confirmed": "yes"}).status_code == 400   # CSRF
+
+
+def test_self_update_apply_get_redirects_not_405(tmp_path):
+    # Both apply stages render INLINE at /self-update/apply, so the browser tab stays there; a
+    # reload/Back/post-outage GET must redirect to the controller row, NEVER 405.
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    c = _real_app(tmp_path)
+    r = c.get("/self-update/apply")
+    assert r.status_code == 302 and r.headers["Location"].endswith("#controller-row")
 
 
 def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):
@@ -1254,7 +1264,7 @@ def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monk
     c = _real_app(tmp_path)
     tok = _csrf(c, "/stacks")
     r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
-    assert "Local changes are present" in r1 and "Overwrite (discard)" in r1
+    assert "Local changes are present" in r1 and "reset to upstream" in r1
     c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
     assert seen["ow"] is True
     c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
@@ -1277,6 +1287,47 @@ def test_self_update_stale_overwrite_tick_downgrades_on_clean_tree(tmp_path, mon
     tok = _csrf(c, "/stacks")
     c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
     assert seen["ow"] is False
+
+
+def test_self_update_diverged_confirm_offers_override(tmp_path, monkeypatch):
+    """A CLEAN but DIVERGED tree (a normal update can't fast-forward) must WARN and offer the
+    reset-to-upstream override, and ticking it selects the force unit — same consent flow as dirty."""
+    from lhpc.core.services import ControllerService, ActionResult
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
+    monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: True)
+    seen = {}
+    monkeypatch.setattr(ControllerService, "self_update_repair_and_trigger",
+                        lambda self, *, overwrite=False: (seen.__setitem__("ow", overwrite),
+                                                          ActionResult(True, "started",
+                                                                       data={"triggered": True}))[1])
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    r1 = c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+    assert "history has diverged" in r1 and "reset to upstream" in r1
+    assert "Local changes are present" not in r1                 # clean tree -> only the diverged note
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes", "overwrite": "yes"})
+    assert seen["ow"] is True                                    # diverged + consent -> force unit
+    c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"})
+    assert seen["ow"] is False                                   # no tick -> normal (apply then refuses)
+
+
+def test_self_update_last_apply_renders_prewrap(tmp_path):
+    """The last-apply outcome renders in a pre-wrap flash so a (sanitized) multi-word summary is
+    legible instead of collapsed — the fix for the 'garbled Update failed' message."""
+    from lhpc.core import selfupdate
+    from lhpc.core.paths import Paths
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    selfupdate.write_cache(Paths(runtime_root=tmp_path), {
+        "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
+        "upstream": {}, "checked_at": 1,
+        "last_apply": {"ok": False, "summary": "Update could not be applied — the local branch has "
+                       "diverged from upstream. fatal: Not possible to fast-forward, aborting.",
+                       "finished_at": 2}})
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "flash-pre" in body                                   # pre-wrap container present
+    assert "Not possible to fast-forward" in body                # clean summary shown verbatim
 
 
 def test_self_update_trigger_blocked_by_active_job(tmp_path, monkeypatch):

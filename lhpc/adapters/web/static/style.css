@@ -130,10 +130,13 @@ pre.next { background: #0f1b2a; color: #d7e3f2; padding: .6rem .8rem; border-rad
 
 /* Flash messages + daemon monitor ------------------------------------- */
 .flash { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; transition: opacity .6s ease; }
+/* Preserve newlines and wrap long tokens for flashes that may carry (sanitized) command output. */
+.flash-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .flash-hide { opacity: 0; }
 .flash-ok { background: #e7f6ec; border: 1px solid #b7e3c4; color: #1a7f37; }
 .flash-warn { background: #fff8e1; border: 1px solid #ffe0a3; color: #7a5200; }
 .flash-bad { background: #fdecea; border: 1px solid #f1a9a0; color: #a01b10; }
+.flash-info { background: #eef2f7; border: 1px solid #cdd7e3; color: #33414f; }   /* neutral (details) */
 meter { width: 12rem; height: 1rem; vertical-align: middle; margin-right: .5rem; }
 form label { display: inline-block; margin: .2rem .8rem .2rem 0; }
 form select, form input[type=text], form input { font: inherit; padding: .2rem .3rem; }
@@ -292,3 +295,16 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .badge-ok { background: #e7f6ec; color: var(--ok); border-color: #b7e3c4; }
 .badge-failed { background: #fdecec; color: var(--bad); border-color: #f3c1c1; }
 .inline { display: inline; }
+
+/* ---- Webserver controller component (inline in the controller row) ---- */
+.ws-comp form { margin: 0.7em 0; }
+.ws-comp .cfgsec > .flash { margin: 0.4em 0; }
+.ws-comp button { margin: 0.25em 0.5em 0.25em 0; }
+.ws-comp table.certs a { margin-left: 0.7em; }
+.ws-comp table.certs td, .ws-comp table.certs th { padding: 0.3em 0.7em 0.3em 0; }
+/* one setting per line: label, input, short description */
+.ws-comp .setting { margin: 0.45em 0; }
+.ws-comp .setting label { display: inline-block; min-width: 9em; font-weight: 600; }
+.ws-comp .setting .muted { margin-left: 0.5em; }
+/* a little breathing room after the System dependencies list, before "Verify now" */
+.ws-comp .sysdeps { margin-bottom: 1em; }
