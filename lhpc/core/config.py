@@ -116,6 +116,17 @@ WEBSERVER_ACCESS_MODES = (
 WEBSERVER_DEFAULT_BIND = "127.0.0.1"
 WEBSERVER_DEFAULT_PORT = 8443
 
+# Public listener scheme. NOT the upstream scheme (that comes from the manifest endpoint).
+WEBSERVER_SCHEMES = ("https", "http")
+
+# Per-stack web-UI proxy exposure modes.
+STACKWEB_MODES = (
+    "local",     # nginx listens on 127.0.0.1 only
+    "lan",       # listens on the console bind; only the configured CIDRs pass
+    "public",    # listens; 0.0.0.0/0 (elevated confirmation)
+)
+STACKWEB_MIN_PORT = 1024        # rootless nginx cannot bind below this
+
 
 @dataclass(frozen=True)
 class WebserverConfig:
@@ -134,6 +145,58 @@ class WebserverConfig:
     ip_sans: tuple = ()
     server_cert_days: int = 825
     client_cert_days: int = 825
+    # The PUBLIC LISTENER scheme. `http` cannot do client-certificate auth at all (a client cert
+    # is presented during the TLS handshake), so it forces access_mode="no-auth".
+    scheme: str = "https"
+
+
+@dataclass(frozen=True)
+class StackWebConfig:
+    """DESIRED reverse-proxy exposure for ONE stack's web UI (`[stackweb]` in local.toml).
+
+    `scheme` is the PUBLIC LISTENER scheme (what a browser speaks to nginx). The UPSTREAM scheme is
+    fixed by the manifest endpoint (http for MeshCom :18083, https for Meshtastic :9443) and is never
+    operator-settable — conflating the two would drop outside TLS because the inside hop is cleartext.
+
+    `port == 0` means NOT PROXIED: no nginx block is emitted at all, which is the default and keeps a
+    fresh deployment's rendered config unchanged."""
+
+    stack_id: str
+    mode: str = "local"
+    port: int = 0                       # 0 = not proxied
+    scheme: str = "https"               # listener scheme
+    access_mode: str = "local-open-remote-auth"
+    allowed_cidrs: tuple = ()
+
+    @property
+    def enabled(self) -> bool:
+        return self.port > 0
+
+    @property
+    def remote(self) -> bool:
+        return self.mode in ("lan", "public")
+
+
+# `[stackweb]` keys are `<stack_id>_<field>`, and BOTH sides may contain underscores
+# (`meshcom_access_mode`, and a future `my_stack_port`). Match by known field suffix,
+# LONGEST FIRST, then validate the remaining prefix as a stack id. A naive
+# `key.split("_", 1)` reads `meshcom_access_mode` as field "access" and silently drops the
+# operator's access mode — the worst failure mode for a security setting.
+# Sorted LONGEST FIRST at definition, not by hand: `meshcom_access_mode` ends with `_mode` as well as
+# with `_access_mode`, so the order is load-bearing and must not depend on how the tuple was typed.
+_STACKWEB_FIELDS = tuple(sorted(
+    ("_access_mode", "_allowed_cidrs", "_scheme", "_port", "_mode"), key=len, reverse=True))
+
+
+def _split_stackweb_key(key: str):
+    """(stack_id, field) for a `[stackweb]` key, or None when it matches no known field.
+
+    A stack id that itself ends in a field name (`x_access` + `_mode`) is inherently ambiguous with
+    (`x` + `_access_mode`); the longest suffix wins, deterministically."""
+    for suffix in _STACKWEB_FIELDS:
+        if key.endswith(suffix) and len(key) > len(suffix):
+            return key[: -len(suffix)], suffix[1:]
+    return None
 
 
 @dataclass
@@ -143,6 +206,7 @@ class Config:
     values: dict = field(default_factory=dict)
     operator: OperatorConfig = field(default_factory=OperatorConfig)
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
+    stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -286,11 +350,91 @@ def _parse_webserver(merged: dict, diagnostics: list) -> "WebserverConfig":
             return dflt
         return v
 
+    scheme = ws.get("scheme", d.scheme)
+    if scheme not in WEBSERVER_SCHEMES:
+        diagnostics.append(f"ignored unknown webserver.scheme {scheme!r}; using {d.scheme}")
+        scheme = d.scheme
+    # http cannot carry a client certificate (no TLS handshake to verify one in). Rather than render
+    # a config that silently ignores the operator's access mode, fall back to the only mode http can
+    # actually honour, and SAY SO.
+    if scheme == "http" and mode != "no-auth":
+        diagnostics.append(f"webserver.scheme=http cannot do client-certificate auth; "
+                           f"access_mode {mode!r} downgraded to 'no-auth'")
+        mode = "no-auth"
+
     return WebserverConfig(
         bind=bind, port=port_v, access_mode=mode, remote_exposed=exposed,
-        allowed_cidrs=cidrs, dns_sans=dns, ip_sans=ips,
+        allowed_cidrs=cidrs, dns_sans=dns, ip_sans=ips, scheme=scheme,
         server_cert_days=_days("server_cert_days", d.server_cert_days),
         client_cert_days=_days("client_cert_days", d.client_cert_days))
+
+
+def _parse_stackweb(merged: dict, diagnostics: list) -> dict:
+    """Structure-validate `[stackweb]` into `{stack_id: StackWebConfig}`.
+
+    Fail-soft like `_parse_webserver`: an unknown key, an invalid stack id, or a malformed value is
+    DROPPED with a diagnostic, leaving its siblings intact. Never crashes, never half-parses."""
+    from . import validators
+    sw = merged.get("stackweb", {})
+    if not isinstance(sw, dict):
+        diagnostics.append(f"ignored non-table [stackweb] ({type(sw).__name__}); using defaults")
+        return {}
+
+    raw: dict = {}
+    for key, value in sw.items():
+        split = _split_stackweb_key(str(key))
+        if split is None:
+            diagnostics.append(f"dropped unknown stackweb key {key!r}")
+            continue
+        sid, field = split
+        try:
+            sid = validators.path_component(sid, field="stackweb stack id")
+        except validators.ValidationError as exc:
+            diagnostics.append(f"dropped stackweb key {key!r} (bad stack id: {exc})")
+            continue
+        raw.setdefault(sid, {})[field] = value
+
+    out: dict = {}
+    for sid, fields in raw.items():
+        d = StackWebConfig(stack_id=sid)
+
+        mode = fields.get("mode", d.mode)
+        if mode not in STACKWEB_MODES:
+            diagnostics.append(f"ignored unknown stackweb.{sid}_mode {mode!r}; using {d.mode}")
+            mode = d.mode
+
+        port = fields.get("port", d.port)
+        if isinstance(port, bool) or not isinstance(port, int) or not (
+                port == 0 or STACKWEB_MIN_PORT <= port <= 65535):
+            diagnostics.append(f"ignored invalid stackweb.{sid}_port {port!r}; not proxied")
+            port = 0
+
+        scheme = fields.get("scheme", d.scheme)
+        if scheme not in WEBSERVER_SCHEMES:
+            diagnostics.append(f"ignored unknown stackweb.{sid}_scheme {scheme!r}; using {d.scheme}")
+            scheme = d.scheme
+
+        access_mode = fields.get("access_mode", d.access_mode)
+        if access_mode not in WEBSERVER_ACCESS_MODES:
+            diagnostics.append(f"ignored unknown stackweb.{sid}_access_mode {access_mode!r}; "
+                               f"using {d.access_mode}")
+            access_mode = d.access_mode
+        if scheme == "http" and access_mode != "no-auth":
+            diagnostics.append(f"stackweb.{sid}_scheme=http cannot do client-certificate auth; "
+                               f"access_mode {access_mode!r} downgraded to 'no-auth'")
+            access_mode = "no-auth"
+
+        cidrs = []
+        for tok in _split_csv(fields.get("allowed_cidrs", "")):
+            try:
+                cidrs.append(validators.cidr(tok, field=f"stackweb.{sid}_allowed_cidrs"))
+            except validators.ValidationError as exc:
+                diagnostics.append(f"dropped invalid stackweb.{sid}_allowed_cidrs entry "
+                                   f"{tok!r} ({exc})")
+        out[sid] = StackWebConfig(stack_id=sid, mode=mode, port=port, scheme=scheme,
+                                  access_mode=access_mode,
+                                  allowed_cidrs=tuple(dict.fromkeys(cidrs)))
+    return out
 
 
 def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
@@ -343,11 +487,13 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         sources = {}
 
     webserver = _parse_webserver(merged, diagnostics)
+    stackweb = _parse_stackweb(merged, diagnostics)
 
     return Config(
         values=merged,
         operator=operator,
         webserver=webserver,
+        stackweb=stackweb,
         sources=sources,
         remotes=remotes,
         local_path=local_path,
@@ -564,7 +710,8 @@ def _cert_days(value, field: str) -> int:
 
 def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=None,
                           remote_exposed=None, allowed_cidrs=None, dns_sans=None,
-                          ip_sans=None, server_cert_days=None, client_cert_days=None) -> Path:
+                          ip_sans=None, server_cert_days=None, client_cert_days=None,
+                          scheme=None) -> Path:
     """Persist DESIRED webserver settings into the runtime-local layer (git-ignored).
     Every supplied value is validated BEFORE any write (fail closed); a ``None`` argument
     means 'leave that key unchanged'. List fields are stored as comma-separated scalar
@@ -600,9 +747,72 @@ def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=Non
         patch["server_cert_days"] = _cert_days(server_cert_days, "server_cert_days")
     if client_cert_days is not None:
         patch["client_cert_days"] = _cert_days(client_cert_days, "client_cert_days")
+    if scheme is not None:
+        if scheme not in WEBSERVER_SCHEMES:
+            raise ConfigError(f"invalid scheme {scheme!r}")
+        patch["scheme"] = scheme
+    # FAIL CLOSED on the impossible combination, rather than writing a config whose access mode nginx
+    # would silently ignore. Resolve against the CURRENT persisted values, not just this patch: saving
+    # scheme=http alone must still be refused when the stored access_mode requires a client cert.
+    _reject_http_with_cert_auth(paths, patch, "webserver")
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"webserver": patch})
+
+
+def _reject_http_with_cert_auth(paths: Paths, patch: dict, what: str,
+                                current: "WebserverConfig | StackWebConfig | None" = None) -> None:
+    """A client certificate is presented during the TLS handshake, so a plain-http listener has
+    nothing to verify. Refuse `scheme=http` together with a cert-based access mode — checking the
+    EFFECTIVE result (patch merged over what is already stored), so neither half can sneak in alone."""
+    if "scheme" not in patch and "access_mode" not in patch:
+        return
+    if current is None:
+        current = load_config(paths).webserver
+    scheme = patch.get("scheme", current.scheme)
+    access_mode = patch.get("access_mode", current.access_mode)
+    if scheme == "http" and access_mode != "no-auth":
+        raise ConfigError(
+            f"{what}: scheme=http cannot do client-certificate authentication (a client cert is "
+            f"presented during the TLS handshake); access_mode must be 'no-auth', got "
+            f"{access_mode!r}")
+
+
+def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, scheme=None,
+                         access_mode=None, allowed_cidrs=None) -> Path:
+    """Persist DESIRED web-UI proxy exposure for ONE stack into `[stackweb]` (flat scalars,
+    `<stack_id>_<field>`). Validated before any write; `None` = leave unchanged. INTENT only —
+    activation is `webserver apply`."""
+    from . import validators
+    sid = validators.path_component(stack_id, field="stackweb stack id")
+    patch: dict = {}
+    if mode is not None:
+        if mode not in STACKWEB_MODES:
+            raise ConfigError(f"invalid stackweb mode {mode!r}")
+        patch["mode"] = mode
+    if port is not None:
+        p = int(port)
+        if p != 0 and not (STACKWEB_MIN_PORT <= p <= 65535):
+            raise ConfigError(f"invalid stackweb port {port!r} "
+                              f"(0 = not proxied, else {STACKWEB_MIN_PORT}..65535)")
+        patch["port"] = p
+    if scheme is not None:
+        if scheme not in WEBSERVER_SCHEMES:
+            raise ConfigError(f"invalid stackweb scheme {scheme!r}")
+        patch["scheme"] = scheme
+    if access_mode is not None:
+        if access_mode not in WEBSERVER_ACCESS_MODES:
+            raise ConfigError(f"invalid stackweb access_mode {access_mode!r}")
+        patch["access_mode"] = access_mode
+    if allowed_cidrs is not None:
+        norm = [validators.cidr(c, field=f"stackweb.{sid}_allowed_cidrs") for c in allowed_cidrs]
+        patch["allowed_cidrs"] = ",".join(dict.fromkeys(norm))
+    current = load_config(paths).stackweb.get(sid) or StackWebConfig(stack_id=sid)
+    _reject_http_with_cert_auth(paths, patch, f"stackweb.{sid}", current)
+    table = {f"{sid}_{k}": v for k, v in patch.items()}
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"stackweb": table})
 
 
 def save_component_remote(paths: Paths, component_id: str, url: str) -> Path:

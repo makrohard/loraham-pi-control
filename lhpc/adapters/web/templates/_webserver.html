@@ -54,10 +54,18 @@
         <p class="setting"><label>Port</label>
           <input name="port" value="{{ mon.desired.port }}">
           <span class="muted">HTTPS port (default 8443)</span></p>
+        <p class="setting"><label>Scheme</label>
+          <select name="scheme" class="schemesel" data-authsel="ws-authsel">
+            <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
+            <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
+          </select>
+          <span class="muted">http disables client-certificate auth entirely (no TLS handshake)</span></p>
         <p class="setting"><label>Access mode</label>
-          <select name="access_mode">
+          <select name="access_mode" id="ws-authsel">
             {% for m in modes %}
-              <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}>{{ m }}</option>
+              {# Cosmetic only — webserver_configure refuses http + a cert-based mode server-side. #}
+              <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
+                {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
             {% endfor %}
           </select>
           <span class="muted">Client-certificate (mTLS) policy</span></p>

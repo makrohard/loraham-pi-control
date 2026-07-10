@@ -67,6 +67,16 @@ def _host_only(raw: str) -> str:
     return h.split(":")[0].lower() if h.count(":") <= 1 else h.lower()
 
 
+def _url_host(raw: str) -> str:
+    """The host authority from `request.host`, ready to place in a URL — port stripped, and an IPv6
+    literal RE-bracketed (`::1` -> `[::1]`). Used to point a proxied web-UI link at the exact host the
+    operator reached the console at, rather than a guessed `local_ip()`."""
+    host = _host_only(raw)
+    if ":" in host and not host.startswith("["):     # bare IPv6 literal
+        return f"[{host}]"
+    return host
+
+
 _HOST_ECHO_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
 
 
@@ -198,7 +208,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         multi-homed Pi (eth0 + wlan0) and IPv6 work without enumerating interfaces — `local_ip()` knows
         exactly one IPv4 address. Loopback-only deployments keep the strict allowlist.
         """
-        if not app.config.get("SESSION_COOKIE_SECURE"):
+        # Enforced whenever we serve productively behind nginx. NOT keyed on Secure cookies alone:
+        # an `http` console must drop those (browsers discard them) yet keep this policy.
+        if not (app.config.get("SESSION_COOKIE_SECURE") or app.config.get("LHPC_PRODUCTIVE")):
             return None
         raw = request.host or ""
         host = _host_only(raw)
@@ -244,6 +256,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive,
+            # The host the browser used to reach the console — a proxied web-UI link points here on
+            # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
+            req_host=_url_host(request.host or ""),
             # Durable restart-required flags (file reads only): a yellow "Restart now"
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
@@ -501,6 +516,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_main": upd_states.get(main.id, "unchecked") if main else "unchecked",
                 "update_available": any(v == "behind" for v in upd_states.values()),
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
+                # {} for a stack with no web UI -> the Webserver sub-section is not rendered.
+                "stack_web": service.stack_web_view(stack.id),
                 "installed": installed,
                 "has_source": has_source,
                 "deps": own + cross,
@@ -1206,6 +1223,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             fields["port"] = f["port"]
         if f.get("access_mode"):
             fields["access_mode"] = f["access_mode"]
+        if f.get("scheme"):
+            fields["scheme"] = f["scheme"]
         if "dns_sans" in f:
             fields["dns_sans"] = [x.strip() for x in f.get("dns_sans", "").split(",") if x.strip()]
         if "ip_sans" in f:
@@ -1213,6 +1232,34 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         r = service.webserver_configure(**fields)
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
+
+    @app.post("/stacks/<stack_id>/webserver")
+    def stack_web_configure(stack_id: str):  # noqa: ANN202
+        """Per-stack web-UI proxy policy. Same typed-confirmation contract as /webserver/expose."""
+        if not _csrf_ok():
+            abort(400)
+        if service.stack(stack_id) is None or service.stack_web_upstream(stack_id) is None:
+            abort(404)                                   # unknown stack, or it has no web UI
+        f = request.form
+        cidrs = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
+        phrase = f.get("confirm_phrase", "").strip()
+        r = service.stack_web_configure(
+            stack_id,
+            mode=(f.get("mode") or None),
+            port=(f.get("port") or None),
+            scheme=(f.get("scheme") or None),
+            access_mode=(f.get("access_mode") or None),
+            cidrs=cidrs if "cidrs" in f else None,
+            confirm=phrase in ("enable-remote", "enable-remote-danger"),
+            confirm_public=(phrase == "enable-remote-danger"))
+        # A successful save is only INTENT — surface it as a warning (yellow), not a green "done",
+        # so the operator sees it still needs Apply. Details (incl. any bypass warning) ride along.
+        flash(r.summary + (" — click Apply to make it live." if r.ok else ""),
+              "warn" if r.ok else "err")
+        for d in r.details:
+            flash(d, "warn" if r.ok else "err")
+        return redirect(url_for("stacks_overview", cfg=stack_id)
+                        + "#stack-webserver-" + stack_id)
 
     @app.route("/webserver/expose", methods=["POST"])
     def webserver_expose():  # noqa: ANN202
@@ -1404,8 +1451,19 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
     try:
         app = create_app()
         if socket:
-            # Productive mode is HTTPS behind nginx -> Secure cookies.
-            app.config.update(SESSION_COOKIE_SECURE=True)
+            # PRODUCTIVE mode (behind nginx). Two separate facts, deliberately not one flag:
+            #   * the trusted-host policy must be enforced whenever we serve through nginx;
+            #   * Secure cookies only make sense when the LISTENER is https — a browser DROPS a
+            #     Secure cookie over plain http, which would silently break the CSRF session.
+            # Gating `_trusted_host` on SESSION_COOKIE_SECURE (as before) would therefore have
+            # switched the host allowlist OFF the moment an operator chose an http console.
+            try:
+                from lhpc.core.config import load_config as _load_config
+                _scheme = _load_config(_resolve_paths()).webserver.scheme
+            except Exception:                            # noqa: BLE001 — unreadable config -> https
+                _scheme = "https"
+            app.config.update(LHPC_PRODUCTIVE=True,
+                              SESSION_COOKIE_SECURE=(_scheme == "https"))
         # Best-effort, NON-BLOCKING upstream freshness checks (process startup + a slow
         # periodic loop — NOT GET routes) so the footer's "Update →" indicator appears
         # without the operator pressing "Check for updates". One check right away (existing

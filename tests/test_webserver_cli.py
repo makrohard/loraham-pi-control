@@ -24,7 +24,11 @@ def test_cli_init_status_issue_flow(monkeypatch, tmp_path, capsys):
     assert main(["webserver", "init", "--dns", "pi.local"]) == 0
     assert main(["webserver", "status"]) == 0
     out = capsys.readouterr().out
-    assert "remote_exposed False" in out and "no remote listener is confirmed" in out
+    assert "remote_exposed False" in out
+    # The exposure-status line now reflects the REAL listener (live /proc): "disabled — loopback only"
+    # when nothing is bound off-loopback, or "disabled in desired config, but the live listener … is
+    # still exposed" on a machine that happens to have :8443 bound. Both share this stable prefix.
+    assert "Remote exposure is disabled" in out
     # issue prints a one-time passphrase, never persisted
     assert main(["webserver", "cert", "issue", "laptop"]) == 0
     out = capsys.readouterr().out

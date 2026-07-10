@@ -121,8 +121,12 @@
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" target="_blank" rel="noopener">log</a>{% endif %}
                       {% for itf in c.interfaces %}
-                        {% if itf.link %}
-                          <a class="iface" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                        {% if itf.proxy_remote and itf.proxy_port and req_host %}
+                          {# Point at the host the browser used to reach the console, on the proxy's
+                             port — correct whether they came via LAN IP, hostname or WAN. #}
+                          <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                        {% elif itf.link %}
+                          <a class="iface iface-web" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
                         {% else %}
                           <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
                         {% endif %}

@@ -255,20 +255,51 @@ class ControllerService:
     # Webserver "component" is presentation only, so controller isolation is unaffected.
 
     def webserver_monitor(self) -> "ActionResult":
-        """READ-ONLY cached status (Monitor/GET): desired config + last-proven effective
-        evidence + PKI state + warnings. No probing, no mutation."""
+        """READ-ONLY status (Monitor/GET): desired config + effective evidence + PKI state + warnings.
+        No network/subprocess probe, no mutation — but the console listener SCOPE is read live from
+        /proc (as the stack-proxy bypass warnings below already are), so the panel is accurate on load
+        without a re-verify."""
         from . import webserver as _ws
-        view = _ws.monitor_view(self._paths, self.config().webserver)
+        cfg = self.config().webserver
+        live_scope = _ws.listener_scope(self._system, cfg.port)   # "exposed" | "loopback" | "absent"
+        view = _ws.monitor_view(self._paths, cfg, live_listener_scope=live_scope)
+        # The per-stack web-UI proxies are part of the config nginx loads — show them here too, with
+        # the standing warning for any upstream that answers around this proxy.
+        proxies = []
+        for p in self._stack_web_proxies():
+            v = self.stack_web_view(p.swc.stack_id)
+            proxies.append({"stack_id": p.swc.stack_id, "port": p.swc.port, "mode": p.swc.mode,
+                            "scheme": p.swc.scheme, "access_mode": p.swc.access_mode,
+                            "upstream": p.upstream_address,
+                            "bypassable": bool(v.get("bypassable"))})
+        view["stack_proxies"] = proxies
+        # monitor_view's warnings are {"level","text"} dicts (the template renders w.level/w.text) —
+        # match that shape, or the panel shows an empty flash.
+        for pr in proxies:
+            if pr["bypassable"]:
+                view.setdefault("warnings", []).append({
+                    "level": "danger",
+                    "text": (f"{pr['stack_id']}: its own port on {pr['upstream']} is listening on "
+                             "all interfaces — reachable directly, bypassing this proxy's "
+                             "authentication. Firewall it or accept the exposure.")})
         return ActionResult(True, "webserver monitor", data=view)
 
     def webserver_verify(self) -> "ActionResult":
-        """Explicit verification: assemble + persist the effective-evidence checklist."""
+        """Explicit verification: assemble + persist the effective-evidence checklist.
+
+        Validates the SAME config `apply` would promote — stack web-UI proxies included. Verifying a
+        console-only config and reporting "verified" would be a claim about a config nginx never loads."""
         from . import webserver as _ws
-        ev = _ws.verify(self._system, self._paths, self.config().webserver)
+        ev = _ws.verify(self._system, self._paths, self.config().webserver,
+                        self._stack_web_proxies())
         failed = [k for k, v in ev["checks"].items() if v == "failed"]
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"
-        return ActionResult(ok, summary, data=ev)
+        details = []
+        for sid in ev["checks"].get("upstream_bypass_stacks", []):
+            details.append(f"  WARNING: {sid}'s upstream port is listening on all interfaces — "
+                           "reachable directly, bypassing this proxy's authentication.")
+        return ActionResult(ok, summary, details=details, data=ev)
 
     def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> "ActionResult":
         """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
@@ -320,6 +351,139 @@ class ControllerService:
         self._invalidate_config()
         return ActionResult(True, "webserver configuration saved (desired; run verify/apply)",
                             next_commands=["lhpc webserver verify"])
+
+    # ---- per-stack web-UI reverse proxies -------------------------------------------------
+
+    def stack_web_upstream(self, stack_id: str):
+        """(address, scheme) of a stack's web UI from the MANIFEST, or None when it has none.
+
+        The upstream is evidence, never operator input: an `EndpointSpec` with `client=true` and an
+        http/https scheme. This is what keeps `upstream_scheme` independent of the listener scheme."""
+        s = self.stack(stack_id)
+        if s is None:
+            return None
+        for comp in s.components:
+            for ep in comp.endpoints:
+                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                    return (ep.address, ep.scheme)
+        return None
+
+    def stack_web_eligible(self) -> list:
+        """Stack ids that expose a web UI (derived from the manifest, never hardcoded)."""
+        return [s.id for s in self.stacks() if self.stack_web_upstream(s.id) is not None]
+
+    def _stack_web_proxies(self) -> list:
+        """The `StackWebProxy` list for nginx rendering — only stacks with a port set (enabled)."""
+        from . import webserver as _ws
+        from .config import StackWebConfig
+        cfgs = self.config().stackweb
+        out = []
+        for sid in self.stack_web_eligible():
+            swc = cfgs.get(sid)
+            if swc is None or not swc.enabled:
+                continue
+            up = self.stack_web_upstream(sid)
+            if up is None:                       # eligibility changed under us; skip, never render half
+                continue
+            out.append(_ws.StackWebProxy(swc, up[0], up[1]))
+        return out
+
+    def stack_web_view(self, stack_id: str) -> dict:
+        """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is
+        evidence from THIS host (/proc/net/tcp), not a hardcoded per-stack fact."""
+        from . import webserver as _ws
+        from .config import StackWebConfig, STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
+        up = self.stack_web_upstream(stack_id)
+        if up is None:
+            return {}
+        address, upstream_scheme = up
+        swc = self.config().stackweb.get(stack_id) or StackWebConfig(stack_id=stack_id)
+        ws = self.config().webserver
+        used = {c.port for sid, c in self.config().stackweb.items()
+                if sid != stack_id and c.enabled}
+        suggested = swc.port or self._default_stack_web_port(stack_id, ws.port)
+        try:
+            upstream_port = int(str(address).rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            upstream_port = 0
+        scope = _ws.listener_scope(self._system, upstream_port) if upstream_port else "absent"
+        plan = _ws.plan_stack_exposure(swc, ws.port, used)
+        return {
+            "stack_id": stack_id, "cfg": swc, "upstream_address": address,
+            "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
+            "upstream_scope": scope, "suggested_port": suggested,
+            "modes": STACKWEB_MODES, "access_modes": WEBSERVER_ACCESS_MODES,
+            "schemes": WEBSERVER_SCHEMES, "plan": plan,
+            "urls": _ws.stack_ui_urls(swc) if swc.enabled else [],
+            # The raw upstream port answers on a non-loopback interface: our proxy's auth is
+            # bypassable, whatever `mode` says. Standing fact, shown on every load.
+            "bypassable": scope == "exposed",
+        }
+
+    def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
+        """A STABLE per-stack default port: `console_port + 1 + position`, where position is the
+        stack's index among the eligible web-UI stacks sorted by id. So meshcom → 8444, meshtastic
+        → 8445, deterministically and without colliding — the old 'first free above the console'
+        gave every not-yet-enabled stack the SAME port (8444), so accepting two suggestions collided.
+
+        A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
+        no port key, so a fresh deployment's rendered nginx stays unchanged."""
+        eligible = sorted(self.stack_web_eligible())
+        pos = eligible.index(stack_id) if stack_id in eligible else 0
+        return min(max(console_port, 1023) + 1 + pos, 65535)
+
+    def stack_web_configure(self, stack_id: str, *, mode=None, port=None, scheme=None,
+                            access_mode=None, cidrs=None, confirm=False,
+                            confirm_public=False) -> "ActionResult":
+        """Persist ONE stack's web-UI proxy policy. Mirrors `webserver_expose`'s two-level
+        confirmation. Writes INTENT only — activation is `lhpc webserver apply`."""
+        from . import config as _config, webserver as _ws
+        from .config import StackWebConfig
+        from .validators import ValidationError
+        if self.stack_web_upstream(stack_id) is None:
+            return ActionResult(False, f"stack '{stack_id}' has no web UI to proxy")
+        ws = self.config().webserver
+        current = self.config().stackweb.get(stack_id) or StackWebConfig(stack_id=stack_id)
+        used = {c.port for sid, c in self.config().stackweb.items() if sid != stack_id and c.enabled}
+        probe = StackWebConfig(
+            stack_id=stack_id,
+            mode=current.mode if mode is None else mode,
+            port=current.port if port is None else int(port),
+            scheme=current.scheme if scheme is None else scheme,
+            access_mode=current.access_mode if access_mode is None else access_mode,
+            allowed_cidrs=current.allowed_cidrs if cidrs is None else tuple(cidrs))
+        plan = _ws.plan_stack_exposure(probe, ws.port, used)
+        if plan["problems"]:
+            return ActionResult(False, f"cannot configure '{stack_id}' web UI",
+                                details=plan["problems"])
+        if plan["remote"]:
+            if plan["danger"] == "elevated" and not confirm_public:
+                what = ("a public source range (0.0.0.0/0)" if plan["public"]
+                        else "no client authentication" if plan["no_auth"]
+                        else "an unencrypted (http) listener")
+                return ActionResult(False, f"remote exposure with {what} needs elevated confirmation",
+                                    details=["re-run with the elevated confirmation to proceed"])
+            if not confirm:
+                return ActionResult(False, "remote exposure needs explicit confirmation",
+                                    details=["re-run with confirmation to proceed"])
+        try:
+            _config.save_stackweb_config(self._paths, stack_id, mode=mode, port=port, scheme=scheme,
+                                         access_mode=access_mode, allowed_cidrs=cidrs)
+        except (ValidationError, _config.ConfigError) as exc:
+            return ActionResult(False, f"invalid web-UI config: {exc}")
+        self._invalidate_config()
+        details = []
+        view = self.stack_web_view(stack_id)
+        if view.get("bypassable"):
+            details.append(
+                f"  WARNING: {stack_id}'s upstream port {view['upstream_port']} is listening on all "
+                f"interfaces — it is reachable directly, bypassing this proxy's authentication.")
+            details.append("  Firewall that port or accept the exposure; LHPC cannot close it.")
+        if probe.enabled:
+            details += [f"  {u}" for u in _ws.stack_ui_urls(probe)]
+        details.append("lhpc webserver apply           # render + validate + reload nginx")
+        return ActionResult(True, f"web UI proxy for '{stack_id}' saved (desired; run apply)",
+                            details=details, next_commands=["lhpc webserver apply"])
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
                          confirm_public=False) -> "ActionResult":
@@ -415,34 +579,72 @@ class ControllerService:
         stays truthful ('reset requested; remote cessation unproven'). NEVER deletes CA keys,
         certificates, CRL, revocation history, `.p12` exports, or the session secret."""
         from . import config as _config, runtime_fs as _rfs, webserver as _ws
-        _config.save_webserver_config(self._paths, bind="127.0.0.1", port=8443,
+        # scheme MUST be reset alongside access_mode, in the same save. `save_webserver_config`
+        # resolves the patch over the STORED config, so resetting to a cert-based access mode while
+        # leaving a stored scheme=http would raise ConfigError (http can't do client-cert auth) —
+        # a valid http console could then not reset at all.
+        _config.save_webserver_config(self._paths, bind="127.0.0.1", port=8443, scheme="https",
                                       access_mode="local-open-remote-auth",
                                       remote_exposed=False, allowed_cidrs=[])
+        # ALSO disable every per-stack web-UI proxy. A `lan`/`public` stack proxy renders its own
+        # `listen 0.0.0.0:<port>` block, so resetting only the console would leave remote listeners
+        # active while this method proves "remote exposure ceased" — a false claim. port=0 removes
+        # the block entirely; the operator's mode/CIDR choices are kept for an easy re-enable.
+        disabled = []
+        for sid, swc in self.config().stackweb.items():
+            if swc.enabled:
+                _config.save_stackweb_config(self._paths, sid, port=0)
+                disabled.append(sid)
         self._invalidate_config()
         cfg = self.config().webserver
+        proxies = self._stack_web_proxies()      # now empty of enabled entries
         # Stage + validate the loopback-only config; promote only on success (never clobber a
         # proven live config with an invalid one).
-        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
-        ev = _ws.verify(self._system, self._paths, cfg)
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg, proxies)
+        ev = _ws.verify(self._system, self._paths, cfg, proxies)
         if not ok:
             return ActionResult(False, "reset requested; loopback config invalid — remote "
                                 f"cessation UNPROVEN ({msg})", data=ev)
+        # Defense in depth: NEVER claim full cessation while any enabled proxy would still bind
+        # off-loopback. After the disable loop this must be empty; if a write silently failed, stay
+        # honest rather than assert a listener is gone when it is not.
+        remaining = [sid for sid, c in self.config().stackweb.items() if c.enabled and c.remote]
+        detail = ([f"  disabled stack web-UI proxy: {sid}" for sid in disabled]
+                  + [f"  STILL REMOTE (reset failed): {sid}" for sid in remaining])
         _ws.promote_config(self._paths)
         if _ws.nginx_master_active(self._paths):
             state, rmsg = _ws.reload(self._system, self._paths)
             if state == "reloaded":
+                # RE-READ the console listener scope AFTER the reload — `ev` came from a verify() run
+                # BEFORE promote+reload, so its `listener_scope` reflects the pre-reset (still
+                # exposed) nginx. Write a CONSISTENT effective block, and only claim cessation when
+                # BOTH no stack proxy remains remote AND the console is no longer bound off-loopback.
+                console_scope = _ws.listener_scope(self._system, cfg.port)
+                console_exposed = console_scope == "exposed"
+                proven = (not remaining) and (not console_exposed)
                 ev["effective"] = {**ev.get("effective", {}),
-                                   "remote_listener": False, "remote_cessation_proven": True}
+                                   "listener_scope": console_scope,
+                                   "remote_listener": console_exposed,
+                                   "remote_cessation_proven": proven}
                 _ws.write_evidence(self._paths, ev)
-                return ActionResult(True, "webserver reset to defaults — remote exposure ceased "
-                                    "(loopback-only config reloaded and proven)", data=ev)
+                if console_exposed:
+                    detail.append(f"  console listener still exposed on port {cfg.port}")
+                if proven:
+                    return ActionResult(True, "webserver reset to defaults — remote exposure ceased "
+                                        "(loopback-only config reloaded and proven)",
+                                        details=detail, data=ev)
+                what = ("the console listener" if console_exposed and not remaining
+                        else "a stack web-UI proxy" if remaining and not console_exposed
+                        else "the console listener and a stack web-UI proxy")
+                return ActionResult(False, f"config reset and nginx reloaded, but {what} is STILL "
+                                    "bound remotely — cessation UNPROVEN", details=detail, data=ev)
             return ActionResult(False, f"reset requested; nginx reload failed — remote cessation "
-                                f"UNPROVEN ({rmsg})", data=ev)
+                                f"UNPROVEN ({rmsg})", details=detail, data=ev)
         ev["effective"] = {**ev.get("effective", {}), "remote_cessation_proven": False}
         _ws.write_evidence(self._paths, ev)
         return ActionResult(False, "reset requested; no active nginx master to reload — remote "
                             "cessation UNPROVEN (start/repair the service to prove it)",
-                            next_commands=["lhpc webserver verify"], data=ev)
+                            details=detail, next_commands=["lhpc webserver verify"], data=ev)
 
     def webserver_tls_renew(self) -> "ActionResult":
         from . import pki as _pki
@@ -518,13 +720,14 @@ class ControllerService:
         cfg = self.config().webserver
         # Stage + validate BEFORE touching the live config; promote atomically only on success
         # (a failed nginx -t leaves the previous proven live config byte-for-byte intact).
-        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg,
+                                                  self._stack_web_proxies())
         if not ok:
             return ActionResult(False, "nginx config validation failed; previous proven "
                                 f"configuration remains active ({msg})")
         _ws.promote_config(self._paths)
         state, rmsg = _ws.reload(self._system, self._paths)
-        ev = _ws.verify(self._system, self._paths, cfg)
+        ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
         if state == "repair_required":
             return ActionResult(False, "config valid but the nginx service is not active — "
                                 "repair required (operator context)",
@@ -548,11 +751,16 @@ class ControllerService:
         if not _ws.nginx_installed(self._system):
             return ActionResult(False, "nginx is not installed", details=[_ws.NGINX_INSTALL_CMD],
                                 next_commands=[_ws.NGINX_INSTALL_CMD])
-        if not _pki.pki_status(self._paths)["server_cert"].get("present"):
+        cfg = self.config().webserver
+        proxies = self._stack_web_proxies()
+        # A server certificate is a prerequisite only for a config that actually terminates TLS.
+        # An all-http desired config (console AND every enabled proxy on `scheme=http`) needs no PKI;
+        # demanding it unconditionally is why `scheme=http` was only half-functional.
+        if _ws.tls_required(cfg, proxies) and not _pki.pki_status(
+                self._paths)["server_cert"].get("present"):
             return ActionResult(False, "no HTTPS server certificate — run `lhpc webserver init` "
                                 "first", next_commands=["lhpc webserver init"])
-        cfg = self.config().webserver
-        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg)
+        ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg, proxies)
         if not ok:
             return ActionResult(False, f"nginx config invalid — not starting ({msg})")
         _ws.promote_config(self._paths)
@@ -563,9 +771,12 @@ class ControllerService:
             return ActionResult(False, "could not enable/start lhpc-nginx.service",
                                 details=[detail[-1] if detail else "systemctl failed"],
                                 next_commands=["systemctl --user enable --now lhpc-nginx.service"])
-        ev = _ws.verify(self._system, self._paths, cfg)
-        return ActionResult(True, f"nginx enabled + started — HTTPS console at "
-                            f"https://{cfg.bind}:{cfg.port}/", data=ev)
+        ev = _ws.verify(self._system, self._paths, cfg, proxies)
+        # The console's real URL, from its own scheme/exposure — never a hardcoded https, and never
+        # `https://0.0.0.0:8443/`, which is a bind wildcard and not an address anyone can visit.
+        urls = _ws.console_urls(cfg)
+        return ActionResult(True, f"nginx enabled + started — console at {urls[0]}",
+                            details=[f"  {u}" for u in urls[1:]], data=ev)
 
     def _invalidate_config(self) -> None:
         """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
@@ -5723,20 +5934,41 @@ class ControllerService:
                if comp.run_cwd else src)
         return f"cd {shlex.quote(cwd)} && {cmd}"
 
-    @staticmethod
-    def _client_interfaces(status) -> list[dict]:
+    def _client_interfaces(self, status, stack_id: str = "") -> list[dict]:
         """User-facing interfaces a client connects to (KISS TCP, web UIs, serial
-        PTYs) that are currently present — NOT internal transport sockets."""
+        PTYs) that are currently present — NOT internal transport sockets.
+
+        A proxied web UI links to the PROXY, not to its loopback upstream: handing a remote browser
+        `http://127.0.0.1:18083` is a dead link. A `local`-mode proxy is still loopback, so it is
+        linked but labelled as such rather than silently failing for a remote reader."""
         if status is None:
             return []
+        from . import webserver as _ws
+        swc = self.config().stackweb.get(stack_id) if stack_id else None
         out = []
         for obs in status.endpoints:
             sp = obs.spec
             if not getattr(sp, "client", False) or not obs.present:
                 continue
-            link = f"{sp.scheme}://{sp.address}" if sp.scheme in ("http", "https") else ""
-            out.append({"label": sp.description or sp.address, "address": sp.address,
-                        "scheme": sp.scheme or "tcp", "link": link})
+            is_web = sp.scheme in ("http", "https")
+            link = f"{sp.scheme}://{sp.address}" if is_web else ""
+            label = sp.description or sp.address
+            entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
+                     "link": link, "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False}
+            if is_web and swc is not None and swc.enabled:
+                urls = _ws.stack_ui_urls(swc)
+                if urls:
+                    entry["link"] = urls[0]          # loopback/local_ip fallback (CLI, no request)
+                    if swc.remote:
+                        # A remote-facing proxy is reached at the SAME host the browser used for the
+                        # console, on the proxy's port — the adapter fills the host from request.host
+                        # so the link is correct however the operator reached the console (LAN IP,
+                        # hostname, WAN). `local_ip()` can only guess one interface.
+                        entry.update(proxy_port=swc.port, proxy_scheme=swc.scheme,
+                                     proxy_remote=True)
+                    else:
+                        entry["label"] = f"{label} (local only)"
+            out.append(entry)
         return out
 
     def _component_booting(self, comp_id: str) -> bool:
@@ -5805,7 +6037,8 @@ class ControllerService:
                           "state": ("booting" if booting
                                     else (live[c.id].run_state.value if c.id in live else "unknown")),
                           # No web-UI/client link while booting — it isn't serving yet.
-                          "interfaces": ([] if booting else self._client_interfaces(live.get(c.id)))})
+                          "interfaces": ([] if booting
+                                         else self._client_interfaces(live.get(c.id), s.id))})
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
                 main_comp = s.component(s.main)

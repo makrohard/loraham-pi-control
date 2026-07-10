@@ -193,4 +193,10 @@
       {% include "_daemon_params.html" %}
     {% endwith %}
   {% endif %}
+
+  {# ===== Webserver — LAST sub-section, only for stacks whose manifest declares a client
+     http/https endpoint. Same level and styling as Install / Info / Settings. ===== #}
+  {% if g.stack_web %}
+    {% include "_stackweb.html" %}
+  {% endif %}
 </div>

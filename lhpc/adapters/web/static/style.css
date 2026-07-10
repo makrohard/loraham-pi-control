@@ -161,6 +161,10 @@ form button { font: inherit; padding: .3rem .9rem; border-radius: 6px; border: 1
 a.iface { text-decoration: none; color: var(--brand); }
 /* On the dashboard running list, each endpoint sits on its own indented line. */
 .complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
+/* Web-UI links read as buttons — give them breathing room above and below. */
+.complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
+/* Separate the per-stack webserver Apply button from the Save button above it. */
+.ws-apply { margin-top: .6rem; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
                    padding: .1rem .5rem; cursor: pointer; }

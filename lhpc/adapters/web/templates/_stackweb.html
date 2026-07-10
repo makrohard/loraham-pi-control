@@ -1,0 +1,128 @@
+{# Per-stack web-UI reverse proxy (MeshCom, Meshtastic, …). Rendered only for stacks whose manifest
+   declares a client http/https endpoint. Requires `g.stack_web` (see services.stack_web_view).
+
+   The proxy reuses the console's client CA, so the SAME client certificate authenticates here.
+   `scheme` is the PUBLIC LISTENER scheme; the upstream scheme is fixed by the manifest. #}
+{% set sw = g.stack_web %}
+{# `advcfg`, like Install / Info / Settings — a peer sub-section of the stack, not a nested stackrow. #}
+<details class="advcfg" id="stack-webserver-{{ g.stack.id }}">
+  <summary>Webserver (web UI proxy)
+    {% if sw.cfg.enabled %}<span class="pill">{{ sw.cfg.mode }} · :{{ sw.cfg.port }}</span>
+    {% else %}<span class="pill">not proxied</span>{% endif %}
+    {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
+  </summary>
+  <div class="body">
+
+    {# STANDING security fact, not a one-off flash: the upstream answers on a non-loopback
+       interface, so nginx is not the only door — whatever `mode`/`auth` say below. #}
+    {% if sw.bypassable %}
+      <p class="flash flash-bad"><strong>This app's own port
+        {{ sw.upstream_port }} is listening on all interfaces.</strong>
+        It is reachable directly on the LAN, bypassing this proxy — the access mode below does
+        <strong>not</strong> protect it. Firewall that port or accept the exposure; LHPC cannot
+        close it (the app exposes no bind option).</p>
+    {% endif %}
+
+    <p class="summary">Reverse-proxies <code>{{ sw.upstream_scheme }}://{{ sw.upstream_address }}</code>
+      through nginx, reusing the console's client certificate.
+      {% if sw.cfg.enabled %}
+        Reachable at {% for u in sw.urls %}<code>{{ u }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        after <code>lhpc webserver apply</code>.
+      {% else %}
+        Set a port (suggested <code>{{ sw.suggested_port }}</code>) to enable the proxy.
+      {% endif %}</p>
+
+    {% if sw.cfg.scheme == 'http' %}
+      <p class="flash flash-warn"><strong>Unencrypted listener.</strong> Client certificates are
+        presented during the TLS handshake, so <code>http</code> cannot authenticate anyone —
+        the access mode is forced to <code>no-auth</code>.</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('stack_web_configure', stack_id=g.stack.id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      {# Same 3-column layout as Settings: label | control | help. #}
+      <section class="cfgsec">
+        <table class="paramgrid dptab">
+          <tr>
+            <th>Access</th>
+            <td>
+              <select name="mode">
+                {% for m in sw.modes %}
+                  <option value="{{ m }}"{% if sw.cfg.mode == m %} selected{% endif %}>
+                    {% if m == 'local' %}local only (loopback)
+                    {% elif m == 'lan' %}LAN (allowed CIDRs){% else %}public (0.0.0.0/0){% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="dphelp muted">Who may reach the proxy</td>
+          </tr>
+          <tr>
+            <th>Port</th>
+            <td>
+              {# Pre-filled with the stable default (meshcom 8444, meshtastic 8445) so enabling the
+                 proxy actually writes a port — a BLANK port silently saves as 0 (not proxied). #}
+              <input name="port" type="number" min="0" max="65535"
+                     value="{{ sw.cfg.port or sw.suggested_port }}" autocomplete="off">
+            </td>
+            <td class="dphelp muted">default {{ sw.suggested_port }}; 0 = not proxied;
+              rootless nginx needs &ge; 1024</td>
+          </tr>
+          <tr>
+            <th>Scheme</th>
+            <td>
+              <select name="scheme" class="schemesel" data-authsel="authsel-{{ g.stack.id }}">
+                {% for s in sw.schemes %}
+                  <option value="{{ s }}"{% if sw.cfg.scheme == s %} selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="dphelp muted">https keeps client-certificate auth possible</td>
+          </tr>
+          <tr>
+            <th>Access mode</th>
+            <td>
+              <select name="access_mode" id="authsel-{{ g.stack.id }}">
+                {% for m in sw.access_modes %}
+                  {# Cosmetic only — the service refuses http + a cert-based mode server-side too. #}
+                  <option value="{{ m }}"{% if sw.cfg.access_mode == m %} selected{% endif %}
+                    {%- if sw.cfg.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="dphelp muted">Client-certificate (mTLS) policy</td>
+          </tr>
+          <tr>
+            <th>Allowed CIDRs</th>
+            <td>
+              <input name="cidrs" value="{{ sw.cfg.allowed_cidrs|join(',') }}"
+                     placeholder="192.168.0.0/24" autocomplete="off">
+            </td>
+            <td class="dphelp muted">Required for LAN/public</td>
+          </tr>
+          <tr>
+            <th>Confirm</th>
+            <td><input name="confirm_phrase" autocomplete="off"></td>
+            <td class="dphelp muted">Remote needs <code>enable-remote</code> — or
+              <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth remote,
+              or an unencrypted <code>http</code> remote listener</td>
+          </tr>
+        </table>
+      </section>
+      <button type="submit">Save web UI exposure</button>
+    </form>
+    {# Apply sits right after Save (as in the console panel): Save records intent, Apply renders +
+       validates + reloads the whole nginx config so the proxy port actually starts listening. #}
+    <form method="post" action="{{ url_for('webserver_apply') }}" class="act ws-apply">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button type="submit">Apply (validate + reload)</button>
+    </form>
+
+    {# Saving only records INTENT — nothing is live until Apply. Make that unmissable (a muted
+       footnote was easy to skip and left proxies configured-but-dead). #}
+    <div class="flash flash-warn">
+      <strong>Saved settings are not live yet.</strong> Click <strong>Apply</strong> above to render,
+      validate and reload nginx — until then the proxy port is not listening.
+    </div>
+  </div>
+</details>
