@@ -186,11 +186,12 @@ a.iface { text-decoration: none; color: var(--brand); }
 
 /* TOP-LEVEL row headers (controller + each stack, direct children of .stacklist) lay out as fixed
    columns so the SAME field lines up vertically across rows: marker | name | status | source |
-   version | head | extra | logs. Fixed track widths (not `auto`) because each summary is its own grid
-   container, so only fixed tracks align across rows. Missing fields leave their cell empty. */
+   version | head | extra | update | logs. Fixed track widths (not `auto`) because each summary is its
+   own grid container, so only fixed tracks align across rows — `update` therefore reserves its width
+   even when empty. Missing fields leave their cell empty. */
 .stacklist > .stackrow > summary {
   display: grid;
-  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 6em 1fr auto;
+  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 6em 1fr 7.5em auto;
   align-items: center;
   column-gap: .5rem;
   row-gap: .2rem;
@@ -203,7 +204,9 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stacklist > .stackrow > summary .col-head    { grid-column: 6; }
 .stacklist > .stackrow > summary .col-extra   { grid-column: 7; min-width: 0; display: flex;
                                                  gap: .4rem; flex-wrap: wrap; align-items: center; }
-.stacklist > .stackrow > summary .col-logs    { grid-column: 8; margin-left: 0; justify-self: end; }
+.stacklist > .stackrow > summary .col-update  { grid-column: 8; justify-self: end; min-width: 0; }
+.stacklist > .stackrow > summary .col-update .update-link { font-size: .82rem; white-space: nowrap; }
+.stacklist > .stackrow > summary .col-logs    { grid-column: 9; margin-left: 0; justify-self: end; }
 /* Small screens (phones/tablets): the fixed column grid can't shrink and would be clipped by the
    card. Reflow the row header to a wrapping flex layout so it FITS the viewport — no horizontal
    cut-off, no whole-page sideways scroll. Wide config tables scroll inside their own box. */
@@ -215,6 +218,7 @@ a.iface { text-decoration: none; color: var(--brand); }
   .stacklist > .stackrow > summary .col-version,
   .stacklist > .stackrow > summary .col-head,
   .stacklist > .stackrow > summary .col-extra,
+  .stacklist > .stackrow > summary .col-update,
   .stacklist > .stackrow > summary .col-logs { grid-column: auto; }
   .stacklist > .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
   .stacklist > .stackrow > summary .col-logs { margin-left: auto; }

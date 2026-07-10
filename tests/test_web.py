@@ -293,7 +293,8 @@ def test_header_rows_drop_id_pill_and_split_version_head(tmp_path):
 def test_header_columns_and_webserver_open(tmp_path):
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     for cls in ('class="col-name"', 'class="col-status"', 'class="col-source"',
-                'class="col-version"', 'class="col-head"', 'class="col-extra"', 'class="logslink col-logs"'):
+                'class="col-version"', 'class="col-head"', 'class="col-extra"',
+                'class="col-update"', 'class="logslink col-logs"'):
         assert cls in body, cls
     assert 'id="webserver-row" open>' in body                # webserver section shown by default
     assert '<details class="advcfg" open>\n    <summary>Monitor' not in body   # Monitor collapsed
@@ -1423,7 +1424,8 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
                      {"ok": True, "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb",
                       "upstream_version": "9.9.9"})
     body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "update available" in body                                   # still signalled
+    # still signalled — now as the col-update link (same column as the stack rows)
+    assert 'class="update-link"' in body and ">Update available</a>" in body
     assert '<details class="stackrow" id="controller-row">' in body     # collapsed (no ' open')
     assert '<details class="stackrow" id="controller-update">' in body  # nested Update collapsed
     assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed

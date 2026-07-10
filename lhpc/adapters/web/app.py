@@ -350,6 +350,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             out["complog"] = service.bulk_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
+    def _effective_freshness(entry, current_head: str) -> str:
+        from lhpc.core import stackupdates
+        return stackupdates.effective_status(entry, current_head or "")
+
+    def _checked_ago(checked_at: int) -> str:
+        """'Last checked' as a short human string — Jinja has no time formatter here."""
+        if not checked_at:
+            return ""
+        secs = max(0, int(time.time()) - int(checked_at))
+        if secs < 90:
+            return "just now"
+        if secs < 5400:
+            return f"{secs // 60} min ago"
+        if secs < 172800:
+            return f"{secs // 3600} h ago"
+        return f"{secs // 86400} d ago"
+
     def _stack_groups(band=""):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
@@ -364,6 +381,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for ss in snapshot.stacks:
             for comp in ss.stack.components:
                 index[comp.id] = (comp, ss.components[comp.id])
+        # CACHED source freshness (never the network on a GET — P0.6). Each cached verdict is
+        # resolved against the component's CURRENT head, so a source updated since the last check
+        # reads `unchecked`, not a stale green/yellow.
+        _fresh = service.source_check_view()
+        _fresh_comps = _fresh.get("components", {})
 
         groups = []
         for ss in snapshot.stacks:
@@ -385,11 +407,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                              in ("match", "dirty", "differs", "unknown", "not-a-repo"))
             interactive = bool(main and main.interactive)
             member_ids = {c.id for c in stack.components}
+            # Freshness, resolved per component against the head the verdict was computed from.
+            # Scoped to the stack's OWN components: a cross-stack dependency (loraham-daemon inside
+            # the chat row) belongs to its own stack's row and must not light up this one.
+            upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id),
+                                                     ss.components[c.id].source_head)
+                          for c in stack.components}
             groups.append({
                 "stack": stack,
                 "main": index.get(main.id) if main else None,
                 "main_status": main_status,
                 "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
+                "update_states": upd_states,          # comp_id -> unchecked|unknown|up_to_date|behind|error
+                "update_main": upd_states.get(main.id, "unchecked") if main else "unchecked",
+                "update_available": any(v == "behind" for v in upd_states.values()),
+                "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
                 "installed": installed,
                 "has_source": has_source,
                 "deps": own + cross,
@@ -461,6 +493,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         res = service.self_update_check()          # NETWORK (explicit): git fetch, refresh cache
         flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("stacks_overview") + "#controller-row")
+
+    @app.post("/source-check/<target>")
+    def source_check(target: str):  # noqa: ANN202
+        # DEDICATED route, deliberately NOT an /action op: probing remote freshness is non-mutating
+        # and needs no confirm stage, so it must not inherit the lifecycle dispatch that
+        # install/build/start/stop share. `target` is a stack id or a component id.
+        if not _csrf_ok():
+            abort(400)
+        sid = service.stack_of(target)
+        if sid is None:
+            abort(404)                             # unknown target -> 404, and no network
+        res = service.source_check(target)         # NETWORK (explicit): git ls-remote, refresh cache
+        flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
+        return _install_back(sid)                  # land on the stack's Install section
 
     @app.route("/self-update/apply", methods=["GET", "POST"])
     def self_update_apply():  # noqa: ANN202
@@ -1286,6 +1332,12 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
             while True:
                 try:
                     ControllerService().self_update_check()
+                except Exception:
+                    pass
+                # Per-component source freshness, same cadence and same knob. Its OWN try/except:
+                # a failing stack sweep must never kill the console's self-update cadence.
+                try:
+                    ControllerService().source_check()
                 except Exception:
                     pass
                 if interval_s <= 0:

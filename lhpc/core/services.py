@@ -5442,15 +5442,26 @@ class ControllerService:
         return [c.id for c in (s.components if s else ())
                 if c.source and life.source_dir(c).exists() and not self.is_built(c)]
 
-    def update_status(self, comp) -> str:
-        """Is the installed source up to date with its GitHub remote branch?
-        Returns "up-to-date", "update-available", or "unknown" (no remote/git/net).
-        Uses a bounded `git ls-remote` — no fetch, no mutation."""
+    def _update_probe(self, comp) -> dict:
+        """NETWORK. Bounded `git ls-remote` freshness probe for ONE component — no fetch, no
+        mutation. Returns a `stackupdates` entry: status + the evidence it was computed from.
+
+        `local_head_at_check` is what ties the verdict to the source it describes (a later
+        Update/Clean invalidates it) — it costs nothing, the probe already runs `rev-parse HEAD`.
+
+        UNKNOWN vs ERROR: "no remote / not installed / invalid remote" is `unknown` (nothing to
+        compare), while a probe that RAN and failed (ls-remote or rev-parse) is `error`. Collapsing
+        both — as the old `update_status` did — reported an unreachable network as "nothing to
+        compare", which reads far too much like "fine".
+        """
+        from . import stackupdates
+        entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
         if comp is None or comp.source is None or not comp.source.remote:
-            return "unknown"
+            return {**entry, "status": stackupdates.UNKNOWN}
+        entry["source_path"] = comp.source.path
         src = self._paths.resolve_source(comp.source.path)
         if not src.is_dir():
-            return "unknown"
+            return {**entry, "status": stackupdates.UNKNOWN}      # not installed -> NO network
         remote = self.config().remotes.get(comp.id) or comp.source.remote
         # Revalidate the (possibly hand-edited) remote IMMEDIATELY before git — an invalid
         # runtime override must never reach `git ls-remote`; treat it as unknown, not a check.
@@ -5458,19 +5469,114 @@ class ControllerService:
         try:
             remote = validators.remote_url(remote or "", field="remote")
         except validators.ValidationError:
-            return "unknown"
+            return {**entry, "status": stackupdates.UNKNOWN}
         if not remote:
-            return "unknown"
+            return {**entry, "status": stackupdates.UNKNOWN}
+        entry["remote"] = remote
         ref = comp.source.branch or "HEAD"
         run = self._system.runner.run
         rem = run(["git", "ls-remote", remote, ref], timeout=12.0)
         if rem.returncode != 0 or not rem.stdout.strip():
-            return "unknown"
+            return {**entry, "status": stackupdates.ERROR}        # unreachable / no such ref
         remote_sha = rem.stdout.split()[0]
         loc = run(["git", "-C", str(src), "rev-parse", "HEAD"], timeout=5.0)
         if loc.returncode != 0 or not loc.stdout.strip():
-            return "unknown"
-        return "up-to-date" if loc.stdout.strip() == remote_sha else "update-available"
+            return {**entry, "status": stackupdates.ERROR}        # not a repo / broken checkout
+        local_sha = loc.stdout.strip()
+        entry["upstream_head"] = remote_sha
+        entry["local_head_at_check"] = local_sha
+        entry["status"] = (stackupdates.UP_TO_DATE if local_sha == remote_sha
+                           else stackupdates.BEHIND)
+        return entry
+
+    def update_status(self, comp) -> str:
+        """Is the installed source up to date with its GitHub remote branch?
+        Returns "up-to-date", "update-available", or "unknown" (no remote/git/net).
+        Uses a bounded `git ls-remote` — no fetch, no mutation.
+
+        Thin wrapper over `_update_probe`, preserving the 3-value contract its callers expect
+        (`update()`'s dry-run): a probe ERROR collapses back to "unknown" here."""
+        from . import stackupdates
+        status = self._update_probe(comp)["status"]
+        if status == stackupdates.UP_TO_DATE:
+            return "up-to-date"
+        if status == stackupdates.BEHIND:
+            return "update-available"
+        return "unknown"                                          # incl. ERROR — legacy contract
+
+    def _source_check_targets(self, target: str):
+        """(components, error) for a source-freshness sweep. Unlike `_resolve`, this selects on
+        SOURCE, not on `run_argv` — a library component like `radiolib` has a remote to compare but
+        nothing to run, and must still be checked."""
+        def _with_source(comps):
+            return [c for c in comps if c.source and c.source.remote]
+        if not target:
+            out = []
+            for s in self.stacks():
+                out += _with_source(s.components)
+            return out, None
+        s = self.stack(target)
+        if s is not None:
+            return _with_source(s.components), None
+        for st in self.stacks():
+            c = st.component(target)
+            if c is not None:
+                return _with_source([c]), None
+        return [], f"Unknown stack or component '{target}'."
+
+    def source_check(self, target: str = "") -> ActionResult:
+        """NETWORK (explicit): probe each component's remote and refresh the cached freshness
+        marker. The ONLY writer of `state/stackupdates.json`, and never reached from a GET route
+        (P0.6) — it is called by the `/source-check/<target>` POST and the background check thread.
+
+        An uninstalled source costs no network at all (`_update_probe` returns UNKNOWN before any
+        git call), so a sweep over a mostly-uninstalled box is nearly free.
+        """
+        from . import stackupdates
+        comps, err = self._source_check_targets(target)
+        if err:
+            return ActionResult(False, err, next_commands=["lhpc list"])
+        if not comps:
+            return ActionResult(True, f"Nothing to check for '{target or 'all'}' — "
+                                      "no component declares a source remote.")
+        results, details = {}, []
+        counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
+                  stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
+        for c in comps:
+            entry = self._update_probe(c)
+            results[c.id] = entry
+            counts[entry["status"]] = counts.get(entry["status"], 0) + 1
+            details.append(f"  {c.id}: {entry['status'].replace('_', ' ')}")
+        stackupdates.record(self._paths, results)
+        n = len(comps)
+        behind, errs = counts[stackupdates.BEHIND], counts[stackupdates.ERROR]
+        unknown, uptodate = counts[stackupdates.UNKNOWN], counts[stackupdates.UP_TO_DATE]
+        who = target or "all"
+        # UNKNOWN is "nothing to compare" (no remote / not installed / invalid remote) — it is NOT
+        # a passing check, and must never be summarized as, or flashed green like, "up to date".
+        # `ok` therefore means "every component yielded a real comparison": a single unknown or
+        # error downgrades the flash to a warning, even when nothing is behind.
+        if errs:
+            summary = (f"{errs} of {n} source(s) could not be checked for '{who}' — see details."
+                       + (f" {behind} behind." if behind else ""))
+        elif behind:
+            summary = f"{behind} of {n} source(s) behind their remote for '{who}'."
+            if unknown:
+                summary += f" {unknown} not comparable."
+        elif uptodate and unknown:
+            summary = f"{uptodate} up to date, {unknown} unknown/not comparable for '{who}'."
+        elif uptodate:
+            summary = f"All checked sources are up to date for '{who}'."
+        else:
+            summary = (f"No installed/comparable sources could be checked for '{who}' — "
+                       f"{unknown} unknown/not comparable.")
+        return ActionResult(errs == 0 and unknown == 0, summary, details=details,
+                            data={"counts": counts, "checked": n})
+
+    def source_check_view(self) -> dict:
+        """Cached, network-free freshness view for GET pages. `{checked_at, components}`."""
+        from . import stackupdates
+        return stackupdates.view(self._paths)
 
     def stack_running(self, target: str) -> bool:
         """True if the stack's main component is currently running/degraded."""

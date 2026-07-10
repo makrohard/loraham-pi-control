@@ -1,7 +1,7 @@
 {# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
    sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -26,7 +26,11 @@
     <summary>Install</summary>
     <div class="body">
       {% if g.installed and g.has_source %}
-        <p>Installed version: <span class="pill">remote status unknown</span></p>
+        {# Cached verdict for the MAIN component, resolved against its current head. Never green
+           unless a real check produced it against exactly this commit. #}
+        <p>Installed version: {{ freshness_pill(g.update_main) }}
+          {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
+          {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
       {% elif g.has_source %}
         <p class="flash flash-warn"><strong>Not installed yet:</strong> the source for
           {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.</p>
@@ -79,6 +83,10 @@
                   <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
                   {% if comp.optional %}<span class="pill">optional</span>{% endif %}
                   <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
+                  {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
+                     owned by its own stack's row, so it has no entry here. #}
+                  {% if comp.id in g.update_states and comp.source and comp.source.remote %}
+                    {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}
                   <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}">logs</a></summary>
                 <div class="body">
                   <div class="actbar">
@@ -97,6 +105,8 @@
                     {% if comp.test_cmd %}{{ action_btn('test', comp.id, 'Test') }}{% endif %}
                     {% if comp.tx_capable and comp.band %}{{ action_btn('test-tx', comp.id, 'TX test') }}{% endif %}
                     {% if comp.band %}<a class="act" href="{{ url_for('stacks_overview', band=comp.band, cfg='daemon') ~ '#stack-settings-daemon' }}"><button type="button">Radio config</button></a>{% endif %}
+                    {# Last button: per-component remote freshness probe. #}
+                    {% if comp.source and comp.source.remote %}{{ source_check_btn(comp.id) }}{% endif %}
                   </div>
                   <details class="advcfg">
                     <summary>Info</summary>

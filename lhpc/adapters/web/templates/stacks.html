@@ -44,8 +44,11 @@
             {% elif controller.identity.status == 'ok' %}<span class="ver ver-green">identity ok</span>
             {% elif controller.identity.status == 'unsafe' %}<span class="ver ver-red" title="{{ controller.identity.reason }}">identity UNSAFE</span>
             {% else %}<span class="pill">not self-hosted</span>{% endif %}
-            {% if controller.update_available %}<span class="pill">update available</span>{% endif %}
           </span>
+          {# Same column as the stack rows (grid alignment), same call-to-action: the controller's
+             update lives in its nested Update panel rather than an Install section. #}
+          <span class="col-update">{% if controller.update_available %}<a class="update-link"
+            href="{{ url_for('stacks_overview') }}#controller-update">Update available</a>{% endif %}</span>
           <a class="logslink col-logs" href="{{ url_for('controller_logs') }}">logs</a>
         </summary>
         <div class="stackrow-body">

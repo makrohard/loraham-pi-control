@@ -23,6 +23,25 @@
 </form>
 {% endmacro %}
 
+{# Remote freshness probe (git ls-remote) for a stack or a single component. Its own route, NOT an
+   /action op: it mutates nothing but the cached status marker, and needs no confirm stage. #}
+{% macro source_check_btn(target) %}
+<form method="post" action="{{ url_for('source_check', target=target) }}" class="act">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <button type="submit">Check for updates</button>
+</form>
+{% endmacro %}
+
+{# Cached per-component freshness, already resolved against the component's CURRENT head by
+   `_effective_freshness` — `unchecked` covers absent, corrupt AND stale-after-update entries. #}
+{% macro freshness_pill(state) %}
+{%- if state == 'behind' %}<span class="ver ver-yellow">update available</span>
+{%- elif state == 'up_to_date' %}<span class="ver ver-green">up to date</span>
+{%- elif state == 'error' %}<span class="ver ver-red">check failed</span>
+{%- elif state == 'unknown' %}<span class="pill">no remote</span>
+{%- else %}<span class="pill">unchecked</span>{% endif %}
+{% endmacro %}
+
 {# Grouped lifecycle actions for a stack — one group per line. #}
 {% macro stack_actions(stack_id, installed, has_source) %}
 {% if has_source %}
@@ -31,6 +50,8 @@
     {% if not installed %}{{ action_btn('install', stack_id, 'Install') }}{% endif %}
     {% if installed %}{{ action_btn('update', stack_id, 'Update') }}{{ action_btn('uninstall', stack_id, 'Uninstall') }}{% endif %}
     {{ action_btn('clean', stack_id, 'Clean all') }}
+    {# Last in the Source line. Only once installed — there is no local head to compare before that. #}
+    {% if installed %}{{ source_check_btn(stack_id) }}{% endif %}
   </div>
 {% endif %}
 {% if installed %}
@@ -58,13 +79,21 @@
   <span class="col-status"><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></span>
   <span class="col-source"><span class="pill">src: {{ st.source_state.value }}</span></span>
   <span class="col-version">{% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}</span>
-  <span class="col-head">{% if st.source_head %}<span class="pill mono">@{{ st.source_head[:9] }}</span>{% endif %}</span>
+  {# YELLOW only when the MAIN component is behind — this commit IS the main's head. A stale
+     radiolib raises the col-update link instead, and leaves this pill grey (truthfully). #}
+  <span class="col-head">{% if st.source_head %}<span class="pill mono{% if g.update_main == 'behind' %} ver ver-yellow{% endif %}"
+    {%- if g.update_main == 'behind' %} title="behind its remote"{% endif %}>@{{ st.source_head[:9] }}</span>{% endif %}</span>
 {% else %}
   <span class="col-status"><span class="badge badge-{{ g.state }}">{{ g.state }}</span></span>
 {% endif %}
 <span class="col-extra">
   {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
 </span>
+{# Last column before `logs`: opens (and scrolls to) this stack's Install section, where the
+   Update/Build buttons and the per-component freshness pills live. #}
+<span class="col-update">{% if g.update_available %}<a class="update-link"
+  href="{{ url_for('stacks_overview', open=g.stack.id, inst=g.stack.id) }}#stack-install-{{ g.stack.id }}"
+  >Update available</a>{% endif %}</span>
 {% endmacro %}
 
 {# A copyable command box (needs copy.js, loaded globally). #}
