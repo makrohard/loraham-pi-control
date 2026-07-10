@@ -250,6 +250,61 @@ def test_install_panel_ids_unique(tmp_path):
     assert ids and len(ids) == len(set(ids))
 
 
+def _anchors(body):
+    import re
+    return re.findall(r"<a\b[^>]*>", body)
+
+
+def _log_anchors(body):
+    """Anchors whose href targets a log VIEW (not the config link that shares the logslink class)."""
+    return [a for a in _anchors(body)
+            if 'href="/logs/' in a or "/controller/logs" in a or "/webserver/logs" in a]
+
+
+def test_every_log_link_opens_in_a_new_tab(tmp_path):
+    # /stacks renders the controller, per-stack, dependency-card and webserver log links.
+    found = _log_anchors(_client(tmp_path).get("/stacks").get_data(as_text=True))
+    assert len(found) >= 3
+    for a in found:
+        assert 'target="_blank"' in a and 'rel="noopener"' in a, a
+
+
+def test_dashboard_log_links_open_in_a_new_tab_but_the_config_link_does_not(tmp_path):
+    # A fresh runtime renders no dashboard radios, so assert on the template source: every
+    # logs_view anchor gets target=_blank, while the `config` link (same logslink class,
+    # but it navigates to /stacks) must NOT.
+    import pathlib, re
+    tpl = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+           / "templates" / "dashboard.html").read_text()
+    log_tags = [a for a in re.findall(r"<a\b[^>]*>", tpl) if "logs_view" in a]
+    assert len(log_tags) == 3                                  # 2x daemon log + per-component log
+    for a in log_tags:
+        assert 'target="_blank"' in a and 'rel="noopener"' in a, a
+    cfg = [a for a in re.findall(r"<a\b[^>]*>", tpl) if "stack-settings-" in a]
+    assert cfg and all('target="_blank"' not in a for a in cfg)
+
+
+def test_logs_col_class_token_stays_contiguous(tmp_path):
+    # test_header_columns_and_webserver_open asserts this exact substring.
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert 'class="logslink col-logs"' in body
+
+
+def test_source_pill_explains_differs_is_not_dirty(tmp_path):
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "differs = clean but at another commit" in body
+    assert "untracked build output is ignored" in body
+
+
+def test_col_head_track_is_wide_enough_for_a_10_char_pill():
+    # `@` + 9 hex in mono at .78rem measures ~91-94px; a 6em (96px) track overran into the .5rem
+    # gap and touched `identity ok`. Pin the widened track.
+    import pathlib
+    css = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+           / "static" / "style.css").read_text()
+    assert "grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 7em 1fr 7.5em auto;" in css
+
+
 def test_stacks_state_js_preserves_force_open():
     import pathlib
     js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
@@ -1388,6 +1443,48 @@ def test_self_update_check_post_csrf(tmp_path, monkeypatch):
     tok = _csrf(c, "/stacks")
     assert c.post("/self-update/check", data={"_csrf": tok}).status_code in (302, 303)
     assert c.post("/self-update/check").status_code == 400          # CSRF enforced
+
+
+def _confirm_body(tmp_path, monkeypatch, *, dirty=False, diverged=False,
+                  changes=(), ahead=0, behind=0):
+    from lhpc.core.services import ControllerService
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"}, {})
+    monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: dirty)
+    monkeypatch.setattr(ControllerService, "self_update_ff_blocked", lambda self: diverged)
+    monkeypatch.setattr(ControllerService, "self_update_local_changes",
+                        lambda self, limit=20: tuple(changes))
+    monkeypatch.setattr(ControllerService, "self_update_divergence", lambda self: (ahead, behind))
+    monkeypatch.setattr(ControllerService, "self_update_branch", lambda self: "main")
+    c = _real_app(tmp_path)
+    tok = _csrf(c, "/stacks")
+    return c.post("/self-update/apply", data={"_csrf": tok}).get_data(as_text=True)
+
+
+def test_dirty_confirm_names_the_paths_an_overwrite_would_discard(tmp_path, monkeypatch):
+    # Consent to a discard the operator cannot see is not consent. A bare "local changes are
+    # present" left them unable to tell an accidental artifact from real work.
+    body = _confirm_body(tmp_path, monkeypatch, dirty=True,
+                         changes=(" M lhpc/core/services.py", "?? scratch.txt", "… and 3 more"))
+    assert "Local changes are present" in body
+    assert "These paths would be discarded" in body
+    assert "lhpc/core/services.py" in body and "scratch.txt" in body
+    assert "… and 3 more" in body                    # truncation disclosed, not silent
+    assert 'name="overwrite"' in body
+
+
+def test_diverged_confirm_names_the_commit_count_and_upstream_ref(tmp_path, monkeypatch):
+    body = _confirm_body(tmp_path, monkeypatch, diverged=True, ahead=3, behind=7)
+    assert "has diverged from upstream" in body
+    assert "3 commits" in body and "origin/main" in body
+    assert "7 ahead of it" in body
+
+
+def test_clean_tree_confirm_shows_neither_banner_nor_checkbox(tmp_path, monkeypatch):
+    body = _confirm_body(tmp_path, monkeypatch)      # clean + fast-forwardable (the normal case)
+    assert 'name="overwrite"' not in body
+    assert "Local changes are present" not in body
+    assert "These paths would be discarded" not in body
 
 
 def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):

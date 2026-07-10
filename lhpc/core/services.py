@@ -351,13 +351,52 @@ class ControllerService:
         except (ValidationError, _config.ConfigError) as exc:
             return ActionResult(False, f"invalid exposure config: {exc}")
         self._invalidate_config()
+        # The LAN address must reach BOTH the trusted-host allowlist and the server cert's SANs, or a
+        # remote browser gets a 400 (unknown Host) and a certificate name mismatch. Nothing else adds
+        # it — `local_ip()` was known and displayed, but never persisted.
+        #
+        # ORDERING: every step reads FRESHLY-loaded config. `self.config()` is memoized, so a `cfg`
+        # captured before the write above would silently drop any ip_sans another writer persisted in
+        # between, and would reissue the cert from pre-exposure state.
+        san_notes = self._expose_add_san_and_reissue()
         return ActionResult(
             True, "remote exposure enabled (desired) — now APPLY to rebind the listener to "
             f"0.0.0.0:{self.config().webserver.port} and reload nginx (until then it stays on "
             "loopback and remote clients get connection refused)",
-            details=["lhpc webserver apply           # reload a running nginx with the new bind",
+            details=[*san_notes,
+                     "lhpc webserver apply           # reload nginx: new bind AND the reissued cert",
                      "lhpc webserver start-service   # if nginx is not running yet"],
             next_commands=["lhpc webserver apply"])
+
+    def _expose_add_san_and_reissue(self) -> list:
+        """Persist this host's LAN IP as an `ip_sans` entry and reissue the server cert from the FINAL
+        persisted config. Returns truthful detail lines; never raises, never fails the exposure.
+
+        FAIL-SOFT by contract: the exposure config is already written. `issue_server_cert` raises when
+        the server CA is not initialized — rolling the exposure back over that would leave the operator
+        strictly worse off than a missing SAN, so we keep ok=True and disclose."""
+        from . import config as _config, pki as _pki, webserver as _ws
+        cfg = self.config().webserver                    # FRESH: post-exposure-write state
+        ip = _ws.local_ip()
+        if not ip:
+            return ["  SAN: this host's LAN address could not be determined — no SAN added; add it "
+                    "by hand to [webserver] ip_sans, then: lhpc webserver tls-renew"]
+        if ip in cfg.ip_sans:
+            return [f"  SAN: {ip} is already an IP SAN — certificate left untouched"]
+        try:
+            _config.save_webserver_config(self._paths, ip_sans=[*cfg.ip_sans, ip])
+        except Exception as exc:                         # noqa: BLE001 — never fail a done exposure
+            return [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it by hand, then: "
+                    "lhpc webserver tls-renew"]
+        self._invalidate_config()
+        cfg = self.config().webserver                    # FRESH again: the cert follows what is on disk
+        try:
+            _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
+                                   ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
+        except Exception as exc:                         # noqa: BLE001 — incl. PKIError (no CA yet)
+            return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
+                    "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
+        return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"]
 
     def webserver_disable_remote(self) -> "ActionResult":
         from . import config as _config
@@ -7140,7 +7179,12 @@ class ControllerService:
                         "be retried on the next self-update.") if remaining else ""
 
         if not res["ok"]:                                    # git failure: dirty refusal / diverged / fetch
-            return ActionResult(False, res["message"], data=data)
+            # On a DIRTY refusal, name the paths a force would discard. `message` stays single-line
+            # (it is flashed verbatim); the evidence rides in details.
+            refusal = [f"  {ln}" for ln in res.get("changes", ())]
+            if refusal:
+                refusal.insert(0, "These paths would be discarded by 'overwrite local changes':")
+            return ActionResult(False, res["message"], details=refusal, data=data)
         if res.get("cleanup_failed"):                        # updated, but untracked cleanup failed -> partial
             details = [res.get("cleanup_error", ""), "Restart the web console after cleaning up:"]
             details += ["  " + c for c in instr["commands"]]
@@ -7212,6 +7256,23 @@ class ControllerService:
         already-fetched remote-tracking ref). POST-time only; GET rendering stays cached-only."""
         from . import selfupdate
         return selfupdate.ff_blocked(self._system)
+
+    def self_update_local_changes(self, limit: int = 20) -> tuple:
+        """The paths an overwrite would discard (`git status --porcelain`). Local git, POST-time
+        only — the confirm must SHOW what it is about to reset, not just assert that it must."""
+        from . import selfupdate
+        return selfupdate.local_changes(self._system, limit)
+
+    def self_update_divergence(self) -> tuple:
+        """`(ahead, behind)` of the local history vs the fetched upstream ref. Local git, POST-time
+        only. Names the size of the divergence the confirm otherwise only alludes to."""
+        from . import selfupdate
+        return selfupdate.divergence(self._system)
+
+    def self_update_branch(self) -> str:
+        """The checkout's branch, for naming the upstream ref in the confirm (`origin/<branch>`)."""
+        from . import selfupdate
+        return str(selfupdate.local_state(self._system).get("branch") or "main")
 
     # ---- web trigger: write the exclusive request marker (NO systemctl, NO bus) ---------------
 
@@ -7551,11 +7612,16 @@ class ControllerService:
         name = "lhpc-selfupdate-overwrite.service"
         p = ud / name
         try:
-            text = updater_units._read_unit(p)               # no-follow, bounded; None if absent
-        except Exception:
-            return f"{name} is present but unreadable/symlinked — remove it by hand if unused."
-        if text is None:
+            text = updater_units._read_unit(p)               # no-follow, bounded
+        except FileNotFoundError:
+            # ABSENT is the normal case — nothing to clean up, and NOT evidence of anything. A bare
+            # `except Exception` here reported every clean box as "present but unreadable/symlinked",
+            # because `_read_unit` raises (never returns None) when the unit does not exist.
             return None
+        except OSError:
+            # Genuinely present but unusable: symlinked (O_NOFOLLOW -> ELOOP), non-regular,
+            # oversized, or unreadable. Never touch it; tell the operator.
+            return f"{name} is present but unreadable/symlinked — remove it by hand if unused."
         home = os.path.expanduser("~")
         root = str(self._paths.runtime_root)
         lines = text.splitlines()

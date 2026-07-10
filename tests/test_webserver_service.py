@@ -126,6 +126,99 @@ def test_configure_validates(tmp_path):
     assert ok.ok and svc.config().webserver.dns_sans == ("pi.local",)
 
 
+# --- expose auto-adds the LAN IP to the SANs and reissues the cert ------------------------------
+
+def _capture_certs(monkeypatch):
+    """Record every issue_server_cert(**kwargs) instead of doing real crypto."""
+    from lhpc.core import pki as _pki, services as _services
+    calls = []
+    monkeypatch.setattr(_pki, "issue_server_cert",
+                        lambda paths, **kw: calls.append(kw) or {"ok": True})
+    return calls
+
+
+def test_expose_adds_the_lan_ip_san_and_reissues_the_cert(tmp_path, monkeypatch):
+    # THE FIX: nothing used to persist the LAN IP, so a remote browser got a 400 (unknown Host) and
+    # a certificate name mismatch.
+    from lhpc.core import webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.66")
+    calls = _capture_certs(monkeypatch)
+    svc = _svc(tmp_path)
+    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    assert res.ok
+    assert svc.config().webserver.ip_sans == ("192.168.178.66",)
+    assert calls and calls[-1]["ip_sans"] == ["192.168.178.66"]
+    assert any("192.168.178.66 added to ip_sans" in d for d in res.details)
+
+
+def test_expose_issues_the_cert_from_disk_not_an_in_memory_union(tmp_path, monkeypatch):
+    """The cert must be issued from config RE-READ after the SAN write, never from the in-memory
+    list we just built. `self.config()` is memoized, so the second `_invalidate_config()` is what
+    makes the certificate describe what is actually persisted.
+
+    Discriminator: a concurrent writer lands an extra ip_sans entry immediately after our SAN write.
+    An implementation that passes its own `[*cfg.ip_sans, ip]` to issue_server_cert loses it; one
+    that re-reads disk does not.
+    """
+    from lhpc.core import config as _config, webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: "10.0.0.9")
+    calls = _capture_certs(monkeypatch)
+    svc = _svc(tmp_path)
+    real_save = _config.save_webserver_config
+    state = {"injected": False}
+
+    def _save(paths, **kw):
+        out = real_save(paths, **kw)
+        if kw.get("ip_sans") and not state["injected"]:      # right after OUR san write
+            state["injected"] = True
+            real_save(paths, ip_sans=[*kw["ip_sans"], "172.16.0.5"])
+        return out
+
+    monkeypatch.setattr(_config, "save_webserver_config", _save)
+    assert svc.webserver_expose(["192.168.0.0/24"], confirm=True).ok
+    assert set(calls[-1]["ip_sans"]) == {"10.0.0.9", "172.16.0.5"}     # read from disk
+    assert set(svc.config().webserver.ip_sans) == {"10.0.0.9", "172.16.0.5"}
+
+
+def test_expose_is_a_no_op_when_the_ip_is_already_a_san(tmp_path, monkeypatch):
+    from lhpc.core import webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.66")
+    calls = _capture_certs(monkeypatch)
+    svc = _svc(tmp_path)
+    svc.webserver_configure(ip_sans=["192.168.178.66"])
+    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    assert res.ok and not calls                       # no pointless cert churn
+    assert any("already an IP SAN" in d for d in res.details)
+
+
+def test_expose_discloses_when_the_lan_ip_is_unknown(tmp_path, monkeypatch):
+    from lhpc.core import webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: "")   # loopback-only host / undeterminable
+    calls = _capture_certs(monkeypatch)
+    svc = _svc(tmp_path)
+    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    assert res.ok and not calls
+    assert svc.config().webserver.ip_sans == ()
+    assert any("could not be determined" in d for d in res.details)
+
+
+def test_expose_survives_an_uninitialized_pki(tmp_path, monkeypatch):
+    # The exposure config is already persisted; a cert reissue failure must NOT fail it, and must
+    # never be silent.
+    from lhpc.core import pki as _pki, webserver as _ws
+    monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.66")
+    def _boom(paths, **kw):
+        raise _pki.PKIError("server TLS CA not initialized")
+    monkeypatch.setattr(_pki, "issue_server_cert", _boom)
+    svc = _svc(tmp_path)
+    res = svc.webserver_expose(["192.168.0.0/24"], confirm=True)
+    assert res.ok                                      # exposure stands
+    assert svc.config().webserver.remote_exposed is True
+    assert svc.config().webserver.ip_sans == ("192.168.178.66",)
+    assert any("NOT reissued" in d for d in res.details)
+    assert any("lhpc webserver init" in d for d in res.details)
+
+
 def test_expose_gating(tmp_path):
     svc = _svc(tmp_path)
     assert not svc.webserver_expose([], confirm=True).ok                       # no CIDR

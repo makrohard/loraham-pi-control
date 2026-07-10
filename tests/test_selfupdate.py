@@ -406,6 +406,69 @@ def test_foreground_refusals_name_repair_integration(tmp_path, monkeypatch):
         assert "lhpc self-update --repair-integration" in r.next_commands
 
 
+# --- disclose WHAT an overwrite would discard ---------------------------------------------------
+
+def test_local_changes_lists_the_porcelain_paths(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    out = " M lhpc/core/services.py\n?? scratch.txt\n"
+    fake = FakeSystem(commands={("git", "-C", "/x", "status", "--porcelain"): CR(0, out, "")})
+    assert selfupdate.local_changes(fake.system) == (" M lhpc/core/services.py", "?? scratch.txt")
+
+
+def test_local_changes_truncation_is_disclosed_not_silent(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    out = "".join(f"?? f{i}\n" for i in range(25))
+    fake = FakeSystem(commands={("git", "-C", "/x", "status", "--porcelain"): CR(0, out, "")})
+    got = selfupdate.local_changes(fake.system, limit=20)
+    assert len(got) == 21 and got[-1] == "… and 5 more"
+
+
+def test_local_changes_fail_soft(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    assert selfupdate.local_changes(FakeSystem().system) == ()      # git error -> no claim
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: None)
+    assert selfupdate.local_changes(FakeSystem().system) == ()
+
+
+def test_divergence_counts_ahead_and_behind(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    monkeypatch.setattr(selfupdate, "local_state", lambda s: {"branch": "main"})
+    cmds = {("git", "-C", "/x", "rev-list", "--left-right", "--count", "HEAD...origin/main"):
+            CR(0, "3\t7\n", "")}
+    assert selfupdate.divergence(FakeSystem(commands=cmds).system) == (3, 7)
+
+
+def test_divergence_fail_soft_never_invents_a_divergence(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    monkeypatch.setattr(selfupdate, "local_state", lambda s: {"branch": "main"})
+    assert selfupdate.divergence(FakeSystem().system) == (0, 0)     # missing ref / git error
+    bad = {("git", "-C", "/x", "rev-list", "--left-right", "--count", "HEAD...origin/main"):
+           CR(0, "garbage\n", "")}
+    assert selfupdate.divergence(FakeSystem(commands=bad).system) == (0, 0)
+
+
+def test_dirty_refusal_names_the_paths_but_keeps_the_message_single_line(tmp_path, monkeypatch):
+    # `message` is flashed verbatim -> must stay one line (the sanitizer contract). The evidence
+    # rides in `changes`, which the service turns into ActionResult details.
+    from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
+    monkeypatch.setattr(selfupdate, "repo_root", lambda: Path("/x"))
+    monkeypatch.setattr(selfupdate, "local_state",
+                        lambda s: {"is_git": True, "dirty": True, "head": "a" * 40,
+                                   "branch": "main", "version": "1"})
+    monkeypatch.setattr(selfupdate, "check_upstream",
+                        lambda s, b="": {"ok": True, "upstream_head": "b" * 40, "deps_changed": False})
+    cmds = {("git", "-C", "/x", "status", "--porcelain"): CR(0, "?? scratch.txt\n", "")}
+    res = selfupdate.apply_update(FakeSystem(commands=cmds).system, _paths(tmp_path))
+    assert res["ok"] is False and res["dirty"] is True
+    assert "\n" not in res["message"]
+    assert res["changes"] == ["?? scratch.txt"]
+
+
 def test_cache_read_write_roundtrip(env):
     selfupdate.write_cache(env["paths"], {"local": {"is_git": True, "version": "9.9"}, "checked_at": 1})
     assert selfupdate.read_cache(env["paths"])["local"]["version"] == "9.9"
@@ -2063,6 +2126,67 @@ def test_repair_restart_true_unaffected_by_watcher_active(tmp_path, monkeypatch)
 def _write_overwrite_unit(ud, root, execline):
     (ud / "lhpc-selfupdate-overwrite.service").write_text(
         f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT={root}\nExecStart={execline}\n")
+
+
+# --- _remove_stale_overwrite_unit: absence is not evidence -------------------------------------
+
+def _stale_svc(tmp_path):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    ud = tmp_path / "units"
+    ud.mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    return svc, ud
+
+
+def test_absent_overwrite_unit_yields_no_note(tmp_path):
+    # THE BUG: `_read_unit` RAISES FileNotFoundError when the unit does not exist (it never returns
+    # None), and a bare `except Exception` reported every clean box as "present but unreadable".
+    svc, ud = _stale_svc(tmp_path)
+    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
+    assert svc._remove_stale_overwrite_unit(ud) is None
+
+
+def test_symlinked_overwrite_unit_is_reported_not_touched(tmp_path):
+    svc, ud = _stale_svc(tmp_path)
+    (tmp_path / "real.service").write_text("[Service]\n")
+    link = ud / "lhpc-selfupdate-overwrite.service"
+    link.symlink_to(tmp_path / "real.service")           # O_NOFOLLOW -> ELOOP
+    note = svc._remove_stale_overwrite_unit(ud)
+    assert note and "unreadable/symlinked" in note
+    assert link.is_symlink()                             # left untouched
+
+
+def test_non_regular_overwrite_unit_is_reported(tmp_path):
+    svc, ud = _stale_svc(tmp_path)
+    (ud / "lhpc-selfupdate-overwrite.service").mkdir()   # a directory at the unit path
+    note = svc._remove_stale_overwrite_unit(ud)
+    assert note and "unreadable/symlinked" in note
+
+
+def test_oversized_overwrite_unit_is_reported(tmp_path):
+    svc, ud = _stale_svc(tmp_path)
+    (ud / "lhpc-selfupdate-overwrite.service").write_text("x" * (64 * 1024 + 1))
+    note = svc._remove_stale_overwrite_unit(ud)
+    assert note and "unreadable/symlinked" in note
+
+
+def test_proven_ours_overwrite_unit_is_removed_silently(tmp_path):
+    svc, ud = _stale_svc(tmp_path)
+    root = str(tmp_path)
+    _write_overwrite_unit(ud, root, f"{root}/venv/lhpc/bin/lhpc self-update --run-service --overwrite")
+    assert svc._remove_stale_overwrite_unit(ud) is None
+    assert not (ud / "lhpc-selfupdate-overwrite.service").exists()
+
+
+def test_foreign_overwrite_unit_is_left_with_its_own_note(tmp_path):
+    svc, ud = _stale_svc(tmp_path)
+    _write_overwrite_unit(ud, "/elsewhere", "/usr/bin/somethingelse")
+    note = svc._remove_stale_overwrite_unit(ud)
+    assert note and "not the recognised old overwrite helper" in note
+    assert "unreadable/symlinked" not in note            # a readable foreign unit is not "unreadable"
+    assert (ud / "lhpc-selfupdate-overwrite.service").exists()
 
 
 def test_overwrite_removed_only_with_old_helper_execstart(tmp_path, monkeypatch):

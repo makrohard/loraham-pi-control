@@ -188,6 +188,48 @@ def local_state(system: System) -> dict:
     return st
 
 
+def local_changes(system: System, limit: int = 20) -> tuple[str, ...]:
+    """NETWORK-FREE: the actual `git status --porcelain` lines behind `local_state()["dirty"]`.
+
+    `dirty` is a bool, which told the operator *that* an overwrite was needed but never *why*. The
+    overwrite path runs `git reset --hard` + `git clean -ffd`, so these are precisely the paths that
+    would be discarded — name them before asking anyone to tick the box. Bounded, and truncation is
+    DISCLOSED ("… and N more") rather than silent. Fail-soft: any git error -> ()."""
+    root = repo_root()
+    if root is None:
+        return ()
+    s = _git(system, root, ["status", "--porcelain"], _LOCAL_TIMEOUT)
+    if s.returncode != 0:
+        return ()
+    lines = [ln for ln in s.stdout.splitlines() if ln.strip()]
+    if len(lines) <= limit:
+        return tuple(lines)
+    return (*lines[:limit], f"… and {len(lines) - limit} more")
+
+
+def divergence(system: System, branch: str = "") -> tuple[int, int]:
+    """NETWORK-FREE `(ahead, behind)` of HEAD vs the already-fetched `origin/<branch>` ref.
+
+    Uses the remote-tracking ref the last 'check for updates' fetch populated, so no network call.
+    Fail-soft to `(0, 0)` on any git error / missing ref — exactly like `ff_blocked`, so a transient
+    git problem never invents a divergence."""
+    root = repo_root()
+    if root is None:
+        return (0, 0)
+    br = branch or local_state(system).get("branch") or "main"
+    r = _git(system, root, ["rev-list", "--left-right", "--count", f"HEAD...{_REMOTE}/{br}"],
+             _LOCAL_TIMEOUT)
+    if r.returncode != 0:
+        return (0, 0)
+    parts = r.stdout.split()
+    if len(parts) != 2:
+        return (0, 0)
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return (0, 0)
+
+
 def ff_blocked(system: System, branch: str = "") -> bool:
     """NETWORK-FREE: would a normal (fast-forward-only) update be REFUSED because the local history
     has diverged? True when HEAD is NOT an ancestor of the already-fetched upstream ref AND differs
@@ -751,7 +793,11 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
     if up["upstream_head"] and up["upstream_head"] == local.get("head"):
         return {"ok": True, "already": True, "message": "Already up to date.", "deps_changed": False}
     if local.get("dirty") and not force:
-        return {"ok": False, "dirty": True,
+        # Name the paths in `changes` (the caller renders them as details). `message` stays SINGLE
+        # LINE — it is flashed verbatim in the GUI, and the sanitizer contract forbids newlines.
+        # "Local changes are present" alone left the operator unable to tell an accidental artifact
+        # from real work before consenting to `reset --hard` + `clean -ffd`.
+        return {"ok": False, "dirty": True, "changes": list(local_changes(system)),
                 "message": "Local changes are present (modified or untracked files) — updating would "
                            "overwrite them. Re-run with 'overwrite local changes' to discard them "
                            "and update."}

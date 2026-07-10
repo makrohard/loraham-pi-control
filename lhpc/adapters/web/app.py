@@ -15,12 +15,13 @@ Security posture:
 
 from __future__ import annotations
 
+import ipaddress as _ipaddress
 import secrets as _secrets
 import time
 from typing import Callable
 
 from flask import (
-    Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for,
+    Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for,
 )
 
 from lhpc.core import validators
@@ -45,6 +46,59 @@ def peer_is_loopback() -> bool:
     from flask import request
     hdr = request.headers.get("X-LHPC-Peer", "")
     return hdr == "loopback" if hdr else True
+
+# --- trusted-host helpers (see `_trusted_host`) --------------------------------------------------
+_HOST_MAX = 260                          # a Host header can never legitimately exceed this
+
+
+def _host_only(raw: str) -> str:
+    """The bare host from a `Host` header value: port stripped, IPv6 brackets stripped, lowercased.
+
+    `"[::1]:8443"` -> `"::1"`, `"pi.local:8443"` -> `"pi.local"`. A naive `split(":")[0]` yields `"["`
+    for the bracketed IPv6 form, which is why the hardcoded `::1` entry could never match. Bounded,
+    because the result is echoed back in the 400 body.
+    """
+    h = (raw or "").strip()[:_HOST_MAX]
+    if h.startswith("["):                # bracketed IPv6 literal: [::1] or [::1]:8443
+        end = h.find("]")
+        if end != -1:
+            return h[1:end].lower()
+    # A bare IPv6 literal (no brackets) has >1 colon and carries no port; anything else is host[:port].
+    return h.split(":")[0].lower() if h.count(":") <= 1 else h.lower()
+
+
+_HOST_ECHO_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
+
+
+def _host_echo(host: str) -> str:
+    """The rejected host, reduced to characters a hostname/IP can legally contain, for echoing in the
+    400 body. The response is text/plain — so this is belt AND braces: even inert, a reflected
+    `<script>` in an error page is a smell nobody should have to reason about."""
+    kept = "".join(ch for ch in host[:80] if ch in _HOST_ECHO_OK)
+    return kept or "(unprintable)"
+
+
+def _as_ip(value: str):
+    """The parsed IP address, or None when `value` is a name."""
+    try:
+        return _ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def _host_allowed(host: str, allowed: set, exposed: bool) -> bool:
+    """Is `host` acceptable? A NAME must be in `allowed`. An IP is compared by PARSED value (so
+    `2001:db8:0:0:0:0:0:1` matches an `ip_sans` entry of `2001:db8::1`), and ANY IP literal is
+    accepted while the console is remotely exposed — rebinding needs a name, not an address."""
+    if host in allowed:
+        return True
+    ip = _as_ip(host)
+    if ip is None:
+        return False                     # a NAME that is not configured -> rejected in every mode
+    if exposed:
+        return True                      # bare IP: cannot be rebound
+    return any(ip == parsed for parsed in (_as_ip(a) for a in allowed) if parsed is not None)
+
 
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
@@ -132,22 +186,47 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.before_request
     def _trusted_host():  # noqa: ANN202
-        # Explicit trusted-host policy — ENFORCED only in productive HTTPS mode (Secure cookies),
-        # so the interactive loopback-TCP console and the test client (plain http) are unaffected.
-        # The allowlist is loopback names + the operator-configured server SANs/bind; the Host
-        # header is compared, never a client-supplied X-Forwarded-Host.
+        """Explicit trusted-host policy — ENFORCED only in productive HTTPS mode (Secure cookies), so
+        the interactive loopback-TCP console and the test client (plain http) are unaffected. The real
+        Host header is compared, never a client-supplied X-Forwarded-Host (nginx blanks those).
+
+        It defends against DNS REBINDING / Host spoofing, which both require a *name*: the attacker's
+        page lives at `evil.example`, its record is flipped to this host's address, and the browser
+        then sends `Host: evil.example` — rejected, because names must be configured in `dns_sans`.
+        A bare IP literal cannot be rebound (a browser only sends one when the operator typed an IP),
+        so while the console is REMOTELY EXPOSED any IP-literal Host is accepted. That is what makes a
+        multi-homed Pi (eth0 + wlan0) and IPv6 work without enumerating interfaces — `local_ip()` knows
+        exactly one IPv4 address. Loopback-only deployments keep the strict allowlist.
+        """
         if not app.config.get("SESSION_COOKIE_SECURE"):
             return None
-        host = (request.host or "").split(":")[0].lower()
+        raw = request.host or ""
+        host = _host_only(raw)
         allowed = {"localhost", "127.0.0.1", "::1"}
+        exposed = False
         try:
             ws = service.config().webserver
-            allowed |= {h.lower() for h in ws.dns_sans} | set(ws.ip_sans) | {ws.bind}
-        except Exception:
+            allowed |= {h.lower() for h in ws.dns_sans} | {str(i).lower() for i in ws.ip_sans}
+            # `bind` is only a valid Host when it names a REAL address. The wildcards 0.0.0.0 / ::
+            # are what an exposed console binds to, and no client ever sends them as a Host.
+            if ws.bind and ws.bind not in ("0.0.0.0", "::"):
+                allowed.add(ws.bind.lower())
+            exposed = bool(ws.remote_exposed)
+        except Exception:                                # noqa: BLE001 — unreadable config -> loopback only
             pass
-        if host and host not in allowed:
-            abort(400)
-        return None
+        if not host or _host_allowed(host, allowed, exposed):
+            return None
+        # The RAW header never reaches the response: only the normalized host, as bounded text/plain.
+        # The full diagnostic goes to the log (logs/lhpc-web.log via the unit's StandardError).
+        app.logger.warning(
+            "trusted-host: rejected Host %r (normalized %r); allowed=%s remote_exposed=%s",
+            raw[:200], host, sorted(allowed), exposed)
+        body = (f"400 Bad Request: this console does not answer to the host "
+                f"\"{_host_echo(host)}\".\n"
+                "Reach it by an address it serves on, or add that name to [webserver] dns_sans "
+                "(or the IP to ip_sans) in config/local.toml. Remote exposure additionally accepts "
+                "any bare IP address.\n")
+        return Response(body, status=400, mimetype="text/plain")
 
     def _runtime_root() -> str:
         return str(service.runtime_root)  # display only
@@ -526,9 +605,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Stage 1 — confirm: warn about the automatic stop/update/restart. The dirty AND
             # diverged states are checked FRESH here (local git only, POST-time) — if either holds,
             # a normal update is refused and the discard-consent checkbox is the operator's explicit
-            # agreement to force (reset --hard + clean).
-            return _render_stacks(confirm={"dirty": service.self_update_local_dirty(),
-                                           "diverged": service.self_update_ff_blocked(),
+            # agreement to force (reset --hard + clean). SHOW the evidence: the exact paths that a
+            # force would discard, and how far the history diverged. Consent to a discard you cannot
+            # see is not consent.
+            _dirty = service.self_update_local_dirty()
+            _diverged = service.self_update_ff_blocked()
+            _ahead, _behind = service.self_update_divergence() if _diverged else (0, 0)
+            return _render_stacks(confirm={"dirty": _dirty,
+                                           "diverged": _diverged,
+                                           "changes": service.self_update_local_changes() if _dirty else (),
+                                           "ahead": _ahead, "behind": _behind,
+                                           "branch": service.self_update_branch(),
                                            "update_available": st.get("update_available")})
         # Stage 2 — trigger. Consent only sets the request marker's payload bit
         # (normal|overwrite); a stale overwrite tick with a meanwhile-clean, fast-forwardable tree
@@ -740,9 +827,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # panel submits p_<name> (run) / pf_<name> (file); defaults come from the saved config.
         params, file_over, _have = (_collect_start_params(target, band)
                                     if op == "start" else ({}, None, False))
-        # Source version selector (only meaningful for install/update). A MISSING selector
-        # defaults to the production-safe 'pinned' — never 'dev'. An INVALID selector is
-        # rejected by run_action (never rewritten to dev).
+        # Source version selector (only meaningful for install/update). A MISSING selector defaults
+        # to 'dev' (the remote branch tip) — the confirm page preselects it, and every normal POST
+        # carries the operator's explicit choice. An INVALID selector is rejected by run_action
+        # (never silently rewritten). Note a 'dev' checkout of a component that declares a
+        # `pin_commit` reads `src: differs` forever, by design: clean, just not at the pin.
         source = request.form.get("source", "dev")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
@@ -1372,6 +1461,21 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
                 pass
             print(f"OK   LoRaHAM Pi Control console on unix socket {sock_path} (behind nginx).")
             print("     No TCP listener. Press Ctrl-C to stop.")
+            # The unit's `status` output shows no journal lines (output goes to logs/lhpc-web.log),
+            # and this process owns no TCP port — nginx does. Publish the reachable URL(s) as the
+            # unit's Status: line via sd_notify. Best effort: any failure is swallowed, and
+            # Type=simple means there is no readiness handshake to miss.
+            # (No service control here: this is a datagram to $NOTIFY_SOCKET, not a bus call.)
+            try:
+                from lhpc.core import sdnotify
+                from lhpc.core.config import load_config as _load_config
+                from lhpc.core.webserver import console_urls as _console_urls
+                _wcfg = _load_config(paths).webserver
+                _urls = _console_urls(_wcfg)
+                _where = "remote" if _wcfg.remote_exposed else "loopback-only"
+                sdnotify.notify_status(f"{' · '.join(_urls)} ({_where})")
+            except Exception:                        # noqa: BLE001 — never block startup
+                pass
             _waitress_serve(app, unix_socket=sock_path, unix_socket_perms="600",
                             threads=8, ident="lhpc")
             return 0

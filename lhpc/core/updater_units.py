@@ -72,6 +72,10 @@ RestartSec=3
 StandardOutput=append:{root}/logs/lhpc-web.log
 StandardError=append:{root}/logs/lhpc-web.log
 SyslogIdentifier=lhpc-web
+# The console pushes its reachable URL as the unit's Status: line (sd_notify STATUS=).
+# Type stays `simple` -> NO readiness handshake: a missed notification can never fail or
+# delay startup. %t/systemd/notify is NOT in InaccessiblePaths below, so the sandbox allows it.
+NotifyAccess=main
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -236,9 +240,10 @@ UNSAFE = "unsafe"         # unit file or a unit/drop-in dir is a symlink
 UNREADABLE = "unreadable"
 
 
-def _read_unit(unit_path: Path) -> str | None:
-    """Read a unit file no-follow, bounded. None on absent; raises on symlink/oversized (caller
-    maps to UNSAFE/UNREADABLE)."""
+def _read_unit(unit_path: Path) -> str:
+    """Read a unit file no-follow, bounded. RAISES on absent (FileNotFoundError), on a symlinked /
+    non-regular leaf, and on oversized — it never returns None. Callers must distinguish absence
+    from unreadability themselves (`verify` -> MISSING vs UNSAFE/UNREADABLE)."""
     fd = os.open(str(unit_path), os.O_RDONLY | os.O_NOFOLLOW)
     try:
         st = os.fstat(fd)

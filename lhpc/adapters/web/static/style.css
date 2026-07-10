@@ -191,7 +191,7 @@ a.iface { text-decoration: none; color: var(--brand); }
    even when empty. Missing fields leave their cell empty. */
 .stacklist > .stackrow > summary {
   display: grid;
-  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 6em 1fr 7.5em auto;
+  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 7em 1fr 7.5em auto;
   align-items: center;
   column-gap: .5rem;
   row-gap: .2rem;
@@ -201,7 +201,9 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stacklist > .stackrow > summary .col-status  { grid-column: 3; }
 .stacklist > .stackrow > summary .col-source  { grid-column: 4; }
 .stacklist > .stackrow > summary .col-version { grid-column: 5; }
-.stacklist > .stackrow > summary .col-head    { grid-column: 6; }
+/* 7em, not 6em: the pill is `@` + 9 hex in mono at .78rem (~75-77px) + .9rem padding + 2px border
+   ~= 91-94px, which overran a 96px track into the .5rem column-gap and touched `identity ok`. */
+.stacklist > .stackrow > summary .col-head    { grid-column: 6; min-width: 0; }
 .stacklist > .stackrow > summary .col-extra   { grid-column: 7; min-width: 0; display: flex;
                                                  gap: .4rem; flex-wrap: wrap; align-items: center; }
 .stacklist > .stackrow > summary .col-update  { grid-column: 8; justify-self: end; min-width: 0; }

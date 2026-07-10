@@ -7,7 +7,7 @@
 
   {% for job in g.jobs %}
     <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
-      <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
+      <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}" target="_blank" rel="noopener">open log</a></p>
   {% endfor %}
 
   {% if g.interactive %}
@@ -87,7 +87,7 @@
                      owned by its own stack's row, so it has no entry here. #}
                   {% if comp.id in g.update_states and comp.source and comp.source.remote %}
                     {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}
-                  <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}">logs</a></summary>
+                  <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" target="_blank" rel="noopener">logs</a></summary>
                 <div class="body">
                   <div class="actbar">
                     {% if comp.kind.value == 'service' %}

@@ -42,6 +42,22 @@ def test_render_unknown_kind_raises():
         U.render("bogus.service", ROOT, CO, VENV)
 
 
+def test_web_unit_allows_sd_notify_status_but_stays_type_simple():
+    # The console pushes its reachable URL as the unit's Status: line. NotifyAccess=main is what
+    # makes systemd accept it; Type MUST stay `simple` so there is no readiness handshake that a
+    # missed/late notification could fail. The helper has no status to report.
+    web = U.render(U.WEB_UNIT, ROOT, CO, VENV)
+    assert "NotifyAccess=main" in web and "Type=simple" in web
+    assert "Type=notify" not in web
+    # the notify socket must NOT be walled off: assert on the DIRECTIVE, not the whole file
+    # (a comment mentioning the path would otherwise satisfy a naive `not in web`).
+    inaccessible = [ln for ln in web.splitlines() if ln.startswith("InaccessiblePaths=")]
+    assert inaccessible == ["InaccessiblePaths=%t/bus %t/systemd/private"]
+    assert all("notify" not in ln for ln in inaccessible)
+    assert "AF_UNIX" in web                                   # the datagram needs it
+    assert "NotifyAccess" not in U.render(U.HELPER_UNIT, ROOT, CO, VENV)
+
+
 def test_web_and_helper_carry_the_bus_block_and_sandbox():
     web = U.render(U.WEB_UNIT, ROOT, CO, VENV)
     helper = U.render(U.HELPER_UNIT, ROOT, CO, VENV)

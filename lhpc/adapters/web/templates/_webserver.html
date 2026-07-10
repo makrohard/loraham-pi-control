@@ -3,7 +3,7 @@
    modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
 {% from "_macros.html" import flash_classes %}
 <details class="stackrow ws-comp" id="webserver-row" open>
-  <summary>Webserver (HTTPS / mTLS)<a class="logslink" href="{{ url_for('webserver_logs', src='access') }}">logs</a></summary>
+  <summary>Webserver (HTTPS / mTLS)<a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener">logs</a></summary>
 
   {# ---- Monitor (cached evidence only; collapsed by default) ---- #}
   <details class="advcfg">

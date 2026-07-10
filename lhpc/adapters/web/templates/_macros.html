@@ -77,7 +77,7 @@
 <span class="col-name"><span class="ss-name">{{ g.stack.name }}</span></span>
 {% if g.main %}{% set comp, st = g.main %}
   <span class="col-status"><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></span>
-  <span class="col-source"><span class="pill">src: {{ st.source_state.value }}</span></span>
+  <span class="col-source"><span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ st.source_state.value }}</span></span>
   <span class="col-version">{% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}</span>
   {# YELLOW only when the MAIN component is behind — this commit IS the main's head. A stale
      radiolib raises the col-update link instead, and leaves this pill grey (truthfully). #}
@@ -124,6 +124,6 @@
 {# Dual status: running state + install/source state + version. #}
 {% macro dual_status(status) %}
 <span class="badge badge-{{ status.run_state.value }}">{{ status.run_state.value }}</span>
-<span class="pill">src: {{ status.source_state.value }}</span>
+<span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ status.source_state.value }}</span>
 {% if status.source_version %}<span class="pill mono">{{ status.source_version }}</span>{% endif %}
 {% endmacro %}

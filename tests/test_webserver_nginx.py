@@ -154,6 +154,26 @@ def test_stage_and_validate_creates_rootless_runtime_dirs(tmp_path):
     assert staged.exists()                                    # config was staged for the -t
 
 
+def test_console_urls_loopback_only_never_offers_the_lan_address(tmp_path, monkeypatch):
+    # Not exposed -> the LAN address would NOT answer. Offering it would be a lie.
+    monkeypatch.setattr(webserver, "local_ip", lambda: "192.168.1.50")
+    assert webserver.console_urls(WebserverConfig(port=8443)) == ["https://127.0.0.1:8443/"]
+
+
+def test_console_urls_exposed_puts_the_lan_address_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(webserver, "local_ip", lambda: "192.168.1.50")
+    cfg = WebserverConfig(bind="0.0.0.0", remote_exposed=True, port=8443,
+                          allowed_cidrs=("192.168.1.0/24",))
+    assert webserver.console_urls(cfg) == ["https://192.168.1.50:8443/", "https://127.0.0.1:8443/"]
+
+
+def test_console_urls_degrade_when_local_ip_is_unknown(tmp_path, monkeypatch):
+    monkeypatch.setattr(webserver, "local_ip", lambda: "")        # loopback-only host / failure
+    cfg = WebserverConfig(bind="0.0.0.0", remote_exposed=True, port=9443,
+                          allowed_cidrs=("10.0.0.0/8",))
+    assert webserver.console_urls(cfg) == ["https://127.0.0.1:9443/"]
+
+
 def test_nginx_serves_static_updating_page_on_502(tmp_path):
     # On a 502/503/504 (e.g. the Waitress upstream gone mid self-update) nginx serves a branded
     # static page from disk (no upstream, no JS) instead of the raw "502 Bad Gateway".

@@ -52,10 +52,21 @@
             {% if confirm.dirty %}<strong>Local changes are present (modified or untracked
               files).</strong>{% endif %}
             {% if confirm.diverged %}<strong>The local history has diverged from upstream</strong> —
-              a normal update can only fast-forward, so it is refused.{% endif %}
+              a normal update can only fast-forward, so it is refused.
+              {% if confirm.ahead %}The local history is {{ confirm.ahead }} commit{{ 's' if confirm.ahead != 1 }}
+                ahead of <code>origin/{{ confirm.branch }}</code>{% if confirm.behind %}, which is
+                {{ confirm.behind }} ahead of it{% endif %}.{% endif %}{% endif %}
             By default nothing is discarded and the update stops. Tick below to <strong>reset the
             checkout to upstream</strong>: this discards modified <em>and</em> non-ignored untracked
             files (ignored artifacts such as a <code>.venv/</code> are left untouched).</p>
+          {# Name what a force would delete. Consent to a discard the operator cannot see is not
+             consent — and a bare "local changes are present" left them guessing which. #}
+          {% if confirm.changes %}
+            <p class="flash flash-pre flash-warn">These paths would be discarded:
+{% for line in confirm.changes %}
+  {{ line }}
+{%- endfor %}</p>
+          {% endif %}
           <label><input type="checkbox" name="overwrite" value="yes"> Overwrite: discard local changes / reset to upstream</label>
           <p></p>
         {% endif %}

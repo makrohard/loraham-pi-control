@@ -420,6 +420,20 @@ def local_ip() -> str:
     return "" if ip.startswith("127.") else ip
 
 
+def console_urls(cfg: WebserverConfig) -> list[str]:
+    """The URL(s) the console is reachable at, most useful first — for DISPLAY only.
+
+    nginx owns the only TCP listener, so these come from the DESIRED config, not from a probe. When
+    the console is not remotely exposed the LAN address is omitted entirely: it would not answer,
+    and offering it would be a lie. `local_ip()` fail-softs to '' (loopback-only host, or unknown).
+    """
+    loopback = f"https://127.0.0.1:{cfg.port}/"
+    if not cfg.remote_exposed:
+        return [loopback]
+    ip = local_ip()
+    return ([f"https://{ip}:{cfg.port}/", loopback] if ip else [loopback])
+
+
 def monitor_view(paths: Paths, cfg: WebserverConfig) -> dict:
     """READ-ONLY cached status for Monitor/GET. Merges DESIRED config (intent) with the
     last-proven EFFECTIVE evidence + read-only PKI state. It NEVER infers active/exposed from

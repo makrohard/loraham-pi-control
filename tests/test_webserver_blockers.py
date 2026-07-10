@@ -128,6 +128,101 @@ def test_trusted_host_enforced_only_in_productive_mode(tmp_path):
     assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200
 
 
+# --- trusted-host: remote exposure, IP literals, IPv6, diagnostics ------------
+
+def _productive(tmp_path, **ws):
+    """A productive-mode client whose [webserver] config is `ws`."""
+    from lhpc.core import config as _config
+    if ws:
+        _config.save_webserver_config(Paths(runtime_root=tmp_path), **ws)
+    app, svc = _app(tmp_path)
+    svc._invalidate_config()
+    app.config["SESSION_COOKIE_SECURE"] = True
+    return app.test_client()
+
+
+def test_exposed_console_accepts_its_lan_ip_as_host(tmp_path):
+    # THE REPORTED BUG: bind=0.0.0.0 + remote_exposed, empty ip_sans -> every remote request 400'd,
+    # because `bind` ("0.0.0.0") is the only IP in the allowlist and no browser ever sends it.
+    c = _productive(tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
+    assert c.get("/stacks", headers={"Host": "192.168.178.66:8443"}).status_code == 200
+
+
+def test_exposed_console_still_rejects_a_name_so_rebinding_stays_blocked(tmp_path):
+    # The whole relaxation rests on this: DNS rebinding needs a NAME. Only IP literals are relaxed.
+    c = _productive(tmp_path, bind="0.0.0.0", remote_exposed=True, allowed_cidrs=["0.0.0.0/0"])
+    assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
+    assert c.get("/stacks", headers={"Host": "pi.local"}).status_code == 400   # name, not in dns_sans
+
+
+def test_loopback_only_console_rejects_a_lan_ip_host(tmp_path):
+    c = _productive(tmp_path)                       # remote_exposed defaults to False
+    assert c.get("/stacks", headers={"Host": "192.168.178.66"}).status_code == 400
+
+
+def test_wildcard_bind_is_never_a_valid_host(tmp_path):
+    c = _productive(tmp_path, bind="0.0.0.0")       # bind set, but NOT exposed
+    assert c.get("/stacks", headers={"Host": "0.0.0.0"}).status_code == 400
+
+
+def test_ipv6_loopback_host_is_accepted(tmp_path):
+    # `[::1]:8443`.split(":")[0] == "[" -> the hardcoded ::1 entry was unreachable before.
+    c = _productive(tmp_path)
+    assert c.get("/stacks", headers={"Host": "[::1]:8443"}).status_code == 200
+
+
+def test_ipv6_literal_is_accepted_only_while_exposed(tmp_path):
+    exposed = tmp_path / "exposed"
+    loopback = tmp_path / "loopback"
+    exposed.mkdir()
+    loopback.mkdir()
+    c_exposed = _productive(exposed, bind="0.0.0.0", remote_exposed=True,
+                            allowed_cidrs=["0.0.0.0/0"])
+    assert c_exposed.get("/stacks", headers={"Host": "[2001:db8::1]:8443"}).status_code == 200
+    c_loopback = _productive(loopback)
+    assert c_loopback.get("/stacks", headers={"Host": "[2001:db8::1]:8443"}).status_code == 400
+
+
+def test_ip_sans_match_by_parsed_value_not_string(tmp_path):
+    # An ip_sans entry of the compressed form must match a request for the expanded form.
+    c = _productive(tmp_path, ip_sans=["2001:db8::1"])
+    assert c.get("/stacks", headers={"Host": "[2001:db8:0:0:0:0:0:1]:8443"}).status_code == 200
+
+
+def test_rejection_is_plain_text_actionable_and_logged(tmp_path, caplog):
+    import logging
+    c = _productive(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        r = c.get("/stacks", headers={"Host": "evil.example"})
+    assert r.status_code == 400
+    assert r.mimetype == "text/plain"                    # nothing to inject into
+    body = r.get_data(as_text=True)
+    assert '"evil.example"' in body                      # names the rejected host
+    assert "dns_sans" in body and "ip_sans" in body      # and the fix
+    assert "<" not in body
+    # the FULL diagnostic (raw header, allowlist, exposure) lands in the log, not the response
+    rec = [r for r in caplog.records if "trusted-host: rejected Host" in r.message]
+    assert rec and "127.0.0.1" not in body               # allowlist is not enumerated to the client
+
+
+def test_host_echo_can_never_reflect_markup():
+    # Werkzeug already blanks a Host containing illegal characters, so `<` cannot reach the body via
+    # a real request. `_host_echo` is the belt to that braces — assert it directly.
+    from lhpc.adapters.web.app import _host_echo
+    assert _host_echo("<script>alert(1)</script>") == "scriptalert1script"
+    assert "<" not in _host_echo("<b>")
+    assert _host_echo("!!!") == "(unprintable)"
+    assert _host_echo("pi.local") == "pi.local"
+    assert len(_host_echo("a" * 500)) <= 80
+
+
+def test_illegal_host_header_is_blanked_by_werkzeug_and_not_rejected(tmp_path):
+    # Documents the pre-existing contract: an unparseable Host yields request.host == "", which the
+    # policy treats as "no Host claim" rather than a rejection. Nothing downstream trusts it.
+    c = _productive(tmp_path)
+    assert c.get("/stacks", headers={"Host": "a<b.com"}).status_code == 200
+
+
 # --- blocker 1 regression + secret hygiene ----------------------------------
 
 def test_webserver_modules_and_page_present_from_installed_package(tmp_path):

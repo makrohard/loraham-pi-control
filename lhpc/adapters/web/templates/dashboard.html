@@ -61,7 +61,7 @@
               </form>
             </h4>
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}" target="_blank" rel="noopener">daemon log</a>
             </p>
             <details class="monitor" open>
               <summary>Monitor</summary>
@@ -119,7 +119,7 @@
                     <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}">config</a>{% endif %}
-                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}">log</a>{% endif %}
+                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" target="_blank" rel="noopener">log</a>{% endif %}
                       {% for itf in c.interfaces %}
                         {% if itf.link %}
                           <a class="iface" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
@@ -218,7 +218,7 @@
 
           {% if r.daemon.process_up and not r.daemon.reachable %}
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}" target="_blank" rel="noopener">daemon log</a>
             </p>
           {% endif %}
         </div>

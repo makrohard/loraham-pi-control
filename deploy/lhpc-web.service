@@ -22,6 +22,10 @@ RestartSec=3
 StandardOutput=append:%h/loraham-pi-control/logs/lhpc-web.log
 StandardError=append:%h/loraham-pi-control/logs/lhpc-web.log
 SyslogIdentifier=lhpc-web
+# The console pushes its reachable URL as the unit's Status: line (sd_notify STATUS=).
+# Type stays `simple` -> NO readiness handshake: a missed notification can never fail or
+# delay startup. %t/systemd/notify is NOT in InaccessiblePaths below, so the sandbox allows it.
+NotifyAccess=main
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
