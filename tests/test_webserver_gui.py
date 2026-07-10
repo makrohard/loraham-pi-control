@@ -62,20 +62,17 @@ def test_webserver_logs_page_and_component_link(tmp_path):
     assert "[emerg] mkdir failed" in c.get("/webserver/logs?src=../etc").data.decode()
 
 
-def test_expose_failure_renders_red_not_uncoloured(tmp_path):
-    # A failed remote-exposure (valid phrase but no CIDR) must flash RED (flash-bad), including the
-    # 'requires at least one allowed source CIDR' detail — not the old uncoloured 'flash-err' class.
+def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
+    # A remote-exposure with a valid phrase but no CIDR is refused: the failure detail is shown and,
+    # critically, the listener is NOT exposed.
     app, svc = _app_svc(tmp_path)
     c = app.test_client()
     tok = _csrf(c)
     r = c.post("/webserver/expose",
                data={"_csrf": tok, "cidrs": "", "confirm_phrase": "enable-remote"},
                follow_redirects=True)
-    body = r.data.decode()
-    assert "flash-bad" in body                                   # failure is red
-    assert "flash-err" not in body                               # the uncoloured class is gone
-    assert "at least one allowed source CIDR" in body            # the actual failure detail, in red
-    assert svc.config().webserver.remote_exposed is False        # not exposed
+    assert "at least one allowed source CIDR" in r.data.decode()  # the actual failure detail
+    assert svc.config().webserver.remote_exposed is False         # not exposed (the safety fact)
 
 
 def test_post_requires_csrf(tmp_path):

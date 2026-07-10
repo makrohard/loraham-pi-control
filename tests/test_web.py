@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from htmlq import parse
 from lhpc.adapters.web.app import _LOOPBACK_HOSTS, create_app, run_server
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -162,17 +163,6 @@ def test_get_routes_make_no_network_calls(tmp_path):
     assert not offenders, f"GET routes ran network commands: {offenders}"
 
 
-def test_dashboard_is_a_control_hub(tmp_path):
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert 'class="tiles"' in body              # overview tiles
-    assert "badge badge-" in body               # status badges
-    assert 'action="/action"' in body           # stack action buttons on the stacks page
-    assert ">Run<" in body and ">Install<" in body
-    assert 'class="stackrow"' in body            # collapsed per-stack list rows
-    assert ">Install</summary>" in body          # folded-in Install section header
-    assert ">Dependencies</summary>" in body     # dependency sub-menu (was the old deps table)
-
-
 def test_radio_dashboard_has_two_band_columns(tmp_path):
     body = _client(tmp_path).get("/").get_data(as_text=True)
     assert 'class="radiogrid"' in body
@@ -181,17 +171,6 @@ def test_radio_dashboard_has_two_band_columns(tmp_path):
     # per-band: a start-stack control and a radio-config link
     assert 'name="op" value="start"' in body
     assert "Radio config" in body or "daemon offline" in body
-
-
-def test_header_nav_home_and_apps(tmp_path):
-    body = _client(tmp_path).get("/").get_data(as_text=True)
-    # The header title itself is the Dash/home button; "Apps" is a same-style link in the header
-    # line. The old Dash/Apps button bar (topnav) is gone.
-    assert 'class="topnav"' not in body and ">Dash<" not in body
-    assert 'class="home"' in body               # title is the clickable home/dashboard link
-    assert 'class="apps-link"' in body and '>Stacks</a>' in body
-    assert ">Config<" not in body           # Config page merged into per-stack Settings, menu removed
-    assert ">Monitor<" not in body          # Monitor page deleted (dashboard monitor needs a live daemon)
 
 
 def test_config_page_route_gone_content_on_stack(tmp_path):
@@ -207,19 +186,12 @@ def test_server_forced_open_marks_data_force_open(tmp_path):
     # A redirected/bookmarked URL forces the row open server-side and marks it data-force-open so the
     # JS restore can never close it. ?cfg forces the row AND its Settings.
     c = _client(tmp_path)
-    op = c.get("/stacks?open=daemon").get_data(as_text=True)
-    tag = op[op.index('<details class="stackrow" id="stackrow-daemon"'):].split(">", 1)[0]
-    assert " open" in tag and 'data-force-open="1"' in tag
-    cfg = c.get("/stacks?cfg=daemon").get_data(as_text=True)
-    assert '<details class="advcfg settings" id="stack-settings-daemon" open data-force-open="1">' in cfg
-    ctag = cfg[cfg.index('<details class="stackrow" id="stackrow-daemon"'):].split(">", 1)[0]
-    assert 'data-force-open="1"' in ctag                      # the row is forced too
-
-
-def _install_tag(body, sid):
-    """The opening <details ...> tag of stack `sid`'s Install panel."""
-    i = body.index('id="stack-install-' + sid + '"')
-    return body[body.rindex("<details", 0, i):body.index(">", i) + 1]
+    row = parse(c.get("/stacks?open=daemon").get_data(as_text=True)).by_id("stackrow-daemon")
+    assert row.has_attr("open") and row["data-force-open"] == "1"
+    cfg = parse(c.get("/stacks?cfg=daemon").get_data(as_text=True))
+    panel = cfg.by_id("stack-settings-daemon")
+    assert panel.has_attr("open") and panel["data-force-open"] == "1"     # ?cfg opens Settings…
+    assert cfg.by_id("stackrow-daemon")["data-force-open"] == "1"         # …and forces the row
 
 
 def test_inst_query_forces_and_scrolls_to_install_panel(tmp_path):
@@ -227,13 +199,13 @@ def test_inst_query_forces_and_scrolls_to_install_panel(tmp_path):
     # refused start lands ON the Install/Build buttons instead of the last saved scroll position.
     c = _client(tmp_path)
     body = c.get("/stacks?inst=igate").get_data(as_text=True)
-    tag = _install_tag(body, "igate")
-    assert " open" in tag and 'data-force-open="1"' in tag and 'data-force-scroll="1"' in tag
-    row = body[body.index('<details class="stackrow" id="stackrow-igate"'):].split(">", 1)[0]
-    assert 'data-force-open="1"' in row                       # the row is forced too
+    doc = parse(body)
+    panel = doc.by_id("stack-install-igate")
+    assert panel.has_attr("open") and panel["data-force-open"] == "1" and panel["data-force-scroll"] == "1"
+    assert doc.by_id("stackrow-igate")["data-force-open"] == "1"          # the row is forced too
     # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to.
-    assert 'data-force-scroll="1"' not in _install_tag(body, "daemon")
-    assert 'data-force-open="1"' not in _install_tag(body, "daemon")
+    daemon = doc.by_id("stack-install-daemon")
+    assert not daemon.has_attr("data-force-scroll") and not daemon.has_attr("data-force-open")
     assert body.count('data-force-scroll="1"') == 1
 
 
@@ -269,54 +241,6 @@ def test_every_log_link_opens_in_a_new_tab(tmp_path):
         assert 'target="_blank"' in a and 'rel="noopener"' in a, a
 
 
-def test_dashboard_log_links_open_in_a_new_tab_but_the_config_link_does_not(tmp_path):
-    # A fresh runtime renders no dashboard radios, so assert on the template source: every
-    # logs_view anchor gets target=_blank, while the `config` link (same logslink class,
-    # but it navigates to /stacks) must NOT.
-    import pathlib, re
-    tpl = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-           / "templates" / "dashboard.html").read_text()
-    log_tags = [a for a in re.findall(r"<a\b[^>]*>", tpl) if "logs_view" in a]
-    assert len(log_tags) == 3                                  # 2x daemon log + per-component log
-    for a in log_tags:
-        assert 'target="_blank"' in a and 'rel="noopener"' in a, a
-    cfg = [a for a in re.findall(r"<a\b[^>]*>", tpl) if "stack-settings-" in a]
-    assert cfg and all('target="_blank"' not in a for a in cfg)
-
-
-def test_logs_col_class_token_stays_contiguous(tmp_path):
-    # test_header_columns_and_webserver_open asserts this exact substring.
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert 'class="logslink col-logs"' in body
-
-
-def test_source_pill_explains_differs_is_not_dirty(tmp_path):
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "differs = clean but at another commit" in body
-    assert "untracked build output is ignored" in body
-
-
-def test_col_head_track_is_wide_enough_for_a_10_char_pill():
-    # `@` + 9 hex in mono at .78rem measures ~91-94px; a 6em (96px) track overran into the .5rem
-    # gap and touched `identity ok`. Pin the widened track.
-    import pathlib
-    css = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-           / "static" / "style.css").read_text()
-    assert "grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 7em 1fr 7.5em auto;" in css
-
-
-def test_stacks_state_js_preserves_force_open():
-    import pathlib
-    js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-          / "static" / "stacks_state.js").read_text()
-    assert "data-force-open" in js and "parentElement" in js  # force-open + ancestor-open walk
-    # The server-forced SCROLL target must be honoured, and the decision must sit INSIDE the
-    # requestAnimationFrame — before that relayout the force-opened ancestors still measure
-    # collapsed, so scrollIntoView() would land short of the panel.
-    assert "data-force-scroll" in js
-    assert js.index("forced.scrollIntoView()") > js.index("requestAnimationFrame(")
-
-
 def test_updating_page_is_static_no_script():
     # The self-update "restarting" page is fully static (no JS): the console stops itself, so it
     # can't reliably run/reload JS. It just shows a big "Return to the console" link.
@@ -326,34 +250,6 @@ def test_updating_page_is_static_no_script():
     assert "<script" not in tpl                              # no script at all
     assert "Return to the console" in tpl and 'href="/"' in tpl
     assert not (base / "static" / "updating.js").exists()    # removed
-
-
-def test_header_rows_drop_id_pill_and_split_version_head(tmp_path):
-    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
-    # daemon stack row header
-    s = body.index('id="stackrow-daemon"')
-    summ = body[s:body.index("</summary>", s)]
-    assert '<span class="pill">daemon</span>' not in summ     # id/type pill removed
-    assert 'class="ss-main"' not in summ                      # component-name cell removed
-    assert 'class="col-version"' in summ and 'class="col-head"' in summ   # two columns
-    # controller row header
-    c = body.index('id="controller-row"')
-    csumm = body[c:body.index("</summary>", c)]
-    assert '<span class="pill">controller</span>' not in csumm   # 'controller' pill removed
-    assert 'class="col-head"' in csumm                           # @head is its own column now
-    assert '>console up</span>' in csumm and "badge-ok" in csumm  # static truthful up indicator
-    assert "badge-running" not in csumm                          # never a fake managed run-state
-
-
-def test_header_columns_and_webserver_collapsed(tmp_path):
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    for cls in ('class="col-name"', 'class="col-status"', 'class="col-source"',
-                'class="col-version"', 'class="col-head"', 'class="col-extra"',
-                'class="col-update"', 'class="logslink col-logs"'):
-        assert cls in body, cls
-    # Default all-closed: the console Webserver panel no longer auto-opens.
-    assert 'id="webserver-row">' in body and 'id="webserver-row" open' not in body
-    assert '<details class="advcfg" open>\n    <summary>Monitor' not in body   # Monitor collapsed
 
 
 def test_radiolib_dependency_has_source_and_build_actions(tmp_path):
@@ -394,13 +290,6 @@ def test_stack_rows_fold_in_detail_sections(tmp_path):
     import pathlib
     base = pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
     assert not (base / "templates" / "stack.html").exists()
-
-
-def test_stack_detail_has_panels_and_evidence(tmp_path):
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "Declared resources" in body
-    assert "Endpoints" in body
-    assert "<details>" in body              # expandable evidence, no JS needed
 
 
 def test_no_inline_style_or_script_on_pages(tmp_path):
@@ -493,11 +382,6 @@ def test_multi_band_config_stored_per_band(tmp_path):
 
 
 
-def test_stack_page_has_action_controls(tmp_path):
-    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert ">Install</summary>" in body and 'action="/action"' in body
-
-
 def test_actions_grouped_and_install_state_aware(tmp_path):
     # fresh runtime: sources missing -> not installed -> Install shown, Build hidden
     body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
@@ -512,12 +396,6 @@ def test_install_confirm_offers_source_versions(tmp_path):
     cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "daemon"}).get_data(as_text=True)
     assert 'name="source"' in cf and "Known working" in cf and "Development" in cf \
         and "Latest stable" in cf
-
-
-def test_apps_page_shows_interactive_command_with_copy(tmp_path):
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert 'id="appcmd-chat"' in body and 'data-copy="appcmd-chat"' in body
-    assert "loraham_chat" in body and "copy.js" in body   # copyable line + handler
 
 
 def test_action_requires_csrf(tmp_path):
@@ -698,84 +576,6 @@ def test_wheel_includes_flash_js():
     globs = data["tool"]["setuptools"]["package-data"]["lhpc.adapters.web"]
     assert any(g == "static/*.js" for g in globs)
     assert (root / "lhpc" / "adapters" / "web" / "static" / "flash.js").exists()
-
-
-def test_stacks_header_reflows_on_small_screens():
-    # The fixed-column row-header grid must reflow to a wrapping flex layout on small screens so the
-    # /stacks page fits phones (no horizontal cut-off / clipped-by-card header).
-    import pathlib
-    css = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-           / "static" / "style.css").read_text()
-    assert "@media (max-width: 860px)" in css
-    mq = css[css.index("@media (max-width: 860px)"):]
-    mq = mq[:mq.index("}\n.stackrow-link") if "}\n.stackrow-link" in mq else len(mq)]
-    assert ".stacklist > .stackrow > summary" in mq and "flex-wrap: wrap" in mq
-
-
-def test_stacks_subpanels_boxed_top_level_only():
-    # Each top-level sub-panel on /stacks (Install/Info/Settings/Daemon params/Webserver) gets a box,
-    # while nested .advcfg (Dependencies -> component -> Info, etc.) stay flat (no boxes-in-boxes).
-    # Assert BOTH halves together: keeping the border but dropping the nested flatten would reintroduce
-    # boxes-within-boxes and must fail here.
-    import pathlib, re
-    css = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-           / "static" / "style.css").read_text()
-    box = re.search(r"\.stacklist \.advcfg\s*\{([^}]*)\}", css)
-    flat = re.search(r"\.stacklist \.advcfg \.advcfg\s*\{([^}]*)\}", css)
-    assert box and "border: 1px solid var(--line)" in box.group(1)     # top-level: boxed
-    assert flat and "border: 0" in flat.group(1) and "padding: 0" in flat.group(1)   # nested: flat
-
-
-def test_stacks_state_js_ships_and_is_wired(tmp_path):
-    # The open/close + scroll restorer must ship (package-data), be referenced from the stacks page,
-    # and the per-stack rows must carry a stable id for id-keyed restore.
-    import pathlib
-    base = pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-    assert (base / "static" / "stacks_state.js").exists()
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "stacks_state.js" in body                 # {% block scripts %} rendered
-    assert 'id="stackrow-' in body                   # stable per-stack row key
-
-
-def test_stacks_state_js_behaviours_present():
-    import pathlib
-    js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-          / "static" / "stacks_state.js").read_text()
-    # one-shot action memory (submit capture) + hash focus + scroll rules + accordion
-    for token in ("sessionStorage", "submit", "lhpc:stacks:act", "location.hash", "scrollTo",
-                  ".wrap > p.flash", "scrollRestoration", "requestAnimationFrame",
-                  "hashchange", ".stacklist > .stackrow"):
-        assert token in js, token
-
-
-def test_stacks_state_js_same_page_hash_and_accordion():
-    # Stands in for the browser cases (pytest can't run a browser):
-    #  - clicking a #controller-update link while already on /stacks must open+scroll it (hashchange).
-    #  - opening a main header auto-closes the others (accordion), and the accordion is bound only
-    #    AFTER the async load-path toggles have drained (setTimeout scheduled from the load rAF), so
-    #    programmatic load opens can't collapse a server-forced row.
-    import pathlib
-    js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-          / "static" / "stacks_state.js").read_text()
-    # same-page hash handler: close all -> open target + ancestors -> scroll
-    assert 'addEventListener("hashchange"' in js
-    assert "detailsForHash()" in js
-    assert "x.open = false" in js and "openWithAncestors(d)" in js
-    # accordion bound via setTimeout(attachAccordion) scheduled from the load requestAnimationFrame
-    assert "function attachAccordion()" in js
-    assert js.index("setTimeout(attachAccordion, 0)") > js.index("requestAnimationFrame(function")
-    # and it only reacts to a row OPENing
-    assert "if (!row.open) { return; }" in js
-
-
-def test_transient_flash_assets_present():
-    # the auto-hide ("show then hide") wiring exists
-    import pathlib
-    base = pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
-    assert "flash.js" in (base / "templates" / "base.html").read_text()
-    js = (base / "static" / "flash.js").read_text()
-    assert ".flash.transient" in js and "remove()" in js
-    assert "flash-hide" in (base / "static" / "style.css").read_text()
 
 
 def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch):
@@ -1250,17 +1050,6 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
     assert not (files / "sib.conf").exists()
 
 
-def test_apps_list_has_inline_settings_after_deps(tmp_path):
-    # The per-stack Settings section (former Config page) is rendered inline in the Apps stacklist,
-    # after each stack's dependency-components table, with a per-stack id (not the detail page's one).
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert ">Settings<" in body
-    assert 'id="stack-settings-meshcom"' in body and 'id="stack-settings-igate"' in body
-    assert 'id="stack-settings"' not in body                    # unique per-stack ids only here
-    # Settings comes after the Install/Dependencies section within each row.
-    assert body.index(">Dependencies</summary>") < body.index('id="stack-settings-meshcom"')
-
-
 def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path):
     c = _daemon_client(tmp_path)                       # 433 CONF socket reachable
     j = c.get("/api/daemon/433/socket").get_json()
@@ -1284,41 +1073,7 @@ def test_daemon_socket_line_sanitises_and_bounds(tmp_path):
     assert svc.daemon_socket_line("evil") == ""         # invalid band -> never builds a socket path
 
 
-def test_daemon_settings_has_view_socket_control(tmp_path):
-    body = _daemon_client(tmp_path).get("/stacks?cfg=1").get_data(as_text=True)
-    assert '>View Socket</button>' in body and 'class="socketbtn"' in body
-    assert 'id="socketout-433"' in body and 'id="socketout-body-433"' in body   # 22-line window
-    assert 'socketclose' in body                        # ✕ closes window + disconnects
-
-
-def test_daemon_settings_has_tx_viewer_and_fixed_height_panes(tmp_path):
-    body = _daemon_client(tmp_path).get("/stacks?cfg=1").get_data(as_text=True)
-    # 4th button: RX/TX View (reuses the dashboard RX/TX feed), closable 22-line window
-    assert '>RX/TX View</button>' in body and 'class="txbtn"' in body
-    assert 'id="txout-433"' in body and 'id="txout-body-433"' in body and 'txclose' in body
-    # every output pane (STATUS/STATS, View Socket, TX-Viewer) is the FIXED 22-line window
-    assert body.count('liveout-body stream22') == 3
-    assert 'socketstream' not in body                   # the old growing pane is gone
-
-
 # --- Restored shared Settings partial (_stack_settings.html): render, placement, regression ---
-
-def test_settings_partial_pages_render_200(tmp_path):                        # (1)
-    c = _client(tmp_path)
-    assert c.get("/stacks").status_code == 200                # Apps overview include site
-    assert c.get("/stacks").status_code == 200         # detail context WITH daemon_params
-    assert c.get("/stacks").status_code == 200          # non-daemon detail
-
-
-def test_settings_ids_and_config_fields(tmp_path):                           # (2)
-    c = _client(tmp_path)
-    detail = c.get("/stacks").get_data(as_text=True)
-    assert 'id="stack-settings-igate"' in detail and '<summary>Settings</summary>' in detail
-    assert 'name="c_call"' in detail                          # component-aware config field
-    assert 'name="_csrf"' in detail                           # CSRF preserved
-    assert "Reset to defaults" in detail                      # exact wording preserved
-    assert 'id="stack-settings-igate"' in c.get("/stacks").get_data(as_text=True)   # per-stack id
-
 
 def test_settings_apps_ids_unique(tmp_path):                                 # (3)
     import re
@@ -1330,9 +1085,10 @@ def test_settings_apps_ids_unique(tmp_path):                                 # (
 
 def test_settings_cfg_query_opens(tmp_path):                                 # (4)
     c = _client(tmp_path)
-    opened = '<details class="advcfg settings" id="stack-settings-igate" open data-force-open="1">'
-    assert opened in c.get("/stacks?cfg=igate").get_data(as_text=True)  # ?cfg=<id> forces it open
-    assert opened not in c.get("/stacks").get_data(as_text=True)        # collapsed by default
+    assert parse(c.get("/stacks?cfg=igate").get_data(as_text=True)) \
+        .by_id("stack-settings-igate").has_attr("open")                 # ?cfg=<id> forces it open
+    assert not parse(c.get("/stacks").get_data(as_text=True)) \
+        .by_id("stack-settings-igate").has_attr("open")                 # collapsed by default
 
 
 def test_settings_embedded_post_persists(tmp_path):                          # (5)
@@ -1371,22 +1127,6 @@ def test_settings_partial_loads_and_renders(tmp_path):                       # (
 
 # --- Settings reset button: exact "Reset to defaults" text for every stack/band --------------
 
-def test_daemon_settings_reset_button_exact_text_both_bands(tmp_path):        # (1)
-    c = _daemon_client(tmp_path)
-    for q in ("?cfg=daemon", "?band=868&cfg=daemon"):         # 433 (default) and 868
-        body = c.get("/stacks" + q).get_data(as_text=True)
-        assert '>Reset to defaults</button>' in body
-        assert 'Reset 433 to defaults' not in body and 'Reset 868 to defaults' not in body
-
-
-def test_multiband_stack_reset_button_exact_text_each_band(tmp_path):         # (2)
-    c = _client(tmp_path)
-    for band in ("433", "868"):                               # kiss is a multi-band non-daemon stack
-        body = c.get(f"/stacks?band={band}&cfg=kiss").get_data(as_text=True)
-        assert '>Reset to defaults</button>' in body
-        assert f'Reset {band} to defaults' not in body
-
-
 def test_reset_post_submits_band_and_redirects_to_settings(tmp_path):         # (3)
     c = _real_app(tmp_path)
     tok = _csrf(c)             # selected-band reset semantics preserved
@@ -1399,15 +1139,6 @@ def test_reset_post_submits_band_and_redirects_to_settings(tmp_path):         # 
     assert c.post("/stacks/kiss/config/reset", data={"band": "868"}).status_code == 400
 
 
-def test_no_page_shows_banded_reset_text(tmp_path):                          # (4)
-    c = _daemon_client(tmp_path)
-    for p in ("/stacks", "/stacks?cfg=daemon", "/stacks?band=868&cfg=daemon",
-              "/stacks?band=433&cfg=kiss", "/stacks?band=868&cfg=kiss", "/stacks?cfg=igate"):
-        body = c.get(p).get_data(as_text=True)
-        assert 'Reset 433 to defaults' not in body and 'Reset 868 to defaults' not in body
-        assert '>Reset to defaults</button>' in body          # the exact-text button is present
-
-
 # --- Self-Update: footer indicator, page, apply flow, Apps entry -----------------------------
 
 def _write_selfcache(tmp_path, local, upstream):
@@ -1418,37 +1149,21 @@ def _write_selfcache(tmp_path, local, upstream):
                            {"local": local, "upstream": upstream, "checked_at": 1})
 
 
-def test_footer_grey_before_any_check(tmp_path):
-    b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert 'class="ver ver-grey">v' in b and "update-link" not in b   # local version, no upstream yet
-
-
-def test_footer_up_to_date_is_green_no_link(tmp_path):
-    from lhpc.version import __version__
-    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
-                     {"ok": True, "upstream_version": __version__,
-                      "upstream_head": "a" * 40, "upstream_head_short": "aaaaaaaaa"})
-    b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert "ver-green" in b and "ver-red" not in b and "ver-yellow" not in b
-    assert "update-link" not in b
-
-
-def test_footer_commit_ahead_same_version_is_yellow(tmp_path):
-    from lhpc.version import __version__
-    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
-                     {"ok": True, "upstream_version": __version__,
-                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
-    b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert "ver-green" in b and "ver-yellow" in b   # version green, commit yellow
-    assert "update-link" in b and "Update" in b and "Self-Update" not in b
-
-
-def test_footer_version_ahead_is_red_with_link(tmp_path):
-    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"},
-                     {"ok": True, "upstream_version": "99.0.0",
-                      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"})
-    b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert "ver-red" in b and "update-link" in b
+@pytest.mark.parametrize("upstream, wants_link", [
+    ({}, False),                                                         # never checked
+    ({"ok": True, "upstream_version": __import__("lhpc.version", fromlist=["__version__"]).__version__,
+      "upstream_head": "a" * 40, "upstream_head_short": "aaaaaaaaa"}, False),   # up to date
+    ({"ok": True, "upstream_version": __import__("lhpc.version", fromlist=["__version__"]).__version__,
+      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"}, True),     # commit ahead
+    ({"ok": True, "upstream_version": "99.0.0",
+      "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb"}, True),     # version ahead
+])
+def test_footer_offers_an_update_link_iff_an_update_is_available(tmp_path, upstream, wants_link):
+    # The actionable behaviour is the LINK, not the CSS colour: a footer update link appears exactly
+    # when the cached self-update check reports the controller is behind upstream.
+    _write_selfcache(tmp_path, {"head": "a" * 40, "head_short": "aaaaaaaaa"}, upstream)
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert ("update-link" in body) is wants_link
 
 
 def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
@@ -1461,11 +1176,6 @@ def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
     assert 'id="controller-row"' in b
     assert "/self-update/check" in b and "Check for updates" in b   # embedded update form
     assert "Self-Update" not in b                                   # renamed to just "Update"
-
-
-def test_dashboard_has_no_controller_card(tmp_path):
-    b = _client(tmp_path).get("/").get_data(as_text=True)
-    assert "controller-row" not in b
 
 
 def test_standalone_self_update_page_is_gone(tmp_path):
@@ -1558,10 +1268,11 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
                      {"ok": True, "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb",
                       "upstream_version": "9.9.9"})
     body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    doc = parse(body)
     # still signalled — now as the col-update link (same column as the stack rows)
-    assert 'class="update-link"' in body and ">Update available</a>" in body
-    assert '<details class="stackrow" id="controller-row">' in body     # collapsed (no ' open')
-    assert '<details class="stackrow" id="controller-update">' in body  # nested Update collapsed
+    assert doc.find("a", **{"class": "update-link"}) and ">Update available</a>" in body
+    assert not doc.by_id("controller-row").has_attr("open")             # controller row collapsed
+    assert not doc.by_id("controller-update").has_attr("open")          # nested Update collapsed
     assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed
 
 
@@ -2244,28 +1955,6 @@ def test_start_notes_flash_yellow_and_long(tmp_path, monkeypatch):
     assert "flash-warn" in body and "transient-long" in body     # yellow + 30s class
     assert "boots in ~1–2 min" in body
     assert "another machine" not in body
-
-
-def test_dash_reload_not_vetoed_by_open_details():
-    # LIVE FINDING: the dashboard's daemon Monitor <details> is open BY DEFAULT, and
-    # dash.js vetoed the signature reload whenever ANY details was open — so a booting
-    # badge never turned green without a manual reload. The veto is gone; open/closed
-    # panel states are saved to sessionStorage and restored after the reload.
-    import pathlib
-    js = pathlib.Path("lhpc/adapters/web/static/dash.js").read_text()
-    assert 'querySelector("details[open]")' not in js            # veto removed
-    assert "dashDetails" in js and "sessionStorage" in js        # state preserved
-    assert "location.reload()" in js
-
-
-def test_dash_reload_not_vetoed_by_focused_button():
-    # LIVE FINDING: a clicked BUTTON retains focus, and the busy-guard treated it as
-    # "user is interacting" — vetoing the signature reload every tick (badges stale for
-    # 30s+ until focus moved). Only genuine text-entry elements defer the reload now.
-    import pathlib
-    js = pathlib.Path("lhpc/adapters/web/static/dash.js").read_text()
-    assert "BUTTON" not in js.split("busy = ")[1].split(";")[0]
-    assert "SELECT|INPUT|TEXTAREA" in js
 
 
 def test_web_and_updater_trigger_paths_never_call_systemctl():

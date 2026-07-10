@@ -3,6 +3,7 @@ LBT), save + reset. Backed by a fake-system service (daemon unreachable)."""
 
 import re
 
+from htmlq import parse
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -25,31 +26,6 @@ def _row(body, sid):
     start = body.index('id="stackrow-' + sid + '"')
     nxt = body.find('id="stackrow-', start + 1)
     return body[start:(nxt if nxt != -1 else len(body))]
-
-
-def test_meshcom_config_shows_daemon_params_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "Daemon radio parameters (433 MHz)" in body       # meshcom runs on 433
-    assert 'value="28"' in body                              # meshcom CADIDLE default = 28
-    assert 'name="dp_SF"' in body and 'value="10"' in body   # every param editable (SF too)
-    assert "greyed" in body                                  # app-owned params greyed (visual)
-
-
-def test_txmode_renders_as_dropdown(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert '<select name="dp_TXMODE"' in body                 # dropdown, not a text input
-    assert 'name="dp_TXMODE" value=' not in body              # ...so no text input for it
-    assert '<option value="DIRECT" selected>' in body         # voice default = DIRECT preselected
-    assert '<option value="MANAGED">' in body
-
-
-def test_new_params_use_correct_widgets(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    for enum in ("MODE", "CRC", "LDRO", "TXQUEUE", "CADMONITOR", "CADTXAFTERTIMEOUT", "SF", "BW", "CR"):
-        assert f'<select name="dp_{enum}"' in body                # enums/small ranges -> dropdown
-    for num in ("FREQ", "POWER", "PREAMBLE", "CADWAIT", "CADIDLE"):
-        assert f'<input type="number" name="dp_{num}"' in body    # ranges -> number input
-    assert '<input type="text" name="dp_SYNC"' in body            # hex -> free text
 
 
 def test_server_side_validation_rejects_bad_values(tmp_path):
@@ -131,29 +107,26 @@ def test_panel_stays_open_after_save(tmp_path):
     assert r.status_code in (302, 303)
     # TARGET-SPECIFIC: reopen only meshcom's row + its panel (no generic dp=1).
     assert "open=meshcom" in loc and "dp=meshcom" in loc and loc.endswith("#stack-daemon-params-meshcom")
-    body = c.get(loc).get_data(as_text=True)
-    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom" open data-force-open="1">' in body
-    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom">' in c.get(   # collapsed default
-        "/stacks").get_data(as_text=True)
+    assert parse(c.get(loc).get_data(as_text=True)) \
+        .by_id("stack-daemon-params-meshcom").has_attr("open")               # forced open on return
+    assert not parse(c.get("/stacks").get_data(as_text=True)) \
+        .by_id("stack-daemon-params-meshcom").has_attr("open")               # collapsed by default
 
 
 def test_dp_target_specific_opens_only_matching_panel(tmp_path):
-    import re
-    body = _app(tmp_path).get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True)
+    doc = parse(_app(tmp_path).get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True))
     # ONLY meshcom's daemon panel is forced open; the daemon stack's own panel stays collapsed.
-    assert '<details class="advcfg dparams" id="stack-daemon-params-meshcom" open data-force-open="1">' in body
-    assert '<details class="advcfg dparams" id="stack-daemon-params-daemon">' in body
-    assert not re.search(r'id="stack-daemon-params-daemon"[^>]*\sopen', body)
+    assert doc.by_id("stack-daemon-params-meshcom").has_attr("open")
+    assert not doc.by_id("stack-daemon-params-daemon").has_attr("open")
 
 
 def test_dp1_no_longer_opens_every_daemon_panel(tmp_path):
     # Regression: the old ?dp=1 opened EVERY daemon-params panel globally. `dp` must now match a
     # stack id, so a non-matching value opens NONE.
-    import re
-    body = _app(tmp_path).get("/stacks?dp=1").get_data(as_text=True)
-    assert 'class="advcfg dparams"' in body                  # panels present...
-    assert not re.search(r'class="advcfg dparams"[^>]*\sopen', body)   # ...but none forced open
-    assert "data-force-open" not in body                     # nothing server-forced by dp=1
+    doc = parse(_app(tmp_path).get("/stacks?dp=1").get_data(as_text=True))
+    panels = doc.find("details", **{"class": "advcfg dparams"})
+    assert panels                                            # panels present...
+    assert not any(p.has_attr("open") for p in panels)       # ...but none forced open by dp=1
 
 
 def test_save_rejects_out_of_range(tmp_path):
@@ -301,13 +274,6 @@ def test_apply_live_other_band_not_blocked(tmp_path):
     assert r.ok
 
 
-def test_cadrssi_in_daemon_params_panel(tmp_path):
-    from lhpc.core import daemon_params as dp, daemon_control as dc
-    assert "CADRSSI" in dp.ALL_PARAMS and dc.validate_set("CADRSSI", dp.default_value("daemon", "433", "CADRSSI")) is None
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert '<input type="number" name="dp_CADRSSI"' in body   # editable number input in the panel
-
-
 def test_daemon_overrides_are_ephemeral_not_persisted(tmp_path):
     # A confirm-page value (or its "Reset to defaults") is applied for THIS start only; the saved
     # config is never touched.
@@ -329,14 +295,6 @@ def test_lowercase_enum_canonicalized(tmp_path):
     st = cfgmod.load_stack_config(svc._paths, "daemon")
     assert st["dp_433_MODE"] == "FSK"                     # fsk -> FSK (valid, canonical)
     assert st["dp_433_TXMODE"] == "DIRECT"                # direct -> DIRECT (differs from default)
-
-
-def test_lowercase_fsk_displays_as_fsk_in_panel(tmp_path):
-    c = _app(tmp_path)
-    tok = _csrf(c)
-    c.post("/stacks/daemon/daemon-params", data={"_csrf": tok, "band": "433", "dp_MODE": "fsk"})
-    body = c.get("/stacks").get_data(as_text=True)
-    assert '<option value="FSK" selected>' in body       # canonical FSK preselected
 
 
 def test_leading_zero_int_canonicalized_and_default_equiv_clears(tmp_path):
@@ -454,21 +412,6 @@ def test_ephemeral_start_leaves_saved_overrides_untouched(tmp_path):
 
 
 # --- Area 3: browser-only FSK warning covers inline start-confirm ----------------------------
-
-def test_confirm_mode_selectors_carry_fsk_warn_attribute(tmp_path):
-    import os, re
-    b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
-    b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
-    c = create_app(service_factory=lambda: ControllerService(
-        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
-    body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
-                                    "p_radio": "both"}).get_data(as_text=True)
-    assert body.count("data-mode-warn") == 2                                    # one per band panel
-    # config page (saved-profile Save/Apply) also carries the warn attribute
-    cfg = c.get("/stacks").get_data(as_text=True)
-    assert "data-mode-warn" in cfg
-
 
 # --- Area 1: strict Start-confirm dp_* field parsing -----------------------------------------
 

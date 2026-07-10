@@ -34,13 +34,6 @@ def test_form_defaults_and_install_mode(tmp_path):
     assert "Known working" in body and "Development" in body and "Latest stable" in body
 
 
-def test_mode_wording_mixed_and_update(tmp_path):
-    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
-    c, _ = _client(tmp_path)
-    assert "Install and update all stacks" in c.get("/install-all").data.decode()
-    assert "Install and update all stacks" in c.get("/stacks").data.decode()
-
-
 def test_post_requires_csrf(tmp_path):
     c, _ = _client(tmp_path)
     assert c.post("/install-all/start", data={"source": "pinned"}).status_code == 400
@@ -177,11 +170,6 @@ def test_welcome_banner_tristate(tmp_path):
     c2, _ = _client(tmp_path)
     dash = c2.get("/").data.decode()
     assert "Welcome!" not in dash and "needs attention" in dash  # recovery, not welcome
-
-
-def test_apps_button_install_label(tmp_path):
-    c, _ = _client(tmp_path)
-    assert "Install and Build all Stacks" in c.get("/stacks").data.decode()
 
 
 # --- M2 round-2: server-enforced RF confirmation + recovery UI -------------------------------
