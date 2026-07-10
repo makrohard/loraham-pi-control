@@ -249,9 +249,11 @@ input.wide { width: 100%; min-width: 16rem; }
 .cfgsec { margin: .5rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 .cfgsec h3 { margin: .3rem 0 .5rem; font-size: 1rem; }
 .advcfg { margin: .4rem 0; }
+/* Group each top-level sub-panel on /stacks in a subtle box; nested sub-panels stay flat. */
+.stacklist .advcfg { border: 1px solid var(--line); border-radius: 8px; padding: .35rem .7rem; }
+.stacklist .advcfg .advcfg { border: 0; border-radius: 0; padding: 0; }
 .advcfg summary { cursor: pointer; color: var(--muted); font-size: .8rem;
                   text-transform: uppercase; letter-spacing: .4px; }
-.advcfg.settings > summary { color: var(--ink); font-weight: 600; }
 .act { display: inline-block; margin: 0; }
 .act button { background: var(--surface); color: var(--brand); border: 1px solid var(--brand); }
 .act button:hover { background: var(--brand); color: #fff; }

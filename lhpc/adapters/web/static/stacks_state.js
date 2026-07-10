@@ -1,19 +1,22 @@
-// Stacks page: keep the collapsible tree's open/close state AND the scroll position across a button
-// action. Every action is a real <form> POST that 302-redirects back and reloads the page fresh, so
-// without this the whole tree collapses to the server default and the scroll jumps. We persist the
-// open/close of every <details> and the scroll position in sessionStorage, restore them on load, and
-// — if the top flash message would be off-screen — scroll to the top so it is seen.
+// Stacks page open/close + scroll behaviour.
 //
-// Keys are per-element PATHS (id when present, else index among sibling <details>), because the DOM
-// reshapes as panels expand; index-only keying (see dash.js) would drift. State is captured from the
-// LIVE DOM at navigation time, so any panel the user acted in is necessarily open — exact-restore
-// never hides a confirm/job UI.
+// Model: DEFAULT EVERYTHING CLOSED, at most ONE relevant section open at a time.
+//  - The server renders every <details> closed except the ones a ?param targets (data-force-open,
+//    plus data-force-scroll for ?inst) and active-job rows. This script NEVER closes anything — it
+//    only opens the single relevant target, so "close all others" is free.
+//  - A LINK to a section (its #anchor, or a ?cfg/?dp/?inst param) → open only that section (+ the
+//    parents needed to reach it) and JUMP to it.
+//  - An ACTION button (a form POST that redirects back) → reopen exactly the section the button sat
+//    in (innermost <details> + ancestors) and STAY there — or jump to the top if a flash appeared.
+//    A server-directed focus (data-force-scroll, a nested data-force-open, or a nested hash target)
+//    WINS over that action memory, so a stale POST memory can never steal focus.
+//
+// Keys are per-element PATHS (id when present, else index among sibling <details>) so a remembered
+// section resolves after the server re-renders the same structure.
 (function () {
-  // Only run on the stacks page (its inline /self-update/apply re-render renders the same template).
-  if (!document.querySelector(".stacklist")) { return; }
+  if (!document.querySelector(".stacklist")) { return; }   // only the stacks page (incl. its re-renders)
 
-  var DKEY = "lhpc:stacks:details";   // { pathKey: 0|1 }
-  var SKEY = "lhpc:stacks:scroll";    // window.scrollY
+  var AKEY = "lhpc:stacks:act";        // one-shot: { k: pathKey, y: scrollY } of the acted section
 
   function keyFor(el) {
     var parts = [];
@@ -32,71 +35,106 @@
     return parts.join("/");
   }
 
-  function readMap() {
-    try {
-      var m = JSON.parse(sessionStorage.getItem(DKEY) || "null");
-      return (m && typeof m === "object") ? m : {};
-    } catch (e) { return {}; }
-  }
-
-  function saveDetails() {
-    var map = {};
-    document.querySelectorAll("details").forEach(function (el) {
-      map[keyFor(el)] = el.open ? 1 : 0;
-    });
-    try { sessionStorage.setItem(DKEY, JSON.stringify(map)); } catch (e) { /* private mode */ }
-  }
-
-  function saveScroll() {
-    try { sessionStorage.setItem(SKEY, String(window.scrollY || window.pageYOffset || 0)); }
-    catch (e) { /* private mode */ }
-  }
-
-  // --- restore ---------------------------------------------------------------------------------
-  if ("scrollRestoration" in history) { history.scrollRestoration = "manual"; }
-  var map = readMap();
-  document.querySelectorAll("details").forEach(function (el) {
-    var k = keyFor(el);
-    if (Object.prototype.hasOwnProperty.call(map, k)) { el.open = map[k] === 1; }
-  });
-
-  // SERVER-FORCED navigation WINS over the restored (possibly stale) map: the server opens rows
-  // for ?open=<id>/?cfg=<id>/?dp=<id>/?inst=<id> and for active jobs and marks them data-force-open.
-  // Force those elements — and every ancestor <details> — open, so a stale stored open=0 can't close
-  // a bookmarked / redirected / job row. Runs AFTER the map restore so it always overrides it.
-  document.querySelectorAll("details[data-force-open]").forEach(function (el) {
+  function openWithAncestors(el) {
     for (var n = el; n && n !== document.body; n = n.parentElement) {
       if (n.tagName === "DETAILS") { n.open = true; }
     }
-  });
+  }
 
-  // After a layout pass (opened panels change page height), place the scroll. The decision MUST live
-  // in here, after the force-open walk above has expanded the ancestors — scrollIntoView() run before
-  // that relayout would measure the collapsed geometry and land short of the target.
-  requestAnimationFrame(function () {
-    // A server-forced SCROLL target (data-force-scroll, e.g. ?inst=<id> after a refused start) beats
-    // both the saved scroll and the flash rule: the operator was sent to that panel on purpose, and
-    // the panel repeats the reason in its own banner. Deliberately NOT keyed on data-force-open —
-    // every action redirect sets open=<sid>, and those must still "stay where the page was".
-    var forced = document.querySelector("[data-force-scroll]");
-    if (forced) { forced.scrollIntoView(); return; }
+  // A sub-panel (has a <details> ancestor) vs a top-level row (#stackrow-*, #controller-row).
+  function nested(el) {
+    return !!(el && el.parentElement && el.parentElement.closest("details"));
+  }
 
-    var saved = null;
-    try { saved = sessionStorage.getItem(SKEY); } catch (e) { /* ignore */ }
-    if (saved !== null) { window.scrollTo(0, parseInt(saved, 10) || 0); }
-    // If an action produced a top flash and it is off-screen, scroll to the top so it is seen.
-    var flash = document.querySelector(".wrap > p.flash");
-    if (flash) {
-      var r = flash.getBoundingClientRect();
-      var visible = r.bottom > 0 && r.top < (window.innerHeight || document.documentElement.clientHeight);
-      if (!visible) { window.scrollTo(0, 0); }
-    }
-  });
+  // The <details> named by location.hash (the element itself, or its nearest <details>), or null.
+  function detailsForHash() {
+    if (location.hash.length <= 1) { return null; }
+    var el = null;
+    try { el = document.getElementById(decodeURIComponent(location.hash.slice(1))); }
+    catch (e) { el = document.getElementById(location.hash.slice(1)); }
+    if (!el) { return null; }
+    return (el.tagName === "DETAILS") ? el : el.closest("details");
+  }
 
-  // --- save triggers ---------------------------------------------------------------------------
-  // Every toggle keeps the map current; pagehide snapshots the scroll right before we navigate away.
-  document.addEventListener("toggle", function (e) {
-    if (e.target && e.target.tagName === "DETAILS") { saveDetails(); }
+  // ACCORDION: opening one MAIN header (a direct .stacklist child row, incl. the controller row)
+  // auto-closes the others. Sub-panels inside a row are NOT direct children, so they never trip it.
+  function attachAccordion() {
+    document.querySelectorAll(".stacklist > .stackrow").forEach(function (row) {
+      row.addEventListener("toggle", function () {
+        if (!row.open) { return; }                 // react to USER OPEN only; close-toggles ignored
+        document.querySelectorAll(".stacklist > .stackrow").forEach(function (o) {
+          if (o !== row && o.open) { o.open = false; }
+        });
+      });
+    });
+  }
+
+  // --- capture the acted section on ANY form submit inside a <details> (broad root: whole page) ---
+  document.addEventListener("submit", function (e) {
+    var btn = e.submitter || document.activeElement;
+    var d = btn && btn.closest ? btn.closest("details") : null;
+    if (!d && e.target && e.target.closest) { d = e.target.closest("details"); }
+    if (!d) { return; }                                    // not inside a section -> nothing to remember
+    try {
+      sessionStorage.setItem(AKEY, JSON.stringify({ k: keyFor(d),
+        y: window.scrollY || window.pageYOffset || 0 }));
+    } catch (e2) { /* private mode */ }
   }, true);
-  window.addEventListener("pagehide", function () { saveDetails(); saveScroll(); });
+
+  // --- restore -----------------------------------------------------------------------------------
+  if ("scrollRestoration" in history) { history.scrollRestoration = "manual"; }
+
+  var act = null;
+  try { act = JSON.parse(sessionStorage.getItem(AKEY) || "null"); sessionStorage.removeItem(AKEY); }
+  catch (e) { act = null; }
+
+  var hashDetails = detailsForHash();
+
+  // A SERVER/LINK-directed focus wins over action memory. Resolve exactly ONE target so at most one
+  // relevant section opens (opening act AND a different forced target would briefly show two).
+  var forcedTarget = document.querySelector("[data-force-scroll]");
+  if (!forcedTarget) {
+    var fdo = document.querySelectorAll("details[data-force-open]");
+    for (var i = 0; i < fdo.length; i++) { if (nested(fdo[i])) { forcedTarget = fdo[i]; break; } }
+  }
+  if (!forcedTarget && hashDetails && nested(hashDetails)) { forcedTarget = hashDetails; }
+
+  var actEl = null;
+  if (act && act.k) {
+    var all = document.querySelectorAll("details");
+    for (var j = 0; j < all.length; j++) { if (keyFor(all[j]) === act.k) { actEl = all[j]; break; } }
+  }
+
+  if (forcedTarget) { openWithAncestors(forcedTarget); }
+  else if (actEl) { openWithAncestors(actEl); }
+
+  // --- scroll (after the open relayout changes page height) --------------------------------------
+  requestAnimationFrame(function () {
+    var flash = document.querySelector(".wrap > p.flash");
+    // A server/link-directed focus (data-force-scroll = ?inst, a nested data-force-open = ?cfg/?dp,
+    // or a nested hash link) beats the acted-section memory. `forced` kept for the JS test.
+    var forced = forcedTarget;
+    if (forced) { forced.scrollIntoView(); }
+    else if (act) { window.scrollTo(0, flash ? 0 : (act.y || 0)); }     // action: top-if-message, else stay
+    else if (hashDetails) { hashDetails.scrollIntoView(); }             // a link to a bare row
+    else if (flash) { window.scrollTo(0, 0); }
+
+    // Bind the accordion ONLY now, deferred one task past this frame. The <details> `toggle` event is
+    // async, so the load-path's programmatic opens above queue toggles that would otherwise hit the
+    // accordion and collapse a server-forced row. Binding after they have drained makes that
+    // impossible — the listeners do not exist while those toggles fire.
+    setTimeout(attachAccordion, 0);
+  });
+
+  // --- same-page hash navigation (e.g. the global footer "Update →" clicked while on /stacks) ------
+  // The load logic runs once; a pure #-only link changes the hash WITHOUT a reload, so re-apply the
+  // one-section model here: close everything, open only the target + ancestors, then scroll after the
+  // relayout (rAF), exactly like the load path.
+  window.addEventListener("hashchange", function () {
+    var d = detailsForHash();
+    if (!d) { return; }
+    document.querySelectorAll("details").forEach(function (x) { x.open = false; });
+    openWithAncestors(d);
+    requestAnimationFrame(function () { d.scrollIntoView(); });
+  });
 })();

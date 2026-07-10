@@ -189,7 +189,7 @@ def test_header_nav_home_and_apps(tmp_path):
     # line. The old Dash/Apps button bar (topnav) is gone.
     assert 'class="topnav"' not in body and ">Dash<" not in body
     assert 'class="home"' in body               # title is the clickable home/dashboard link
-    assert 'class="apps-link"' in body and '>Apps</a>' in body
+    assert 'class="apps-link"' in body and '>Stacks</a>' in body
     assert ">Config<" not in body           # Config page merged into per-stack Settings, menu removed
     assert ">Monitor<" not in body          # Monitor page deleted (dashboard monitor needs a live daemon)
 
@@ -345,13 +345,14 @@ def test_header_rows_drop_id_pill_and_split_version_head(tmp_path):
     assert "badge-running" not in csumm                          # never a fake managed run-state
 
 
-def test_header_columns_and_webserver_open(tmp_path):
+def test_header_columns_and_webserver_collapsed(tmp_path):
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     for cls in ('class="col-name"', 'class="col-status"', 'class="col-source"',
                 'class="col-version"', 'class="col-head"', 'class="col-extra"',
                 'class="col-update"', 'class="logslink col-logs"'):
         assert cls in body, cls
-    assert 'id="webserver-row" open>' in body                # webserver section shown by default
+    # Default all-closed: the console Webserver panel no longer auto-opens.
+    assert 'id="webserver-row">' in body and 'id="webserver-row" open' not in body
     assert '<details class="advcfg" open>\n    <summary>Monitor' not in body   # Monitor collapsed
 
 
@@ -711,6 +712,20 @@ def test_stacks_header_reflows_on_small_screens():
     assert ".stacklist > .stackrow > summary" in mq and "flex-wrap: wrap" in mq
 
 
+def test_stacks_subpanels_boxed_top_level_only():
+    # Each top-level sub-panel on /stacks (Install/Info/Settings/Daemon params/Webserver) gets a box,
+    # while nested .advcfg (Dependencies -> component -> Info, etc.) stay flat (no boxes-in-boxes).
+    # Assert BOTH halves together: keeping the border but dropping the nested flatten would reintroduce
+    # boxes-within-boxes and must fail here.
+    import pathlib, re
+    css = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+           / "static" / "style.css").read_text()
+    box = re.search(r"\.stacklist \.advcfg\s*\{([^}]*)\}", css)
+    flat = re.search(r"\.stacklist \.advcfg \.advcfg\s*\{([^}]*)\}", css)
+    assert box and "border: 1px solid var(--line)" in box.group(1)     # top-level: boxed
+    assert flat and "border: 0" in flat.group(1) and "padding: 0" in flat.group(1)   # nested: flat
+
+
 def test_stacks_state_js_ships_and_is_wired(tmp_path):
     # The open/close + scroll restorer must ship (package-data), be referenced from the stacks page,
     # and the per-stack rows must carry a stable id for id-keyed restore.
@@ -726,9 +741,31 @@ def test_stacks_state_js_behaviours_present():
     import pathlib
     js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
           / "static" / "stacks_state.js").read_text()
-    for token in ("sessionStorage", "toggle", "scrollTo", ".wrap > p.flash", "scrollRestoration",
-                  "requestAnimationFrame"):
+    # one-shot action memory (submit capture) + hash focus + scroll rules + accordion
+    for token in ("sessionStorage", "submit", "lhpc:stacks:act", "location.hash", "scrollTo",
+                  ".wrap > p.flash", "scrollRestoration", "requestAnimationFrame",
+                  "hashchange", ".stacklist > .stackrow"):
         assert token in js, token
+
+
+def test_stacks_state_js_same_page_hash_and_accordion():
+    # Stands in for the browser cases (pytest can't run a browser):
+    #  - clicking a #controller-update link while already on /stacks must open+scroll it (hashchange).
+    #  - opening a main header auto-closes the others (accordion), and the accordion is bound only
+    #    AFTER the async load-path toggles have drained (setTimeout scheduled from the load rAF), so
+    #    programmatic load opens can't collapse a server-forced row.
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+          / "static" / "stacks_state.js").read_text()
+    # same-page hash handler: close all -> open target + ancestors -> scroll
+    assert 'addEventListener("hashchange"' in js
+    assert "detailsForHash()" in js
+    assert "x.open = false" in js and "openWithAncestors(d)" in js
+    # accordion bound via setTimeout(attachAccordion) scheduled from the load requestAnimationFrame
+    assert "function attachAccordion()" in js
+    assert js.index("setTimeout(attachAccordion, 0)") > js.index("requestAnimationFrame(function")
+    # and it only reacts to a row OPENing
+    assert "if (!row.open) { return; }" in js
 
 
 def test_transient_flash_assets_present():
@@ -1528,6 +1565,28 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
     assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed
 
 
+def test_stacks_default_closed_install_and_webserver_not_auto_open(tmp_path):
+    # "install and webserver section shall not auto-open anymore": a plain GET force-opens nothing.
+    import re
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "data-force-open" not in body and "data-force-scroll" not in body
+    # every Install panel collapsed (id immediately followed by '>', no ' open')
+    assert re.search(r'id="stack-install-[a-z0-9-]+"', body)          # they render…
+    assert not re.search(r'id="stack-install-[a-z0-9-]+"[^>]*\sopen', body)   # …but closed
+    assert 'id="webserver-row">' in body and 'id="webserver-row" open' not in body
+
+
+def test_footer_update_link_targets_the_controller_update_panel(tmp_path):
+    # The link must open+scroll the Update panel section, not the row (which the JS treats as generic).
+    _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                                "branch": "main"},
+                     {"ok": True, "upstream_head": "b" * 40, "upstream_head_short": "bbbbbbbbb",
+                      "upstream_version": "9.9.9"})
+    body = _real_app(tmp_path).get("/").get_data(as_text=True)
+    assert 'class="update-link"' in body and "#controller-update" in body
+    assert 'href="/stacks#controller-row"' not in body
+
+
 def test_foreground_console_shows_managed_service_banner(tmp_path, monkeypatch):
     # The unit FILES can verify ok while the console runs in a foreground shell — say why one-click
     # update / boot autostart are unavailable, without implying they are impossible forever.
@@ -1587,12 +1646,12 @@ def test_controller_logs_page_and_header_link(tmp_path):
 
 def test_self_update_apply_get_redirects_not_405(tmp_path):
     # Both apply stages render INLINE at /self-update/apply, so the browser tab stays there; a
-    # reload/Back/post-outage GET must redirect to the controller row, NEVER 405.
+    # reload/Back/post-outage GET must redirect to the controller Update panel, NEVER 405.
     _write_selfcache(tmp_path, {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
                                 "branch": "main"}, {})
     c = _real_app(tmp_path)
     r = c.get("/self-update/apply")
-    assert r.status_code == 302 and r.headers["Location"].endswith("#controller-row")
+    assert r.status_code == 302 and r.headers["Location"].endswith("#controller-update")
 
 
 def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):

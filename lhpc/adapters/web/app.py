@@ -588,7 +588,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         res = service.self_update_check()          # NETWORK (explicit): git fetch, refresh cache
         flash(res.summary, "ok" if res.ok else "warn")
-        return redirect(url_for("stacks_overview") + "#controller-row")
+        return redirect(url_for("stacks_overview") + "#controller-update")
 
     @app.post("/source-check/<target>")
     def source_check(target: str):  # noqa: ANN202
@@ -614,7 +614,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Both stages render INLINE at this URL, so the browser tab stays on /self-update/apply.
             # A stray GET (reload, Back button, or the browser re-requesting through the restart
             # outage) must NOT 405 — send it to the controller row instead.
-            return redirect(url_for("stacks_overview") + "#controller-row")
+            return redirect(url_for("stacks_overview") + "#controller-update")
         if not _csrf_ok():
             abort(400)
         st = service.self_update_status()
@@ -1258,8 +1258,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
               "warn" if r.ok else "err")
         for d in r.details:
             flash(d, "warn" if r.ok else "err")
-        return redirect(url_for("stacks_overview", cfg=stack_id)
-                        + "#stack-webserver-" + stack_id)
+        # Anchor the webserver panel itself (NOT ?cfg, which opens Settings). The panel reopens via
+        # the client's action memory / the hash, and the page focuses it.
+        return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
 
     @app.route("/webserver/expose", methods=["POST"])
     def webserver_expose():  # noqa: ANN202

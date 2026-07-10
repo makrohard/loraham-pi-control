@@ -289,6 +289,8 @@ def test_route_saves_and_redirects_to_the_panel(tmp_path):
     r = c.post("/stacks/meshcom/webserver",
                data={"_csrf": _csrf(c), "mode": "local", "port": "8444"})
     assert r.status_code == 302 and r.headers["Location"].endswith("#stack-webserver-meshcom")
+    # anchors the webserver panel, NOT ?cfg (which would wrongly open Settings)
+    assert "cfg=" not in r.headers["Location"]
     assert svc.config().stackweb["meshcom"].port == 8444
 
 

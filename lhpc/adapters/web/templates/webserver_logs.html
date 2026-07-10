@@ -3,7 +3,6 @@
 {% block content %}
   {# LHPC-managed nginx front-end logs (on disk under the runtime root). Static tail — reload to
      refresh; no polling and no liveness probe (the controller-owned component is read-only). #}
-  <p><a href="{{ url_for('stacks_overview') }}#webserver-row">&larr; back to Webserver</a></p>
   <div class="card">
     <header>
       <h2>Webserver logs <span class="pill">nginx {{ src }}</span></h2>

@@ -21,8 +21,8 @@
      force-opens it against a stale sessionStorage map, and data-force-scroll makes stacks_state.js
      scroll here (see A in the plan) — the reason lives in the banners below, not only in the top
      flash, which scrolls out of view. #}
-  <details class="advcfg" id="stack-install-{{ g.stack.id }}" open
-    {%- if request.args.get('inst') == g.stack.id %} data-force-open="1" data-force-scroll="1"{% endif %}>
+  <details class="advcfg" id="stack-install-{{ g.stack.id }}"
+    {%- if request.args.get('inst') == g.stack.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
     <summary>Install</summary>
     <div class="body">
       {% if g.installed and g.has_source %}

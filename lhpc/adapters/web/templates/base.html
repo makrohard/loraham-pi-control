@@ -11,7 +11,7 @@
     <div class="wrap header-wrap">
       <div class="header-top">
         <h1><a href="{{ url_for('dashboard') }}" class="home" title="Dashboard (home)">LoRaHAM&nbsp;Pi&nbsp;Control</a></h1>
-        <a href="{{ url_for('stacks_overview') }}" class="apps-link">Apps</a>
+        <a href="{{ url_for('stacks_overview') }}" class="apps-link">Stacks</a>
       </div>
     </div>
   </header>
@@ -26,7 +26,7 @@
   </div>
   <footer class="site-footer">
     <a href="https://github.com/makrohard/loraham-pi-control" target="_blank" rel="noopener">LoRaHAM Pi Control</a>
-    <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-row" class="update-link">Update &rarr;</a>{% endif %}
+    <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-update" class="update-link">Update &rarr;</a>{% endif %}
     <div class="sub">Local operator console · {{ runtime_root|default('') }}</div>
   </footer>
   <script src="{{ url_for('static', filename='copy.js') }}" defer></script>
