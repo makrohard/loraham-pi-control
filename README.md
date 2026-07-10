@@ -109,6 +109,7 @@ lhpc explain <stack>         # components, start order, resources
 
 lhpc install <stack> --yes   # adopt/verify source
 lhpc build <stack>           # build
+lhpc config <stack> call W1ABC  # set a stack setting (e.g. callsign) — validated
 lhpc stack start <stack>     # start (auto-starts the daemon if the stack needs it)
 lhpc stack stop <stack>      # stop
 lhpc logs <stack>            # tail a component log
@@ -121,7 +122,7 @@ lhpc update | uninstall <stack>
 ```
 
 Mutating commands print a plan and require `--yes` (or a confirmation) before they
-act. TX is never implicit.
+act. TX is never implicit. Full command reference: [`docs/cli.md`](docs/cli.md).
 
 ## Web console
 

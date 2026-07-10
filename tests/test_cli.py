@@ -221,3 +221,206 @@ def test_install_all_default_source_is_dev(monkeypatch, capsys):
                         (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
     cli_main.main(["install-all", "--yes"])
     assert seen and seen[0] == "dev"
+
+
+# --------------------------------------------------------------------------------------------------
+# `lhpc config` — per-stack settings + operator identity (the reported gap)
+# --------------------------------------------------------------------------------------------------
+
+def _rt(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    main(["bootstrap", "--yes"])
+    capsys.readouterr()
+
+
+def test_config_list_marks_identity(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom"]) == 0
+    out = capsys.readouterr().out
+    assert "mc_callsign" in out and "*" in out and "identity" in out
+
+
+def test_config_set_and_show(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "mc_callsign", "W1ABC-7"]) == 0
+    capsys.readouterr()
+    assert main(["config", "meshcom", "mc_callsign"]) == 0
+    assert "W1ABC-7" in capsys.readouterr().out
+
+
+def test_config_set_invalid_value_rejected(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "mc_callsign", "bad!!call"]) == 1
+    assert "invalid callsign" in capsys.readouterr().out
+
+
+def test_config_set_n0call_warns(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "mc_callsign", "N0CALL"]) == 0
+    out = capsys.readouterr().out
+    assert "WARN" in out and "valid callsign is required" in out
+
+
+def test_config_unknown_param(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "nosuchparam"]) == 1
+    assert "unknown parameter" in capsys.readouterr().out
+
+
+def test_config_unknown_stack(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "does-not-exist", "call", "W1ABC"]) == 1
+    assert "unknown stack" in capsys.readouterr().out
+
+
+def test_config_operator_partial_update_preserves(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "operator", "--callsign", "W1ABC"]) == 0
+    assert main(["config", "operator", "--locator", "JN58"]) == 0     # must not clear callsign
+    from lhpc.core.services import ControllerService
+    op = ControllerService().config().operator
+    assert op.callsign == "W1ABC" and op.locator == "JN58"
+
+
+def test_config_operator_reserved_rejects_positional(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "operator", "call", "X"]) == 2
+    assert "only --callsign/--locator" in capsys.readouterr().out
+
+
+def test_config_stack_rejects_operator_flags(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "--callsign", "X"]) == 2
+    assert "apply only to 'lhpc config operator'" in capsys.readouterr().out
+
+
+def test_config_conflicting_modes_rejected(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "meshcom", "--reset", "mc_callsign", "X"]) == 2
+    assert "conflicting options" in capsys.readouterr().out
+
+
+def test_config_daemon_param_unknown_key_rejected(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "daemon", "--daemon-param", "NOPE=1"]) == 2
+    assert "unknown daemon parameter" in capsys.readouterr().out
+
+
+def test_config_daemon_param_saves(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["config", "daemon", "--daemon-param", "TXMODE=DIRECT"]) == 0
+    assert "saved daemon params" in capsys.readouterr().out
+
+
+def test_config_ambiguous_param_refuses_without_mutating():
+    # No stack in the shipped manifest has a duplicated param name, so drive the guard directly with
+    # a fake service: a bare name owned by two components must REFUSE (print component.param) and
+    # never call save_config_bundle.
+    import argparse
+    from lhpc.adapters.cli import main as cli_main
+    from lhpc.core.services import ActionResult
+
+    class _Fake:
+        def __init__(self):
+            self.saved = []
+
+        def stack(self, s):
+            return object()
+
+        def config_param_fields(self, stack, band):
+            return [{"component": "a", "name": "call", "kind": "run", "key": "a.call", "default": ""},
+                    {"component": "b", "name": "call", "kind": "run", "key": "b.call", "default": ""}]
+
+        def config_param_groups(self, stack, band):
+            return []
+
+        def save_config_bundle(self, *a, **k):
+            self.saved.append((a, k))
+            return ActionResult(True, "should not happen")
+
+    fake = _Fake()
+    args = argparse.Namespace(stack="x", param="call", value="V", band="", reset=False,
+                              daemon_param=None, apply_daemon=False, reset_daemon=False,
+                              callsign=None, locator=None, yes=False)
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli_main._cmd_config(fake, args)
+    out = buf.getvalue()
+    assert rc == 1 and "a.call" in out and "b.call" in out
+    assert fake.saved == []                                  # NO mutation on ambiguity
+
+
+# --------------------------------------------------------------------------------------------------
+# restart, source-check, known-working, and the broken-hint regression guard
+# --------------------------------------------------------------------------------------------------
+
+def test_stack_restart_is_a_command(tmp_path, monkeypatch, capsys):
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["stack", "restart", "meshcom"]) == 0        # not argparse rc 2
+    assert "Restart plan" in capsys.readouterr().out
+
+
+def test_source_check_and_known_working_dispatch(monkeypatch, capsys):
+    from lhpc.core.services import ControllerService, ActionResult
+    monkeypatch.setattr(ControllerService, "source_check",
+                        lambda self, t="": ActionResult(True, "sources checked"))
+    monkeypatch.setattr(ControllerService, "confirm_known_working",
+                        lambda self, s: ActionResult(True, "recorded known-working"))
+    assert main(["source-check"]) == 0
+    assert "sources checked" in capsys.readouterr().out
+    assert main(["known-working", "meshcom"]) == 0
+    assert "recorded known-working" in capsys.readouterr().out
+
+
+def test_identity_hint_points_at_a_real_command(tmp_path, monkeypatch):
+    # The reported bug: the callsign-failure hint pointed at `lhpc config <stack>`, which argparse
+    # rejected. The fixed hint must be a copy-pasteable, PARSEABLE command.
+    import shlex
+    _ = monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    main(["bootstrap", "--yes"])
+    from lhpc.core.services import ControllerService
+    from lhpc.adapters.cli.main import build_parser
+    hint = ControllerService()._identity_config_hint("chat")
+    assert hint.startswith("lhpc config chat ")
+    toks = [("W1ABC" if t.startswith("<") else t) for t in shlex.split(hint)[1:]]
+    build_parser().parse_args(toks)                          # must NOT SystemExit
+
+
+def test_all_cli_hints_reference_real_commands():
+    # Regression guard: every `lhpc ...` command hint in the service/CLI source must resolve to a
+    # registered command (and subcommand). Catches a future hint pointing at a phantom command.
+    import re
+    import pathlib
+    import argparse
+    from lhpc.adapters.cli.main import build_parser
+    subs = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)][0]
+    top = set(subs.choices)
+    suba = {}
+    for n in ("stack", "webserver"):
+        inner = [a for a in subs.choices[n]._actions if isinstance(a, argparse._SubParsersAction)]
+        if inner:
+            suba[n] = set(inner[0].choices)
+    root = pathlib.Path(__file__).resolve().parents[1]
+    text = "".join((root / r).read_text()
+                   for r in ("lhpc/core/services.py", "lhpc/adapters/cli/main.py"))
+    bad = set()
+    # Only strings that BEGIN with `lhpc ` (a command hint) — excludes mid-sentence prose.
+    for m in re.finditer(r'''["']\s*lhpc ([a-z][a-z-]+)(?: ([a-z][a-z-]+))?''', text):
+        cmd, sub = m.group(1), m.group(2)
+        if cmd not in top:
+            bad.add(cmd)
+        elif cmd in suba and sub and sub not in suba[cmd]:
+            bad.add(f"{cmd} {sub}")
+    assert not bad, f"hints referencing unknown commands: {sorted(bad)}"
+
+
+def test_docs_cli_lists_every_command():
+    import argparse
+    import pathlib
+    from lhpc.adapters.cli.main import build_parser
+    subs = [a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction)][0]
+    doc = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "cli.md").read_text()
+    missing = [c for c in subs.choices if f"### {c}" not in doc]
+    assert not missing, f"docs/cli.md missing sections for: {missing}"

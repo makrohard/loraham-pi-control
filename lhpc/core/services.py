@@ -3276,7 +3276,7 @@ class ControllerService:
             if not id_ok:
                 return ActionResult(False, f"Cannot start '{target}': {id_msg}",
                                     data={"enforce_field": id_field},
-                                    next_commands=[f"lhpc config {target}"])
+                                    next_commands=[self._identity_config_hint(target)])
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
@@ -6473,6 +6473,33 @@ class ControllerService:
                             details=self._apply_hints(target, modes) + remote_notes,
                             next_commands=[f"lhpc stack start {target}"])
 
+    def set_operator_identity(self, callsign: str | None = None,
+                              locator: str | None = None) -> ActionResult:
+        """Set the GLOBAL operator identity (`[operator]` in local.toml) — the shared callsign every
+        licensed stack inherits via each identity param's `{callsign}` default. PARTIAL UPDATE: an
+        argument left as None PRESERVES the current stored value (so `--callsign` alone never clears
+        the locator, and vice versa); an explicit empty string clears that field. Validates format."""
+        from . import config as _config
+        from .validators import callsign as _v_call, locator as _v_loc, ValidationError
+        if callsign is None and locator is None:
+            return ActionResult(False, "nothing to set — pass --callsign and/or --locator")
+        cur = self.config().operator
+        new_call = cur.callsign if callsign is None else callsign
+        new_loc = cur.locator if locator is None else locator
+        try:
+            new_call = _v_call(new_call).upper()
+            new_loc = _v_loc(new_loc)
+        except ValidationError as exc:
+            return ActionResult(False, f"invalid operator identity: {exc}")
+        try:
+            _config.save_operator_config(self._paths, new_call, new_loc)
+        except (OSError, _config.ConfigError) as exc:
+            return ActionResult(False, f"could not save operator identity: {exc}")
+        self._invalidate_config()
+        return ActionResult(True, "operator identity saved",
+                            details=[f"  callsign = {new_call or '(unset)'}",
+                                     f"  locator  = {new_loc or '(unset)'}"])
+
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
         path (`save_config_bundle`). `values` keys are the same canonical API keys the Config/Start
@@ -6634,6 +6661,17 @@ class ControllerService:
                     return rec                       # licensed wins immediately
                 found = found or rec                 # remember an unlicensed node field
         return found
+
+    def _identity_config_hint(self, target: str) -> str:
+        """A copy-pasteable `lhpc config` command that sets the callsign/node param blocking a start,
+        e.g. `lhpc config chat call <YOURCALL>`. Falls back to the plain list command if the target
+        has no identity field. The token is `_param_key`, so a duplicated name is already qualified."""
+        idf = self._identity_field(target)
+        if not idf:
+            return f"lhpc config {target}"
+        token = self._param_key(target, idf["kind"], idf["comp"], idf["name"])
+        placeholder = "<YOURCALL>" if idf["enforce"] == "licensed" else "<NODENAME>"
+        return f"lhpc config {target} {token} {placeholder}"
 
     def _identity_value(self, target: str, band: str, params, file_over) -> str:
         """The value of the SELECTED identity field, read from ITS OWN component (never masked by a
@@ -6825,7 +6863,7 @@ class ControllerService:
         if not id_ok:
             return None, None, ActionResult(
                 False, f"Cannot {op} '{target}': {id_msg}", data={"enforce_field": id_field},
-                next_commands=[f"lhpc config {target}"])
+                next_commands=[self._identity_config_hint(target)])
         return params, file_over, None
 
     def write_config_files(self, target: str, band: str = "",

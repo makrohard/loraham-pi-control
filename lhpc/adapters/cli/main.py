@@ -100,6 +100,142 @@ def _render(result: ActionResult) -> int:
     return 0 if result.ok else 1
 
 
+def _config_rows(svc, stack: str, band: str) -> list[dict]:
+    """Flatten config_param_groups into rows (each carries component/name/value/default/is_identity)."""
+    return [r for g in svc.config_param_groups(stack, band) for r in g["rows"]]
+
+
+def _config_list(svc, stack: str, band: str) -> int:
+    groups = svc.config_param_groups(stack, band)
+    if not groups:
+        print(f"OK    '{stack}' has no configurable parameters")
+        return 0
+    print(f"OK    {stack} settings" + (f" (band {band})" if band else "") + ":")
+    has_identity = False
+    for g in groups:
+        print(f"  [{g['name']}]")
+        for r in g["rows"]:
+            has_identity = has_identity or r["is_identity"]
+            mark = " *" if r["is_identity"] else ""
+            val = r["value"] if r["value"] != "" else "(empty)"
+            dflt = "" if r["value"] == r["default"] else f"   [default: {r['default'] or '(empty)'}]"
+            print(f"    {r['name']}{mark} = {val}{dflt}")
+    if has_identity:
+        print("\n  * identity (callsign/node) — required to start a licensed stack")
+    print(f"  set a value:  lhpc config {stack} <param> <value>")
+    return 0
+
+
+def _cmd_config(svc, args) -> int:
+    """Dispatch `lhpc config` — operator identity, or per-stack settings/daemon params.
+    Enforces: operator is a reserved subcommand; modes are mutually exclusive; no ambiguous set."""
+    stack = args.stack
+    op_flags = args.callsign is not None or args.locator is not None
+
+    # ----- operator (RESERVED — never a stack id) -----
+    if stack == "operator":
+        stray = [n for n, v in (("<param>", args.param), ("--reset", args.reset),
+                                 ("--band", args.band), ("--daemon-param", args.daemon_param),
+                                 ("--apply-daemon", args.apply_daemon),
+                                 ("--reset-daemon", args.reset_daemon)) if v]
+        if stray:
+            print("ERR   'lhpc config operator' takes only --callsign/--locator "
+                  f"(remove: {', '.join(stray)})")
+            return 2
+        if not op_flags:
+            op = svc.config().operator
+            print("OK    operator identity:")
+            print(f"  callsign = {op.callsign or '(unset)'}")
+            print(f"  locator  = {op.locator or '(unset)'}")
+            return 0
+        return _render(svc.set_operator_identity(callsign=args.callsign, locator=args.locator))
+
+    # ----- stack config -----
+    if op_flags:
+        print("ERR   --callsign/--locator apply only to 'lhpc config operator'")
+        return 2
+    if svc.stack(stack) is None:
+        print(f"ERR   unknown stack '{stack}'")
+        print("\nNext:\n  lhpc list")
+        return 1
+
+    daemon_mode = bool(args.daemon_param or args.apply_daemon or args.reset_daemon)
+    positional = args.param is not None and args.param != "list"
+    active = [m for m, on in (("--reset", args.reset), ("daemon-params", daemon_mode),
+                              ("<param>", positional)) if on]
+    if len(active) > 1:
+        print(f"ERR   conflicting options ({', '.join(active)}) — use one at a time")
+        return 2
+
+    if args.reset:
+        if not args.yes and not _confirm(f"\nReset {stack} settings to defaults? [y/N] "):
+            print("Aborted.")
+            return 0
+        return _render(svc.reset_config(stack, args.band))
+
+    if daemon_mode:
+        if sum(bool(x) for x in (args.daemon_param, args.apply_daemon, args.reset_daemon)) > 1:
+            print("ERR   choose one of --daemon-param / --apply-daemon / --reset-daemon")
+            return 2
+        if args.apply_daemon:
+            return _render(svc.apply_daemon_params(stack, args.band))
+        if args.reset_daemon:
+            return _render(svc.reset_daemon_params(stack, args.band))
+        from lhpc.core import daemon_params as _dp
+        vals = {}
+        for kv in args.daemon_param:
+            key, sep, val = kv.partition("=")
+            key = key.strip()
+            if not sep or not key:
+                print(f"ERR   bad --daemon-param {kv!r} — expected KEY=VALUE")
+                return 2
+            if key not in _dp.ALL_PARAMS:
+                print(f"ERR   unknown daemon parameter {key!r} — valid: {', '.join(_dp.ALL_PARAMS)}")
+                return 2
+            vals[key] = val.strip()
+        return _render(svc.save_daemon_params(stack, args.band, vals))
+
+    if args.param is None or args.param == "list":
+        return _config_list(svc, stack, args.band)
+
+    # show / set a single parameter — resolve the name to its canonical key (NO first-match).
+    fields = svc.config_param_fields(stack, args.band)
+    matches = [f for f in fields
+               if f["name"] == args.param or f"{f['component']}.{f['name']}" == args.param]
+    if not matches:
+        print(f"ERR   unknown parameter '{args.param}' for '{stack}'")
+        print(f"\nNext:\n  lhpc config {stack}")
+        return 1
+    if len(matches) > 1:
+        forms = sorted({f"{f['component']}.{f['name']}" for f in matches})
+        print(f"ERR   '{args.param}' is declared by multiple components — qualify it:")
+        for form in forms:
+            print(f"    lhpc config {stack} {form} <value>")
+        return 1
+    fld = matches[0]
+    row = next((r for r in _config_rows(svc, stack, args.band)
+                if r["component"] == fld["component"] and r["name"] == fld["name"]), None)
+
+    if args.value is None:                                  # show
+        print(f"OK    {stack} · {fld['component']} · {fld['name']}")
+        if row is not None:
+            print(f"  value   = {row['value'] or '(empty)'}")
+            print(f"  default = {row['default'] or '(empty)'}")
+            if row.get("choices"):
+                print(f"  choices = {', '.join(row['choices'])}")
+        print(f"\n  set:  lhpc config {stack} {args.param} <value>")
+        return 0
+
+    key = f"file_{fld['key']}" if fld["kind"] == "file" else fld["key"]
+    res = svc.save_config_bundle(stack, values={key: args.value}, band=args.band)
+    rc = _render(res)
+    if res.ok and row is not None and row["is_identity"]:
+        ok, _f, msg = svc.enforce_identity(stack, args.band)
+        if not ok:
+            print(f"WARN  {msg}")
+    return rc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lhpc",
@@ -150,13 +286,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_help = sub.add_parser("help", help="Detailed help on a topic")
     p_help.add_argument("topic", nargs="?", help="safety | resources | profiles")
 
-    # Start/stop a stack or component.
-    p_stack = sub.add_parser("stack", help="Start/stop a stack or component")
+    # Start/stop/restart a stack or component.
+    p_stack = sub.add_parser("stack", help="Start/stop/restart a stack or component")
     stack_sub = p_stack.add_subparsers(dest="stack_action", metavar="<action>")
-    for action in ("start", "stop"):
+    for action in ("start", "stop", "restart"):
         sp = stack_sub.add_parser(action, help=f"{action.capitalize()} a stack/component")
         sp.add_argument("stack", help="Stack or component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
+
+    # Per-stack settings (callsign/params/daemon params) and the global operator identity.
+    p_cfg = sub.add_parser("config", help="View or set stack settings and operator identity")
+    p_cfg.add_argument("stack", help="Stack id, or 'operator' for the global callsign/locator")
+    p_cfg.add_argument("param", nargs="?",
+                       help="Parameter name (or 'list'); omit to list all. Qualify a duplicated "
+                            "name as <component>.<param>")
+    p_cfg.add_argument("value", nargs="?", help="New value; omit to show the current value")
+    p_cfg.add_argument("--band", default="", help="Band for band-switchable stacks (e.g. 433 or 868)")
+    p_cfg.add_argument("--reset", action="store_true", help="Reset this stack's settings to defaults")
+    p_cfg.add_argument("--yes", action="store_true", help="Apply --reset without confirmation")
+    p_cfg.add_argument("--daemon-param", metavar="KEY=VALUE", action="append", dest="daemon_param",
+                       help="Persist a band-scoped daemon parameter override, e.g. TXMODE=DIRECT "
+                            "(repeatable)")
+    p_cfg.add_argument("--apply-daemon", action="store_true", dest="apply_daemon",
+                       help="Apply this stack's saved daemon params to the running daemon")
+    p_cfg.add_argument("--reset-daemon", action="store_true", dest="reset_daemon",
+                       help="Reset this stack's daemon parameters")
+    p_cfg.add_argument("--callsign", help="(operator only) set the global operator callsign")
+    p_cfg.add_argument("--locator", help="(operator only) set the global Maidenhead locator")
 
     p_build = sub.add_parser("build", help="Build a stack/component")
     p_build.add_argument("target", help="Stack/component id")
@@ -193,6 +349,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_test.add_argument("--tx", action="store_true", help="TX-capable test (real RF, dummy loads)")
     p_test.add_argument("--yes", action="store_true", help="Non-interactive confirm")
 
+    p_sc = sub.add_parser("source-check",
+                          help="Check managed sources for available upstream updates (read-only)")
+    p_sc.add_argument("target", nargs="?", default="", help="Limit to one stack/component")
+
+    p_kw = sub.add_parser("known-working",
+                          help="Record a running stack's current commits as a known-good composition")
+    p_kw.add_argument("stack", help="Stack id")
+
     p_su = sub.add_parser("self-update", help="Check for / apply lhpc's own update")
     p_su.add_argument("--apply", action="store_true",
                       help="Apply the update (fast-forward); restart the console afterwards")
@@ -216,7 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
                             "(no TCP listener; requires waitress)")
 
     # Webserver (controller-owned): production Nginx + Waitress + TLS/mTLS control.
+    # Vocabulary mirrors the service enums exactly (config.WEBSERVER_ACCESS_MODES / STACKWEB_MODES
+    # / WEBSERVER_SCHEMES) so the CLI never diverges from the web UI / service.
     _WS_MODES = ["local-open-remote-auth", "auth-everywhere", "no-auth"]
+    _STACKWEB_MODES = ["local", "lan", "public"]
+    _WS_SCHEMES = ["https", "http"]
     p_ws = sub.add_parser("webserver", help="Production webserver (HTTPS/mTLS) control")
     ws_sub = p_ws.add_subparsers(dest="ws_cmd")
     ws_sub.add_parser("status", help="Cached webserver status (read-only)")
@@ -235,25 +403,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_init.add_argument("--confirm-recreate", action="store_true",
                            help="Confirm DESTRUCTIVE re-init when a CA already exists")
     p_ws_cfg = ws_sub.add_parser("configure", help="Set desired webserver config")
-    p_ws_cfg.add_argument("--bind")
-    p_ws_cfg.add_argument("--port", type=int)
-    p_ws_cfg.add_argument("--access-mode", choices=_WS_MODES)
-    p_ws_cfg.add_argument("--dns", action="append")
-    p_ws_cfg.add_argument("--ip", action="append")
+    p_ws_cfg.add_argument("--bind", help="Listen address: 127.0.0.1 (loopback) or 0.0.0.0 (remote)")
+    p_ws_cfg.add_argument("--port", type=int, help="HTTPS port (default 8443)")
+    p_ws_cfg.add_argument("--access-mode", choices=_WS_MODES,
+                          help="Client-certificate policy: " + " | ".join(_WS_MODES))
+    p_ws_cfg.add_argument("--dns", action="append", help="DNS SAN for the server cert (repeatable)")
+    p_ws_cfg.add_argument("--ip", action="append", help="IP SAN for the server cert (repeatable)")
     p_ws_exp = ws_sub.add_parser("expose", help="Enable remote exposure (opt-in)")
     p_ws_exp.add_argument("--cidr", action="append", default=[], help="Allowed source CIDR (repeatable)")
-    p_ws_exp.add_argument("--access-mode", choices=_WS_MODES)
+    p_ws_exp.add_argument("--access-mode", choices=_WS_MODES,
+                          help="Client-certificate policy: " + " | ".join(_WS_MODES))
     p_ws_exp.add_argument("--confirm-phrase", default="",
                           help="Type 'enable-remote' to confirm; 'enable-remote-danger' for the "
                                "elevated case (public 0.0.0.0/0 or a no-auth remote mode)")
+    # Per-stack web-UI reverse proxy exposure (mirrors `expose`'s two-level confirmation).
+    p_ws_proxy = ws_sub.add_parser("proxy",
+                                   help="Configure a stack's web-UI reverse proxy (intent; run apply)")
+    p_ws_proxy.add_argument("stack", help="Stack id whose web UI to proxy")
+    p_ws_proxy.add_argument("--mode", choices=_STACKWEB_MODES,
+                            help="local = loopback only; lan = listen, only --cidr passes; "
+                                 "public = 0.0.0.0/0 (elevated)")
+    p_ws_proxy.add_argument("--port", type=int, help="Public listener port (0 = not proxied)")
+    p_ws_proxy.add_argument("--scheme", choices=_WS_SCHEMES, help="Public listener scheme")
+    p_ws_proxy.add_argument("--access-mode", choices=_WS_MODES,
+                            help="Client-certificate policy: " + " | ".join(_WS_MODES))
+    p_ws_proxy.add_argument("--cidr", action="append", default=[],
+                            help="Allowed source CIDR for lan mode (repeatable)")
+    p_ws_proxy.add_argument("--confirm-phrase", default="",
+                            help="'enable-remote' to confirm lan/public; 'enable-remote-danger' for "
+                                 "public 0.0.0.0/0, a no-auth mode, or an http listener")
     p_ws_cert = ws_sub.add_parser("cert", help="Client (device) certificate lifecycle")
     cert_sub = p_ws_cert.add_subparsers(dest="cert_cmd")
     cert_sub.add_parser("list", help="List client certificates")
+    _CERT_HELP = {
+        "issue": "Issue a new client certificate + a one-time .p12 passphrase",
+        "reissue": "Rotate a client certificate + a new one-time .p12 passphrase",
+        "discard-export": "Delete the stored .p12 export for a label (keeps the certificate)",
+    }
     for _n in ("issue", "reissue", "discard-export"):
-        _pc = cert_sub.add_parser(_n)
-        _pc.add_argument("label")
-    p_ws_rev = cert_sub.add_parser("revoke")
-    p_ws_rev.add_argument("label")
+        _pc = cert_sub.add_parser(_n, help=_CERT_HELP[_n])
+        _pc.add_argument("label", help="Client certificate label (device name)")
+    p_cert_exp = cert_sub.add_parser("export",
+                                     help="Write a device's PKCS#12 (.p12) bundle to a file")
+    p_cert_exp.add_argument("label", help="Client certificate label to export")
+    p_cert_exp.add_argument("path", help="Destination file (created mode 0600; refuses to overwrite)")
+    p_cert_exp.add_argument("--force", action="store_true",
+                            help="Overwrite an existing destination file")
+    p_ws_rev = cert_sub.add_parser("revoke", help="Revoke a client certificate (updates the CRL)")
+    p_ws_rev.add_argument("label", help="Client certificate label to revoke")
     p_ws_rev.add_argument("--confirm-label", default="",
                           help="Must equal <label> to confirm revocation")
 
@@ -318,14 +515,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if args.stack_action == "start":
-            return _apply_flow(lambda a: svc.run_action("start", args.stack, apply=a),
-                               yes=args.yes)
-        if args.stack_action == "stop":
-            return _apply_flow(lambda a: svc.run_action("stop", args.stack, apply=a),
-                               yes=args.yes)
+        if args.stack_action in ("start", "stop", "restart"):
+            return _apply_flow(
+                lambda a: svc.run_action(args.stack_action, args.stack, apply=a), yes=args.yes)
         parser.parse_args(["stack", "--help"])
         return 1
+    if args.command == "config":
+        return _cmd_config(svc, args)
     if args.command == "build":
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)
     if args.command == "logs":
@@ -353,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
         return _apply_flow(
             lambda a: svc.test(args.target, tx=args.tx, apply=a),
             yes=args.yes)
+    if args.command == "source-check":
+        return _render(svc.source_check(args.target))
+    if args.command == "known-working":
+        return _render(svc.confirm_known_working(args.stack))
     if args.command == "self-update":
         if args.run_service:
             # Unit plumbing (non-interactive) — mode is read from the claimed request marker.
@@ -413,6 +613,13 @@ def main(argv: list[str] | None = None) -> int:
                 args.cidr, access_mode=args.access_mode,
                 confirm=phrase in ("enable-remote", "enable-remote-danger"),
                 confirm_public=(phrase == "enable-remote-danger")))
+        if cmd == "proxy":
+            phrase = (args.confirm_phrase or "").strip()
+            return _render(svc.stack_web_configure(
+                args.stack, mode=args.mode, port=args.port, scheme=args.scheme,
+                access_mode=args.access_mode, cidrs=(args.cidr or None),
+                confirm=phrase in ("enable-remote", "enable-remote-danger"),
+                confirm_public=(phrase == "enable-remote-danger")))
         if cmd == "disable-remote":
             return _render(svc.webserver_disable_remote())
         if cmd == "reset-defaults":
@@ -457,7 +664,29 @@ def main(argv: list[str] | None = None) -> int:
                 return _render(svc.webserver_cert_revoke(args.label))
             if cc == "discard-export":
                 return _render(svc.webserver_cert_discard_export(args.label))
-        print("Usage: lhpc webserver {status|verify|init|configure|expose|disable-remote|"
+            if cc == "export":
+                import os as _os
+                data = svc.webserver_cert_export_bytes(args.label)
+                if not data:
+                    print(f"ERR   no export bundle for '{args.label}' — issue or reissue it first")
+                    return 1
+                flags = _os.O_WRONLY | _os.O_CREAT | (_os.O_TRUNC if args.force else _os.O_EXCL)
+                try:
+                    fd = _os.open(args.path, flags, 0o600)
+                except FileExistsError:
+                    print(f"ERR   refusing to overwrite existing '{args.path}' — pass --force")
+                    return 1
+                except OSError as exc:
+                    print(f"ERR   could not write '{args.path}': {exc}")
+                    return 1
+                # Enforce 0600 even when overwriting (O_CREAT mode applies only on creation), and
+                # never echo the bundle bytes/passphrase — only the path + size.
+                _os.fchmod(fd, 0o600)
+                with _os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+                print(f"OK    wrote {len(data)} bytes to {args.path} (mode 0600)")
+                return 0
+        print("Usage: lhpc webserver {status|verify|init|configure|expose|proxy|disable-remote|"
               "reset-defaults|tls-renew|logs|cert ...}")
         return 2
 
