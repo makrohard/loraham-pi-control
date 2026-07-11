@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loraham-pi-control"
-version = "0.1.2"
+version = "0.1.4"
 description = "Terminal-first and web-enabled installer/updater/configurator/orchestrator for LoRaHAM Pi stacks"
 readme = "README.md"
 requires-python = ">=3.11"
