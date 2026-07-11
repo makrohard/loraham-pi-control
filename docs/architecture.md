@@ -49,13 +49,23 @@ lhpc/
     install.py           # adopt/verify/update sources (git, pinned)
     jobs.py              # detached job spawn + bounded log tail
     probes/              # read-only bounded probes (process, net, unixsock, systemd, source, hardware)
-    services.py          # ControllerService — the single API the adapters call
+    services.py            # ControllerService facade: init/state/locks, manifest, status,
+                           # bootstrap/install plans — composes the service_* mixins below
+    service_base.py        # shared types: ActionResult, ConfigWrite, typed exceptions
+    service_webserver.py   # nginx/TLS/mTLS console + per-stack proxy operations
+    service_selfupdate.py  # controller self-update orchestration + updater integration
+    service_bulk.py        # install-all / bulk-run driver, markers, log streaming
+    service_maintenance.py # source update / uninstall / clean / known-working / source-check
+    service_params.py      # param & config resolution, saves, config-file generation, daemon params
+    service_lifecycle_ops.py # start/stop/restart/build/test orchestration, jobs, dashboards
   adapters/
     cli/main.py          # argparse  → ControllerService → render ActionResult
     web/app.py           # Flask HTTP → ControllerService → server-rendered pages
 ```
 
 Dependency rule: `adapters/*` import `core/*`; `core/*` never imports `adapters/*`.
+Adapters import only `lhpc.core.services`; the `service_*` modules are internal mixins of
+`ControllerService` (composed by the `services.py` facade) and are never imported by adapters.
 Both adapters are thin — they parse input, call one `ControllerService` method, and
 render the returned `ActionResult`. The web adapter calls the service directly
 (never shells out to the CLI), so validation, gating and results are identical.
