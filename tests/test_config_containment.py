@@ -147,3 +147,19 @@ def test_source_base_read_reads_real_file(tmp_path):
     src = tmp_path / "src" / "app"; src.mkdir(parents=True)
     (src / "base.toml").write_text("k = 1\n")
     assert svc._read_source_base(_comp(), "base.toml") == "k = 1\n"
+
+
+def test_stack_config_path_escaping_stacks_dir_raises_validationerror(tmp_path):
+    # F-9: config/stacks/ swapped to a symlink pointing OUTSIDE the runtime root is refused by the
+    # house no-follow containment (paths.under) and surfaced as the ValidationError the service layer
+    # already catches — a bare PathContainmentError would escape callers as a 500.
+    from lhpc.core import config
+    from lhpc.core.validators import ValidationError
+    rt = tmp_path / "rt"; (rt / "config").mkdir(parents=True)
+    outside = tmp_path / "outside"; outside.mkdir()
+    os.symlink(outside, rt / "config" / "stacks")           # stacks/ escapes the runtime root
+    paths = Paths(runtime_root=rt)
+    with pytest.raises(ValidationError):
+        config._stack_config_path(paths, "voice")
+    with pytest.raises(ValidationError):                    # public entry routes through the same helper
+        config.load_stack_config(paths, "voice")

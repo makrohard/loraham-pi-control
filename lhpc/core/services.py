@@ -41,8 +41,6 @@ from .config import (
     load_config,
     load_stack_config,
     render_keyval,
-    save_component_remote,
-    save_stack_config,
     update_toml,
     update_yaml,
 )
@@ -372,7 +370,6 @@ class ControllerService:
     def _stack_web_proxies(self) -> list:
         """The `StackWebProxy` list for nginx rendering — only stacks with a port set (enabled)."""
         from . import webserver as _ws
-        from .config import StackWebConfig
         cfgs = self.config().stackweb
         out = []
         for sid in self.stack_web_eligible():
@@ -384,6 +381,20 @@ class ControllerService:
                 continue
             out.append(_ws.StackWebProxy(swc, up[0], up[1]))
         return out
+
+    def _stack_listen_scope(self, swc) -> str:
+        """Effective network scope of a stackweb proxy's OWN nginx listen port, read live from
+        /proc/net/tcp: "exposed" (answers off-loopback — reachable on the LAN), "loopback" (127.0.0.1
+        only), or "absent" (nothing listening — proxy disabled, not applied, or nginx down).
+
+        This is the GROUND TRUTH for what a browser can actually reach, independent of the DESIRED
+        `mode`: a stale 0.0.0.0 listener left after a `local`-mode save without Apply reads "exposed",
+        and a `public` mode not yet applied reads "loopback". Used so the dashboard link and the stack's
+        Webserver header never lie about reachability."""
+        from . import webserver as _ws
+        if swc is None or not getattr(swc, "enabled", False) or not getattr(swc, "port", 0):
+            return "absent"
+        return _ws.listener_scope(self._system, swc.port)
 
     def stack_web_view(self, stack_id: str) -> dict:
         """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is
@@ -404,6 +415,7 @@ class ControllerService:
         except (IndexError, ValueError):
             upstream_port = 0
         scope = _ws.listener_scope(self._system, upstream_port) if upstream_port else "absent"
+        listen_scope = self._stack_listen_scope(swc)
         plan = _ws.plan_stack_exposure(swc, ws.port, used)
         return {
             "stack_id": stack_id, "cfg": swc, "upstream_address": address,
@@ -415,6 +427,11 @@ class ControllerService:
             # The raw upstream port answers on a non-loopback interface: our proxy's auth is
             # bypassable, whatever `mode` says. Standing fact, shown on every load.
             "bypassable": scope == "exposed",
+            # EFFECTIVE listen scope of the proxy port + whether it disagrees with the desired mode
+            # (i.e. an Apply is still pending to make the live listener match the saved intent).
+            "listen_scope": listen_scope,
+            "pending": bool(swc.enabled and (
+                listen_scope == "absent" or swc.remote != (listen_scope == "exposed"))),
         }
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
@@ -1422,7 +1439,7 @@ class ControllerService:
         per-source-group reconciliation, dependency-aware continuation, durable run
         marker at every transition (a write failure STOPS the run), disclosed TX phase.
         stdout (`emit`) is the narrative log."""
-        from . import bulk as bulk_mod, reslock
+        from . import bulk as bulk_mod
         if source not in self.SOURCE_CHOICES:
             return ActionResult(False, f"Unknown source choice {source!r}.")
         if tx and not tests:
@@ -2407,11 +2424,14 @@ class ControllerService:
         details.append(f"  systemctl: {hardware.check_systemctl(sys, user=False).detail}")
         details.append(f"  systemctl --user: {hardware.check_systemctl(sys, user=True).detail}")
         # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
+        # A missing REQUIRED dep makes doctor non-OK (machine-actionable); optional ones never do.
+        required_missing = False
         for grp in self.controller_system_deps():
             for d in grp["deps"]:
                 if d["satisfied"]:
                     state = "present"
                 elif d["required"]:
+                    required_missing = True
                     state = f"MISSING — {d['install']}" if d["install"] else "MISSING"
                 else:
                     hint = f": {d['install']}" if d["install"] else ""
@@ -2465,8 +2485,10 @@ class ControllerService:
         details.append(f"  observed resource conflicts: {len(observed)}")
 
         return ActionResult(
-            ok=True,
-            summary="doctor: bounded local checks only (no init, no network, no RF).",
+            ok=not required_missing,
+            summary=("doctor: required dependencies missing; bounded local checks only "
+                     "(no init, no network, no RF)." if required_missing
+                     else "doctor: bounded local checks only (no init, no network, no RF)."),
             details=details,
             next_commands=["lhpc status", "lhpc status --versions"],
         )
@@ -3079,7 +3101,6 @@ class ControllerService:
         order = self._run_order(target)
         if not order:
             return []
-        cfg_band = self._config_band(target, band)
         order_ids = {c.id for _, c in order}
         target_stack = self.stack_of(target)
         target_is_daemon = bool(target_stack and self.stack(target_stack)
@@ -4041,7 +4062,7 @@ class ControllerService:
         radio params the daemon does not echo are reported SENT (never claimed as read-back
         confirmed). Valid settings were persisted first (by the caller); a live-apply failure never
         rolls that back — `data['persisted']` says so."""
-        from . import daemon_params, reslock
+        from . import reslock
         sid = self._owner_stack_id(target)                       # owner-stack profile + lock scope
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
@@ -5954,11 +5975,11 @@ class ControllerService:
         PTYs) that are currently present — NOT internal transport sockets.
 
         A proxied web UI links to the PROXY, not to its loopback upstream: handing a remote browser
-        `http://127.0.0.1:18083` is a dead link. A `local`-mode proxy is still loopback, so it is
-        linked but labelled as such rather than silently failing for a remote reader."""
+        `http://127.0.0.1:18083` is a dead link. The proxy link tracks the proxy's EFFECTIVE listen
+        scope (via `_stack_listen_scope`), so a loopback-only proxy is labelled as such and a
+        remotely-bound one links to the request host — reflecting reality, not the saved `mode`."""
         if status is None:
             return []
-        from . import webserver as _ws
         swc = self.config().stackweb.get(stack_id) if stack_id else None
         out = []
         for obs in status.endpoints:
@@ -5969,20 +5990,28 @@ class ControllerService:
             link = f"{sp.scheme}://{sp.address}" if is_web else ""
             label = sp.description or sp.address
             entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
-                     "link": link, "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False}
+                     "link": link, "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
+                     "pending": False}
             if is_web and swc is not None and swc.enabled:
-                urls = _ws.stack_ui_urls(swc)
-                if urls:
-                    entry["link"] = urls[0]          # loopback/local_ip fallback (CLI, no request)
-                    if swc.remote:
-                        # A remote-facing proxy is reached at the SAME host the browser used for the
-                        # console, on the proxy's port — the adapter fills the host from request.host
-                        # so the link is correct however the operator reached the console (LAN IP,
-                        # hostname, WAN). `local_ip()` can only guess one interface.
-                        entry.update(proxy_port=swc.port, proxy_scheme=swc.scheme,
-                                     proxy_remote=True)
-                    else:
-                        entry["label"] = f"{label} (local only)"
+                # Truthful link: the reachable path is the nginx proxy on swc.port, so key off its
+                # EFFECTIVE live scope (/proc/net/tcp), NOT the desired `mode`. A stale 0.0.0.0
+                # listener (local-mode saved but Apply not run) is honestly shown as remote; a
+                # public mode not yet applied is honestly shown as loopback. `pending` marks any such
+                # desired-vs-live drift (an Apply will reconcile it).
+                entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # loopback/no-request fallback
+                scope = self._stack_listen_scope(swc)
+                if scope == "exposed":
+                    # Reached at the SAME host the browser used for the console (the adapter fills it
+                    # from request.host, correct via LAN IP / hostname / WAN — `local_ip()` can only
+                    # guess one interface).
+                    entry.update(proxy_port=swc.port, proxy_scheme=swc.scheme, proxy_remote=True,
+                                 pending=not swc.remote)
+                elif scope == "loopback":
+                    entry["label"] = f"{label} (local only)"
+                    entry["pending"] = bool(swc.remote)
+                else:                                # absent: proxy enabled but not listening yet
+                    entry["label"] = f"{label} (proxy not active — Apply)"
+                    entry["pending"] = True
             out.append(entry)
         return out
 
@@ -6887,7 +6916,6 @@ class ControllerService:
         `overrides` are EPHEMERAL per-start file values ({param_name: value}, this launch only,
         never persisted) taken from the Start-confirm 'Stack parameters' panel — validated by the
         caller via `_normalize_file_overrides` before they reach here."""
-        from pathlib import Path
         op = self.config().operator
         runtime = str(self._paths.runtime_root)
         cfg_band = self._config_band(target, band)
@@ -6971,7 +6999,6 @@ class ControllerService:
         Returns a small result with `.status` ("ok"/"failed"/"linked-readonly"),
         `.policy`, `.path`, `.detail`, `.detail_path`."""
         from types import SimpleNamespace
-        runtime = str(self._paths.runtime_root)
         if raw == "{runtime}" or raw.startswith("{runtime}/"):
             rel = raw[len("{runtime}"):].lstrip("/")
             parts = [p for p in rel.split("/") if p]
@@ -7215,8 +7242,10 @@ class ControllerService:
         from . import webserver as _ws
         fs = self._system.fs
 
-        def onpath(cmd: str) -> bool:
-            return shutil.which(cmd) is not None
+        def have_cmd(cmd: str, *fallbacks: str) -> bool:
+            # PATH first (a managed unit's PATH can be narrower than a shell), then safe absolute-path
+            # fallbacks via the injectable fs.exists — NEVER executes the binary. No subprocess.
+            return shutil.which(cmd) is not None or any(fs.exists(p) for p in fallbacks)
 
         def have_mod(mod: str) -> bool:
             try:
@@ -7224,22 +7253,26 @@ class ControllerService:
             except (ImportError, ValueError):
                 return False
 
-        nginx_ok = onpath("nginx") or fs.exists("/usr/sbin/nginx") or fs.exists("/usr/bin/nginx")
         return [
             {"title": "System packages (apt)", "deps": [
-                {"what": "git", "required": True, "satisfied": onpath("git"),
+                {"what": "git", "required": True,
+                 "satisfied": have_cmd("git", "/usr/bin/git", "/usr/local/bin/git"),
                  "install": "sudo apt install -y git",
                  "purpose": "self-update fast-forward, initial clone, source adoption"},
-                {"what": "nginx", "required": False, "satisfied": nginx_ok,
+                {"what": "nginx", "required": False,
+                 "satisfied": have_cmd("nginx", "/usr/sbin/nginx", "/usr/bin/nginx"),
                  "install": _ws.NGINX_INSTALL_CMD,
                  "purpose": "HTTPS + mTLS front-end — the console runs over loopback without it; "
                             "exposed/HTTPS access needs it"},
-                {"what": "systemd (systemctl, loginctl)", "required": False, "satisfied": onpath("systemctl"),
+                {"what": "systemd (systemctl, loginctl)", "required": False,
+                 "satisfied": (have_cmd("systemctl", "/usr/bin/systemctl", "/bin/systemctl")
+                               and have_cmd("loginctl", "/usr/bin/loginctl", "/bin/loginctl")),
                  "install": "",
                  "purpose": "the managed --user service + boot linger (only for managed-service mode)"},
             ]},
             {"title": "Install-time", "deps": [
-                {"what": "python3 (>= 3.11)", "required": True, "satisfied": onpath("python3"),
+                {"what": "python3 (>= 3.11)", "required": True,
+                 "satisfied": have_cmd("python3", "/usr/bin/python3", "/usr/local/bin/python3"),
                  "install": "sudo apt install -y python3", "purpose": "the controller runtime"},
                 {"what": "python3-venv", "required": True,
                  "satisfied": have_mod("venv") and have_mod("ensurepip"),
@@ -7523,7 +7556,8 @@ class ControllerService:
                 refusal.insert(0, "These paths would be discarded by 'overwrite local changes':")
             return ActionResult(False, res["message"], details=refusal, data=data)
         if res.get("cleanup_failed"):                        # updated, but untracked cleanup failed -> partial
-            details = [res.get("cleanup_error", ""), "Restart the web console after cleaning up:"]
+            details = [res.get("cleanup_error", ""), instr.get("note", ""),
+                       "Restart the web console after cleaning up:"]
             details += ["  " + c for c in instr["commands"]]
             details += [n for n in (migrated_note, pending_note) if n]
             return ActionResult(False, res["message"], data=data,
@@ -7531,7 +7565,8 @@ class ControllerService:
         if res.get("already"):                               # nothing to update; may have recovered pending
             details = tuple(n for n in (migrated_note, pending_note) if n)
             return ActionResult(True, res["message"], data=data, details=details)
-        details = ["Restart the web console to load the new version:"]
+        details = [n for n in (instr.get("note", ""),) if n]
+        details += ["Restart the web console to load the new version:"]
         details += ["  " + c for c in instr["commands"]]
         details += [n for n in (migrated_note, pending_note) if n]
         return ActionResult(True, res["message"], data=data, details=tuple(details),
@@ -8917,7 +8952,7 @@ class ControllerService:
                 if (to_remove or orphans) else [],
                 data={"changes": len(to_remove) + len(orphans)})
 
-        from . import reslock, source_fs, source_registry
+        from . import reslock, source_registry
         inst = self._installer()
         out, ok = [], True
         # SERIALIZATION ORDER (whole applied operation): config-stable shared lock ->

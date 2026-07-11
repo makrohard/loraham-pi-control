@@ -8,6 +8,12 @@
 <details class="advcfg" id="stack-webserver-{{ g.stack.id }}">
   <summary>Webserver (web UI proxy)
     {% if sw.cfg.enabled %}<span class="pill">{{ sw.cfg.mode }} · :{{ sw.cfg.port }}</span>
+      {# LIVE listener scope (from /proc/net/tcp) — the truth, which may differ from the saved mode
+         until Apply is run. #}
+      {% if sw.listen_scope == 'exposed' %}<span class="pill">live: all interfaces</span>
+      {% elif sw.listen_scope == 'loopback' %}<span class="pill">live: loopback</span>
+      {% else %}<span class="ver ver-yellow">live: not listening</span>{% endif %}
+      {% if sw.pending %}<span class="ver ver-red">pending Apply</span>{% endif %}
     {% else %}<span class="pill">not proxied</span>{% endif %}
     {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
   </summary>
@@ -26,8 +32,15 @@
     <p class="summary">Reverse-proxies <code>{{ sw.upstream_scheme }}://{{ sw.upstream_address }}</code>
       through nginx, reusing the console's client certificate.
       {% if sw.cfg.enabled %}
-        Reachable at {% for u in sw.urls %}<code>{{ u }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
-        after <code>lhpc webserver apply</code>.
+        {% if sw.listen_scope == 'exposed' %}
+          <strong>Currently listening on port {{ sw.cfg.port }} on all interfaces</strong> — reachable from the LAN now.
+        {% elif sw.listen_scope == 'loopback' %}
+          <strong>Currently listening on <code>127.0.0.1:{{ sw.cfg.port }}</code> only</strong> — loopback, not reachable remotely.
+        {% else %}
+          <strong>Port {{ sw.cfg.port }} is not listening</strong> — nginx is not running or the config has not been applied.
+        {% endif %}
+        {% if sw.pending %}The live listener does not match the saved <code>{{ sw.cfg.mode }}</code> mode yet — run
+          <code>lhpc webserver apply</code> (or Apply below) to reconcile.{% endif %}
       {% else %}
         Set a port (suggested <code>{{ sw.suggested_port }}</code>) to enable the proxy.
       {% endif %}</p>

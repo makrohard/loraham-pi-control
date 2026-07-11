@@ -1,4 +1,5 @@
 """§7 — required vs optional post-start, and §5 typed start aggregation."""
+import pytest
 
 import time
 
@@ -74,6 +75,7 @@ def _igate_svc(tmp_path):
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
 
+@pytest.mark.needs_session
 def test_start_required_post_start_failure_is_unverified(tmp_path, monkeypatch):
     # Drives ControllerService.start() and exercises the CALLER's handling of the typed
     # required-post-start result (the bug was the caller using a nonexistent Outcome.ok).
@@ -89,6 +91,7 @@ def test_start_required_post_start_failure_is_unverified(tmp_path, monkeypatch):
                for r in res.results)
 
 
+@pytest.mark.needs_session
 def test_start_required_post_start_success_verifies(tmp_path, monkeypatch):
     svc = _igate_svc(tmp_path)
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
@@ -190,6 +193,7 @@ def test_optional_post_start_containment_failure_is_typed(tmp_path):
     assert not any(outside.iterdir())                # nothing created outside the root
 
 
+@pytest.mark.needs_session
 def test_optional_post_start_success_is_scheduled(tmp_path):
     # A real, ownable runner (long retry window) bound to a verified main schedules ok.
     life = _real_life(tmp_path)
@@ -203,6 +207,7 @@ def test_optional_post_start_success_is_scheduled(tmp_path):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_ephemeral_start_params_override_saved_config(tmp_path, monkeypatch):
     # A value set on the start-confirm page (ephemeral params) must reach the launch + post-start,
     # overriding the saved config — fixes meshtastic NodeName / igate params not applying on start.
@@ -391,6 +396,7 @@ def _record_main(life, comp, stack):
     return p
 
 
+@pytest.mark.needs_session
 def test_post_runner_owned_and_cancellable(tmp_path):
     life = _real_life(tmp_path)
     comp, stack = _pr(_free_port())
@@ -409,6 +415,7 @@ def test_post_runner_owned_and_cancellable(tmp_path):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_restart_isolation_old_runner_payload_not_delivered(tmp_path):
     import socket
     life = _real_life(tmp_path)
@@ -433,6 +440,7 @@ def test_restart_isolation_old_runner_payload_not_delivered(tmp_path):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_optional_post_start_scheduling_non_gating(tmp_path):
     # scheduling a runner returns ok (non-gating) and does not block on the retry window.
     life = _real_life(tmp_path)
@@ -489,10 +497,12 @@ def _run_bound(binding, port, data="P\n", repeat=4, interval=1, timeout=18):
     return got["b"]
 
 
+@pytest.mark.needs_session
 def test_bound_runner_sends_when_main_matches():
     assert _run_bound(_self_binding(), _free_port()) == b"P\n"
 
 
+@pytest.mark.needs_session
 def test_bound_runner_skips_send_when_main_starttime_changed():
     # main pid reused with a NEW start time (crash + later launch) -> old runner must not send.
     assert _run_bound(_self_binding(main_starttime=1), _free_port()) == b""
@@ -512,6 +522,7 @@ def _main_leader(life, port):
     return p, comp, stack
 
 
+@pytest.mark.needs_session
 def test_post_runner_binding_recorded_from_main(tmp_path):
     life = _real_life(tmp_path)
     p, comp, stack = _main_leader(life, _free_port())
@@ -524,6 +535,7 @@ def test_post_runner_binding_recorded_from_main(tmp_path):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_stop_aborts_main_when_runner_unverified(tmp_path, monkeypatch):
     life = _real_life(tmp_path)
     p, comp, stack = _main_leader(life, _free_port())
@@ -541,6 +553,7 @@ def test_stop_aborts_main_when_runner_unverified(tmp_path, monkeypatch):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_stale_record_removal_failure_is_unverified(tmp_path, monkeypatch):
     life = _real_life(tmp_path)
     p, comp, stack = _main_leader(life, _free_port())
@@ -556,6 +569,7 @@ def test_stale_record_removal_failure_is_unverified(tmp_path, monkeypatch):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_spawn_record_fail_verified_cleanup_leaves_no_runner(tmp_path, monkeypatch):
     # A real gated runner is spawned; record write fails -> it is never armed and exits doing
     # nothing; proven cessation -> typed scheduling failure, no runner left.
@@ -602,6 +616,7 @@ def _pr_main(port):
     return comp, Stack(id="prs", name="prs", components=(comp,), main="pr")
 
 
+@pytest.mark.needs_session
 def test_preflight_cancels_stale_runner_before_new_start(tmp_path):
     life = _real_life(tmp_path)
     comp, stack = _pr_main(_free_port())
@@ -618,6 +633,7 @@ def test_preflight_cancels_stale_runner_before_new_start(tmp_path):
         prior.terminate(); prior.wait()
 
 
+@pytest.mark.needs_session
 def test_preflight_blocks_new_start_when_stale_runner_unverifiable(tmp_path, monkeypatch):
     life = _real_life(tmp_path)
     comp, stack = _pr_main(_free_port())
@@ -635,6 +651,7 @@ def test_preflight_blocks_new_start_when_stale_runner_unverifiable(tmp_path, mon
         prior.terminate(); prior.wait()
 
 
+@pytest.mark.needs_session
 def test_main_exit_before_post_scheduling_yields_no_unbound_runner(tmp_path):
     # The main dies between launch/readiness and post scheduling -> no verified main -> the runner
     # is never spawned (it can never come up unbound).
@@ -690,6 +707,7 @@ def test_bound_runner_skips_send_when_main_zombie(tmp_path):
         z.wait()
 
 
+@pytest.mark.needs_session
 def test_bound_runner_skips_send_when_session_or_group_changed():
     assert _run_bound(_self_binding(main_sid=999999), _free_port()) == b""
     assert _run_bound(_self_binding(main_pgid=999999), _free_port()) == b""
@@ -757,6 +775,7 @@ def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
     assert stamps[2] - stamps[1] >= 0.8
 
 
+@pytest.mark.needs_session
 def test_arm_write_exception_is_not_scheduled(tmp_path, monkeypatch):
     # os.write raising AFTER a durable record: no payload, not scheduled, record removed once
     # cessation is proven.
@@ -784,6 +803,7 @@ def test_arm_write_exception_is_not_scheduled(tmp_path, monkeypatch):
         srv.close(); p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_arm_write_zero_is_not_scheduled(tmp_path, monkeypatch):
     # A short/zero write (os.write -> 0) is treated identically: non-success, record removed.
     life = _real_life(tmp_path)
@@ -798,6 +818,7 @@ def test_arm_write_zero_is_not_scheduled(tmp_path, monkeypatch):
         p.terminate(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_arm_failure_uncertain_cessation_is_unverified(tmp_path, monkeypatch):
     # Arm fails and the runner's cessation cannot be proven: unverified=True, not scheduled, and the
     # ownership record is RETAINED.

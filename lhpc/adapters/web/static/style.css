@@ -163,8 +163,12 @@ a.iface { text-decoration: none; color: var(--brand); }
 .complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
 /* Web-UI links read as buttons — give them breathing room above and below. */
 .complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
-/* Separate the per-stack webserver Apply button from the Save button above it. */
-.ws-apply { margin-top: .6rem; }
+/* Separate the per-stack webserver Apply button from the Save button above it, and render Apply as a
+   SOLID blue button like Save (it sits in `.act`, which would otherwise make it outlined). */
+.ws-apply { margin-top: 1rem; }
+/* `.act.ws-apply` (both classes the form carries) out-specifies the `.act button` outline rule below. */
+.act.ws-apply button { background: var(--brand); color: #fff; border: 1px solid var(--brand); }
+.act.ws-apply button:hover { background: #0a4f93; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
                    padding: .1rem .5rem; cursor: pointer; }

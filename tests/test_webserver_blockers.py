@@ -216,11 +216,17 @@ def test_host_echo_can_never_reflect_markup():
     assert len(_host_echo("a" * 500)) <= 80
 
 
-def test_illegal_host_header_is_blanked_by_werkzeug_and_not_rejected(tmp_path):
-    # Documents the pre-existing contract: an unparseable Host yields request.host == "", which the
-    # policy treats as "no Host claim" rather than a rejection. Nothing downstream trusts it.
+def test_illegal_host_header_is_safe_200_or_400(tmp_path):
+    # An unparseable Host must be SAFE either way and must never 500 or raise. Werkzeug's behaviour
+    # varies across 3.1.x: <=3.1.7 fail-closes with 400 ("Host 'a<b.com' is not trusted"); 3.1.8 blanks
+    # request.host to "" -> 200. Both are fine — nothing downstream trusts a Host claim. (A fresh
+    # install resolves the newest Werkzeug flask allows, so this is 200 in practice.)
     c = _productive(tmp_path)
-    assert c.get("/stacks", headers={"Host": "a<b.com"}).status_code == 200
+    try:
+        r = c.get("/stacks", headers={"Host": "a<b.com"})
+    except Exception as exc:                     # some Werkzeug 3.1.x raise in the test client
+        raise AssertionError(f"illegal Host raised instead of returning a status: {exc!r}") from exc
+    assert r.status_code in (200, 400)           # 200 = blanked, 400 = fail-closed; never 500
 
 
 # --- blocker 1 regression + secret hygiene ----------------------------------

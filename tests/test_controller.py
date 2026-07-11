@@ -802,6 +802,40 @@ def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
              "install": "sudo apt install -y nginx", "purpose": "HTTPS console"},
         ]},
     ])
-    out = "\n".join(svc.doctor().details)
+    res = svc.doctor()
+    out = "\n".join(res.details)
     assert "git: MISSING — sudo apt install -y git" in out          # required -> problem
     assert "nginx: not installed (optional" in out                  # optional -> not alarming
+    # P2-1: a missing REQUIRED dep makes doctor non-OK and says so in the summary.
+    assert res.ok is False
+    assert res.summary == ("doctor: required dependencies missing; bounded local checks only "
+                           "(no init, no network, no RF).")
+
+
+def test_doctor_ok_when_only_optional_dep_missing(tmp_path, monkeypatch):
+    # Optional-only missing (nginx) must NOT flip doctor.ok, and the summary stays the base string.
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "controller_system_deps", lambda: [
+        {"title": "System packages (apt)", "deps": [
+            {"what": "git", "required": True, "satisfied": True,
+             "install": "sudo apt install -y git", "purpose": "self-update"},
+            {"what": "nginx", "required": False, "satisfied": False,
+             "install": "sudo apt install -y nginx", "purpose": "HTTPS console"},
+        ]},
+    ])
+    res = svc.doctor()
+    assert res.ok is True
+    assert res.summary == "doctor: bounded local checks only (no init, no network, no RF)."
+
+
+def test_controller_dep_detection_uses_abspath_fallback(tmp_path, monkeypatch):
+    # P2-2: a narrow-PATH managed service where shutil.which() finds nothing still detects a tool that
+    # exists at a normal absolute path (via the injectable fs.exists) — and never runs a subprocess.
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda c: None)                     # PATH sees nothing
+    for cmd, present_path in (("git", "/usr/bin/git"), ("nginx", "/usr/sbin/nginx")):
+        svc = ControllerService(system=FakeSystem(paths={present_path}).system,
+                                paths=Paths(runtime_root=tmp_path))
+        flat = {d["what"]: d for g in svc.controller_system_deps() for d in g["deps"]}
+        assert flat[cmd]["satisfied"] is True, cmd

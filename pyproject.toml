@@ -16,6 +16,9 @@ authors = [{ name = "Johannes Loose (DJ0CHE)", email = "410733@gmail.com" }]
 # Jinja templates — a small, dependency-light foundation (no SPA, no Node).
 dependencies = [
     "flask>=3,<4",
+    # Werkzeug ships with Flask; pin the floor that introduced strict Host parsing so the
+    # illegal-Host contract (test_illegal_host_header_is_safe_200_or_400) is well-defined.
+    "werkzeug>=3.1",
     # Productive WSGI server (mandatory — the web console must not fall back to
     # Flask's development server for productive serving).
     "waitress>=3,<4",

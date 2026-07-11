@@ -845,9 +845,14 @@ def restart_instructions(deps_changed: bool = False, deps_sync_cmd: str = "") ->
     is used."""
     under_systemd = bool(os.environ.get("INVOCATION_ID"))
     cmds: list[str] = []
+    note = ""
     if deps_changed:
         sync = deps_sync_cmd or "pip install -e ."
-        cmds.append(f"{sync}    # dependencies changed in this update")
+        cmds.append(f"{sync}    # sync the venv FIRST — dependencies changed (LHPC never installs "
+                    "packages for you)")
+        note = ("Dependencies changed in this update — run the venv sync command before (or with) the "
+                "restart; otherwise the controller is updated but missing Python deps. LHPC never "
+                "installs system or Python packages for you.")
     cmds.append("systemctl --user restart lhpc-web" if under_systemd
                 else "stop the console (Ctrl-C) and re-run:  lhpc web")
-    return {"under_systemd": under_systemd, "deps_changed": deps_changed, "commands": cmds}
+    return {"under_systemd": under_systemd, "deps_changed": deps_changed, "commands": cmds, "note": note}

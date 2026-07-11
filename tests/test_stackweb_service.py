@@ -215,27 +215,26 @@ def test_unproxied_web_ui_keeps_its_honest_loopback_literal(tmp_path):
     assert itf["link"] == "http://127.0.0.1:18083"          # it really IS loopback-only
 
 
-def test_lan_proxied_ui_links_the_reachable_address(tmp_path, monkeypatch):
-    from lhpc.core import webserver as _ws
-    monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.95")
-    svc = _svc(tmp_path)
+def test_applied_remote_proxy_links_the_reachable_address(tmp_path):
+    # An APPLIED lan/public proxy: nginx is live on 0.0.0.0:8444, so the interface is truthfully
+    # remote (proxy_remote), in sync with the saved mode (not pending). The dashboard fills the host
+    # from request.host; the CLI/no-request fallback link is loopback.
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
     svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.178.0/24"],
                             confirm=True)
     itf = _ifaces(svc, "meshcom")[0]
-    assert itf["link"] == "https://192.168.178.95:8444/"     # local_ip fallback (CLI / no request)
-    assert "local only" not in itf["label"]
-    # …but the dashboard prefers the host the browser actually used (request.host):
     assert itf["proxy_remote"] and itf["proxy_port"] == 8444 and itf["proxy_scheme"] == "https"
+    assert "local only" not in itf["label"] and itf["pending"] is False
+    assert itf["link"] == "https://127.0.0.1:8444/"          # loopback fallback (dash uses request.host)
 
 
 def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_path):
     # Accessed remotely at a LAN IP or a hostname -> the mesh link points at THAT host on the proxy
-    # port, not a guessed local_ip(). Proves item #2.
+    # port. Requires the proxy to be LIVE on all interfaces (applied), which the injected listener models.
     from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
     svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
                             confirm=True, confirm_public=True)
-    # give meshcom a running http endpoint so the interface renders on the dash
     app = create_app(lambda: svc)
     app.config["SESSION_COOKIE_SECURE"] = False   # allow an arbitrary Host through in tests
     c = app.test_client()
@@ -243,6 +242,37 @@ def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_pat
     # the console host, meshcom's proxy port — regardless of local_ip
     if "MeshCom" in body and "iface-web" in body:
         assert "https://pi.example.lan:8444/" in body
+
+
+def test_drift_local_mode_but_exposed_listener_is_truthfully_remote(tmp_path):
+    # THE REPORTED BUG: config says `local`, but the running nginx still holds 0.0.0.0:8444 (mode was
+    # changed to local without an Apply). The link must reflect REALITY — remotely reachable, flagged
+    # `pending` — never a misleading "local only".
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
+    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    itf = _ifaces(svc, "meshcom")[0]
+    assert itf["proxy_remote"] and itf["proxy_port"] == 8444
+    assert "local only" not in itf["label"] and itf["pending"] is True
+
+
+def test_drift_remote_mode_not_yet_applied_is_loopback_and_pending(tmp_path):
+    # Saved `public` but Apply not run: the live listener is still 127.0.0.1 -> honestly loopback, and
+    # flagged pending so the operator knows to Apply.
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 1}])
+    svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True)
+    itf = _ifaces(svc, "meshtastic")[0]
+    assert not itf["proxy_remote"] and "local only" in itf["label"] and itf["pending"] is True
+
+
+def test_enabled_proxy_with_no_listener_is_marked_not_active(tmp_path):
+    # Enabled in config but nothing listening on the port (nginx down / never applied): honest
+    # "not active", pending an Apply — not a dead remote link.
+    svc = _svc(tmp_path)                                      # no listeners
+    svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True)
+    itf = _ifaces(svc, "meshcom")[0]
+    assert not itf["proxy_remote"] and "Apply" in itf["label"] and itf["pending"] is True
 
 
 def test_url_host_helper_is_ipv6_safe():
@@ -253,14 +283,43 @@ def test_url_host_helper_is_ipv6_safe():
     assert _url_host("::1") == "[::1]"
 
 
-def test_local_proxied_ui_is_labelled_local_only(tmp_path, monkeypatch):
-    from lhpc.core import webserver as _ws
-    monkeypatch.setattr(_ws, "local_ip", lambda: "192.168.178.95")
-    svc = _svc(tmp_path)
+def test_applied_local_proxy_is_labelled_local_only(tmp_path):
+    # Applied local proxy: nginx is live on 127.0.0.1:8444 -> loopback, honestly labelled, not pending.
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8444, "inode": 1}])
     svc.stack_web_configure("meshcom", mode="local", port=8444)
     itf = _ifaces(svc, "meshcom")[0]
     assert itf["link"] == "https://127.0.0.1:8444/"
-    assert "local only" in itf["label"]                     # tells a remote reader why it won't open
+    assert "local only" in itf["label"] and itf["pending"] is False   # honest for a remote reader
+
+
+def test_view_reports_live_listen_scope_and_pending_drift(tmp_path):
+    # stack_web_view carries the EFFECTIVE listen scope + a pending flag for the stacks-page header.
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
+    svc.stack_web_configure("meshcom", mode="local", port=8444)   # desired local, live exposed -> drift
+    v = svc.stack_web_view("meshcom")
+    assert v["listen_scope"] == "exposed" and v["pending"] is True
+
+
+def test_view_in_sync_public_is_not_pending(tmp_path):
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8445, "inode": 1}])
+    svc.stack_web_configure("meshtastic", mode="public", port=8445, cidrs=["0.0.0.0/0"],
+                            confirm=True, confirm_public=True)
+    v = svc.stack_web_view("meshtastic")
+    assert v["listen_scope"] == "exposed" and v["pending"] is False
+
+
+def test_view_disabled_proxy_is_absent_and_not_pending(tmp_path):
+    v = _svc(tmp_path).stack_web_view("meshcom")             # never configured
+    assert v["listen_scope"] == "absent" and v["pending"] is False
+
+
+def test_stacks_panel_shows_live_scope_and_pending_apply(tmp_path):
+    # The stacks-page Webserver header states the LIVE scope + a pending-Apply flag on drift.
+    app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
+    svc.stack_web_configure("meshcom", mode="local", port=8444)
+    body = app.test_client().get("/stacks").get_data(as_text=True)
+    assert 'id="stack-webserver-meshcom"' in body
+    assert "live: all interfaces" in body and "pending Apply" in body
 
 
 # --- web routes ---------------------------------------------------------------------------------------

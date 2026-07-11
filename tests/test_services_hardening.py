@@ -1,4 +1,5 @@
 """Regressions for the round-1 hardening audit findings not covered elsewhere."""
+import pytest
 import os
 import time
 
@@ -156,6 +157,7 @@ def test_active_jobs_unchanged_stale_marker_removed(tmp_path):
     assert not (jobs / "stale.job").exists()                   # and cleaned up
 
 
+@pytest.mark.needs_session
 def test_active_jobs_live_marker_protects_its_log(tmp_path):
     # P2 #5: a valid live identity-backed marker still protects its log from retention.
     import time as _t

@@ -55,6 +55,7 @@ def _leader(reaper):
     return p
 
 
+@pytest.mark.needs_session
 def test_owned_session_leader_is_verified_and_stopped(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -74,6 +75,7 @@ def test_manual_matching_process_without_record_is_not_killed(tmp_path, reaper):
     assert life._proc_alive(p.pid)                         # untouched
 
 
+@pytest.mark.needs_session
 def test_stale_record_after_process_exit_is_cleaned_not_blocked(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -87,6 +89,7 @@ def test_stale_record_after_process_exit_is_cleaned_not_blocked(tmp_path, reaper
     assert life.owned_records("loraham-daemon") == []      # stale record cleaned up
 
 
+@pytest.mark.needs_session
 def test_wrong_start_time_fails_verification(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -112,6 +115,7 @@ def test_controller_own_group_is_never_signalled(tmp_path, reaper):
     assert life._proc_alive(p.pid)
 
 
+@pytest.mark.needs_session
 def test_per_band_records_are_independent(tmp_path, reaper):
     life = _life(tmp_path)
     a, b = _leader(reaper), _leader(reaper)
@@ -125,6 +129,7 @@ def test_per_band_records_are_independent(tmp_path, reaper):
     assert len(life.owned_records("loraham-daemon", band="433")) == 2   # 433 + both
 
 
+@pytest.mark.needs_session
 def test_record_is_restrictive_permissions(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -135,6 +140,7 @@ def test_record_is_restrictive_permissions(tmp_path, reaper):
 
 # --- §6.1/§6.2/§6.4 ownership retention + PID-reuse-safe cleanup --------------
 
+@pytest.mark.needs_session
 def test_ceased_process_with_lingering_endpoint_retains_record(tmp_path, reaper, monkeypatch):
     # Process ceases on SIGTERM, but a ready=true endpoint still answers (even after the
     # bounded grace poll) -> the stop is ENDPOINT_STILL_PRESENT and the record is retained.
@@ -162,6 +168,7 @@ def test_no_record_but_lingering_endpoint_is_not_already_stopped(tmp_path, monke
     assert res.outcome.value == "endpoint_still_present" and not res.ok
 
 
+@pytest.mark.needs_session
 def test_lingering_endpoint_that_closes_within_grace_converges_to_stopped(tmp_path, reaper, monkeypatch):
     # THE meshcom-qemu case: the tracked wrapper (run.sh) ceases immediately while its
     # backgrounded child (qemu) takes a beat to close its 12323 listener. The endpoint is
@@ -221,6 +228,7 @@ def test_terminate_unobserved_refuses_on_identity_mismatch(tmp_path, reaper):
     assert life._proc_alive(p.pid)                         # untouched
 
 
+@pytest.mark.needs_session
 def test_terminate_unobserved_signals_matching_identity(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -346,6 +354,7 @@ def test_empty_cmdline_argv_rejected_despite_nonempty_digest(tmp_path, reaper, m
     assert life.record_launch(STACK, COMP, p.pid, band="both") is False
 
 
+@pytest.mark.needs_session
 def test_passed_identity_is_not_silently_resubstituted(tmp_path, reaper, monkeypatch):
     # When a complete identity is passed in, record_launch must use IT (not re-read a
     # weaker one). Make a re-read return None; the passed complete identity still records.
@@ -359,6 +368,7 @@ def test_passed_identity_is_not_silently_resubstituted(tmp_path, reaper, monkeyp
 
 # --- P0 stop truth: transient /proc, confirmed reuse, removal failure --------
 
+@pytest.mark.needs_session
 def test_transient_proc_error_during_stop_retains_record(tmp_path, reaper, monkeypatch):
     from lhpc.core.outcomes import Outcome
     import lhpc.core.lifecycle as L
@@ -377,6 +387,7 @@ def test_transient_proc_error_during_stop_retains_record(tmp_path, reaper, monke
     assert life.owned_records("loraham-daemon")             # record RETAINED as evidence
 
 
+@pytest.mark.needs_session
 def test_confirmed_pid_reuse_proves_cessation_without_signalling(tmp_path, reaper):
     # A record whose starttime no longer matches the live pid -> the original ceased
     # (PID reused). verify_owned must refuse to signal; _original_ceased proves cessation.
@@ -389,6 +400,7 @@ def test_confirmed_pid_reuse_proves_cessation_without_signalling(tmp_path, reape
     assert life._original_ceased(rec) is True               # reuse proves original gone
 
 
+@pytest.mark.needs_session
 def test_record_removal_failure_is_typed_unverified(tmp_path, reaper, monkeypatch):
     from lhpc.core.outcomes import Outcome
     life = _life(tmp_path)
@@ -423,6 +435,7 @@ def test_terminate_refuses_on_identity_mismatch(tmp_path, reaper):
         assert life._proc_alive(p.pid)
 
 
+@pytest.mark.needs_session
 def test_terminate_tolerates_exec_argv_change(tmp_path, reaper):
     # A legitimate later exec (e.g. env -> bash) changes exec/argv but NOT start time, so the
     # process is still safely cleanable (matches the accepted stable-identity ownership model).
@@ -434,6 +447,7 @@ def test_terminate_tolerates_exec_argv_change(tmp_path, reaper):
     assert not life._proc_alive(p.pid)
 
 
+@pytest.mark.needs_session
 def test_terminate_signals_and_verifies_with_complete_identity(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
@@ -460,6 +474,7 @@ def test_argv_confirms_exact_suffix_and_mismatch():
     assert not Lifecycle._argv_confirms(b"sh\x00run.sh\x00", [])   # empty intended never confirms
 
 
+@pytest.mark.needs_session
 def test_start_records_ownership_for_shebang_wrapper(tmp_path, reaper):
     # A run command that is a shebang SCRIPT which forks a child and waits (exactly the
     # meshcom-qemu `run.sh` shape) must still be OWNED: the launched pid is the
@@ -519,6 +534,7 @@ def test_reused_pid_between_spawn_and_persist_is_not_owned(tmp_path, reaper):
 
 # --- 3.2: a spawned job that cannot be marker-tracked is terminated, not orphaned --
 
+@pytest.mark.needs_session
 def test_untracked_job_spawn_is_terminated_not_orphaned(tmp_path, reaper, monkeypatch):
     from lhpc.core.services import ControllerService
     from lhpc.core import runtime_fs
@@ -539,6 +555,7 @@ def test_untracked_job_spawn_is_terminated_not_orphaned(tmp_path, reaper, monkey
     assert svc.active_jobs() == []                        # and never recorded as a job
 
 
+@pytest.mark.needs_session
 def test_stop_drops_reused_pid_record_without_signalling(tmp_path, reaper):
     # The reported bug's safety case: a record whose pid is ALIVE but is a REUSED pid
     # (recorded start time differs from the live process) is STALE. Stop must DROP it,
@@ -664,6 +681,7 @@ def test_symlinked_marker_leaf_not_active_and_no_crash(tmp_path):
     assert (d / "build-x.job").is_symlink()              # evidence retained
 
 
+@pytest.mark.needs_session
 def test_identity_tolerates_exec_change_same_starttime():
     # A process that exec's after launch (e.g. `#!/usr/bin/env bash`: env -> bash) changes its
     # exec/argv but NOT its start time. Ownership must still match (start time is reuse-proof);

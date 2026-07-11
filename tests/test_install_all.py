@@ -2,6 +2,7 @@
 semantics, durable run marker (write-failure aborts; interrupted derivation; ack), TX
 coupling, run_id-bound log access. Deterministic: FakeSystem + disposable roots + real tmp
 git repos where identity proof is exercised."""
+import pytest
 
 import json
 import os
@@ -125,6 +126,7 @@ def test_invalid_source_and_run_id_refused(tmp_path):
 
 # ---- dependency semantics + marker truthfulness ------------------------------------------
 
+@pytest.mark.needs_session
 def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeypatch):
     # FakeSystem: every clone fails -> daemon FAILS; every daemon-dependent stack is
     # BLOCKED (not attempted); meshtastic (independent) is attempted on its own and hits
@@ -147,6 +149,7 @@ def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeyp
     assert st["run_id"] and st["log"] == bulk_mod.log_name_for(st["run_id"]) + ".log"
 
 
+@pytest.mark.needs_session
 def test_marker_write_failure_stops_run(tmp_path, monkeypatch):
     _stub_frozen(monkeypatch)
     svc = _svc(tmp_path)
@@ -165,6 +168,7 @@ def test_marker_write_failure_stops_run(tmp_path, monkeypatch):
                for ln in lines)
 
 
+@pytest.mark.needs_session
 def test_running_component_refuses_with_zero_marker(tmp_path):
     svc = _svc(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
     r = svc.install_all(apply=True, emit=lambda s: None)
@@ -184,6 +188,7 @@ def _seed_marker(tmp_path, state="running", run_id="a" * 32):
     return paths, m
 
 
+@pytest.mark.needs_session
 def test_running_marker_with_dead_job_reads_interrupted(tmp_path):
     _seed_marker(tmp_path, "running")
     svc = _svc(tmp_path)
@@ -253,6 +258,7 @@ def test_ack_archives_marker_no_follow(tmp_path):
 
 # ---- lease boundary blocks concurrent ops ------------------------------------------------
 
+@pytest.mark.needs_session
 def test_boundary_blocks_concurrent_update_and_start(tmp_path):
     svc = _svc(tmp_path)
     src_paths = ["src/loraham-kiss-tnc", "src/loraham-daemon", "src/RadioLib"]
@@ -267,6 +273,7 @@ def test_boundary_blocks_concurrent_update_and_start(tmp_path):
     assert bulk_mod.read_lease(svc._paths)[0] == "absent"        # lease cleared on exit
 
 
+@pytest.mark.needs_session
 def test_bulk_ctx_validation_fails_closed(tmp_path):
     svc = _svc(tmp_path)
     foreign = bulk_mod.BulkOperationContext("d" * 32, ["src/loraham-kiss-tnc"])
@@ -417,6 +424,7 @@ def test_log_chunk_byte_cap(tmp_path):
     assert len(c2["data"]) == 100_000 - 64 * 1024
 
 
+@pytest.mark.needs_session
 def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
     # A benign non-mutating adopt outcome (status "skipped") must NOT mark a stack FAIL.
     # Linked stacks WITH declared build/test work are truthfully BLOCKED (their required
@@ -449,6 +457,7 @@ def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
     assert st["state"] == "completed" and r.ok
 
 
+@pytest.mark.needs_session
 def test_linked_stack_with_work_still_blocks(tmp_path, monkeypatch):
     # The linked-blocked semantics survive for SYNTHETIC linked components (legacy
     # manifests / direct construction) even though the shipped manifest has none.
@@ -501,6 +510,7 @@ def _happy_ops(monkeypatch):
                         ActionResult(True, "tested"))
 
 
+@pytest.mark.needs_session
 def test_blocked_rows_without_fail_are_not_success(tmp_path, monkeypatch):
     # Blocked rows only (no fail rows): the run is completed-with-failures, ok=False, and
     # the summary truthfully reports the successes that remain installed/built.
@@ -523,6 +533,7 @@ def test_blocked_rows_without_fail_are_not_success(tmp_path, monkeypatch):
     assert "1 blocked" in r.summary and "0 failed" in r.summary  # only the mocked kiss group
 
 
+@pytest.mark.needs_session
 def test_candidate_cleanup_failure_downgrades_run(tmp_path, monkeypatch):
     _happy_ops(monkeypatch)
     monkeypatch.setattr(ControllerService, "_retire_candidates_for_paths",
@@ -533,6 +544,7 @@ def test_candidate_cleanup_failure_downgrades_run(tmp_path, monkeypatch):
     assert svc.bulk_status()["state"] == "completed-with-failures"
 
 
+@pytest.mark.needs_session
 def test_lease_clear_failure_is_durable_incomplete(tmp_path, monkeypatch):
     # A failed lease clear after an otherwise clean run: ok=False, the marker is a durable
     # completed-with-failures naming the cleanup, and a new run is BLOCKED.
@@ -599,6 +611,7 @@ def _spawnable(svc, monkeypatch, spawn_ok=True, track_ok=True):
     return calls
 
 
+@pytest.mark.needs_session
 def test_concurrent_starts_exactly_one_reservation(tmp_path, monkeypatch):
     svc1 = _svc(tmp_path)
     svc2 = _svc(tmp_path)
@@ -612,6 +625,7 @@ def test_concurrent_starts_exactly_one_reservation(tmp_path, monkeypatch):
     assert c2 == []                                              # ...BEFORE spawning
 
 
+@pytest.mark.needs_session
 def test_spawn_failure_removes_reservation(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _spawnable(svc, monkeypatch, spawn_ok=False)
@@ -625,6 +639,7 @@ def test_spawn_failure_removes_reservation(tmp_path, monkeypatch):
     assert ln2 and err2 is None
 
 
+@pytest.mark.needs_session
 def test_spawn_failure_with_stuck_reservation_is_recovery_blocked(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _spawnable(svc, monkeypatch, spawn_ok=False)
@@ -647,6 +662,7 @@ def test_driver_refusal_releases_claimed_reservation(tmp_path):
     assert _svc(tmp_path)._bulk_gate() == ""                     # next run available
 
 
+@pytest.mark.needs_session
 def test_child_claim_requires_matching_run_id(tmp_path, monkeypatch):
     # A reservation bound to ANOTHER run_id (live spawner) refuses the mismatched child.
     from lhpc.core import procident
@@ -705,6 +721,7 @@ def test_archive_symlink_leaf_never_follows(tmp_path):
     assert archived and archived[0].is_symlink()                 # moved as a link, unfollowed
 
 
+@pytest.mark.needs_nonroot
 def test_archive_failure_is_truthful(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     m = bulk_mod.new_marker("a" * 32, "install", "pinned", True, False, [])
@@ -744,6 +761,7 @@ def _dead_ident():
             "argv_fp": "x", "argv_len": 1}
 
 
+@pytest.mark.needs_session
 def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monkeypatch):
     # The reservation is bound to the CHILD after spawn: a child that dies before claiming
     # becomes DEAD and acknowledgeable even though the web-server/spawner process (this
@@ -809,6 +827,7 @@ def _record_signals(monkeypatch):
     return sent
 
 
+@pytest.mark.needs_session
 def test_bind_persist_failure_sigterm_proven_clears_reservation(tmp_path, monkeypatch):
     # Reservation bind persistence fails with a healthy child identity: containment is
     # SIGTERM-ONLY through the identity-verified primitive, exit is PROVEN, and the
@@ -833,6 +852,7 @@ def test_bind_persist_failure_sigterm_proven_clears_reservation(tmp_path, monkey
     assert ln2 and err2 is None                                  # next run available
 
 
+@pytest.mark.needs_session
 def test_identity_capture_failure_unproven_is_recovery_blocked(tmp_path, monkeypatch):
     # Child identity cannot be captured: LHPC must not signal a process it cannot prove
     # is its own (SIGTERM-only policy also means no blind kills), must NOT claim the
@@ -859,6 +879,7 @@ def test_identity_capture_failure_unproven_is_recovery_blocked(tmp_path, monkeyp
     kids[0].wait(timeout=5)
 
 
+@pytest.mark.needs_session
 def test_job_tracking_failure_sigterm_proven(tmp_path, monkeypatch):
     # Marker persistence fails AFTER a successful bind: the tracked containment path is
     # also SIGTERM-only; proven exit clears the reservation.
@@ -877,6 +898,7 @@ def test_job_tracking_failure_sigterm_proven(tmp_path, monkeypatch):
     assert bulk_mod.read_reservation(svc._paths)[0] == "absent"
 
 
+@pytest.mark.needs_session
 def test_ack_racing_start_never_archives_live_state(tmp_path, monkeypatch):
     # A completed start (live child-bound reservation) makes acknowledgement REFUSE —
     # live evidence is never archived and no duplicate job is spawned by the loser.
@@ -893,6 +915,7 @@ def test_ack_racing_start_never_archives_live_state(tmp_path, monkeypatch):
     assert ln2 is None and c2 == []                              # no duplicate job either
 
 
+@pytest.mark.needs_session
 def test_claim_refuses_wrong_phase_and_foreign_identity(tmp_path):
     from lhpc.core import procident
     svc = _svc(tmp_path)
@@ -915,6 +938,7 @@ def test_claim_refuses_wrong_phase_and_foreign_identity(tmp_path):
     assert bulk_mod.read_reservation(svc._paths)[1]["pid"] == 999999   # not overwritten
 
 
+@pytest.mark.needs_session
 def test_reservation_clear_failure_on_early_refusal_is_typed(tmp_path, monkeypatch):
     # Pre-boundary running refusal + reservation clear failure: the result is a TYPED
     # incomplete (never only the original refusal), and status stays safe-side.
@@ -942,6 +966,7 @@ def test_recovery_reason_from_stale_lease_with_absent_marker(tmp_path):
     assert ack.ok and svc.bulk_recovery_reason() == ""
 
 
+@pytest.mark.needs_session
 def test_linked_stack_without_declared_work_is_success(tmp_path, monkeypatch):
     # A linked stack with NO declared build/test work stays SUCCESS when its bulk work
     # (source adoption) genuinely completed.
@@ -966,6 +991,7 @@ def test_linked_stack_without_declared_work_is_success(tmp_path, monkeypatch):
     assert st["state"] == "completed" and r.ok
 
 
+@pytest.mark.needs_session
 def test_abort_path_with_reservation_clear_failure_is_typed(tmp_path, monkeypatch):
     # Marker-write abort (exception inside the boundary) + reservation clear failure:
     # the converged cleanup path still returns a TYPED incomplete result.
@@ -1021,6 +1047,7 @@ def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
     return svc, lifecycle
 
 
+@pytest.mark.needs_session
 def test_tx_no_callsign_driver_refuses_before_any_mutation(tmp_path):
     svc = _svc(tmp_path)                                          # no callsign configured
     r = svc.install_all(apply=True, tests=True, tx=True, emit=lambda s: None)
@@ -1040,6 +1067,7 @@ def test_tx_no_callsign_spawn_refuses_before_child(tmp_path, monkeypatch):
     assert bulk_mod.read_reservation(svc._paths)[0] == "absent"
 
 
+@pytest.mark.needs_session
 def test_tx_admission_refused_when_daemon_group_blocked(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
     real = ControllerService._reconcile_group
@@ -1061,6 +1089,7 @@ def test_tx_admission_refused_when_daemon_group_blocked(tmp_path, monkeypatch):
     assert st["state"] == "completed-with-failures"
 
 
+@pytest.mark.needs_session
 def test_tx_refused_on_daemon_build_failure(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch, build_ok=False)
     r = svc.install_all(apply=True, tests=True, tx=True, emit=lambda s: None)
@@ -1073,6 +1102,7 @@ def test_tx_refused_on_daemon_build_failure(tmp_path, monkeypatch):
     assert st["state"] == "completed-with-failures" and not r.ok
 
 
+@pytest.mark.needs_session
 def test_tx_refused_on_daemon_host_test_failure(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch, test_ok=False)
     r = svc.install_all(apply=True, tests=True, tx=True, emit=lambda s: None)
@@ -1084,6 +1114,7 @@ def test_tx_refused_on_daemon_host_test_failure(tmp_path, monkeypatch):
     assert st["state"] == "completed-with-failures" and not r.ok
 
 
+@pytest.mark.needs_session
 def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
     # An unrelated independent failure (meshtastic deps) does not veto TX while the
     # daemon itself is fully successful with a passed host test.
@@ -1101,6 +1132,7 @@ def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
     assert not r.ok and "REMAIN installed" in r.summary
 
 
+@pytest.mark.needs_session
 def test_tx_happy_path_still_runs(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
     real = ControllerService._reconcile_group
@@ -1127,6 +1159,7 @@ def test_unbootstrapped_root_refuses_bulk_with_zero_mutation(tmp_path):
     assert plan.ok and any("bootstrap" in d for d in plan.details)
 
 
+@pytest.mark.needs_session
 def test_orphan_risk_phase_requires_confirmed_ack(tmp_path, monkeypatch):
     # Identity-capture failure with an unproven child: the reservation becomes the
     # TERMINAL orphan-risk phase (child pid + reason), the gate/page demand recovery,
@@ -1158,6 +1191,7 @@ def test_orphan_risk_phase_requires_confirmed_ack(tmp_path, monkeypatch):
     assert svc._bulk_gate() == ""                                # later launch possible
 
 
+@pytest.mark.needs_session
 def test_rebind_write_failure_yields_orphan_risk(tmp_path, monkeypatch):
     # bind persistence fails AND cessation is unproven (SIGTERM-ignoring child):
     # orphan-risk evidence with the pid; recovery only through the confirmed path.
@@ -1191,6 +1225,7 @@ def test_rebind_write_failure_yields_orphan_risk(tmp_path, monkeypatch):
     assert svc.bulk_ack(confirm_orphan=True).ok                  # confirmed path works
 
 
+@pytest.mark.needs_session
 def test_tx_refusal_after_successful_daemon_flips_row(tmp_path, monkeypatch):
     # Candidate-marker cleanup failure makes TX ineligible AFTER the daemon completed its
     # host work: the row must NOT stay `success`; host-test evidence is preserved.
@@ -1225,6 +1260,7 @@ def _ls_remote_fakes(sha_by_ref):
     return bind
 
 
+@pytest.mark.needs_session
 def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     # The plan resolves the dev branch ONCE; the fake remote then ADVANCES — every later
     # group adoption still receives the ORIGINAL frozen commit (no second lookup).
@@ -1261,6 +1297,7 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     assert len(paths_adopted) == len(set(paths_adopted))         # shared path adopted once
 
 
+@pytest.mark.needs_session
 def test_frozen_resolution_failure_refuses_before_mutation(tmp_path, monkeypatch):
     _callsign(tmp_path)
     svc = _svc(tmp_path)                                         # FakeSystem: ls-remote fails
@@ -1296,6 +1333,7 @@ from lhpc.core.config import Config
 from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
 
 
+@pytest.mark.needs_session
 def test_spawn_exception_settles_no_child(tmp_path, monkeypatch):
     # spawn_job RAISES after reservation creation (web server stays alive): the slot
     # settles durably, is never a live web-server-owned run, and ordinary ack recovers.
@@ -1313,6 +1351,7 @@ def test_spawn_exception_settles_no_child(tmp_path, monkeypatch):
     assert ln2 and err2 is None                                  # next run fine
 
 
+@pytest.mark.needs_session
 def test_identity_lookup_exception_settles_unproven(tmp_path, monkeypatch):
     from lhpc.core import procident
     svc = _svc(tmp_path)
@@ -1338,6 +1377,7 @@ def test_identity_lookup_exception_settles_unproven(tmp_path, monkeypatch):
     assert svc.bulk_ack(confirm_orphan=True).ok
 
 
+@pytest.mark.needs_session
 def test_tracker_exception_settles(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     kids = []
@@ -1357,6 +1397,7 @@ def test_tracker_exception_settles(tmp_path, monkeypatch):
     assert bulk_mod.read_reservation(svc._paths)[0] == "absent"
 
 
+@pytest.mark.needs_session
 def test_orphan_risk_persistence_failure_leaves_blocking_residual(tmp_path, monkeypatch):
     # write_orphan_risk fails: the residual spawning+uncertain record itself blocks,
     # is NEVER read as a live web-server run, and demands the orphan confirmation.
@@ -1491,6 +1532,7 @@ def test_local_advance_after_plan_still_frozen(tmp_path):
 
 # --- M2 round-6: artifact sources frozen for EVERY bulk selector -----------------------------
 
+@pytest.mark.needs_session
 def test_pinned_bulk_freezes_artifact_commit(tmp_path, monkeypatch):
     # A `pinned` bulk plan resolves every ARTIFACT group to a non-empty exact commit and
     # passes it to adoption (artifacts never use known-working entries — the plan-time
@@ -1529,6 +1571,7 @@ def test_pinned_bulk_freezes_artifact_commit(tmp_path, monkeypatch):
     assert all(exp is None or exp[0] == "" or len(exp[0]) == 40 for exp in non_art)
 
 
+@pytest.mark.needs_session
 def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
     # The artifact remote moves AFTER plan construction: every later artifact adoption
     # still receives the ORIGINAL frozen commit (no second lookup at adopt time).
@@ -1554,6 +1597,7 @@ def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
     assert seen and all(sha == sha_a for _, sha in seen)         # ALL frozen @ A
 
 
+@pytest.mark.needs_session
 def test_artifact_resolution_failure_refuses_before_marker(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: ((None, None), "remote unreachable"))
@@ -1621,6 +1665,7 @@ def test_bulk_scope_includes_optional_components(tmp_path):
     assert "src/meshcore-cli" in all_paths and "src/meshcore-node-manager" in all_paths
 
 
+@pytest.mark.needs_session
 def test_bulk_build_context_covers_optional_paths(tmp_path, monkeypatch):
     # The driver's build call for meshcore must NOT be refused for uncovered paths.
     _happy_ops(monkeypatch)

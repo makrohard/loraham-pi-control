@@ -1044,11 +1044,18 @@ def _stack_config_path(paths: Paths, stack_id: str, band: str = "") -> Path:
     if band:
         band = validators.band(band, allow_both=True)
     name = f"{sid}@{band}.toml" if band else f"{sid}.toml"
-    base = (paths.runtime_root / "config" / "stacks").resolve()
-    path = (base / name).resolve()
-    if base not in path.parents:
-        raise validators.ValidationError(f"config path escapes stacks dir: {name!r}")
-    return path
+    # House no-follow containment discipline (lexical + realpath symlink-escape), consistent with
+    # every other runtime write path; present the ValidationError callers already handle.
+    try:
+        resolved = paths.under("config", "stacks", name)
+    except PathContainmentError as exc:
+        raise validators.ValidationError(f"config path escapes stacks dir: {name!r}") from exc
+    # A stack config leaf is always a real LHPC-written file (atomic rename), never a symlink. Refuse
+    # a symlink leaf here so it surfaces as a typed "unsafe config" refusal to the caller rather than
+    # a silent default (a no-follow read would otherwise ELOOP and be swallowed as an empty config).
+    if resolved.is_symlink():
+        raise validators.ValidationError(f"config path is a symlink leaf: {name!r}")
+    return resolved
 
 
 def load_stack_config(paths: Paths, stack_id: str, band: str = "") -> dict:

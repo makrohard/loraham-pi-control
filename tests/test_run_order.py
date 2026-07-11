@@ -1,6 +1,7 @@
 """Tests for dependency run-order and the daemon auto-start/reconfigure logic."""
 
 from __future__ import annotations
+import pytest
 
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -147,6 +148,7 @@ def test_same_frequency_blocks_second_stack(tmp_path):
     assert svc.run_blockers("meshcore") == []
 
 
+@pytest.mark.needs_session
 def test_active_jobs_tracks_live_and_prunes_dead(tmp_path):
     import os
     svc = _svc(tmp_path)
@@ -242,6 +244,7 @@ _RDY = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
 _UNINIT = b"STATUS RADIO=UNINITIALIZED\n"
 
 
+@pytest.mark.needs_session
 def test_dual_band_both_absent_starts_per_band(tmp_path):
     svc = _daemon_svc(tmp_path, {})
     res = svc.start("daemon", apply=True)
@@ -249,6 +252,7 @@ def test_dual_band_both_absent_starts_per_band(tmp_path):
     assert _band_starts(res.details) == {"433", "868"}
 
 
+@pytest.mark.needs_session
 def test_dual_band_433_ready_starts_only_868(tmp_path):
     svc = _daemon_svc(tmp_path, {"/tmp/loraconf433.sock": _RDY})
     text = "\n".join(svc.start("daemon", apply=True).details)
@@ -257,6 +261,7 @@ def test_dual_band_433_ready_starts_only_868(tmp_path):
     assert "--radio both" not in text
 
 
+@pytest.mark.needs_session
 def test_dual_band_868_ready_starts_only_433(tmp_path):
     svc = _daemon_svc(tmp_path, {"/tmp/loraconf868.sock": _RDY})
     text = "\n".join(svc.start("daemon", apply=True).details)
@@ -339,6 +344,7 @@ def test_real_conflict_daemon_both_vs_meshtastic_868(tmp_path):
     assert not any("loraham.radio.433" in m for m in msgs)
 
 
+@pytest.mark.needs_session
 def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
     # Starting the daemon in FSK must NOT re-apply params to a band already serving a running
     # stack (433 voice stays as-is); only freshly-started bands get this start's params.

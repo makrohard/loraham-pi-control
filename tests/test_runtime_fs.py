@@ -35,6 +35,56 @@ def test_atomic_write_and_read_roundtrip(tmp_path):
     assert runtime_fs.read_text(p, target) == "hello"
 
 
+@pytest.mark.parametrize("umask_val", [0o077, 0o022])
+def test_atomic_write_bytes_mode_is_exact_regardless_of_umask(tmp_path, umask_val):
+    # F-6: the mode is applied with fchmod on the HELD fd, so the final leaf mode is EXACTLY the
+    # requested 0600 whatever the process umask — an O_CREAT mode alone would be masked (e.g.
+    # umask 022 would leave it 0644). Secret-bearing artifacts (PKCS#12) depend on this.
+    p = Paths(runtime_root=tmp_path)
+    target = p.under("state", "secret.bin")
+    old = os.umask(umask_val)
+    try:
+        runtime_fs.atomic_write_bytes(p, target, b"secret", 0o600)
+    finally:
+        os.umask(old)
+    assert os.stat(target).st_mode & 0o777 == 0o600
+
+
+def test_chmod_converts_raced_symlink_valueerror_to_typed(tmp_path, monkeypatch):
+    # F-7: if the leaf becomes a symlink AFTER the pre-check, CPython's os.chmod raises a bare
+    # ValueError ("cannot use dir_fd and follow_symlinks together"). runtime_fs.chmod must convert
+    # that to the typed PathContainmentError the PKI layer already handles — never a raw 500.
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    target = p.under("state", "leaf"); target.write_text("x")   # a real regular leaf (passes pre-check)
+
+    def racing_chmod(name, mode, *, dir_fd=None, follow_symlinks=True):
+        raise ValueError("cannot use dir_fd and follow_symlinks together")
+    monkeypatch.setattr(os, "chmod", racing_chmod)
+    with pytest.raises(PathContainmentError):
+        runtime_fs.chmod(p, target, 0o600)
+
+    def unsupported_chmod(name, mode, *, dir_fd=None, follow_symlinks=True):
+        raise NotImplementedError                              # glibc <2.32: no-follow chmod unsupported
+    monkeypatch.setattr(os, "chmod", unsupported_chmod)
+    with pytest.raises(PathContainmentError):
+        runtime_fs.chmod(p, target, 0o600)
+
+
+def test_chmod_ordinary_oserror_stays_truthful(tmp_path, monkeypatch):
+    # F-7 boundary: an ordinary permission/filesystem error must NOT be masked as a symlink
+    # refusal — it propagates as the real OSError (typed-only conversion, never OSError).
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir()
+    target = p.under("state", "leaf"); target.write_text("x")
+
+    def denied_chmod(name, mode, *, dir_fd=None, follow_symlinks=True):
+        raise PermissionError("EPERM")
+    monkeypatch.setattr(os, "chmod", denied_chmod)
+    with pytest.raises(PermissionError):
+        runtime_fs.chmod(p, target, 0o600)
+
+
 def test_open_log_rejects_symlink_leaf(tmp_path):
     p = Paths(runtime_root=tmp_path)
     (tmp_path / "logs").mkdir()
@@ -77,6 +127,7 @@ def test_job_marker_reused_pid_not_active(tmp_path):
         p.kill(); p.wait()
 
 
+@pytest.mark.needs_session
 def test_job_marker_matching_identity_is_active(tmp_path):
     svc = _svc(tmp_path)
     p = subprocess.Popen(["sleep", "30"])

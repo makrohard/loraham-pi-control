@@ -118,10 +118,18 @@ def mkdir(paths: Paths, *parts: str) -> Path:
 
 
 def atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None:
-    """Atomically write `text` to a contained runtime leaf, descriptor-anchored: a temp
-    leaf is created via the held parent fd, fsynced, mode-set, renamed over the target via
-    src/dst dir-fds, then the parent directory fd is fsynced. Refuses a symlink leaf or an
-    escaping/symlinked-parent path."""
+    """Atomically write `text` (UTF-8) to a contained runtime leaf. Thin wrapper over the
+    byte-oriented core `atomic_write_bytes` (defaults 0o644 for text config)."""
+    atomic_write_bytes(paths, path, text.encode("utf-8"), mode)
+
+
+def atomic_write_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Atomically write BINARY `data` to a contained runtime leaf, descriptor-anchored — the
+    single core of the write protocol (`atomic_write` encodes text and delegates here). A unique
+    temp leaf is created via the held parent fd (O_CREAT|O_EXCL|O_NOFOLLOW), written, its mode set
+    on the OPEN fd (`fchmod` — no leaf re-resolve, umask-proof), fsynced, then renamed over the
+    target via src/dst dir-fds and the parent dir fd fsynced. Refuses a symlink leaf or an
+    escaping/symlinked-parent path. Used for secret-bearing artifacts (e.g. PKCS#12); defaults 0600."""
     with _walk_parent(paths, path, create=True) as (parent_fd, name):
         if _is_symlink_leaf(parent_fd, name):
             raise PathContainmentError(f"refusing to write through a symlink leaf: {path}")
@@ -141,49 +149,13 @@ def atomic_write(paths: Paths, path: Path, text: str, mode: int = 0o644) -> None
         if tmp is None:
             raise OSError(f"could not create a unique temp file for {path}")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(text)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.chmod(tmp, mode, dir_fd=parent_fd)
-            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            os.fsync(parent_fd)                       # durable rename (parent dir entry)
-        except BaseException:
-            try:
-                os.unlink(tmp, dir_fd=parent_fd)
-            except OSError:
-                pass
-            raise
-
-
-def atomic_write_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600) -> None:
-    """Atomically write BINARY `data` to a contained runtime leaf — the byte-oriented peer of
-    `atomic_write` (same descriptor-anchored, no-follow, unique-temp, fsync+rename+parent-fsync
-    guarantees). Used for secret-bearing binary artifacts (e.g. encrypted PKCS#12 bundles);
-    defaults to 0600."""
-    with _walk_parent(paths, path, create=True) as (parent_fd, name):
-        if _is_symlink_leaf(parent_fd, name):
-            raise PathContainmentError(f"refusing to write through a symlink leaf: {path}")
-        tmp, fd = None, None
-        for _ in range(64):
-            cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
-            try:
-                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                             mode, dir_fd=parent_fd)
-                tmp = cand
-                break
-            except FileExistsError:
-                continue
-        if tmp is None:
-            raise OSError(f"could not create a unique temp file for {path}")
-        try:
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
                 fh.flush()
-                os.fsync(fh.fileno())
-            os.chmod(tmp, mode, dir_fd=parent_fd)
+                os.fchmod(fh.fileno(), mode)          # mode on the HELD fd (umask-proof, no re-resolve)
+                os.fsync(fh.fileno())                 # fsync AFTER the mode is set -> metadata durable
             os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            os.fsync(parent_fd)                       # durable rename (parent dir entry)
         except BaseException:
             try:
                 os.unlink(tmp, dir_fd=parent_fd)
@@ -593,8 +565,14 @@ def chmod(paths: Paths, path: Path, mode: int, *, create_dir: bool = False) -> N
         if _is_symlink_leaf(parent_fd, name):
             raise PathContainmentError(f"refusing to chmod through a symlink leaf: {path}")
         # follow_symlinks=False: even if the leaf is (racily) a symlink, never chmod its
-        # target; on a regular file/dir this sets the leaf's own mode.
-        os.chmod(name, mode, dir_fd=parent_fd, follow_symlinks=False)
+        # target; on a regular file/dir this sets the leaf's own mode. If the leaf IS a symlink
+        # at syscall time (the narrow race past the check above), CPython raises ValueError
+        # ("cannot use dir_fd and follow_symlinks together") — that is a symlink-leaf refusal, so
+        # re-raise it typed. (Only ValueError/NotImplementedError — ordinary OSError stays truthful.)
+        try:
+            os.chmod(name, mode, dir_fd=parent_fd, follow_symlinks=False)
+        except (ValueError, NotImplementedError) as exc:
+            raise PathContainmentError(f"refusing to chmod through a symlink leaf: {path}") from exc
         try:
             os.fsync(parent_fd)
         except OSError:

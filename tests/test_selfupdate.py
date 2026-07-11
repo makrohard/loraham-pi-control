@@ -484,6 +484,19 @@ def test_restart_instructions_env_detection(monkeypatch):
                for c in selfupdate.restart_instructions()["commands"])
 
 
+def test_restart_instructions_deps_sync_guidance(monkeypatch):
+    # P2-3: when deps changed, the guidance carries the EXACT (venv) sync command AND a clear note that
+    # the operator must sync, and that LHPC never installs packages itself.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    i = selfupdate.restart_instructions(deps_changed=True,
+                                        deps_sync_cmd="/rt/venv/lhpc/bin/python -m pip install -e /rt/co")
+    assert any("/rt/venv/lhpc/bin/python -m pip install -e /rt/co" in c for c in i["commands"])
+    assert "never installs" in i["note"] and "sync" in i["note"].lower()
+    # When nothing changed: no sync command is added and the note is empty.
+    n = selfupdate.restart_instructions(deps_changed=False)
+    assert n["note"] == "" and not any("pip install" in c for c in n["commands"])
+
+
 def test_non_git_install_unavailable(env, monkeypatch):
     monkeypatch.setattr(selfupdate, "repo_root", lambda: None)
     assert selfupdate.local_state(env["sys"])["is_git"] is False

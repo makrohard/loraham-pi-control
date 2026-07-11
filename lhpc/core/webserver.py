@@ -767,7 +767,6 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
 
     `stack_webs` MUST be the same proxy set `apply` would promote. Validating a console-only config
     and then reporting "verified" would be a lie about a config that is never loaded."""
-    from . import runtime_fs
     checks: dict = {}
     plan = plan_exposure(cfg)
     problems = list(plan["problems"])

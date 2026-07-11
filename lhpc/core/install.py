@@ -1085,8 +1085,7 @@ class Installer:
         journal field; an invalid/malicious journal is retained and blocks. Each per-source
         recovery takes the source-path lock and only ever renames controller-named
         candidate/prior siblings — never an arbitrary or symlinked path."""
-        import json
-        from . import runtime_fs, reslock
+        from . import runtime_fs
         # Descriptor-anchored enumeration: a symlinked/escaping txn DIR blocks (never
         # followed); a MISSING dir is genuinely empty. A symlinked journal ENTRY is
         # retained and blocks (recovery-required) — it is NOT skipped/treated as absent.
@@ -1192,7 +1191,6 @@ class Installer:
         the captured fd-pinned path. Returns True (dirty — late tracked/non-ignored
         untracked changes), False (clean / not dirty-capable), or None (unprovable —
         the caller retains everything)."""
-        from . import source_fs
         try:
             if txn.leaf_kind(prev.name) != "dir":
                 return False                       # symlink/absent prior: nothing scannable

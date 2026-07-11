@@ -1,6 +1,7 @@
 """Web surface of the bulk install-all feature: form modes/defaults, CSRF, second-stage RF
 confirmation binding source+tests+TX, POST refusal matrix, ack path, run view, cursor log
 API, welcome-banner tri-state, Apps-page button labels."""
+import pytest
 
 import json
 import os
@@ -123,6 +124,7 @@ def test_tx_without_tests_refused(tmp_path, monkeypatch):
     assert b"requires host tests" in r.data and not spawned
 
 
+@pytest.mark.needs_session
 def test_run_view_rows_and_api(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
@@ -330,6 +332,7 @@ def test_orphan_risk_page_requires_confirmation_checkbox(tmp_path):
     assert bulk_mod.read_reservation(paths)[0] == "absent"
 
 
+@pytest.mark.needs_session
 def test_starting_card_shown_after_spawn_before_marker(tmp_path):
     # LIVE FINDING: after the POST nothing appeared until the driver wrote its marker
     # (double-clicks -> 'already reserved'). A live reservation with no marker now
@@ -351,6 +354,7 @@ def test_install_all_page_defaults_to_dev(tmp_path):
     assert 'value="dev" selected' in body
 
 
+@pytest.mark.needs_session
 def test_starting_card_shown_in_spawning_phase(tmp_path):
     # The POST redirect lands within milliseconds — while the reservation is still in
     # phase 'spawning'. The card must show then too (LIVE FINDING: fast browsers got a
@@ -366,6 +370,7 @@ def test_starting_card_shown_in_spawning_phase(tmp_path):
     assert "bulk.js" in body
 
 
+@pytest.mark.needs_session
 def test_starting_card_shown_over_old_terminal_marker(tmp_path):
     # LIVE FINDING (user): after a PREVIOUS completed run its terminal marker is still
     # on disk — the page showed only the old collapsed card, no poller, and the new
@@ -606,6 +611,7 @@ def test_spawn_param_ignored_when_marker_matches(tmp_path):
     assert "Run could not start" not in body
 
 
+@pytest.mark.needs_session
 def test_api_reports_spawn_liveness(tmp_path):
     from lhpc.core import procident
     c, svc = _client(tmp_path)

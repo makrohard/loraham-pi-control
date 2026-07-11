@@ -130,6 +130,7 @@
                         {% else %}
                           <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
                         {% endif %}
+                        {% if itf.pending %}<span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span>{% endif %}
                       {% endfor %}
                       {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}
                         <form method="post" action="{{ url_for('action') }}" class="act">
