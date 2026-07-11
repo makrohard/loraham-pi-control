@@ -50,7 +50,7 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
                 label=req.note or req.cmd or req.check_file,
                 satisfied=req not in missing,
                 detail=("present" if req not in missing else
-                        f"missing: {req.check_file or req.cmd}"),
+                        f"missing: {req.check_file or req.cmd or ('groups ' + ','.join(req.groups))}"),
                 install_cmd=req.install or ""))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)

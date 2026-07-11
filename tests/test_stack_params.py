@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 
 from lhpc.core.config import save_operator_config
@@ -188,6 +189,7 @@ def test_same_process_claim_waits_then_succeeds(tmp_path):
     t.join()
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_component_booting_tracks_live_post_runner(tmp_path):
     # A running component reads 'booting' while its post-start (--setcall) runner is still alive,
     # then flips to normal once the runner finishes.
@@ -225,9 +227,6 @@ def _seam_svc(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_ensure_daemon", seam)
     monkeypatch.setattr(svc, "write_config_files", seam)
     return svc
-
-
-import pytest
 
 
 @pytest.mark.parametrize("call", ["", "N0CALL", "N0CALL-1"])

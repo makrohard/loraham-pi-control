@@ -174,26 +174,50 @@ def require_atomic_rename(paths: Paths = None, parent: Path = None) -> str:
         return f"cannot probe atomic rename (source parent unsafe): {exc}"
 
 
-def leaf_ident_at(parent_fd: int, name: str):
-    """No-follow (dev, ino) of leaf `name` under `parent_fd`, or None when absent/unreadable —
-    the strict identity evidence journals persist for crash recovery."""
+def _ident_of_stat(st, *, with_ctime: bool):
+    """[dev, ino] or [dev, ino, ctime_ns] from a stat result. `ctime_ns` is kernel-controlled —
+    `utimensat` can forge atime/mtime but never sets ctime to an arbitrary past value — so a v5
+    ident survives inode RECYCLING (a recreated leaf on the same recycled inode gets a fresh
+    ctime, which will not match the journaled one)."""
+    return [st.st_dev, st.st_ino, st.st_ctime_ns] if with_ctime else [st.st_dev, st.st_ino]
+
+
+def _ident_cmp(st, ident) -> bool:
+    """dev+ino always; ctime_ns ONLY when the stored `ident` carries a third element. So a 2-element
+    (live/in-process) ident compares exactly as before, and a 3-element (v5 journal) ident also
+    enforces ctime. Length is validated by the caller."""
+    if st.st_dev != ident[0] or st.st_ino != ident[1]:
+        return False
+    return len(ident) < 3 or st.st_ctime_ns == ident[2]
+
+
+def leaf_ident_at(parent_fd: int, name: str, *, with_ctime: bool = False):
+    """No-follow [dev, ino] (or [dev, ino, ctime_ns] when `with_ctime`) of leaf `name` under
+    `parent_fd`, or None when absent/unreadable. The v5 (with_ctime) form is the strict identity
+    evidence the crash-recovery journal persists; the 2-element form is the live/in-process one."""
     try:
         st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except OSError:
         return None
-    return [st.st_dev, st.st_ino]
+    return _ident_of_stat(st, with_ctime=with_ctime)
 
 
 def ident_matches(parent_fd: int, name: str, ident) -> bool:
-    """Leaf `name` still has the journal-recorded (dev, ino) identity."""
-    cur = leaf_ident_at(parent_fd, name)
-    return (cur is not None and isinstance(ident, (list, tuple)) and len(ident) == 2
-            and cur[0] == ident[0] and cur[1] == ident[1])
+    """Leaf `name` still has the recorded identity — dev+ino, plus ctime_ns when `ident` is v5
+    (3-element). Length-tolerant so both live [dev,ino] and journal [dev,ino,ctime_ns] idents work."""
+    if not (isinstance(ident, (list, tuple)) and len(ident) in (2, 3)):
+        return False
+    try:
+        st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return _ident_cmp(st, ident)
 
 
 def remove_bound(parent_fd: int, name: str, ident) -> tuple:
     """THE identity-bound destructive removal: leaf `name` under `parent_fd` is removed ONLY
-    while it matches `ident` ([dev, ino]) — never through the mutable name alone.
+    while it matches `ident` ([dev, ino] or v5 [dev, ino, ctime_ns]) — never through the mutable
+    name alone.
 
       * a DIRECTORY leaf is OPENED no-follow and BOUND (fstat == ident); its contents are
         removed THROUGH that bound fd (a concurrent name swap cannot redirect the recursion);
@@ -203,13 +227,13 @@ def remove_bound(parent_fd: int, name: str, ident) -> tuple:
 
     Returns (ok, reason). `ident` is REQUIRED — callers without identity evidence must not
     delete (they retain evidence instead)."""
-    if not (isinstance(ident, (list, tuple)) and len(ident) == 2):
+    if not (isinstance(ident, (list, tuple)) and len(ident) in (2, 3)):
         return False, "no identity evidence — refusing to remove (leaf retained)"
     try:
         st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except OSError:
         return False, "leaf is absent/unreadable — nothing removed"
-    if [st.st_dev, st.st_ino] != list(ident):
+    if not _ident_cmp(st, ident):
         return False, "leaf was substituted — refusing to remove (substitute retained)"
     if _stat.S_ISDIR(st.st_mode):
         try:
@@ -218,7 +242,7 @@ def remove_bound(parent_fd: int, name: str, ident) -> tuple:
             return False, f"leaf could not be bound: {exc}"
         try:
             bst = os.fstat(fd)
-            if [bst.st_dev, bst.st_ino] != list(ident):
+            if not _ident_cmp(bst, ident):
                 return False, "leaf was substituted during binding — refusing"
             for child in os.listdir(fd):
                 _rmtree_fd(fd, child)                 # contents via the BOUND fd only
@@ -228,7 +252,10 @@ def remove_bound(parent_fd: int, name: str, ident) -> tuple:
             return False, f"bound removal incomplete: {exc} (remainder retained)"
         finally:
             os.close(fd)
-        if not ident_matches(parent_fd, name, ident):     # final re-proof before rmdir
+        # Final re-proof before rmdir is dev+ino ONLY: the inode was already ctime-bound above and
+        # pinned through the bound fd; our own content removal legitimately bumped its ctime, so a v5
+        # ctime check here would spuriously refuse. This guards a NAME swap to a different inode.
+        if not ident_matches(parent_fd, name, list(ident[:2])):
             return False, "leaf was substituted after content removal — refusing rmdir"
         try:
             os.rmdir(name, dir_fd=parent_fd)

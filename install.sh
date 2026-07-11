@@ -18,6 +18,7 @@
 # links / systemd units, and any existing checkout, and rolls back on a mid-install failure.
 
 set -euo pipefail
+: "${USER:=$(id -un)}"   # $USER can be unset in minimal envs (systemd/su); bind it so set -u never aborts.
 umask 077          # everything this script creates is owner-only (0700/0600).
 
 # --------------------------------------------------------------------------- fixed inputs

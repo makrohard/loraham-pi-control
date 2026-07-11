@@ -152,6 +152,7 @@ def test_start_rejects_malicious_runparam(tmp_path):
     assert not res.ok and "invalid" in res.detail.lower()
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_start_allows_valid_values(tmp_path):
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
                      run_argv=("./app", "-c", "{operator:callsign}"))

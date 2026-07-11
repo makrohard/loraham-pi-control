@@ -684,6 +684,7 @@ def test_record_write_failure_delivers_no_payload(tmp_path, monkeypatch):
     assert sched.ok is False and got == b""                          # no side effect ever
 
 
+@pytest.mark.needs_session
 def test_bound_runner_skips_send_when_main_zombie(tmp_path):
     import subprocess
     z = subprocess.Popen(["true"])                                   # exits immediately -> zombie

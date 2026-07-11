@@ -130,6 +130,16 @@ def _cmd_config(svc, args) -> int:
     """Dispatch `lhpc config` — operator identity, or per-stack settings/daemon params.
     Enforces: operator is a reserved subcommand; modes are mutually exclusive; no ambiguous set."""
     stack = args.stack
+    # Split the trailing positional group (collected as `rest` so flags may precede it — see the parser)
+    # into the optional <param> [<value>]. More than two is a usage error. (Tests that construct a
+    # Namespace directly set param/value and omit `rest`; honour those unchanged.)
+    rest = getattr(args, "rest", None)
+    if rest is not None:
+        if len(rest) > 2:
+            print("ERR   too many arguments — usage: lhpc config <stack> [<param> [<value>]]")
+            return 2
+        args.param = rest[0] if rest else None
+        args.value = rest[1] if len(rest) > 1 else None
     op_flags = args.callsign is not None or args.locator is not None
 
     # ----- operator (RESERVED — never a stack id) -----
@@ -297,10 +307,13 @@ def build_parser() -> argparse.ArgumentParser:
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
     p_cfg = sub.add_parser("config", help="View or set stack settings and operator identity")
     p_cfg.add_argument("stack", help="Stack id, or 'operator' for the global callsign/locator")
-    p_cfg.add_argument("param", nargs="?",
-                       help="Parameter name (or 'list'); omit to list all. Qualify a duplicated "
-                            "name as <component>.<param>")
-    p_cfg.add_argument("value", nargs="?", help="New value; omit to show the current value")
+    # ONE greedy trailing group, not two nargs="?" positionals: on Python 3.12.x argparse cannot
+    # backfill split-across-an-optional positionals (`config <stack> --reset <param> <value>` dies with
+    # SystemExit(2) before the handler's graceful conflict check). `nargs="*"` collects them uniformly;
+    # the handler splits into param/value.
+    p_cfg.add_argument("rest", nargs="*", metavar="[param [value]]",
+                       help="Parameter name (or 'list'); optionally a new value. Omit to list all. "
+                            "Qualify a duplicated name as <component>.<param>.")
     p_cfg.add_argument("--band", default="", help="Band for band-switchable stacks (e.g. 433 or 868)")
     p_cfg.add_argument("--reset", action="store_true", help="Reset this stack's settings to defaults")
     p_cfg.add_argument("--yes", action="store_true", help="Apply --reset without confirmation")
@@ -459,7 +472,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, extra = parser.parse_known_args(argv)
+    if extra:
+        # argparse consumes a command's trailing positional chunk ONCE, so positionals split around an
+        # optional (e.g. `config <stack> --reset <param> <value>`) cannot be back-filled into an
+        # already-consumed nargs="*" `rest`; whether it errors is 3.12.x-point-release-dependent. Fold
+        # such trailing POSITIONAL tokens back into config's `rest`; anything else is a genuine
+        # unrecognized argument returned as an int (never an uncaught SystemExit — main() promises -> int).
+        if getattr(args, "command", "") == "config" and all(not t.startswith("-") for t in extra):
+            args.rest = list(getattr(args, "rest", []) or []) + list(extra)
+        else:
+            sys.stderr.write(f"{parser.prog}: error: unrecognized arguments: {' '.join(extra)}\n")
+            return 2
 
     if not args.command:
         parser.print_help()

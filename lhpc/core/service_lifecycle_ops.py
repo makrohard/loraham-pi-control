@@ -535,7 +535,7 @@ class LifecycleOpsMixin:
             miss = life.missing_requirements(comp)
             if miss:
                 record(comp, stack, Outcome.BLOCKED, "missing "
-                       + "; ".join(f"{r.cmd} ({r.install})" for r in miss))
+                       + "; ".join(f"{r.cmd or r.note} ({r.install})" for r in miss))
                 continue
             if self._running_conflicts(comp, cfg_band):
                 record(comp, stack, Outcome.BLOCKED, "resource conflict")

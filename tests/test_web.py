@@ -471,6 +471,7 @@ def test_install_confirm_shows_missing_system_deps(tmp_path):
     assert "Missing system dependencies" in cf and "libncurses-dev" in cf
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_install_runs_as_live_logged_job(tmp_path):
     c = _real_app(tmp_path)
     token = _csrf(c)
@@ -501,6 +502,7 @@ def test_log_api_returns_lines(tmp_path):
     assert "lines" in j and isinstance(j["lines"], list)
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_build_action_redirects_to_live_log(tmp_path):
     c = _real_app(tmp_path)
     token = _csrf(c)

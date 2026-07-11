@@ -201,12 +201,12 @@ def _crash_state_after_activation(tmp_path, inst, had_prior: bool, text="v2\n"):
     def ident(q):
         try:
             st = os.stat(q, follow_symlinks=False)
-            return [st.st_dev, st.st_ino]
+            return [st.st_dev, st.st_ino, st.st_ctime_ns]   # v5 ctime-hardened ident
         except OSError:
             return None
     inst._journal_path(dest).parent.mkdir(parents=True, exist_ok=True)
     inst._journal_path(dest).write_text(json.dumps({
-        "version": 4, "state": "activated", "source_rel": rel(dest),
+        "version": 5, "state": "activated", "source_rel": rel(dest),
         "prev_rel": rel(dest.with_name(".app.prev")), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel),
         "meta": {"selector": "dev", "resolved_commit": new_head, "remote": "",
@@ -270,7 +270,7 @@ def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
     staging = dest.with_name(".app.candidate-1-2")
     cand_rel = rel(staging)
     inst._journal_path(dest).write_text(json.dumps({
-        "version": 4, "state": "activated", "source_rel": rel(dest),
+        "version": 5, "state": "activated", "source_rel": rel(dest),
         "prev_rel": rel(dest.with_name(".app.prev")), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel),
         "meta": {"selector": "stable", "resolved_commit": "f" * 40,
@@ -292,7 +292,7 @@ def test_v3_journal_with_invalid_meta_is_retained(tmp_path):
     rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
     cand_rel = rel(dest.with_name(".app.candidate-1-2"))
     inst._journal_path(dest).write_text(json.dumps({
-        "version": 4, "state": "activated", "source_rel": rel(dest),
+        "version": 5, "state": "activated", "source_rel": rel(dest),
         "prev_rel": rel(dest.with_name(".app.prev")), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel),
         "meta": {"selector": "evil", "resolved_commit": 5},             # invalid meta

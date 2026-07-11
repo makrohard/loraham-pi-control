@@ -23,18 +23,20 @@ def _inst(tmp_path) -> Installer:
     return Installer(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
 
 
-def _ident_of(p):
+def _ident_of(p, *, ctime=True):
     import os as _os
     try:
         st = _os.stat(p, follow_symlinks=False)
-        return [st.st_dev, st.st_ino]
     except OSError:
         return None
+    # v5 idents carry ctime_ns; ctime=False yields the legacy v4 [dev, ino] shape.
+    return [st.st_dev, st.st_ino, st.st_ctime_ns] if ctime else [st.st_dev, st.st_ino]
 
 
-def _journal(inst, dest, prev, staging, state, version=4):
-    # v4 journal with LOGICAL runtime-relative names + leaf-identity evidence computed from
-    # the on-disk leaves the test just created (v2 crafted journals are generation-blocked).
+def _journal(inst, dest, prev, staging, state, version=5):
+    # v5 journal (default) with LOGICAL runtime-relative names + ctime-hardened leaf-identity
+    # evidence computed from the on-disk leaves the test just created. version=4 emits the legacy
+    # [dev, ino]-only idents (now retained-as-unprovable); v2/v3 carry no idents (generation-blocked).
     d = inst.paths.under("state", "source-txn")
     d.mkdir(parents=True, exist_ok=True)
     rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
@@ -43,10 +45,12 @@ def _journal(inst, dest, prev, staging, state, version=4):
         "version": version, "state": state, "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel)}
-    if version == 4:
+    if version in (4, 5):
+        ct = version == 5
         payload["meta"] = {"selector": "legacy", "resolved_commit": "", "remote": "",
                            "strategy": "", "components": [dest.name]}
-        payload["idents"] = {"candidate": _ident_of(staging), "prev": _ident_of(prev)}
+        payload["idents"] = {"candidate": _ident_of(staging, ctime=ct),
+                             "prev": _ident_of(prev, ctime=ct)}
     inst._journal_path(dest).write_text(json.dumps(payload))
 
 
@@ -1335,3 +1339,50 @@ def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path):
     assert (prev / "m").read_text() == "SUBSTITUTED PRIOR"
     assert (staging / "m").read_text() == "SUBSTITUTED CANDIDATE"
     assert inst._journal_path(dest).exists()                    # journal retained
+
+
+# --- R-5: v5 ctime hardening defeats inode-recycling forgery; v4 downgraded to unprovable --------
+
+def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
+    # DETERMINISTIC inode-recycling forgery (no reliance on real inode reuse): the journal records
+    # the ORIGINAL prior's [dev, ino, ctime_ns]; a `.prev` recreated on the RECYCLED inode has the
+    # SAME dev+ino but a fresh ctime. The v5 ctime check catches it -> the forged prior is NOT
+    # restored, everything retained. (Candidate absent so recovery takes the prior-restore path.)
+    inst = _inst(tmp_path)
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"                                         # died after dest->.prev (dest absent)
+    prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("SUBSTITUTE PRIOR")
+    staging = src / ".app.candidate-1-2"                       # absent -> promotion skipped
+    real = _ident_of(prev)                                     # [dev, ino, ctime_ns]
+    forged = [real[0], real[1], real[2] - 1]                  # SAME dev+ino, forged (older) ctime
+    rel = lambda p: str(p.relative_to(inst.paths.runtime_root))
+    inst._journal_path(dest).parent.mkdir(parents=True, exist_ok=True)
+    inst._journal_path(dest).write_text(json.dumps({
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
+        "prev_rel": rel(prev), "candidate_rel": rel(staging),
+        "txn_id": inst._txn_id(rel(staging)),
+        "meta": {"selector": "legacy", "resolved_commit": "", "remote": "",
+                 "strategy": "", "components": ["app"]},
+        "idents": {"candidate": None, "prev": forged}}))
+    msgs = inst.recover_source_activations()
+    assert any("substituted" in m and "recovery-required" in m for m in msgs)   # ctime mismatch caught
+    assert not dest.exists()                                   # forged prior NOT restored
+    assert (prev / "m").read_text() == "SUBSTITUTE PRIOR"      # untouched
+    assert inst._journal_path(dest).exists()                   # retained
+
+
+def test_v4_journal_retained_as_unprovable_not_restored(tmp_path):
+    # A v4 ([dev, ino]-only) journal is no longer trusted for destructive recovery — its identity is
+    # forgeable via inode recycling — so it is retained-as-unprovable exactly like v2/v3, never a
+    # roll-back. (An identical v5 journal DOES roll back: see test_recover_rolls_back_after_prior_archived.)
+    inst = _inst(tmp_path)
+    src = inst.paths.under("src"); src.mkdir(parents=True)
+    dest = src / "app"                                         # died after dest->.prev (dest absent)
+    prev = src / ".app.prev"; prev.mkdir(); (prev / "m").write_text("PRIOR")
+    staging = src / ".app.candidate-1-2"
+    _journal(inst, dest, prev, staging, "prior-archived", version=4)
+    msgs = inst.recover_source_activations()
+    assert any("generation" in m and "recovery-required" in m for m in msgs)
+    assert not dest.exists()                                   # NOT restored (v4 untrusted)
+    assert (prev / "m").read_text() == "PRIOR"                 # retained
+    assert inst._journal_path(dest).exists()                   # journal retained

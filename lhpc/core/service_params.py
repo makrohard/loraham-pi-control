@@ -545,9 +545,12 @@ class ParamsConfigMixin:
         return out
 
     def missing_system_deps(self, target: str) -> list[dict]:
-        """Unsatisfied system dependencies (e.g. -dev packages) for a stack's
-        components, with the command to install each. Empty = all satisfied."""
-        return [d for d in self.system_deps(target) if not d["satisfied"]]
+        """Unsatisfied INSTALL-time system dependencies (e.g. -dev packages) for a stack's components,
+        with the command to install each. Empty = all satisfied. Run-time capabilities (`runtime`, e.g.
+        group membership) are EXCLUDED — they gate start, not install/build, so they never block the
+        install gate; they still surface in `system_deps`."""
+        return [d for d in self.system_deps(target)
+                if not d["satisfied"] and not d["runtime"]]
 
     def system_deps(self, target: str) -> list[dict]:
         """ALL declared system requirements for a stack (dev packages, headers,
@@ -564,7 +567,8 @@ class ParamsConfigMixin:
                     seen.add(key)
                     out.append({"what": req.note or req.cmd or req.check_file,
                                 "install": req.install,
-                                "satisfied": req not in missing})
+                                "satisfied": req not in missing,
+                                "runtime": bool(req.groups)})   # run-time capability (not install-gated)
         return out
 
     def config_view(self, target: str, band: str = "") -> dict:

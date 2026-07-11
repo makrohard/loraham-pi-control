@@ -217,16 +217,21 @@ def test_host_echo_can_never_reflect_markup():
 
 
 def test_illegal_host_header_is_safe_200_or_400(tmp_path):
-    # An unparseable Host must be SAFE either way and must never 500 or raise. Werkzeug's behaviour
-    # varies across 3.1.x: <=3.1.7 fail-closes with 400 ("Host 'a<b.com' is not trusted"); 3.1.8 blanks
-    # request.host to "" -> 200. Both are fine — nothing downstream trusts a Host claim. (A fresh
-    # install resolves the newest Werkzeug flask allows, so this is 200 in practice.)
+    # An unparseable Host must be SAFE either way and must never 500. Werkzeug's behaviour varies across
+    # 3.1.x: 3.1.7 fail-closes by RAISING SecurityError (a BadRequest, .code == 400) from the test client;
+    # 3.1.8 blanks request.host to "" -> 200. Both are fine — nothing downstream trusts a Host claim, and a
+    # raised 400 is the same fail-closed outcome as a returned 400. (A fresh install resolves the newest
+    # Werkzeug flask allows, so this is 200 in practice; the pinned floor werkzeug>=3.1 also covers 3.1.7.)
+    from werkzeug.exceptions import HTTPException
     c = _productive(tmp_path)
     try:
         r = c.get("/stacks", headers={"Host": "a<b.com"})
-    except Exception as exc:                     # some Werkzeug 3.1.x raise in the test client
-        raise AssertionError(f"illegal Host raised instead of returning a status: {exc!r}") from exc
-    assert r.status_code in (200, 400)           # 200 = blanked, 400 = fail-closed; never 500
+    except HTTPException as exc:                  # 3.1.7 raises SecurityError(code=400) instead of returning it
+        assert exc.code == 400, f"illegal Host raised a non-400 HTTP error: {exc!r}"
+        return
+    except Exception as exc:                      # anything else (e.g. a 500-class crash) is a real failure
+        raise AssertionError(f"illegal Host raised a non-HTTP error: {exc!r}") from exc
+    assert r.status_code in (200, 400)            # 200 = blanked, 400 = fail-closed; never 500
 
 
 # --- blocker 1 regression + secret hygiene ----------------------------------

@@ -16,6 +16,7 @@
 # that provably belong to the selected target; noncanonical/foreign units are left untouched.
 
 set -euo pipefail
+: "${USER:=$(id -un)}"   # $USER can be unset in minimal envs (systemd/su); bind it so set -u never aborts.
 
 TARGET_DIR="${HOME}/loraham-pi-control"
 PURGE=0

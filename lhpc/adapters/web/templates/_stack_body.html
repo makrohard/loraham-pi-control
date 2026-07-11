@@ -131,7 +131,7 @@
                   <span class="badge badge-{{ 'running' if d.satisfied else 'stopped' }}">{{ 'satisfied' if d.satisfied else 'not found' }}</span>
                   {{ d.what }}
                   {% if not d.satisfied and d.install %}
-                    <div class="muted">install it:</div>{{ cmdbox('dep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install) }}
+                    <div class="muted">{{ 'grant it:' if d.runtime else 'install it:' }}</div>{{ cmdbox('dep-' ~ g.stack.id ~ '-' ~ loop.index0, d.install) }}
                   {% endif %}
                 </li>
               {% endfor %}

@@ -454,7 +454,8 @@ def _parse_component(raw: dict) -> Component:
         bin=raw.get("bin", ""),
         requires=tuple(
             Requirement(cmd=r.get("cmd", ""), install=r.get("install", ""),
-                        check_file=r.get("check_file", ""), note=r.get("note", ""))
+                        check_file=r.get("check_file", ""), note=r.get("note", ""),
+                        groups=tuple(r.get("groups", [])))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),

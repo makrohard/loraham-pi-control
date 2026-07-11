@@ -2,6 +2,7 @@
 verified healthy state. A daemon --radio both must verify BOTH bands; a dependent
 must not start when daemon readiness failed."""
 
+import pytest
 from lhpc.core.lifecycle import Lifecycle
 from conftest import real_spawn
 from lhpc.core.services import ControllerService
@@ -24,6 +25,7 @@ def _built_daemon(tmp_path):
     (d / "loraham_daemon").write_text("#!bin")          # is_built -> True
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch):
     _built_daemon(tmp_path)
     # Only 433 answers GET STATUS; 868's CONF socket never comes up.
@@ -226,6 +228,7 @@ def test_raw_launch_ok_does_not_decide_top_level_success(tmp_path):
     assert not res.ok or all(r.verified for r in res.results)
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypatch):
     # A verified start whose running-band marker cannot persist must report UNVERIFIED,
     # not VERIFIED — the marker drives multi-band decisions + dashboard state.

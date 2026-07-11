@@ -75,6 +75,7 @@ def _life(tmp_path):
                      Config(operator=OperatorConfig()), FakeSystem().system)
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_structured_start_records_real_executable_not_shell(tmp_path):
     life = _life(tmp_path)
     life.OBSERVE_TIMEOUT_S = 3.0          # exercise the real observation path
@@ -88,6 +89,7 @@ def test_structured_start_records_real_executable_not_shell(tmp_path):
     life.stop(comp)                                            # cleanup
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_identity_mismatch_leaves_no_record_and_terminates(tmp_path, reaper):
     import time
     life = _life(tmp_path)
@@ -135,6 +137,7 @@ def test_no_shell_in_lifecycle_and_job_sources():
         assert "sh -c" not in text and "bash -c" not in text
 
 
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
 def test_started_process_argv_is_not_a_shell(tmp_path):
     # Capture the argv LHPC actually spawns for the (migrated) daemon: it must be
     # the real executable, never /bin/sh -c.

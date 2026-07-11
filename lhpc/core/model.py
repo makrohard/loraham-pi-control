@@ -129,12 +129,18 @@ class Requirement:
     """A dependency a component needs, with how to install it. Satisfied when the
     command `cmd` is on PATH, or (if `check_file` is set) when that file exists —
     used for -dev library packages that ship a header rather than a command.
+
+    `groups` is a RUN-TIME capability requirement: satisfied only when the current process is a member of
+    ALL listed unix groups (e.g. spi/gpio for rootless device access). It is surfaced in the stack's
+    system-dependencies view and enforced at START, but is NOT part of the install gate (the binary
+    installs fine without the group). `install` then holds the copyable grant command.
     """
 
     cmd: str = ""
     install: str = ""           # e.g. "sudo apt install socat"
     check_file: str = ""        # e.g. "/usr/include/ncurses.h" (a header to test for)
     note: str = ""
+    groups: tuple[str, ...] = ()   # required unix-group membership (run-time capability)
 
 
 @dataclass(frozen=True)

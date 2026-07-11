@@ -2,6 +2,12 @@
 
 ## unreleased
 - lhpc dependencies
+- Crash-recovery hardening: source-activation journals now carry a ctime-hardened leaf identity (`[dev, ino, ctime_ns]`, "v5") so a substituted leaf recreated on a recycled inode can no longer be trusted during fd-less recovery. Migration you may see: pre-existing v2/v3/v4 journals are retained as *unprovable* and surface as a `recovery-required … retained` diagnostic after upgrade — inspect and clear them manually as the message instructs; this is expected, not a fault.
+- Deploy scripts: `install.sh`/`uninstall.sh` no longer abort when `$USER` is unset (minimal environments — systemd, cron, `su`).
+- `lhpc config` accepts its options before or after the positional `<param> [<value>]`, and reports too many arguments gracefully.
+- Meshtastic surfaces `spi`+`gpio` group membership as a run-time system dependency: the stack's System-dependencies view shows whether you have the rights and, when not, a copyable `sudo usermod -aG spi,gpio $USER` grant command (blocks start, not install).
+- Truthful web-UI proxy reachability: the dashboard link and each stack's Webserver header reflect the live nginx listener scope (loopback vs remote), not just the desired config, and flag a pending Apply when they differ.
+- Web-GUI polish: install-all wording; clearer spacing of the per-stack Save/Apply buttons.
 
 ## 0.1.4
 - Make web-GUI, meshcom and meshtastic GUI remote exposable With TLS and certificate-auth

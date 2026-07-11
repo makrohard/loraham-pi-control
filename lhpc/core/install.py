@@ -966,15 +966,15 @@ class Installer:
     def _journal_payload(self, dest: Path, prev: Path, staging: Path, state: str,
                          txn_id: str, meta: dict | None = None,
                          idents: dict | None = None) -> str:
-        """v4 journal: carries the OWNERSHIP metadata (`meta`) AND strict leaf-identity
-        evidence (`idents`: no-follow [dev, ino] for the CANDIDATE and the archived PRIOR),
-        so crash recovery can re-prove the exact leaves before any destructive step —
-        candidate promotion, prior restore, and prior cleanup all verify identity first.
-        `meta=None` renders a v2-shaped payload; meta-without-idents renders v3 (both are
-        still recoverable, with the older journals' destructive steps degraded to the
-        pre-identity checks — never an unsafe automatic cleanup)."""
+        """v5 journal: carries the OWNERSHIP metadata (`meta`) AND ctime-hardened leaf-identity
+        evidence (`idents`: no-follow [dev, ino, ctime_ns] for the CANDIDATE and the archived
+        PRIOR), so crash recovery can re-prove the exact leaves before any destructive step —
+        candidate promotion, prior restore, and prior cleanup all verify identity first. `ctime_ns`
+        defeats inode recycling (dev+ino alone is forgeable). `meta=None` renders a v2-shaped
+        payload; meta-without-idents renders v3. Older v2/v3/v4 journals are still PARSED at
+        recovery but retained-as-unprovable (never an unsafe automatic cleanup)."""
         import json
-        version = 2 if meta is None else (4 if idents is not None else 3)
+        version = 2 if meta is None else (5 if idents is not None else 3)
         payload = {
             "version": version, "state": state,
             "source_rel": self._source_rel(dest),
@@ -1023,17 +1023,42 @@ class Installer:
 
     @staticmethod
     def _valid_idents(idents) -> bool:
-        """Strict validation of v4 leaf-identity evidence (untrusted persisted input)."""
+        """Strict validation of v5 leaf-identity evidence (untrusted persisted input): each present
+        leaf ident is [dev, ino, ctime_ns] — exactly THREE ints (bools rejected)."""
         if not isinstance(idents, dict):
             return False
         for key in ("candidate", "prev"):
             v = idents.get(key)
             if v is None:
                 continue
-            if (not isinstance(v, list) or len(v) != 2
+            if (not isinstance(v, list) or len(v) != 3
                     or not all(isinstance(x, int) and not isinstance(x, bool) for x in v)):
                 return False
         return True
+
+    @staticmethod
+    def _v5_leaf_ident(txn, handle, name):
+        """Ctime-hardened [dev, ino, ctime_ns] for a captured leaf, from a FRESH view of its inode at
+        THIS moment — NOT the stale creation-time handle ctime (a candidate dir's ctime changes as it
+        is populated, and a rename bumps ctime). A dir handle's retained fd follows the inode through
+        renames, so `fstat` gives the live ctime; a symlink handle (fd < 0) is lstat'd by its CURRENT
+        name. Returns None if unreadable (the caller then records no ident and recovery retains)."""
+        try:
+            if getattr(handle, "fd", -1) >= 0:
+                ctime = os.fstat(handle.fd).st_ctime_ns
+            else:
+                ctime = os.stat(name, dir_fd=txn.fd, follow_symlinks=False).st_ctime_ns
+        except OSError:
+            return None
+        return [handle.st_dev, handle.st_ino, ctime]
+
+    def _v5_idents(self, txn, handle, prior, cand_name, prior_name):
+        """The journal idents dict — candidate (at `cand_name`) and archived prior (at `prior_name`),
+        each ctime-hardened from a FRESH view at this journal transition (see `_v5_leaf_ident`)."""
+        return {
+            "candidate": (self._v5_leaf_ident(txn, handle, cand_name) if handle is not None else None),
+            "prev": (self._v5_leaf_ident(txn, prior, prior_name) if prior is not None else None),
+        }
 
     def _managed_source_dests(self) -> set:
         """The EXACT set of resolved managed-source destination paths from the loaded
@@ -1121,11 +1146,11 @@ class Installer:
         try:
             try:
                 j = json.loads(marker.read())                  # read THROUGH the retained fd
-                if j.get("version") not in (2, 3, 4) or j.get("state") not in self._VALID_STATES:
+                if j.get("version") not in (2, 3, 4, 5) or j.get("state") not in self._VALID_STATES:
                     raise ValueError("bad version/state")
                 meta = None
                 idents = None
-                if j.get("version") == 4:
+                if j.get("version") == 5:
                     meta = j.get("meta")
                     if not self._valid_meta(meta):
                         raise ValueError("bad ownership metadata")
@@ -1163,13 +1188,16 @@ class Installer:
                         "local changes — retained for the OPERATOR (inspect/salvage, then "
                         "remove the .prev directory and this journal manually); automatic "
                         "recovery will not delete it")
-            # GENERATIONAL FAIL-CLOSED: only a v4 journal carries the complete, current
-            # leaf-identity evidence automatic recovery requires. Structurally-valid v2/v3
-            # journals are NEVER silently upgraded into authority for destructive work —
-            # every leaf and the journal are retained with a truthful operator diagnostic.
-            if j.get("version") in (2, 3):
+            # GENERATIONAL FAIL-CLOSED: only a v5 journal carries ctime-hardened leaf-identity
+            # evidence automatic recovery can trust. v2/v3 have no leaf identity at all; v4's
+            # [dev, ino]-only identity is FORGEABLE via inode recycling (ext4 hands a substituted
+            # leaf recreated on the recycled inode the same dev+ino), so a v4 journal must NOT
+            # authorize a destructive restore/cleanup either. All of v2/v3/v4 retain-as-unprovable:
+            # every leaf and the journal are kept with a truthful operator diagnostic.
+            if j.get("version") in (2, 3, 4):
                 return (f"recovery-required: journal {jf.name} is generation "
-                        f"v{j['version']} (no leaf-identity evidence) — automatic recovery "
+                        f"v{j['version']} (no ctime-hardened leaf-identity evidence — v4's "
+                        "dev+ino identity is defeatable by inode recycling) — automatic recovery "
                         "refused; all leaves and the journal are retained. Inspect "
                         f"{self._source_rel(dest)} and its .prev/candidate siblings "
                         "manually, then remove the journal and re-adopt/update the source.")
@@ -1198,7 +1226,9 @@ class Installer:
         except (OSError, PathContainmentError):
             return None
         try:
-            if prev_ident is not None and [h.st_dev, h.st_ino] != list(prev_ident):
+            # dev+ino here (a read-only dirty probe); the DESTRUCTIVE gate `_prev_cleanup_ok`
+            # enforces the full v5 ctime before any removal. `prev_ident` may be v5 (3-element).
+            if prev_ident is not None and [h.st_dev, h.st_ino] != list(prev_ident[:2]):
                 return None                        # substituted -> existing retention path
             return bool(self.dirty_report(Path(h.pinned_path()), self._source_rel(dest)))
         finally:
@@ -1363,10 +1393,10 @@ class Installer:
                     except (OSError, PathContainmentError):
                         pass                            # fall through to prior restore
                     else:
-                        # POST-promotion re-proof: the destination must STILL be the
-                        # recorded candidate (a swap immediately after the rename is
-                        # detected; everything retained).
-                        if not source_fs.ident_matches(txn.fd, dest.name, cand_ident):
+                        # POST-promotion re-proof is dev+ino ONLY: our own rename just bumped the
+                        # candidate's ctime, so the v5 ctime was already proven on `staging` above;
+                        # here we only confirm the name still resolves to THAT inode (swap detection).
+                        if not source_fs.ident_matches(txn.fd, dest.name, list(cand_ident[:2])):
                             return (f"recovery-required for {dest.name}: destination is no "
                                     "longer the recorded candidate after promotion "
                                     "(everything retained)")
@@ -1393,8 +1423,10 @@ class Installer:
                     except (OSError, PathContainmentError):
                         return (f"recovery-required for {dest.name}: could not restore prior "
                                 "(journal + candidate/prior retained)")
-                    # POST-restore re-proof: the destination must be the restored prior.
-                    if not source_fs.ident_matches(txn.fd, dest.name, prev_ident):
+                    # POST-restore re-proof is dev+ino ONLY: our own rename just bumped the prior's
+                    # ctime (the v5 ctime was proven on `.prev` above); confirm the name resolves to
+                    # THAT inode.
+                    if not source_fs.ident_matches(txn.fd, dest.name, list(prev_ident[:2])):
                         return (f"recovery-required for {dest.name}: destination is not the "
                                 "restored prior (everything retained)")
                     if not txn.usable(dest.name):
@@ -1506,9 +1538,8 @@ class Installer:
         # any candidate/dest/`.prev` mutation; the injected leaf is preserved for recovery.
         idents = None
         if meta is not None:
-            idents = {"candidate": ([handle.st_dev, handle.st_ino] if handle is not None
-                                    else None),
-                      "prev": ([prior.st_dev, prior.st_ino] if prior is not None else None)}
+            # v5 ctime-hardened idents: candidate still at `staging`, prior still at `dest`.
+            idents = self._v5_idents(txn, handle, prior, staging.name, dest.name)
         jh = self._create_journal(dest, prev, staging, meta, idents)
         if jh is None:
             return "recovery-required"
@@ -1559,6 +1590,11 @@ class Installer:
                         return "recovery-required"
                     archived = True                     # the prior IS archived now — set BEFORE
                     txn.fsync()                         # the journal write, so a later failure
+                    # REFRESH the prior ident: dest -> .prev renamed the prior, which bumps its
+                    # ctime, so the journal must record the .prev's CURRENT ctime for recovery to
+                    # re-prove it. (Candidate is untouched — still at `staging`.)
+                    if jh.get("idents") is not None:
+                        jh["idents"] = self._v5_idents(txn, handle, prior, staging.name, prev.name)
                     if not self._update_journal(jh, dest, prev, staging, "prior-archived"):
                         raise _JournalLost()
                     # SECOND dirty scan THROUGH THE CAPTURED PRIOR HANDLE, after the archive
@@ -1601,6 +1637,10 @@ class Installer:
                         return "recovery-required"
                     return "recovery-required"           # .prev + journal retained (evidence)
                 txn.fsync()
+                # REFRESH the candidate ident: candidate -> dest renamed it, bumping its ctime, so
+                # the journal records the active leaf's CURRENT ctime. (Prior untouched — at `.prev`.)
+                if jh.get("idents") is not None:
+                    jh["idents"] = self._v5_idents(txn, handle, prior, dest.name, prev.name)
                 if not self._update_journal(jh, dest, prev, staging, "activated"):
                     raise _JournalLost()
                 # POST-rename: the ACTIVE leaf must be exactly our captured candidate/link.

@@ -154,6 +154,12 @@ class Lifecycle:
         -dev packages) a `check_file` header that does not exist."""
         missing = []
         for req in comp.requires:
+            if req.groups:
+                # RUN-TIME capability: the current process must be in ALL listed unix groups (rootless
+                # device access). Read through the injectable seam so tests drive it with FakeSystem.
+                if not set(req.groups) <= self.system.fs.user_groups():
+                    missing.append(req)
+                continue
             if req.check_file:
                 if not self.system.fs.exists(req.check_file):
                     missing.append(req)

@@ -165,7 +165,9 @@ a.iface { text-decoration: none; color: var(--brand); }
 .complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
 /* Separate the per-stack webserver Apply button from the Save button above it, and render Apply as a
    SOLID blue button like Save (it sits in `.act`, which would otherwise make it outlined). */
-.ws-apply { margin-top: 1rem; }
+/* `.act.ws-apply` (0,0,2,0) out-specifies `.act { margin: 0 }` (0,0,1,0) below, which otherwise zeroes
+   this — separating the Apply button from Save above and the "not live yet" banner below. */
+.act.ws-apply { margin-top: 1.25rem; margin-bottom: 1rem; }
 /* `.act.ws-apply` (both classes the form carries) out-specifies the `.act button` outline rule below. */
 .act.ws-apply button { background: var(--brand); color: #fff; border: 1px solid var(--brand); }
 .act.ws-apply button:hover { background: #0a4f93; }

@@ -73,6 +73,7 @@ class FileSystem(Protocol):
     def exists(self, path: str) -> bool: ...
     def is_socket(self, path: str) -> bool: ...
     def is_char_device(self, path: str) -> bool: ...
+    def user_groups(self) -> frozenset[str]: ...   # unix-group names of the current process
 
 
 class UnixClient(Protocol):
@@ -329,6 +330,28 @@ class RealFileSystem:
         except OSError:
             return False
 
+    def user_groups(self) -> frozenset[str]:
+        """Unix-group NAMES the invoking OPERATOR is CONFIGURED into — from the group database
+        (`os.getgrouplist`: /etc/group memberships + the primary group), i.e. exactly what
+        `usermod -aG` grants and what `id -nG` shows. NOT `os.getgroups()` (the running process's
+        cached supplementary groups): a long-lived or lingering service that started BEFORE the groups
+        were granted keeps stale supplementary groups, which would report a genuinely-granted member as
+        missing until the service/session is restarted (the manifest's 'log out/reboot to apply' step).
+        Read-only, no subprocess (safe on GET)."""
+        import grp
+        import pwd
+        try:
+            gids = os.getgrouplist(pwd.getpwuid(os.getuid()).pw_name, os.getgid())
+        except (KeyError, OSError):
+            gids = list(set(os.getgroups()) | {os.getgid()})   # fallback if the passwd entry is absent
+        names = set()
+        for gid in gids:
+            try:
+                names.add(grp.getgrgid(gid).gr_name)
+            except (KeyError, OSError):
+                pass
+        return frozenset(names)
+
 
 class RealUnixClient:
     def request(
@@ -401,6 +424,10 @@ class FakeSystem:
     unix_replies: dict[str, bytes] = field(default_factory=dict)
     unix_errors: dict[str, str] = field(default_factory=dict)
     calls: list[list[str]] = field(default_factory=list)
+    # Distinct name from the user_groups() method (a dataclass field cannot share a method's name).
+    # Permissive default so existing tests that start hardware stacks stay green; the missing-capability
+    # case is opted into with user_group_names=frozenset().
+    user_group_names: frozenset[str] = frozenset({"spi", "gpio"})
 
     # CommandRunner
     def run(self, argv: list[str], timeout: float,
@@ -432,6 +459,9 @@ class FakeSystem:
 
     def is_char_device(self, path: str) -> bool:
         return path in self.char_devices
+
+    def user_groups(self) -> frozenset[str]:
+        return self.user_group_names
 
     # UnixClient
     sent: list[tuple[str, bytes]] = field(default_factory=list)

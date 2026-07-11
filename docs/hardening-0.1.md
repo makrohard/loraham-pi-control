@@ -387,6 +387,15 @@ manifest-managed source, whose candidate/`.prev` names are non-controller, OR wh
 `txn_id` is absent (legacy) or altered. A legacy basename-only or txn_id-less journal is
 therefore **retained + blocking** (never silently migrated or deleted).
 
+**v5 leaf identity — residual same-user window**: fd-less crash recovery now proves each candidate/`.prev`
+leaf by NAME with a ctime-hardened identity (`[dev, ino, ctime_ns]`) tightly before the restore/promote
+rename, closing the inode-recycling forgery that a bare `[dev, ino]` allowed. A theoretical same-user
+TOCTOU window remains between that pre-rename proof and the rename syscall itself — a delete+recreate on
+the recycled inode inside that gap would still survive the dev+ino post-rename re-proof — but this is
+inherent to POSIX rename-by-name, the window is microseconds versus the pre-v5 *unbounded* crash gap, and
+the layered pre-proof / held-seam / post-proof design is the accepted mitigation within the same-user
+trust domain.
+
 **Shared, fail-closed process-tree termination** (`core/proctree.py`): the bounded command
 runner AND the detached build/test launcher use ONE tested `terminate_session(token, …)`. The
 token is a **typed immutable `SessionToken`** (frozen dataclass: leader pid, start time, sid,

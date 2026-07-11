@@ -317,12 +317,12 @@ def test_recovery_retains_occupied_dest_and_substituted_prev(tmp_path):
     st = os.stat(prev, follow_symlinks=False)
     inst._journal_path(dest).parent.mkdir(parents=True, exist_ok=True)
     inst._journal_path(dest).write_text(json.dumps({
-        "version": 4, "state": "prior-archived", "source_rel": rel(dest),
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel),
         "meta": {"selector": "dev", "resolved_commit": "a" * 40, "remote": "",
                  "strategy": "", "components": ["app"], "had_prior": True},
-        "idents": {"candidate": None, "prev": [st.st_dev, st.st_ino]}}))
+        "idents": {"candidate": None, "prev": [st.st_dev, st.st_ino, st.st_ctime_ns]}}))
     msgs = inst.recover_source_activations()
     assert any("recovery-required" in m and ("occupied" in m or "unverified occupant" in m)
                for m in msgs)
@@ -342,9 +342,9 @@ def test_recovery_retains_occupied_dest_and_substituted_prev(tmp_path):
 
 # --- FINAL: substitution at every last-cleanup proof; frozen plans; marker retirement ---------
 
-def test_v4_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch):
+def test_v5_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch):
     # The candidate is swapped between the recovery pre-rename ident proof and the rename:
-    # the POST-promotion re-proof detects it — no foreign promotion, no cleanup, retained.
+    # the POST-promotion re-proof (dev+ino) detects it — no foreign promotion, no cleanup, retained.
     import json
     _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
@@ -357,12 +357,12 @@ def test_v4_recovery_promotion_substitution_after_preproof(tmp_path, monkeypatch
     st = os.stat(staging, follow_symlinks=False)
     inst._journal_path(dest).parent.mkdir(parents=True, exist_ok=True)
     inst._journal_path(dest).write_text(json.dumps({
-        "version": 4, "state": "prior-archived", "source_rel": rel(dest),
+        "version": 5, "state": "prior-archived", "source_rel": rel(dest),
         "prev_rel": rel(src / ".app.prev"), "candidate_rel": rel(staging),
         "txn_id": inst._txn_id(rel(staging)),
         "meta": {"selector": "dev", "resolved_commit": "", "remote": "",
                  "strategy": "", "components": ["app"], "had_prior": False},
-        "idents": {"candidate": [st.st_dev, st.st_ino], "prev": None}}))
+        "idents": {"candidate": [st.st_dev, st.st_ino, st.st_ctime_ns], "prev": None}}))
 
     def swap(_path):
         shutil.move(str(staging), str(tmp_path / "stolen"))
@@ -681,12 +681,12 @@ def test_prev_dirty_during_recovery_cleanup_is_retained(tmp_path, monkeypatch):
 
     def ident(q):
         st = os.stat(q, follow_symlinks=False)
-        return [st.st_dev, st.st_ino]
+        return [st.st_dev, st.st_ino, st.st_ctime_ns]   # v5 ctime-hardened ident
     import json as _json
     jf = inst._journal_path(dest)
     jf.parent.mkdir(parents=True, exist_ok=True)
     jf.write_text(_json.dumps({
-        "version": 4, "state": "activated", "source_rel": rel(dest),
+        "version": 5, "state": "activated", "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": staging_rel,
         "txn_id": inst._txn_id(staging_rel),
         "meta": {"selector": "dev", "resolved_commit": v2_head, "remote": "",

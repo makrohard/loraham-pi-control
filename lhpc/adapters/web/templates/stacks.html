@@ -113,9 +113,8 @@
 
   <div class="card">
     <div class="body">
-      <p>Set up (or refresh) everything in one guided run — installs, builds and
-        optionally tests every stack in dependency order.
-        <span class="muted">This can take several minutes.</span></p>
+      <p>Installs (or refreshes), builds and optionally tests every stack in dependency order.<br>
+        <strong>This can take several minutes.</strong></p>
       <p><a href="{{ url_for('install_all_page') }}"><button type="button">
         {% if bulk_mode == 'install' %}Install and Build all Stacks
         {% elif bulk_mode == 'update' %}Update all Stacks

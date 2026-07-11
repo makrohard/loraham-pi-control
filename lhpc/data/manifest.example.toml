@@ -801,7 +801,7 @@ main = "meshtastic"
     { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], optional = true },
     { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], optional = true },
   ]
-  note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). You are already in the spi+gpio groups, so lhpc runs/stops it WITHOUT root. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
+  note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). lhpc runs/stops it WITHOUT root ONLY WHEN you are in the spi+gpio groups — see System dependencies below; grant with the shown command (then log out/in or reboot) if missing. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
     [[stack.component.param]]
     name = "region"
@@ -840,6 +840,10 @@ main = "meshtastic"
     check_file = "/dev/spidev0.0"
     install = "Enable SPI: add 'dtparam=spi=on' and 'dtoverlay=spi0-0cs' to /boot/firmware/config.txt, then reboot"
     note = "SPI device (RF95 on SPI0)"
+    [[stack.component.require]]
+    groups = ["spi", "gpio"]
+    install = "sudo usermod -aG spi,gpio $USER"
+    note = "spi + gpio group membership — needed to run meshtasticd WITHOUT root. After granting, log out and back in (or reboot) to apply."
 
     # meshtasticd YAML config generated from the LoRaHAM base, per band (the Lora
     # pins differ between the 433 and 868 boards). Written to the runtime root so no
