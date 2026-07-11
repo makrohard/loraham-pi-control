@@ -25,9 +25,9 @@
     {% if view.radios %}
       <section class="cfgsec">
         {% for radio in view.radios %}
-          <h4>{{ radio.band }} MHz
+          <h3>{{ radio.band }} MHz
             <span class="badge badge-{{ 'running' if radio.reachable else 'stopped' }}">
-              {{ 'live' if radio.reachable else 'offline' }}</span></h4>
+              {{ 'live' if radio.reachable else 'offline' }}</span></h3>
           {% if not radio.reachable %}
             <p class="muted">Daemon not serving {{ radio.band }} MHz — start it to tune live.</p>
           {% else %}
@@ -206,7 +206,7 @@
 
     {% if view.optional %}
       <section class="cfgsec">
-        <h4>Run an optional component now</h4>
+        <h3>Run an optional component now</h3>
         <div class="actrow">
           {% for opt in view.optional %}
             <span class="actgroup">

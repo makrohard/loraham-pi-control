@@ -3,12 +3,14 @@
    modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
 {% from "_macros.html" import flash_classes %}
 <details class="advcfg ws-comp" id="webserver-row">
-  <summary>Webserver (HTTPS / mTLS)<a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener">logs</a></summary>
+  <summary>Webserver (HTTPS / mTLS)</summary>
 
   {# ---- Monitor (cached evidence only; collapsed by default) ---- #}
   <details class="advcfg">
     <summary>Monitor</summary>
     <section class="cfgsec">
+      {# logs link in the body (not the summary) — no interactive element nested in the summary (a11y). #}
+      <p><a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener" aria-label="webserver access logs">logs</a></p>
       {% for w in mon.warnings %}
         <p class="flash {{ flash_classes(w.level) }}">{{ w.text }}</p>
       {% endfor %}
@@ -28,7 +30,7 @@
           server-cert {{ 'present' if mon.pki.server_cert.present else 'absent' }} ·
           CRL {{ 'present' if mon.pki.crl_present else 'absent' }}</li>
       </ul>
-      <h4>System dependencies</h4>
+      <h3>System dependencies</h3>
       <ul class="kv sysdeps">
         {% for d in mon.system_deps %}
         <li>{{ d.name }}: <code>{{ d.status }}</code> — {{ d.purpose }}
@@ -48,19 +50,19 @@
     <section class="cfgsec">
       <form method="post" action="{{ url_for('webserver_configure') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label>Bind</label>
-          <input name="bind" value="{{ mon.desired.bind }}">
+        <p class="setting"><label for="ws-bind">Bind</label>
+          <input id="ws-bind" name="bind" value="{{ mon.desired.bind }}">
           <span class="muted">127.0.0.1 (loopback) or 0.0.0.0 (remote)</span></p>
-        <p class="setting"><label>Port</label>
-          <input name="port" value="{{ mon.desired.port }}">
+        <p class="setting"><label for="ws-port">Port</label>
+          <input id="ws-port" name="port" value="{{ mon.desired.port }}">
           <span class="muted">HTTPS port (default 8443)</span></p>
-        <p class="setting"><label>Scheme</label>
-          <select name="scheme" class="schemesel" data-authsel="ws-authsel">
+        <p class="setting"><label for="ws-scheme">Scheme</label>
+          <select id="ws-scheme" name="scheme" class="schemesel" data-authsel="ws-authsel">
             <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
             <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
           </select>
           <span class="muted">http disables client-certificate auth entirely (no TLS handshake)</span></p>
-        <p class="setting"><label>Access mode</label>
+        <p class="setting"><label for="ws-authsel">Access mode</label>
           <select name="access_mode" id="ws-authsel">
             {% for m in modes %}
               {# Cosmetic only — webserver_configure refuses http + a cert-based mode server-side. #}
@@ -69,11 +71,11 @@
             {% endfor %}
           </select>
           <span class="muted">Client-certificate (mTLS) policy</span></p>
-        <p class="setting"><label>DNS SANs</label>
-          <input name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}">
+        <p class="setting"><label for="ws-dns-sans">DNS SANs</label>
+          <input id="ws-dns-sans" name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}">
           <span class="muted">Comma-separated hostnames for the server certificate</span></p>
-        <p class="setting"><label>IP SANs</label>
-          <input name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}">
+        <p class="setting"><label for="ws-ip-sans">IP SANs</label>
+          <input id="ws-ip-sans" name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}">
           <span class="muted">Comma-separated LAN IPs (never 0.0.0.0)</span></p>
         <button type="submit">Save desired config</button>
       </form>
@@ -82,19 +84,19 @@
         <button type="submit">Apply (validate + reload)</button>
       </form>
 
-      <h4>Remote exposure</h4>
+      <h3>Remote exposure</h3>
       <form method="post" action="{{ url_for('webserver_expose') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label>Allowed CIDRs</label>
-          <input name="cidrs" placeholder="192.168.0.0/24">
+        <p class="setting"><label for="ws-expose-cidrs">Allowed CIDRs</label>
+          <input id="ws-expose-cidrs" name="cidrs" placeholder="192.168.0.0/24">
           <span class="muted">At least one required for remote exposure</span></p>
-        <p class="setting"><label>Access mode</label>
-          <select name="access_mode">
+        <p class="setting"><label for="ws-expose-access-mode">Access mode</label>
+          <select id="ws-expose-access-mode" name="access_mode">
             <option value="">(keep)</option>
             {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
           </select></p>
-        <p class="setting"><label>Confirm</label>
-          <input name="confirm_phrase" autocomplete="off">
+        <p class="setting"><label for="ws-expose-confirm">Confirm</label>
+          <input id="ws-expose-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">Type <code>enable-remote</code> — or <code>enable-remote-danger</code>
             for public <code>0.0.0.0/0</code> / no-auth remote</span></p>
         <button type="submit">Enable remote exposure</button>
@@ -104,11 +106,11 @@
         <button type="submit">Disable remote</button>
       </form>
 
-      <h4>Reset</h4>
+      <h3>Reset</h3>
       <form method="post" action="{{ url_for('webserver_reset') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label>Confirm</label>
-          <input name="confirm_phrase" autocomplete="off">
+        <p class="setting"><label for="ws-reset-confirm">Confirm</label>
+          <input id="ws-reset-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">Type <code>reset</code> to confirm</span></p>
         <button type="submit">Reset to default</button>
       </form>
@@ -124,8 +126,8 @@
     <section class="cfgsec">
       <form method="post" action="{{ url_for('webserver_init') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label>Initialize PKI</label>
-          <input name="confirm_phrase" autocomplete="off">
+        <p class="setting"><label for="ws-init-confirm">Initialize PKI</label>
+          <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
         <button type="submit">Initialize / recreate PKI</button>
       </form>
@@ -136,8 +138,8 @@
       <form method="post" action="{{ url_for('webserver_cert') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="op" value="issue">
-        <p class="setting"><label>Issue client cert</label>
-          <input name="label" placeholder="laptop">
+        <p class="setting"><label for="ws-issue-label">Issue client cert</label>
+          <input id="ws-issue-label" name="label" placeholder="laptop">
           <span class="muted">Device label; prints a one-time bundle passphrase</span></p>
         <button type="submit">Issue</button>
       </form>
@@ -153,7 +155,7 @@
           <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}</td>
           <td>
             {% if c.state == 'active' %}
-              <form method="post" action="{{ url_for('webserver_cert') }}" style="display:inline">
+              <form method="post" action="{{ url_for('webserver_cert') }}" class="inline">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="revoke">
                 <input type="hidden" name="label" value="{{ c.label }}">

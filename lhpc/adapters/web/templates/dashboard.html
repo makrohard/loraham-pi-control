@@ -26,6 +26,7 @@
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="op" value="restart">
           <input type="hidden" name="target" value="{{ sid }}">
+          <input type="hidden" name="from" value="dash">
           <button type="submit" class="warnbtn">Restart {{ sid }} now</button>
         </form>
       {% endfor %}
@@ -50,7 +51,7 @@
 
           {# --- radio config (only when the daemon serves this band) --- #}
           {% if r.daemon.reachable %}
-            <h4><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a>
+            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">Radio config</a>
               <form method="post" action="{{ url_for('action') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="op" value="stop">
@@ -59,7 +60,7 @@
                 <input type="hidden" name="from" value="dash">
                 <button type="submit">Stop daemon ({{ r.band }})</button>
               </form>
-            </h4>
+            </h3>
             <p class="links">
               <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}" target="_blank" rel="noopener">daemon log</a>
             </p>
@@ -108,7 +109,7 @@
           {% endif %}
 
           {# --- running stack(s) on this band --- #}
-          <h4>Running on {{ r.band }}</h4>
+          <h3>Running on {{ r.band }}</h3>
           {% if r.running %}
             {% for s in r.running %}
               <div class="runstack">
@@ -118,8 +119,8 @@
                   {% for c in s.components %}
                     <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
-                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}">config</a>{% endif %}
-                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" target="_blank" rel="noopener">log</a>{% endif %}
+                      {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
+                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" target="_blank" rel="noopener" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {% for itf in c.interfaces %}
                         {% if itf.proxy_remote and itf.proxy_port and req_host %}
                           {# Point at the host the browser used to reach the console, on the proxy's
@@ -175,7 +176,7 @@
 
           {# --- interactive apps: tracked, but the operator starts them in a terminal --- #}
           {% if r.interactive %}
-            <h4>Interactive apps</h4>
+            <h3>Interactive apps</h3>
             {% for s in r.interactive %}
               <div class="runstack">
                 {% if s.running %}
@@ -208,7 +209,7 @@
 
           {# --- start another stack on this band --- #}
           {% if r.startable %}
-            <h4>Start a stack on {{ r.band }}</h4>
+            <h3>Start a stack on {{ r.band }}</h3>
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">

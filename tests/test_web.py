@@ -2048,3 +2048,28 @@ def test_controller_system_deps_makes_no_subprocess(tmp_path):
     svc = ControllerService(system=s, paths=Paths(runtime_root=tmp_path))
     svc.controller_system_deps()
     assert calls == []
+
+
+# --- return-to-site: dash-originated actions come back to the Dashboard --------------------------
+
+def test_dash_originated_action_returns_to_dashboard(tmp_path):
+    # A Dashboard button carries from=dash -> _redirect_for sends the applied action back to the
+    # Dashboard (root), never to /stacks.
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "igate",
+                                "from": "dash", "confirmed": "yes"})
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith("/")         # dashboard root, not a /stacks anchor
+    assert "/stacks" not in r.headers["Location"]
+
+
+def test_stacks_originated_action_returns_to_its_stack_row(tmp_path):
+    # No from=dash -> the action returns to the acting stack's row on /stacks.
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "igate",
+                                "confirmed": "yes"})
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert "/stacks" in loc and "open=igate" in loc

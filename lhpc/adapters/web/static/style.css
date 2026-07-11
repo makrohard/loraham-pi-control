@@ -9,13 +9,38 @@
   --muted: #5b6677;
   --line: #e2e8f0;
   --brand: #0b5cab;
+  --brand-hover: #0a4f93;
   --brand-ink: #ffffff;
+  /* Primary-button fill — separate from --brand so links/outlines stay bright on dark while filled
+     buttons use a muted deep blue in dark mode. */
+  --btn-bg: #0b5cab;  --btn-ink: #ffffff;  --btn-hover: #0a4f93;
+  --header-ink: #ffffff;   /* nav/banner text — white in BOTH themes (banner is dark-blue in both) */
   --ok: #1a7f37;
   --warn: #9a6700;
   --bad: #c1121f;
   --idle: #57606a;
   --shadow: 0 1px 3px rgba(16, 24, 40, .08), 0 1px 2px rgba(16, 24, 40, .06);
   --radius: 10px;
+  color-scheme: light;   /* native controls (checkboxes, radios, scrollbars, select popups) follow theme */
+
+  /* Derived surface tokens (light). A single dark block (:root[data-theme="dark"], plus the no-JS
+     prefers-color-scheme fallback) re-points ALL of these — see the end of this file. */
+  --header-grad-a: #0b5cab;
+  --header-grad-b: #0a4f93;
+  --warnbox-bg: #fff8e6;  --warnbox-border: #f5d98a;  --warnbox-ink: #6b4e00;
+  --badge-ok-bg: #e7f6ec;   --badge-ok-border: #b7e3c4;
+  --badge-warn-bg: #fbf1d8;  --badge-warn-border: #f0d79a;
+  --badge-bad-bg: #fde7e9;   --badge-bad-border: #f3b9bf;
+  --badge-idle-bg: #eef1f4;  --badge-idle-border: #dbe1e8;  --badge-idle-ink: #57606a;
+  --pill-bg: #eef2f7;  --pill-ink: #334455;
+  --conflict-bg: #fdf0f0;  --conflict-border: #f3b9bf;  --conflict-ink: #7a1620;
+  --flash-ok-bg: #e7f6ec;  --flash-ok-border: #b7e3c4;  --flash-ok-ink: #1a7f37;
+  --flash-warn-bg: #fff8e1; --flash-warn-border: #ffe0a3; --flash-warn-ink: #7a5200;
+  --flash-bad-bg: #fdecea;  --flash-bad-border: #f1a9a0;  --flash-bad-ink: #a01b10;
+  --flash-info-bg: #eef2f7; --flash-info-border: #cdd7e3; --flash-info-ink: #33414f;
+  --warnbtn-bg: #fff3cd;  --warnbtn-border: #e0b64f;  --warnbtn-ink: #7a5200;
+  --code-bg: #0f1b2a;  --code-ink: #d7e3f2;
+  --field-bad-bg: rgba(224, 82, 82, .12);
 }
 
 * { box-sizing: border-box; }
@@ -25,20 +50,30 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;                 /* a stray wide child can't drag the whole page sideways */
 }
 
 a { color: var(--brand); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+/* Wide content stays reachable: pre scrolls inside its box; long unbroken commands wrap. */
+pre { max-width: 100%; overflow-x: auto; }
+code { overflow-wrap: anywhere; }
+/* Content sub-section heading fallback (many were <h4>, promoted to <h3> for sequential heading order):
+   compact, like the old <h4>. More specific rules (.card>header h3 / .panel h3 / .cfgsec h3) still win. */
+h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
+/* Screen-reader-only structural heading — present in the a11y outline, invisible on screen. */
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+                   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Header / footer ------------------------------------------------------- */
 .site-header {
-  background: linear-gradient(180deg, #0b5cab, #0a4f93);
-  color: var(--brand-ink);
+  background: linear-gradient(180deg, var(--header-grad-a), var(--header-grad-b));
+  color: var(--header-ink);
   padding: 1rem 1.25rem;
   box-shadow: var(--shadow);
 }
-.site-header a { color: var(--brand-ink); }
+.site-header a { color: var(--header-ink); }
 .site-header h1 { margin: 0; font-size: 1.2rem; letter-spacing: .2px; }
 .site-header .sub { opacity: .85; font-size: .85rem; margin-top: .2rem; }
 /* Header line is the navigation: the title is the Dash/home button (left), "Apps" is a same-style
@@ -59,10 +94,10 @@ code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas,
 .deps .badge { font-size: .7rem; }
 .links { font-size: .9rem; margin-top: .6rem; }
 .stack-group > header h2 a { color: var(--ink); }
-.jobrun { background: #fff8e6; border: 1px solid #f5d98a; color: #6b4e00;
+.jobrun { background: var(--warnbox-bg); border: 1px solid var(--warnbox-border); color: var(--warnbox-ink);
           padding: .4rem .7rem; border-radius: 6px; font-size: .9rem; }
 .banner {
-  background: #fff8e6; border: 1px solid #f5d98a; color: #6b4e00;
+  background: var(--warnbox-bg); border: 1px solid var(--warnbox-border); color: var(--warnbox-ink);
   padding: .6rem .9rem; border-radius: var(--radius); margin: 0 0 1rem;
 }
 .site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem; }
@@ -97,25 +132,25 @@ tr:last-child td { border-bottom: none; }
 /* Status badges (colour + text label, never colour alone) --------------- */
 .badge { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
 .badge::before { content: "● "; }
-.badge-running { background: #e7f6ec; color: var(--ok); border-color: #b7e3c4; }
-.badge-degraded { background: #fbf1d8; color: var(--warn); border-color: #f0d79a; }
-.badge-booting { background: #fbf1d8; color: var(--warn); border-color: #f0d79a; }   /* transient: firmware booting / callsign applying */
-.badge-failed { background: #fde7e9; color: var(--bad); border-color: #f3b9bf; }
-.badge-stopped, .badge-not-installed, .badge-unknown { background: #eef1f4; color: var(--idle); border-color: #dbe1e8; }
-.badge-not-applicable { background: #eef1f4; color: var(--idle); border-color: #dbe1e8; }
+.badge-running { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
+.badge-degraded { background: var(--badge-warn-bg); color: var(--warn); border-color: var(--badge-warn-border); }
+.badge-booting { background: var(--badge-warn-bg); color: var(--warn); border-color: var(--badge-warn-border); }   /* transient: firmware booting / callsign applying */
+.badge-failed { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
+.badge-stopped, .badge-not-installed, .badge-unknown { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
+.badge-not-applicable { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable::before { content: "– "; }
 
-.pill { display: inline-block; padding: .05rem .45rem; border-radius: 6px; background: #eef2f7; color: #344; font-size: .78rem; border: 1px solid var(--line); }
+.pill { display: inline-block; padding: .05rem .45rem; border-radius: 6px; background: var(--pill-bg); color: var(--pill-ink); font-size: .78rem; border: 1px solid var(--line); }
 .tx-enabled { color: var(--bad); font-weight: 600; }
 .tx-disabled { color: var(--idle); }
 
 /* Panels inside stack detail ------------------------------------------- */
 .panel { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .8rem; margin: .6rem 0; }
-.panel h4 { margin: 0 0 .35rem; font-size: .82rem; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+.panel h4, .panel h3 { margin: 0 0 .35rem; font-size: .82rem; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
 .kv { margin: 0; }
 .kv li { list-style: none; }
 ul.clean { margin: .2rem 0; padding-left: 1.1rem; }
-.conflict { background: #fdf0f0; border: 1px solid #f3b9bf; color: #7a1620; padding: .5rem .8rem; border-radius: 8px; }
+.conflict { background: var(--conflict-bg); border: 1px solid var(--conflict-border); color: var(--conflict-ink); padding: .5rem .8rem; border-radius: 8px; }
 .muted { color: var(--muted); }
 details summary { cursor: pointer; color: var(--brand); font-size: .88rem; }
 details[open] summary { margin-bottom: .4rem; }
@@ -124,7 +159,7 @@ details.monitor > summary { font-size: 1rem; font-weight: 600; color: var(--ink)
                             margin: .6rem 0 .3rem; }
 .monrssi th { white-space: nowrap; }
 .monrssi td { display: flex; align-items: center; gap: .5rem; }
-pre.next { background: #0f1b2a; color: #d7e3f2; padding: .6rem .8rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
+pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); padding: .6rem .8rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
 .endpoint-ok { color: var(--ok); }
 .endpoint-bad { color: var(--idle); }
 
@@ -133,15 +168,25 @@ pre.next { background: #0f1b2a; color: #d7e3f2; padding: .6rem .8rem; border-rad
 /* Preserve newlines and wrap long tokens for flashes that may carry (sanitized) command output. */
 .flash-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .flash-hide { opacity: 0; }
-.flash-ok { background: #e7f6ec; border: 1px solid #b7e3c4; color: #1a7f37; }
-.flash-warn { background: #fff8e1; border: 1px solid #ffe0a3; color: #7a5200; }
-.flash-bad { background: #fdecea; border: 1px solid #f1a9a0; color: #a01b10; }
-.flash-info { background: #eef2f7; border: 1px solid #cdd7e3; color: #33414f; }   /* neutral (details) */
+.flash-ok { background: var(--flash-ok-bg); border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
+.flash-warn { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
+.flash-bad { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
+.flash-info { background: var(--flash-info-bg); border: 1px solid var(--flash-info-border); color: var(--flash-info-ink); }   /* neutral (details) */
 meter { width: 12rem; height: 1rem; vertical-align: middle; margin-right: .5rem; }
 form label { display: inline-block; margin: .2rem .8rem .2rem 0; }
-form select, form input[type=text], form input { font: inherit; padding: .2rem .3rem; }
-form button { font: inherit; padding: .3rem .9rem; border-radius: 6px; border: 1px solid var(--brand);
-              background: var(--brand); color: #fff; cursor: pointer; }
+/* Text-like inputs only (NOT checkboxes/radios — those theme natively via color-scheme + accent-color). */
+form select, form input[type=text], form input[type=number], form input[type=password],
+form input[type=search] { font: inherit; padding: .2rem .3rem;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }
+option { background: var(--surface); color: var(--ink); }   /* native dropdown list in dark mode */
+input[type=checkbox], input[type=radio] { accent-color: var(--brand); }
+/* Base button = THE one blue-button look: border-only (outline), fills on hover. Every button (incl. bare
+   button-in-link like "Dependency Overview", form submits, the webserver Apply) uses this; the yellow
+   (.warnbtn / pending) and neutral utility buttons (.copybtn/.dismiss/.liveclose/.theme-toggle) set their
+   own colours and out-specify it. `--btn-*` are the hover fill. */
+button { font: inherit; padding: .3rem .8rem; border-radius: 6px; border: 1px solid var(--brand);
+         background: var(--surface); color: var(--brand); cursor: pointer; }
+button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: var(--btn-bg); }
 .monitor-links a { margin-right: 1rem; }
 .actbar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .3rem 0; }
 .actrow { display: flex; flex-wrap: wrap; gap: 1.3rem; align-items: center; margin: .4rem 0; }
@@ -155,7 +200,9 @@ form button { font: inherit; padding: .3rem .9rem; border-radius: 6px; border: 1
 .runstack { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; margin: .4rem 0; }
 .complist { list-style: none; padding-left: 0; margin: .3rem 0; }
 .complist li { margin: .15rem 0; }
-.logslink { font-size: .8rem; margin-left: .3rem; }
+/* Enlarged, comfortably-spaced tap target for the row "logs" link (≈ WCAG 2.5.8 24×24). The padding
+   grows the link inside its own grid cell, not the row layout. */
+.logslink { font-size: .8rem; margin-left: .3rem; display: inline-block; padding: .25rem .45rem; }
 .iface { font-size: .8rem; margin-left: .4rem; padding: .05rem .4rem; border-radius: 6px;
          background: var(--bg); border: 1px solid var(--line); }
 a.iface { text-decoration: none; color: var(--brand); }
@@ -163,20 +210,25 @@ a.iface { text-decoration: none; color: var(--brand); }
 .complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
 /* Web-UI links read as buttons — give them breathing room above and below. */
 .complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
-/* Separate the per-stack webserver Apply button from the Save button above it, and render Apply as a
-   SOLID blue button like Save (it sits in `.act`, which would otherwise make it outlined). */
-/* `.act.ws-apply` (0,0,2,0) out-specifies `.act { margin: 0 }` (0,0,1,0) below, which otherwise zeroes
-   this — separating the Apply button from Save above and the "not live yet" banner below. */
+/* `.act.ws-apply` (0,0,2,0) out-specifies `.act { margin: 0 }` (0,0,1,0) below — spacing only. The Apply
+   button itself now uses the SAME outline look as every other blue button (no filled override). */
 .act.ws-apply { margin-top: 1.25rem; margin-bottom: 1rem; }
-/* `.act.ws-apply` (both classes the form carries) out-specifies the `.act button` outline rule below. */
-.act.ws-apply button { background: var(--brand); color: #fff; border: 1px solid var(--brand); }
-.act.ws-apply button:hover { background: #0a4f93; }
+/* Pending Apply: the per-stack webserver Apply turns yellow while saved settings are not live yet.
+   `.act.ws-apply button.pending` (0,0,3,1) out-specifies the outline `.act button` / base `button`. */
+.act.ws-apply button.pending { background: var(--warnbtn-bg); color: var(--warnbtn-ink); border-color: var(--warnbtn-border); }
+.act.ws-apply button.pending:hover { background: var(--warn); color: #1a1400; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
-                   padding: .1rem .5rem; cursor: pointer; }
+                   padding: .1rem .5rem; cursor: pointer;
+                   background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+                   border-radius: 6px; }
+.cmdbox .copybtn:hover { background: var(--line); color: var(--ink); }   /* stay neutral, not blue */
 .cmdbox pre { padding-right: 5rem; }
 .dismiss { float: right; }
-.dismiss button { padding: 0 .4rem; line-height: 1.2; }
+.dismiss button { padding: 0 .4rem; line-height: 1.2;
+                  background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+                  border-radius: 6px; }
+.dismiss button:hover { background: var(--line); color: var(--ink); }   /* stay neutral, not blue */
 .startform { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .actline { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .3rem 0; }
 .actline .grouplabel { min-width: 3.5rem; }
@@ -191,50 +243,65 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stackrow-body { padding: .3rem .8rem 1rem; }
 .ss-name { font-weight: 600; }
 .ss-main { font-size: .8rem; }
-/* Nested rows (Update, Webserver) keep the flex summary; pin their logs link right. */
-.stackrow > summary .logslink { margin-left: auto; }
+/* The action links (logs + "Update available") sit in a .row-actions OVERLAY OUTSIDE the <summary> (so no
+   interactive element is nested in the summary toggle — a11y) but are positioned over the row's right
+   edge, staying visible + clickable on the collapsed row. pointer-events:none on the container lets clicks
+   in its empty area fall through to the summary (row still toggles); the links keep pointer-events. */
+.stackrow-wrap { position: relative; }
+.row-actions { position: absolute; top: 0; right: .8rem; display: flex; align-items: center; gap: .6rem;
+               padding: .6rem 0; pointer-events: none; }
+.row-actions > * { pointer-events: auto; }
+.row-actions .update-link { font-size: .82rem; white-space: nowrap; }
 
-/* TOP-LEVEL row headers (controller + each stack, direct children of .stacklist) lay out as fixed
-   columns so the SAME field lines up vertically across rows: marker | name | status | source |
-   version | head | extra | update | logs. Fixed track widths (not `auto`) because each summary is its
-   own grid container, so only fixed tracks align across rows — `update` therefore reserves its width
-   even when empty. Missing fields leave their cell empty. */
-.stacklist > .stackrow > summary {
+/* TOP-LEVEL row headers (controller + each stack) lay out as fixed columns so the SAME field lines up
+   vertically across rows: marker | name | status | source | version | head | extra. The summary reserves
+   right padding for the .row-actions overlay so the flexible `col-extra` never slides under it. */
+.stacklist .stackrow > summary {
   display: grid;
-  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 7em 1fr 7.5em auto;
+  grid-template-columns: 1.2em 11em 6.5em 8em 5.5em 7em 1fr;
   align-items: center;
   column-gap: .5rem;
   row-gap: .2rem;
+  padding-right: 11.5em;   /* room for the logs + "Update available" overlay */
 }
-.stacklist > .stackrow > summary .col-name    { grid-column: 2; min-width: 0; overflow: hidden;
-                                                 text-overflow: ellipsis; white-space: nowrap; }
-.stacklist > .stackrow > summary .col-status  { grid-column: 3; }
-.stacklist > .stackrow > summary .col-source  { grid-column: 4; }
-.stacklist > .stackrow > summary .col-version { grid-column: 5; }
+.stacklist .stackrow > summary .col-name    { grid-column: 2; min-width: 0; overflow: hidden;
+                                               text-overflow: ellipsis; white-space: nowrap; }
+.stacklist .stackrow > summary .col-status  { grid-column: 3; }
+.stacklist .stackrow > summary .col-source  { grid-column: 4; }
+.stacklist .stackrow > summary .col-version { grid-column: 5; }
 /* 7em, not 6em: the pill is `@` + 9 hex in mono at .78rem (~75-77px) + .9rem padding + 2px border
    ~= 91-94px, which overran a 96px track into the .5rem column-gap and touched `identity ok`. */
-.stacklist > .stackrow > summary .col-head    { grid-column: 6; min-width: 0; }
-.stacklist > .stackrow > summary .col-extra   { grid-column: 7; min-width: 0; display: flex;
-                                                 gap: .4rem; flex-wrap: wrap; align-items: center; }
-.stacklist > .stackrow > summary .col-update  { grid-column: 8; justify-self: end; min-width: 0; }
-.stacklist > .stackrow > summary .col-update .update-link { font-size: .82rem; white-space: nowrap; }
-.stacklist > .stackrow > summary .col-logs    { grid-column: 9; margin-left: 0; justify-self: end; }
+.stacklist .stackrow > summary .col-head    { grid-column: 6; min-width: 0; }
+.stacklist .stackrow > summary .col-extra   { grid-column: 7; min-width: 0; display: flex;
+                                               gap: .4rem; flex-wrap: wrap; align-items: center; }
 /* Small screens (phones/tablets): the fixed column grid can't shrink and would be clipped by the
    card. Reflow the row header to a wrapping flex layout so it FITS the viewport — no horizontal
    cut-off, no whole-page sideways scroll. Wide config tables scroll inside their own box. */
 @media (max-width: 860px) {
-  .stacklist > .stackrow > summary { display: flex; flex-wrap: wrap; column-gap: .5rem; row-gap: .25rem; }
-  .stacklist > .stackrow > summary .col-name,
-  .stacklist > .stackrow > summary .col-status,
-  .stacklist > .stackrow > summary .col-source,
-  .stacklist > .stackrow > summary .col-version,
-  .stacklist > .stackrow > summary .col-head,
-  .stacklist > .stackrow > summary .col-extra,
-  .stacklist > .stackrow > summary .col-update,
-  .stacklist > .stackrow > summary .col-logs { grid-column: auto; }
-  .stacklist > .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
-  .stacklist > .stackrow > summary .col-logs { margin-left: auto; }
-  .paramgrid, .dptab, table.deps { display: block; overflow-x: auto; max-width: 100%; }
+  .stacklist .stackrow > summary { display: flex; flex-wrap: wrap; column-gap: .5rem; row-gap: .25rem;
+                                   padding-right: 10.5em; }
+  .stacklist .stackrow > summary .col-name,
+  .stacklist .stackrow > summary .col-status,
+  .stacklist .stackrow > summary .col-source,
+  .stacklist .stackrow > summary .col-version,
+  .stacklist .stackrow > summary .col-head,
+  .stacklist .stackrow > summary .col-extra { grid-column: auto; }
+  .stacklist .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
+  /* Every wide block scrolls inside its own box so no section overflows the phone viewport. */
+  table { display: block; overflow-x: auto; max-width: 100%; }
+  .wrap { padding: .8rem; }
+  .card .body, .card > header { padding-left: .7rem; padding-right: .7rem; }
+  /* Config/param FORM tables reflow to stacked rows (name → full-width input → help) instead of a
+     3-column grid that overran the viewport. */
+  .paramgrid, .paramgrid tbody, .paramgrid tr, .paramgrid th, .paramgrid td,
+  .dptab, .dptab tbody, .dptab tr, .dptab th, .dptab td { display: block; width: auto; }
+  .paramgrid tr, .dptab tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
+  .paramgrid th, .dptab th { padding: 0 0 .1rem; text-align: left; }
+  .paramgrid td, .dptab td { padding: .1rem 0; }
+  .paramgrid input:not([type=checkbox]), .paramgrid select,
+  .dptab input:not([type=checkbox]), .dptab select { width: 100%; max-width: 24rem; }
+  .setcell { flex-wrap: wrap; }          /* Live radio settings row wraps instead of overflowing */
+  input.wide { min-width: 0; }           /* source-remote input (min-width:16rem) must shrink on phones */
 }
 .stackrow-link { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                  padding: .6rem .8rem; border-bottom: 1px solid var(--line);
@@ -263,13 +330,9 @@ input.wide { width: 100%; min-width: 16rem; }
 .stacklist .advcfg .advcfg { border: 0; border-radius: 0; padding: 0; }
 .advcfg summary { cursor: pointer; color: var(--muted); font-size: .8rem;
                   text-transform: uppercase; letter-spacing: .4px; }
-/* Webserver panel now uses the .advcfg look like Update / System dependencies. Keep the summary's
-   default disclosure marker (do NOT set display:flex, which removes it) and float the inline "logs"
-   link to the right edge. */
-.ws-comp > summary .logslink { float: right; margin-left: .5rem; }
 .act { display: inline-block; margin: 0; }
 .act button { background: var(--surface); color: var(--brand); border: 1px solid var(--brand); }
-.act button:hover { background: var(--brand); color: #fff; }
+.act button:hover { background: var(--btn-bg); color: var(--btn-ink); }
 .act a, a.act { text-decoration: none; }
 .settings th { width: 12rem; }
 /* Live daemon settings (daemon page): one param per cell, two columns when wide enough. */
@@ -288,6 +351,9 @@ input.wide { width: 100%; min-width: 16rem; }
 .liveclose { position: absolute; top: .3rem; right: .3rem; line-height: 1;
              padding: .1rem .4rem; cursor: pointer; border: 1px solid var(--line);
              border-radius: 6px; background: var(--surface); color: var(--muted); }
+/* Keep utility buttons neutral on hover — the broad `button:hover` blue fill must not leak in. */
+.liveclose:hover,
+.theme-toggle:hover { background: var(--surface); color: var(--ink); border-color: var(--line); }
 .liveclose:hover { color: var(--ink); }
 .paramgrid { width: auto; margin: .3rem 0 .8rem; }
 .paramgrid th { width: 11rem; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: .92rem; }
@@ -310,9 +376,9 @@ hr.sep { border: 0; border-top: 1px solid var(--line, #333); margin: 1.4rem 0 .6
 .dphelp { font-size: .78rem; }
 tr.greyed th, tr.greyed .dpin { color: var(--muted); opacity: .75; }   /* visual only — still editable */
 span.greyed { color: var(--muted); opacity: .8; }
-.logbox { max-height: 28rem; overflow-y: auto; background: #0f1b2a; color: #d7e3f2;
-          padding: .6rem .8rem; border-radius: 8px; font-size: .82rem; line-height: 1.35;
-          white-space: pre-wrap; word-break: break-word; }
+.logbox { max-height: 28rem; overflow-y: auto; background: var(--code-bg); color: var(--code-ink);
+          border: 1px solid var(--line); padding: .6rem .8rem; border-radius: 8px; font-size: .82rem;
+          line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
 
 /* Start-confirm "Stack parameters" panel + CALL/node enforcement.
    Same 3-column design as the daemon panel: monospace NAME | input | short description, all
@@ -330,7 +396,7 @@ span.greyed { color: var(--muted); opacity: .8; }
                              vertical-align: baseline; }
 .stackparams tr.spgroup:first-child th { border-top: 0; padding-top: .2rem; }
 .req { color: var(--bad, #e05252); font-weight: 700; white-space: nowrap; }
-tr.field-bad th, tr.field-bad td { background: rgba(224, 82, 82, .12); }
+tr.field-bad th, tr.field-bad td { background: var(--field-bad-bg); }
 tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252); }
 
 /* "Save before apply?" modal (3-choice) */
@@ -347,8 +413,10 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .header-wrap { padding-top: 0; padding-bottom: 0; }
 .pill-light { background: rgba(255, 255, 255, .15); color: #fff; border-color: transparent; }
 .details-link { margin: .6rem 0 0; }
+.fs-sm { font-size: .8rem; }
+.loglabel { margin: .6rem 0 .2rem; }
 /* Yellow operator-action buttons (Confirm known-working, Restart required) ----- */
-.warnbtn { background: #fff3cd; color: #7a5200; border: 1px solid #e0b64f; font-weight: 600; }
+.warnbtn { background: var(--warnbtn-bg); color: var(--warnbtn-ink); border: 1px solid var(--warnbtn-border); font-weight: 600; }
 .warnbtn:hover { background: var(--warn); color: #fff; }
 
 /* bulk install-all run view */
@@ -356,8 +424,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .logbox-half { max-height: 22rem; }
 .tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }
 .tasklist th, .tasklist td { text-align: left; padding: 0.25rem 0.6rem 0.25rem 0; }
-.badge-ok { background: #e7f6ec; color: var(--ok); border-color: #b7e3c4; }
-.badge-failed { background: #fdecec; color: var(--bad); border-color: #f3c1c1; }
+.badge-ok { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
+.badge-failed { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
 .inline { display: inline; }
 
 /* ---- Webserver controller component (inline in the controller row) ---- */
@@ -372,3 +440,87 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .ws-comp .setting .muted { margin-left: 0.5em; }
 /* a little breathing room after the System dependencies list, before "Verify now" */
 .ws-comp .sysdeps { margin-bottom: 1em; }
+
+/* ============================ DARK MODE ==================================
+   The whole UI is driven by the :root custom properties above, so a dark theme is just a re-point of
+   those tokens. `data-theme` is set on <html> by theme.js BEFORE first paint (from localStorage, else
+   the OS preference) — that is authoritative. The @media block is a no-JS fallback only (it applies the
+   same palette when JS never runs and the OS asks for dark). Keep the two token lists identical. */
+:root[data-theme="dark"] {
+  --bg: #0e1116; --surface: #171b21; --ink: #e6edf3; --muted: #9aa7b4; --line: #2a313a;
+  color-scheme: dark;
+  --brand: #58a6ff; --brand-hover: #79b8ff; --brand-ink: #0b1220;
+  --btn-bg: #1f6feb; --btn-ink: #ffffff; --btn-hover: #388bfd;   /* muted deep-blue filled buttons */
+  --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #768390;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .4);
+  --header-grad-a: #234e7d; --header-grad-b: #1a3c61;
+  --warnbox-bg: #2b2411; --warnbox-border: #4a3f1a; --warnbox-ink: #e3c766;
+  --badge-ok-bg: #10261a; --badge-ok-border: #1f5133;
+  --badge-warn-bg: #2b2411; --badge-warn-border: #4a3f1a;
+  --badge-bad-bg: #2d1618; --badge-bad-border: #5c2a2e;
+  --badge-idle-bg: #1c222b; --badge-idle-border: #333c48; --badge-idle-ink: #adb7c2;   /* ≥4.5:1 */
+  --pill-bg: #1c222b; --pill-ink: #c9d3de;
+  --conflict-bg: #2d1618; --conflict-border: #5c2a2e; --conflict-ink: #f0b7b2;
+  --flash-ok-bg: #0f2417; --flash-ok-border: #1f5133; --flash-ok-ink: #56d364;
+  --flash-warn-bg: #2b2411; --flash-warn-border: #4a3f1a; --flash-warn-ink: #e3b341;
+  --flash-bad-bg: #2d1618; --flash-bad-border: #5c2a2e; --flash-bad-ink: #ff7b72;
+  --flash-info-bg: #161b22; --flash-info-border: #2a313a; --flash-info-ink: #c9d3de;
+  --warnbtn-bg: #c9971f; --warnbtn-border: #e3b341; --warnbtn-ink: #1a1400;   /* clearly YELLOW in dark */
+  --code-bg: #05080d; --code-ink: #c9d3de;
+  --field-bad-bg: rgba(248, 81, 73, .15);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #0e1116; --surface: #171b21; --ink: #e6edf3; --muted: #9aa7b4; --line: #2a313a;
+    color-scheme: dark;
+    --brand: #58a6ff; --brand-hover: #79b8ff; --brand-ink: #0b1220;
+    --btn-bg: #1f6feb; --btn-ink: #ffffff; --btn-hover: #388bfd;
+    --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #768390;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .4);
+    --header-grad-a: #234e7d; --header-grad-b: #1a3c61;
+    --warnbox-bg: #2b2411; --warnbox-border: #4a3f1a; --warnbox-ink: #e3c766;
+    --badge-ok-bg: #10261a; --badge-ok-border: #1f5133;
+    --badge-warn-bg: #2b2411; --badge-warn-border: #4a3f1a;
+    --badge-bad-bg: #2d1618; --badge-bad-border: #5c2a2e;
+    --badge-idle-bg: #1c222b; --badge-idle-border: #333c48; --badge-idle-ink: #adb7c2;
+    --pill-bg: #1c222b; --pill-ink: #c9d3de;
+    --conflict-bg: #2d1618; --conflict-border: #5c2a2e; --conflict-ink: #f0b7b2;
+    --flash-ok-bg: #0f2417; --flash-ok-border: #1f5133; --flash-ok-ink: #56d364;
+    --flash-warn-bg: #2b2411; --flash-warn-border: #4a3f1a; --flash-warn-ink: #e3b341;
+    --flash-bad-bg: #2d1618; --flash-bad-border: #5c2a2e; --flash-bad-ink: #ff7b72;
+    --flash-info-bg: #161b22; --flash-info-border: #2a313a; --flash-info-ink: #c9d3de;
+    --warnbtn-bg: #c9971f; --warnbtn-border: #e3b341; --warnbtn-ink: #1a1400;
+    --code-bg: #05080d; --code-ink: #c9d3de;
+    --field-bad-bg: rgba(248, 81, 73, .15);
+  }
+}
+
+/* Dark scrollbars (WebKit + Firefox). Applied for the JS-set theme and the no-JS media fallback. */
+:root[data-theme="dark"] { scrollbar-color: #4a525d var(--bg); }
+:root[data-theme="dark"] ::-webkit-scrollbar { width: 12px; height: 12px; }
+:root[data-theme="dark"] ::-webkit-scrollbar-track { background: var(--bg); }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #3a424d; border-radius: 6px; }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #4a525d; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { scrollbar-color: #4a525d var(--bg); }
+  :root:not([data-theme]) ::-webkit-scrollbar { width: 12px; height: 12px; }
+  :root:not([data-theme]) ::-webkit-scrollbar-track { background: var(--bg); }
+  :root:not([data-theme]) ::-webkit-scrollbar-thumb { background: #3a424d; border-radius: 6px; }
+  :root:not([data-theme]) ::-webkit-scrollbar-thumb:hover { background: #4a525d; }
+}
+
+/* Fixed lower-right theme toggle. Light theme shows the MOON (click → dark); dark shows the SUN. */
+.theme-toggle {
+  position: fixed; right: .9rem; bottom: .9rem; z-index: 40;
+  width: 2.3rem; height: 2.3rem; padding: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface); color: var(--muted); border: 1px solid var(--line);
+  box-shadow: var(--shadow); cursor: pointer; opacity: .7;
+}
+.theme-toggle:hover { opacity: 1; }
+.theme-toggle svg { width: 1.2rem; height: 1.2rem; display: block; fill: none;
+                    stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle .icon-moon { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+:root[data-theme="dark"] .theme-toggle .icon-moon { display: none; }

@@ -17,6 +17,7 @@
   if (!document.querySelector(".stacklist")) { return; }   // only the stacks page (incl. its re-renders)
 
   var AKEY = "lhpc:stacks:act";        // one-shot: { k: pathKey, y: scrollY } of the acted section
+  var OKEY = "lhpc:stacks:open";       // durable per-tab: keyFor() of every open <details>, for reload restore
 
   function keyFor(el) {
     var parts = [];
@@ -41,6 +42,29 @@
     }
   }
 
+  // Durable open/close memory so a reload restores exactly what was open. keyFor() paths survive the
+  // server's re-render of the same structure.
+  function allDetails() {
+    return Array.prototype.slice.call(document.querySelectorAll(".stacklist details"));
+  }
+  function saveOpenSet() {
+    try {
+      var keys = [];
+      allDetails().forEach(function (d) { if (d.open) { keys.push(keyFor(d)); } });
+      sessionStorage.setItem(OKEY, JSON.stringify(keys));
+    } catch (e) { /* private mode */ }
+  }
+  function restoreOpenSet() {
+    var keys = null;
+    try { keys = JSON.parse(sessionStorage.getItem(OKEY) || "null"); } catch (e) { keys = null; }
+    if (!keys || !keys.length) { return false; }
+    var set = {};
+    keys.forEach(function (k) { set[k] = true; });
+    var opened = false;
+    allDetails().forEach(function (d) { if (set[keyFor(d)]) { d.open = true; opened = true; } });
+    return opened;
+  }
+
   // A sub-panel (has a <details> ancestor) vs a top-level row (#stackrow-*, #controller-row).
   function nested(el) {
     return !!(el && el.parentElement && el.parentElement.closest("details"));
@@ -56,15 +80,33 @@
     return (el.tagName === "DETAILS") ? el : el.closest("details");
   }
 
+  // Programmatic opens (load restore, hashchange) also fire the native <details> `toggle` event, which
+  // would trip the accordion below and undo them. `openTarget` marks such opens so the accordion ignores
+  // them; the load path is additionally protected by deferred binding (see setTimeout(attachAccordion)).
+  var programmaticOpen = false;
+  function openTarget(el) {
+    programmaticOpen = true;
+    try { openWithAncestors(el); }
+    finally { setTimeout(function () { programmaticOpen = false; }, 0); }
+  }
+
   // ACCORDION: opening one MAIN header (a direct .stacklist child row, incl. the controller row)
-  // auto-closes the others. Sub-panels inside a row are NOT direct children, so they never trip it.
+  // auto-closes the OTHER rows AND their sub-panels, and resets the freshly opened row's OWN sub-panels
+  // to closed (a native <details> keeps children's open state across a close/reopen, so we clear it
+  // ourselves). Multiple sub-panels within THIS row stay independently openable — their toggles are not
+  // bound here (only the top-level `.stackrow` rows are; each now sits inside a `.stackrow-wrap`, so this
+  // is a descendant selector, not a direct child).
   function attachAccordion() {
-    document.querySelectorAll(".stacklist > .stackrow").forEach(function (row) {
+    document.querySelectorAll(".stacklist .stackrow").forEach(function (row) {
       row.addEventListener("toggle", function () {
         if (!row.open) { return; }                 // react to USER OPEN only; close-toggles ignored
-        document.querySelectorAll(".stacklist > .stackrow").forEach(function (o) {
-          if (o !== row && o.open) { o.open = false; }
+        if (programmaticOpen) { return; }           // a scripted open (restore/hashchange) — leave it be
+        document.querySelectorAll(".stacklist .stackrow").forEach(function (o) {
+          if (o === row) { return; }
+          if (o.open) { o.open = false; }
+          o.querySelectorAll("details").forEach(function (s) { s.open = false; });   // + their sub-panels
         });
+        row.querySelectorAll("details").forEach(function (s) { s.open = false; });   // own subs start closed
       });
     });
   }
@@ -81,6 +123,11 @@
     } catch (e2) { /* private mode */ }
   }, true);
 
+  // Persist the open set on EVERY <details> toggle (user or programmatic — incl. this load's restore and
+  // the accordion's programmatic closes). `toggle` doesn't bubble, so listen in the capture phase. The
+  // full-set write is idempotent, so the last coalesced toggle always leaves the correct set stored.
+  document.addEventListener("toggle", saveOpenSet, true);
+
   // --- restore -----------------------------------------------------------------------------------
   if ("scrollRestoration" in history) { history.scrollRestoration = "manual"; }
 
@@ -90,8 +137,8 @@
 
   var hashDetails = detailsForHash();
 
-  // A SERVER/LINK-directed focus wins over action memory. Resolve exactly ONE target so at most one
-  // relevant section opens (opening act AND a different forced target would briefly show two).
+  // A server/link-directed focus (?inst/?cfg/?dp/?comp or a nested hash). Resolved first; the acted
+  // section (below) takes precedence on a real action-return, this is the fallback for plain links.
   var forcedTarget = document.querySelector("[data-force-scroll]");
   if (!forcedTarget) {
     var fdo = document.querySelectorAll("details[data-force-open]");
@@ -105,19 +152,36 @@
     for (var j = 0; j < all.length; j++) { if (keyFor(all[j]) === act.k) { actEl = all[j]; break; } }
   }
 
-  if (forcedTarget) { openWithAncestors(forcedTarget); }
-  else if (actEl) { openWithAncestors(actEl); }
+  // A new flash on top means "a message appeared" -> stay at the top instead of scrolling to the spot.
+  var flash = document.querySelector(".wrap > p.flash");
+
+  // Resolve ONE section to open. An ACTION return (a form POST that redirected back, evidenced by a flash
+  // or a server anchor) reopens exactly the section the button sat in (actEl) — more precise than the
+  // server's redirect hash (e.g. per-stack Webserver Apply redirects to the controller #webserver-row,
+  // but the button lived in #stack-webserver-<id>). A plain nav carrying a STALE post memory (no flash,
+  // no anchor — e.g. after install/build/test diverted to the log page) is ignored. Otherwise a link/
+  // server-directed focus wins. Failing everything, auto-open the FIRST pending-Apply webserver section.
+  var actionReturn = !!(act && (flash || forcedTarget || hashDetails));
+  var target = (actEl && actionReturn) ? actEl : (forcedTarget || hashDetails);
+
+  // Precedence that preserves the single-main-row model:
+  //  - An EXPLICIT target (action-return / link / hash) WINS and replaces the saved set — open only its
+  //    chain, so a link to another row can never leave two main rows open. The toggle-save above then
+  //    re-persists exactly that chain.
+  //  - Only a plain reload (no explicit target) restores the saved open set.
+  //  - Pending-Apply auto-open is the last resort, when nothing else opened.
+  var restoredAny = false;
+  if (!target) { restoredAny = restoreOpenSet(); }
+  if (!target && !restoredAny) {
+    var pend = document.querySelector("details[data-ws-pending]");   // querySelector => the FIRST one only
+    if (pend) { target = pend; }
+  }
+  if (target) { openWithAncestors(target); }
 
   // --- scroll (after the open relayout changes page height) --------------------------------------
   requestAnimationFrame(function () {
-    var flash = document.querySelector(".wrap > p.flash");
-    // A server/link-directed focus (data-force-scroll = ?inst, a nested data-force-open = ?cfg/?dp,
-    // or a nested hash link) beats the acted-section memory. `forced` kept for the JS test.
-    var forced = forcedTarget;
-    if (forced) { forced.scrollIntoView(); }
-    else if (act) { window.scrollTo(0, flash ? 0 : (act.y || 0)); }     // action: top-if-message, else stay
-    else if (hashDetails) { hashDetails.scrollIntoView(); }             // a link to a bare row
-    else if (flash) { window.scrollTo(0, 0); }
+    if (flash) { window.scrollTo(0, 0); }             // message on top -> stay on top (section already open)
+    else if (target) { target.scrollIntoView(); }     // no message -> jump to the opened section
 
     // Bind the accordion ONLY now, deferred one task past this frame. The <details> `toggle` event is
     // async, so the load-path's programmatic opens above queue toggles that would otherwise hit the
@@ -134,7 +198,7 @@
     var d = detailsForHash();
     if (!d) { return; }
     document.querySelectorAll("details").forEach(function (x) { x.open = false; });
-    openWithAncestors(d);
+    openTarget(d);     // guarded: the accordion is already bound here, so mark this as a scripted open
     requestAnimationFrame(function () { d.scrollIntoView(); });
   });
 })();

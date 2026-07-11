@@ -208,8 +208,17 @@ def _csrf(client, path="/stacks"):
 
 
 def _row(body, sid):
+    # Summary-only slice (head/status pills live here). The action links (logs / Update available) now
+    # render in a .row-actions overlay AFTER </details> — use _wrap() for those.
     i = body.index('id="stackrow-' + sid + '"')
     return body[i:body.index("</summary>", i)]
+
+
+def _wrap(body, sid):
+    # A stack's whole wrapper: its <details> AND the .row-actions overlay after it, up to the next row.
+    i = body.index('id="stackrow-' + sid + '"')
+    nxt = body.find('class="stackrow-wrap"', i + 1)
+    return body[i:(nxt if nxt != -1 else len(body))]
 
 
 def _seed(tmp_path, entries, now=1000):
@@ -220,9 +229,8 @@ def test_main_behind_paints_head_yellow_and_shows_the_link(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
     body = _app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True)
-    row = _row(body, "daemon")
-    assert "ver-yellow" in row and "@" + A[:9] in row
-    assert ">Update available</a>" in row
+    assert "ver-yellow" in _row(body, "daemon") and "@" + A[:9] in _row(body, "daemon")
+    assert ">Update available</a>" in _wrap(body, "daemon")   # link is in the row-actions overlay
 
 
 def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
@@ -232,9 +240,9 @@ def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A),
                      "radiolib": _entry_for(su.BEHIND, B)})
     cmds = {**_git_src(ds, A), **_git_src(rl, B)}
-    row = _row(_app(tmp_path, cmds, [ds, rl]).get("/stacks").get_data(as_text=True), "daemon")
-    assert ">Update available</a>" in row          # any component behind -> link
-    assert "ver-yellow" not in row                 # but the main's head stays grey
+    body = _app(tmp_path, cmds, [ds, rl]).get("/stacks").get_data(as_text=True)
+    assert ">Update available</a>" in _wrap(body, "daemon")   # any component behind -> link (overlay)
+    assert "ver-yellow" not in _row(body, "daemon")           # but the main's head (summary) stays grey
 
 
 def test_nothing_behind_and_empty_cache_show_neither(tmp_path):
@@ -264,18 +272,18 @@ def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
 def test_update_link_opens_the_install_section(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
-    row = _row(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True), "daemon")
+    row = _wrap(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True), "daemon")
     i = row.index(">Update available</a>")
     href = row[row.rindex('href="', 0, i) + 6:row.index('"', row.rindex('href="', 0, i) + 6)]
     assert "open=daemon" in href and "inst=daemon" in href
     assert href.endswith("#stack-install-daemon")
 
 
-def test_col_update_cell_present_on_every_top_level_row(tmp_path):
-    # Fixed-track grid: the cell must exist even when empty, or the columns misalign.
+def test_every_top_level_row_has_an_actions_overlay(tmp_path):
+    # The logs / "Update available" links live in a .row-actions overlay OUTSIDE each row's <summary>
+    # (a11y). Every top-level row (controller + each stack) has one.
     body = _app(tmp_path).get("/stacks").get_data(as_text=True)
-    assert body.count('class="col-update"') >= 2          # controller row + at least one stack
-    assert 'class="col-update"' in _row(body, "daemon")
+    assert body.count('class="row-actions"') >= 2         # controller row + at least one stack
 
 
 # --- the network boundary (P0.6, both directions) -----------------------------------------------

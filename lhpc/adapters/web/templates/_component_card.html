@@ -13,7 +13,7 @@
 
 {% if comp.resources %}
   <div class="panel">
-    <h4>Declared resources</h4>
+    <h3>Declared resources</h3>
     <ul class="clean">{% for r in comp.resources %}
       <li><span class="mono">{{ r.key }}</span>
         <span class="pill">{{ r.mode.value }}{% if r.requirement %} = {{ r.requirement }}{% endif %}</span>
@@ -24,7 +24,7 @@
 
 {% if st.dependencies %}
   <div class="panel">
-    <h4>Runtime dependencies</h4>
+    <h3>Runtime dependencies</h3>
     <ul class="clean">{% for d in st.dependencies %}
       <li>{{ d.component_id }}: <span class="badge badge-{{ d.run_state.value }}">{{ d.run_state.value }}</span>{% if d.band %} <span class="muted">({{ d.band }} MHz)</span>{% endif %}</li>
     {% endfor %}</ul>
@@ -33,7 +33,7 @@
 
 {% if st.endpoints %}
   <div class="panel">
-    <h4>Endpoints</h4>
+    <h3>Endpoints</h3>
     <ul class="clean">{% for e in st.endpoints %}
       <li><span class="mono">{{ e.spec.address }}</span> <span class="muted">({{ e.spec.kind }})</span> —
         <span class="{{ 'endpoint-ok' if e.present else 'endpoint-bad' }}">{{ e.detail }}</span></li>

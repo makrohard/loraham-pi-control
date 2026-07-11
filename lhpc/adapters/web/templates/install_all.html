@@ -131,7 +131,7 @@
   <div class="card" id="bulk-run" data-run="{{ st.run_id }}">
     <header>
       <h2>Run {{ st.run_id[:8] }} <span class="pill">{{ st.mode }} / {{ st.source }}</span>
-        <span class="muted" style="font-size:.8rem">
+        <span class="muted fs-sm">
           started {{ st.started_at }}{% if st.finished_at %} · finished {{ st.finished_at }}
           — historical result, not live state{% endif %}</span></h2>
     </header>
@@ -161,7 +161,7 @@
       {# Second window — the per-component build/test detail. LIVE: filled by bulk.js. HISTORICAL:
          seeded server-side (complog_seed), like the rollup above. Plain {{ }} keeps the untrusted
          log output HTML-escaped inside the <pre>. #}
-      <p class="muted" style="margin:.6rem 0 .2rem">Component build &amp; test logs
+      <p class="muted loglabel">Component build &amp; test logs
         {% if collapsed %}(historical, in execution order){% else %}(live, in execution order){% endif %}</p>
       <pre class="logbox logbox-half" id="bulk-complog">{% if collapsed %}{{ complog_seed }}{% endif %}</pre>
     </div>

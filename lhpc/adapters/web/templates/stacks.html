@@ -1,8 +1,11 @@
 {% extends "base.html" %}
-{% from "_macros.html" import stack_actions, stack_summary, cmdbox %}
+{% from "_macros.html" import stack_actions, stack_summary, stack_row_actions, cmdbox %}
 {% block title %}stacks — LoRaHAM Pi Control{% endblock %}
 {% block content %}
 
+  {# Structural page heading (h1 is the site title in the header) so the heading outline is
+     h1 → h2 → h3 with no skipped levels. Visually hidden — the page is self-evidently the stacks list. #}
+  <h2 class="visually-hidden">Stacks</h2>
   <section class="tiles">
     <div class="tile"><div class="n">{{ summary.stacks }}</div><div class="l">Stacks</div></div>
     <div class="tile"><div class="n">{{ summary.states.get('running', 0) }}</div><div class="l">Running</div></div>
@@ -34,6 +37,7 @@
          CACHED data only on this GET (no live git/network/identity). #}
       {# Collapsed on a first load: only the forced self-update confirm flow opens it (an available
          update is signalled by the 'update available' pill, not by auto-expanding the row). #}
+      <div class="stackrow-wrap">
       <details class="stackrow" id="controller-row"{% if confirm %} open{% endif %}>
         <summary>
           <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
@@ -53,9 +57,6 @@
           </span>
           {# Same column as the stack rows (grid alignment), same call-to-action: the controller's
              update lives in its nested Update panel rather than an Install section. #}
-          <span class="col-update">{% if controller.update_available %}<a class="update-link"
-            href="{{ url_for('stacks_overview') }}#controller-update">Update available</a>{% endif %}</span>
-          <a class="logslink col-logs" href="{{ url_for('controller_logs') }}" target="_blank" rel="noopener">logs</a>
         </summary>
         <div class="stackrow-body">
           <details class="advcfg" id="controller-update"{% if confirm %} open{% endif %}>
@@ -74,7 +75,7 @@
                 <strong>not executed by LHPC</strong> — run them yourself.</p>
               {% for grp in controller_system_deps %}
                 {% set gi = loop.index0 %}
-                <h4>{{ grp.title }}</h4>
+                <h3>{{ grp.title }}</h3>
                 <ul class="clean">
                   {% for d in grp.deps %}
                     <li>
@@ -103,16 +104,24 @@
           {% endif %}
         </div>
       </details>
+      {# Action links OUTSIDE the summary (a11y) but overlaid on the row. #}
+      <div class="row-actions">
+        {% if controller.update_available %}<a class="update-link"
+          href="{{ url_for('stacks_overview') }}#controller-update">Update available</a>{% endif %}
+        <a class="logslink" href="{{ url_for('controller_logs') }}" target="_blank" rel="noopener" aria-label="controller logs">logs</a>
+      </div>
+      </div>
       {% endif %}
       {% for g in groups %}
         {% set _forced = g.jobs or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
-        <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
-          <summary>
-            {{ stack_summary(g) }}
-            {% if g.main %}<a class="logslink col-logs" href="{{ url_for('logs_view', target=g.main[0].id) }}" target="_blank" rel="noopener">logs</a>{% endif %}
-          </summary>
-          {% include "_stack_body.html" %}
-        </details>
+        <div class="stackrow-wrap">
+          <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
+            <summary>{{ stack_summary(g) }}</summary>
+            {% include "_stack_body.html" %}
+          </details>
+          {# Action links OUTSIDE the summary (a11y) but overlaid on the row (see .row-actions). #}
+          {{ stack_row_actions(g) }}
+        </div>
       {% endfor %}
     </div>
   </div>

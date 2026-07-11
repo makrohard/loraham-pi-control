@@ -530,8 +530,21 @@ _UPDATING_PAGE_HTML = """<!doctype html>
           box-shadow: 0 2px 10px rgba(0,0,0,.06); max-width: 30rem; text-align: center; }
   h1 { font-size: 1.3rem; margin: 0 0 .6rem; }
   p { color: #556; line-height: 1.5; }
-  a.btn { display: inline-block; margin-top: 1rem; padding: .7rem 1.4rem; background: #1a7f37;
-          color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; }
+  /* Match the console's normal outline button (border-only, fills on hover). Hardcoded — this page
+     can't use style.css. */
+  a.btn { display: inline-block; margin-top: 1rem; padding: .7rem 1.4rem; background: #fff;
+          color: #0b5cab; border: 1px solid #0b5cab; text-decoration: none; border-radius: 8px;
+          font-weight: 600; }
+  a.btn:hover { background: #0b5cab; color: #fff; }
+  /* Standalone page (nginx-served during the outage): can't read the console's theme choice, so it
+     follows the OS scheme. */
+  @media (prefers-color-scheme: dark) {
+    body { background: #0e1116; color: #e6edf3; }
+    .card { background: #171b21; border-color: #2a313a; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+    p { color: #9aa7b4; }
+    a.btn { background: #171b21; color: #58a6ff; border-color: #58a6ff; }
+    a.btn:hover { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+  }
 </style></head>
 <body><div class="card">
   <h1>The console is restarting&hellip;</h1>

@@ -5,7 +5,7 @@
    `scheme` is the PUBLIC LISTENER scheme; the upstream scheme is fixed by the manifest. #}
 {% set sw = g.stack_web %}
 {# `advcfg`, like Install / Info / Settings — a peer sub-section of the stack, not a nested stackrow. #}
-<details class="advcfg" id="stack-webserver-{{ g.stack.id }}">
+<details class="advcfg" id="stack-webserver-{{ g.stack.id }}"{% if sw.pending %} data-ws-pending="1"{% endif %}>
   <summary>Webserver (web UI proxy)
     {% if sw.cfg.enabled %}<span class="pill">{{ sw.cfg.mode }} · :{{ sw.cfg.port }}</span>
       {# LIVE listener scope (from /proc/net/tcp) — the truth, which may differ from the saved mode
@@ -128,7 +128,7 @@
        validates + reloads the whole nginx config so the proxy port actually starts listening. #}
     <form method="post" action="{{ url_for('webserver_apply') }}" class="act ws-apply">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <button type="submit">Apply (validate + reload)</button>
+      <button type="submit"{% if sw.pending %} class="pending"{% endif %}>Apply (validate + reload)</button>
     </form>
 
     {# Saving only records INTENT — nothing is live until Apply. Make that unmissable (a muted

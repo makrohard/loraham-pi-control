@@ -2379,7 +2379,12 @@ class LifecycleOpsMixin:
                 # band column they were started on.
                 if main_comp is not None and main_comp.interactive:
                     mark_band = self.interactive_band(s.id)        # None if not active
-                    active = mark_band is not None or running_up
+                    # The box stays only while the app is actually up, OR its marker's daemon band is
+                    # still USABLE. An interactive app here is daemon-backed (it reaches this code only
+                    # via a band component), so it cannot be running once that daemon is stopped —
+                    # stopping the daemon therefore closes a lingering-marker box instead of leaving it.
+                    marker_live = mark_band is not None and mark_band in usable_bands
+                    active = running_up or marker_live
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue

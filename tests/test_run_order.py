@@ -64,7 +64,11 @@ def test_radio_overview_maps_stacks_to_bands(tmp_path):
 
 
 def test_interactive_run_shows_block_then_dismiss(tmp_path):
-    svc = _svc(tmp_path)
+    # Chat's box shows only while its daemon band is USABLE (see the daemon-down test below), so fake a
+    # READY daemon on 433 for the marked interactive app to show its command block.
+    reply = b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n"
+    fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     svc.mark_interactive("chat", "433")                  # chat is 433-only
     ro = {r["band"]: r for r in svc.radio_overview()}
     block = [s["id"] for s in ro["433"]["interactive"]]
@@ -73,6 +77,17 @@ def test_interactive_run_shows_block_then_dismiss(tmp_path):
     svc.dismiss_interactive("chat")
     ro = {r["band"]: r for r in svc.radio_overview()}
     assert "chat" in {s["id"] for s in ro["433"]["startable"]}       # back in dropdown
+
+
+def test_interactive_box_closes_when_daemon_not_usable(tmp_path):
+    # BUG FIX: chat "started" (marker set) but not actually running; with NO usable daemon on its band
+    # the dashboard box must CLOSE — chat returns to the startable dropdown, not the interactive column.
+    # (Reproduces "start chat, then stop the daemon" — the daemon is no longer usable on 433.)
+    svc = _svc(tmp_path)                                  # no daemon reachable/usable
+    svc.mark_interactive("chat", "433")
+    ro = {r["band"]: r for r in svc.radio_overview()}
+    assert ro["433"]["interactive"] == []                                # box closed
+    assert "chat" in {s["id"] for s in ro["433"]["startable"]}           # back in the dropdown
 
 
 def test_client_interfaces_marked_and_transport_excluded(tmp_path):
