@@ -552,23 +552,44 @@ class ParamsConfigMixin:
         return [d for d in self.system_deps(target)
                 if not d["satisfied"] and not d["runtime"]]
 
+    def install_dep_gate(self, target: str) -> dict:
+        """Split the unsatisfied INSTALL-time deps of a stack into a hard-block set and a warn-only set.
+
+        `block` = missing deps of a MANDATORY (non-optional) component — install must not proceed until
+        they are satisfied. `warn` = missing deps of an OPTIONAL component — advisory only, the operator
+        may proceed. Run-time capabilities (groups) are excluded from both (they gate start, not install).
+        The SINGLE classifier reused by the CLI, web and install-all gates. GET-safe (no subprocess)."""
+        missing = self.missing_system_deps(target)
+        # Unknown optionality defaults to mandatory (fail-safe: block rather than silently skip).
+        return {"block": [d for d in missing if d.get("mandatory", True)],
+                "warn": [d for d in missing if not d.get("mandatory", True)]}
+
     def system_deps(self, target: str) -> list[dict]:
         """ALL declared system requirements for a stack (dev packages, headers,
         device nodes) with their satisfied state + install command — for the app
-        tab ('Installed' vs a copyable install command) and the install gate."""
+        tab ('Installed' vs a copyable install command) and the install gate.
+        `mandatory` = required by a non-optional component (mandatory wins on dedup)."""
         life = self._lifecycle()
         s = self.stack(target)
-        out, seen = [], set()
+        out, by_key = [], {}
         for c in (s.components if s else ()):
             missing = life.missing_requirements(c)
             for req in c.requires:
                 key = req.install or req.cmd or req.check_file
-                if key and key not in seen:
-                    seen.add(key)
-                    out.append({"what": req.note or req.cmd or req.check_file,
-                                "install": req.install,
-                                "satisfied": req not in missing,
-                                "runtime": bool(req.groups)})   # run-time capability (not install-gated)
+                if not key:
+                    continue
+                if key in by_key:
+                    # A dep shared by several components is mandatory if ANY requiring
+                    # component is non-optional (mandatory wins over an optional sibling).
+                    by_key[key]["mandatory"] = by_key[key]["mandatory"] or not c.optional
+                    continue
+                entry = {"what": req.note or req.cmd or req.check_file,
+                         "install": req.install,
+                         "satisfied": req not in missing,
+                         "runtime": bool(req.groups),   # run-time capability (not install-gated)
+                         "mandatory": not c.optional}
+                by_key[key] = entry
+                out.append(entry)
         return out
 
     def config_view(self, target: str, band: str = "") -> dict:

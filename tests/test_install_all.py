@@ -142,7 +142,9 @@ def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeyp
     for sid in ("chat", "igate", "voice", "kiss", "meshcom", "meshcore"):
         assert rows[sid]["status"] == "blocked"
         assert "dependency failed: daemon" in rows[sid]["detail"]
-    assert rows["meshtastic"]["detail"].startswith("missing system deps") \
+    # meshtastic is independent: its own MANDATORY system deps are missing, so the early gate
+    # (before any source work) blocks it — never a false "dependency failed".
+    assert "missing mandatory system deps" in rows["meshtastic"]["detail"] \
         or rows["meshtastic"]["status"] in ("fail", "blocked")
     assert "dependency failed" not in rows["meshtastic"]["detail"]
     assert "REMAIN installed" in r.summary                       # partial results stated

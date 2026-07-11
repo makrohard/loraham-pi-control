@@ -421,6 +421,56 @@ class MaintenanceOpsMixin:
                                    stack_id, comp_index)
         return deps.grouped(report)
 
+    def dependency_overview(self) -> dict:
+        """Read-only, GET-safe aggregation for the Dependency Overview page + Stacks banner: LHPC's own
+        dependencies (including the web-server nginx dep) plus every INSTALLED stack's, each normalized to
+        one shape and classified mandatory vs optional. An unmet dep LHPC can satisfy itself carries an
+        in-page action (op/target for the /action dispatcher); everything else carries a copyable command
+        (LHPC never runs system-package commands). `mandatory_missing`/`optional_missing` drive the banner
+        colour (yellow if any mandatory unmet, else green if only optional). Composes existing GET-safe
+        probes only (shutil.which / fs.exists / find_spec / missing_requirements / is_dir) — no subprocess."""
+        def norm(label, satisfied, mandatory, detail, install, runtime=False):
+            # NARROW action parse: ONLY `lhpc install <target>` / `lhpc build <target>` where the op is a
+            # real web action and the target resolves to a known stack — anything else stays copyable.
+            op = target = None
+            parts = (install or "").split()
+            if (len(parts) == 3 and parts[0] == "lhpc" and parts[1] in ("install", "build")
+                    and parts[1] in self.WEB_ACTIONS and self.stack(parts[2]) is not None):
+                op, target, install = parts[1], parts[2], ""
+            return {"label": label, "satisfied": bool(satisfied), "mandatory": bool(mandatory),
+                    "detail": detail or "", "install": install or "", "op": op, "target": target,
+                    "runtime": bool(runtime)}
+
+        sections: list = []
+        # LHPC + web server: controller_system_deps groups carry the explicit required flag (nginx here).
+        for grp in self.controller_system_deps():
+            deps_ = [norm(d.get("what", ""), d.get("satisfied"), d.get("required", True),
+                          d.get("purpose", ""), d.get("install", ""))
+                     for d in grp.get("deps", [])]
+            sections.append({"title": grp.get("title", "LHPC"), "kind": "controller",
+                             "stack": None, "deps": deps_})
+        # Every INSTALLED stack, in manifest order. A dep of an OPTIONAL component is optional.
+        comp_index = {c.id: c for s in self.stacks() for c in s.components}
+        for s in self.stacks():
+            if not self.is_installed(s.id):
+                continue
+            report = self.deps_report(s.id)          # {system, build, runtime: [DepItem]}
+            deps_ = []
+            for kind in ("system", "build"):         # runtime = always-satisfied ordering; omit
+                for it in report.get(kind, []):
+                    comp = comp_index.get(it.component)
+                    mandatory = not (comp is not None and comp.optional)
+                    deps_.append(norm(it.label, it.satisfied, mandatory, it.detail,
+                                      it.install_cmd, runtime=it.runtime))
+            sections.append({"title": s.name, "kind": "stack", "stack": s.id, "deps": deps_})
+
+        mandatory_missing = sum(1 for sec in sections for d in sec["deps"]
+                                if not d["satisfied"] and d["mandatory"])
+        optional_missing = sum(1 for sec in sections for d in sec["deps"]
+                               if not d["satisfied"] and not d["mandatory"])
+        return {"sections": sections, "mandatory_missing": mandatory_missing,
+                "optional_missing": optional_missing}
+
     def _running_source_consumers(self, paths: set) -> list:
         """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —
         a source swap under a running process breaks it (deleted inodes / half-read files), so

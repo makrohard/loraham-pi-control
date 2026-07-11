@@ -20,6 +20,16 @@
           {% endfor %}
         </div>
       {% endif %}
+      {% if optional_deps %}
+        <div class="flash flash-warn">
+          <strong>Optional dependencies not installed</strong> — recommended but not required;
+          you can proceed without them (the components that need them stay unavailable):
+          {% for d in optional_deps %}
+            <div>{{ d.what }}:</div>
+            {% if d.install %}{{ cmdbox('optdep-' ~ loop.index0, d.install) }}{% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
       <p>{{ plan.summary }}</p>
       {% if plan.details %}
         <pre class="next">{% for line in plan.details %}{{ line }}

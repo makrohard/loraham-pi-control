@@ -27,6 +27,7 @@ class DepItem:
     detail: str = ""     # current state / why unsatisfied
     install_cmd: str = ""  # exact operator command ("" when none applies)
     note: str = NOT_EXECUTED_NOTE
+    runtime: bool = False  # run-time capability (e.g. group membership) — "grant" not "install"
 
 
 def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> list:
@@ -51,7 +52,7 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
                 satisfied=req not in missing,
                 detail=("present" if req not in missing else
                         f"missing: {req.check_file or req.cmd or ('groups ' + ','.join(req.groups))}"),
-                install_cmd=req.install or ""))
+                install_cmd=req.install or "", runtime=bool(req.groups)))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source

@@ -64,6 +64,35 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
+def _print_install_dep_gate(svc, stack) -> bool:
+    """Install-time system-dependency gate for the CLI `install`. Prints a WARN line for each
+    missing OPTIONAL dep (advisory — install still proceeds) and, when a MANDATORY dep is missing,
+    an ERR refusal plus the copyable install command(s). Returns True when the install must be
+    refused (a mandatory dep is missing). `stack` None → aggregate over all managed stacks."""
+    ids = [stack] if stack else [s.id for s in svc.stacks()]
+    block, warn = [], []
+    for sid in ids:
+        gate = svc.install_dep_gate(sid)
+        block += [(sid, d) for d in gate["block"]]
+        warn += [(sid, d) for d in gate["warn"]]
+    for sid, d in warn:
+        hint = f"  -> {d['install']}" if d.get("install") else ""
+        print(f"WARN  optional dependency not installed for '{sid}': {d['what']}{hint}")
+    if not block:
+        return False
+    print(f"ERR   Refusing to install '{stack or 'all'}': missing mandatory system dependencies.")
+    cmds = []
+    for sid, d in block:
+        print(f"  {sid}: {d['what']}")
+        if d.get("install") and d["install"] not in cmds:
+            cmds.append(d["install"])
+    if cmds:
+        print("\nInstall them, then retry:")
+        for c in cmds:
+            print(f"  {c}")
+    return True
+
+
 def _render_daemon(view) -> int:
     if not view.reachable:
         print(f"ERR   daemon {view.band}: not reachable ({view.error or 'no CONF socket'})")
@@ -504,6 +533,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "bootstrap":
         return _apply_flow(lambda apply: svc.bootstrap(apply=apply), yes=args.yes)
     if args.command == "install":
+        if _print_install_dep_gate(svc, args.stack):
+            return 1
         if args.check:
             return _render(svc.install(args.stack, apply=False, source=args.source))
         return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),

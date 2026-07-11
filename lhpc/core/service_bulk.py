@@ -592,6 +592,20 @@ class BulkOpsMixin:
         except reslock.ResourceBusy:
             return None, "a bulk start is already in progress"
 
+    def install_all_dep_preflight(self) -> dict:
+        """Per-stack install-time dependency gate across the bulk scope, for the /install-all page.
+        Returns {"block": [{stack, name, deps}], "warn": [{stack, name, deps}]} — `block` = stacks
+        that WILL BE SKIPPED (a mandatory dep of a non-optional component is missing), `warn` =
+        stacks with only optional deps missing. GET-safe (install_dep_gate runs no subprocess)."""
+        block, warn = [], []
+        for st, _comps in self._bulk_scope():
+            gate = self.install_dep_gate(st.id)
+            if gate["block"]:
+                block.append({"stack": st.id, "name": st.name, "deps": gate["block"]})
+            if gate["warn"]:
+                warn.append({"stack": st.id, "name": st.name, "deps": gate["warn"]})
+        return {"block": block, "warn": warn}
+
     def install_all(self, source: str = "pinned", tests: bool = True, tx: bool = False,
                     run_id: str = "", apply: bool = False, emit=print) -> ActionResult:
         """THE bulk driver ("Install and Build all Stacks"): one outer bulk boundary
@@ -616,6 +630,26 @@ class BulkOpsMixin:
             details.append(f"  host tests: {'on' if tests else 'off'}; "
                            f"TX test: {'ON (real RF!)' if tx else 'off'}; "
                            f"source: {source}")
+            # PRE-FLIGHT dep gate: mandatory-missing stacks will be SKIPPED at run time; optional
+            # missing deps only warn. Surfaced here so the operator can abort (answer N) and install
+            # the copyable commands first, or continue to skip the blocked stacks.
+            blocked_any = False
+            for st, _comps in scope:
+                gate = self.install_dep_gate(st.id)
+                if gate["block"]:
+                    blocked_any = True
+                    cmds = "; ".join(sorted({d.get("install", "") for d in gate["block"]
+                                             if d.get("install")}))
+                    details.append(f"  [blocked] {st.id}: missing mandatory deps — "
+                                   f"run: {cmds or 'see doctor'}")
+                if gate["warn"]:
+                    cmds = "; ".join(sorted({d.get("install", "") for d in gate["warn"]
+                                             if d.get("install")}))
+                    details.append(f"  [warn] {st.id}: optional deps missing"
+                                   + (f" — run: {cmds}" if cmds else ""))
+            if blocked_any:
+                details.append("  NOTE: the [blocked] stacks above will be SKIPPED — abort (answer "
+                               "N) and install their commands first, or continue to skip them.")
             if not self._paths.runtime_root_exists:
                 details.append("  NOTE: runtime root is not bootstrapped yet — apply "
                                "requires 'lhpc bootstrap' first")
@@ -779,6 +813,22 @@ class BulkOpsMixin:
                         emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
                         bw()
                         continue
+                    # MANDATORY system-dep gate — BEFORE any source clone/adopt. A stack missing a
+                    # mandatory dep of a non-optional component is skipped without touching its
+                    # sources; optional missing deps only warn and fall through into the build.
+                    gate = self.install_dep_gate(st.id)
+                    for d in gate["warn"]:
+                        emit(f"  [warn] {st.id}: optional dep not installed: {d['what']}"
+                             + (f" -> {d['install']}" if d.get("install") else ""))
+                    if gate["block"]:
+                        cmds = "; ".join(sorted({d.get("install", "") for d in gate["block"]
+                                                 if d.get("install")}))
+                        r["status"] = "blocked"
+                        r["detail"] = f"missing mandatory system deps — run: {cmds or 'see doctor'}"
+                        failed_stacks.add(st.id)
+                        emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
+                        bw()
+                        continue
                     emit(f"==== {st.id}: sources ====")
                     r["status"] = "downloading"
                     bw()
@@ -811,16 +861,7 @@ class BulkOpsMixin:
                         failed_stacks.add(st.id)
                         bw()
                         continue
-                    missing = self.missing_system_deps(st.id)
-                    if missing:
-                        cmds = "; ".join(sorted({m.get("install", "") for m in missing
-                                                 if m.get("install")}))
-                        r["status"] = "blocked"
-                        r["detail"] = f"missing system deps — run: {cmds or 'see doctor'}"
-                        failed_stacks.add(st.id)
-                        emit(f"  [blocked] {st.id}: {r['detail']}")
-                        bw()
-                        continue
+                    # (mandatory system-dep gate already ran BEFORE source adoption, above)
                     # LINKED external trees: adoption may be a truthful no-op, but a
                     # linked stack with DECLARED build/test work that bulk intentionally
                     # refuses to execute is NOT a success — the row is blocked and the

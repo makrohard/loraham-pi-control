@@ -91,9 +91,11 @@
 </span>
 {# Last column before `logs`: opens (and scrolls to) this stack's Install section, where the
    Update/Build buttons and the per-component freshness pills live. #}
-<span class="col-update">{% if g.update_available %}<a class="update-link"
+<span class="col-update">{% if g.update_available %}{% if g.update_component and not g.update_component_is_main %}<a class="update-link"
+  href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.update_component) }}#comp-{{ g.update_component }}"
+  >Update available</a>{% else %}<a class="update-link"
   href="{{ url_for('stacks_overview', open=g.stack.id, inst=g.stack.id) }}#stack-install-{{ g.stack.id }}"
-  >Update available</a>{% endif %}</span>
+  >Update available</a>{% endif %}{% endif %}</span>
 {% endmacro %}
 
 {# A copyable command box (needs copy.js, loaded globally). #}

@@ -47,7 +47,8 @@ its identity check. It is **initial install only** — refuses an existing check
 destructive git; **update later with `lhpc self-update`**.
 
 ```bash
-sudo apt install -y nginx     # prerequisite for the HTTPS console (skip for loopback-only use)
+sudo apt install -y git python3 python3-venv python3-pip   # LHPC prerequisites (git + Python 3.11+ venv + pip)
+sudo apt install -y nginx                                  # optional — only for the HTTPS console (skip for loopback-only use)
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
 #   or, from a checkout:  ./install.sh
 #   options:  --target <dir>   --no-service (skip the web service)   --no-path (skip the CLI symlink)

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_macros.html" import action_btn, cmdbox %}
+{% block title %}dependencies — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+
+  <div class="card">
+    <header><h2>Dependency Overview</h2></header>
+    <div class="body">
+      <p class="muted">Every dependency of LHPC, the web server and each <strong>installed</strong> stack.
+        Shell commands are <strong>not executed by LHPC</strong> — run them yourself; only LHPC's own
+        install/build steps are buttons.</p>
+      {% if overview.mandatory_missing %}
+        <div class="flash flash-warn"><strong>{{ overview.mandatory_missing }} mandatory</strong>
+          dependenc{{ 'y' if overview.mandatory_missing == 1 else 'ies' }} missing{% if overview.optional_missing %}
+          · {{ overview.optional_missing }} optional{% endif %} — resolve the mandatory ones below.</div>
+      {% elif overview.optional_missing %}
+        <div class="flash flash-ok">{{ overview.optional_missing }} optional
+          dependenc{{ 'y' if overview.optional_missing == 1 else 'ies' }} missing — nothing mandatory.</div>
+      {% else %}
+        <div class="flash flash-ok">All dependencies satisfied ✓</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% for sec in overview.sections %}
+    {% set si = loop.index0 %}
+    <div class="card">
+      <header><h2>{{ sec.title }}{% if sec.kind == 'stack' %} <span class="pill">stack</span>{% endif %}</h2></header>
+      <div class="body">
+        {% if sec.deps %}
+          <ul class="clean">
+            {% for d in sec.deps %}
+              <li>
+                {% if d.satisfied %}<span class="badge badge-running">satisfied</span>
+                {% elif d.mandatory %}<span class="badge badge-failed">missing</span>
+                {% else %}<span class="badge badge-not-installed">optional</span>{% endif %}
+                {{ d.label }}{% if d.detail %} <span class="muted">· {{ d.detail }}</span>{% endif %}
+                {% if not d.satisfied %}
+                  {% if d.op and d.target %}
+                    {{ action_btn(d.op, d.target, d.op|capitalize ~ ' ' ~ d.target) }}
+                  {% elif d.install %}
+                    <div class="muted">{{ 'grant it:' if d.runtime else 'run it yourself:' }}</div>{{ cmdbox('depov-' ~ si ~ '-' ~ loop.index0, d.install) }}
+                  {% endif %}
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="muted">No declared dependencies.</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+
+{% endblock %}

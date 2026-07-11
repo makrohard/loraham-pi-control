@@ -10,6 +10,12 @@
     <div class="tile"><div class="n">{{ observed_conflicts|length }}</div><div class="l">Active conflicts</div></div>
   </section>
 
+  {% if dep_summary.mandatory_missing %}
+    <div class="flash flash-warn"><strong>{{ dep_summary.mandatory_missing }} mandatory dependenc{{ 'y is' if dep_summary.mandatory_missing == 1 else 'ies are' }} missing</strong> — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to resolve.</div>
+  {% elif dep_summary.optional_missing %}
+    <div class="flash flash-ok">{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.</div>
+  {% endif %}
+
   {% if not snapshot.runtime_root_exists %}
     <p class="banner">Runtime root not installed — run this first:</p>
     {{ cmdbox('bootstrap', 'lhpc bootstrap') }}
@@ -119,6 +125,14 @@
         {% if bulk_mode == 'install' %}Install and Build all Stacks
         {% elif bulk_mode == 'update' %}Update all Stacks
         {% else %}Install and update all stacks{% endif %}</button></a></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="body">
+      <p>Every dependency of LHPC, the web server and each installed stack — with the command or action to
+        resolve any that are unmet.</p>
+      <p><a href="{{ url_for('dependencies_page') }}"><button type="button">Dependency Overview</button></a></p>
     </div>
   </div>
 {% endblock %}

@@ -330,7 +330,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "install_all.html", version=__version__, runtime_root=_runtime_root(),
             st=st, mode=mode, running=running, gate=gate, needs_ack=needs_ack,
             recovery=recovery, orphan_risk=orphan_risk, starting=starting, starting_run=starting_run,
-            spawn_failed=spawn_failed,
+            spawn_failed=spawn_failed, dep_preflight=service.install_all_dep_preflight(),
             log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS)
 
     _TX_CONFIRM_TTL_S = 300.0
@@ -507,6 +507,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id),
                                                      ss.components[c.id].source_head)
                           for c in stack.components}
+            # Deep-link target for the row's "Update available": the behind component itself. The MAIN
+            # (== the stack) links to its Install section; a behind DEPENDENCY links to its own
+            # #comp-<id> subsection so the operator lands on the component that actually has the update.
+            _behind = [cid for cid, v in upd_states.items() if v == "behind"]
+            _main_id = main.id if main else None
+            if _main_id is not None and upd_states.get(_main_id) == "behind":
+                _upd_comp, _upd_is_main = _main_id, True
+            elif _behind:
+                _upd_comp, _upd_is_main = _behind[0], False
+            else:
+                _upd_comp, _upd_is_main = None, False
             groups.append({
                 "stack": stack,
                 "main": index.get(main.id) if main else None,
@@ -515,6 +526,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_states": upd_states,          # comp_id -> unchecked|unknown|up_to_date|behind|error
                 "update_main": upd_states.get(main.id, "unchecked") if main else "unchecked",
                 "update_available": any(v == "behind" for v in upd_states.values()),
+                "update_component": _upd_comp,            # the behind component to deep-link to
+                "update_component_is_main": _upd_is_main,  # main -> Install section; dep -> #comp-<id>
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
                 # {} for a stack with no web UI -> the Webserver sub-section is not rendered.
                 "stack_web": service.stack_web_view(stack.id),
@@ -574,6 +587,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # One-click integration status (GET-safe file reads): gates the "Update now" button
             # and drives recovery/guidance in _update.html.
             updater=service.updater_integration(),
+            # Banner summary (green if only optional missing, yellow if a mandatory one is) linking to
+            # the Dependency Overview. GET-safe (presence probes only).
+            dep_summary=service.dependency_overview(),
             confirm=None,
         )
         ctx.update(over)
@@ -582,6 +598,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     @app.get("/stacks")
     def stacks_overview():  # noqa: ANN202
         return _render_stacks()
+
+    @app.get("/dependencies")
+    def dependencies_page():  # noqa: ANN202
+        # Read-only: every dependency of LHPC, the web server and each INSTALLED stack, with a fulfill
+        # action or copyable command for each unmet one. No mutation / subprocess on load.
+        return render_template("dependencies.html", overview=service.dependency_overview(),
+                               version=__version__, runtime_root=_runtime_root())
 
     @app.post("/self-update/check")
     def self_update_check():  # noqa: ANN202
@@ -812,6 +835,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # for DISPLAY only) so a re-render after a failed Save/enforcement keeps the operator's edits.
         _dp_display, _ = (_parse_start_daemon_overrides(request.form) if op == "start" else (None, ""))
         plan = service.run_action(op, target, apply=False, params=params, source=source, band=band)
+        # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
+        # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
+        _gate = (service.install_dep_gate(target) if op in ("install", "build") else None)
         return render_template(
             "confirm.html", version=__version__, runtime_root=_runtime_root(),
             op=op, target=target, plan=plan, tx=("tx" in op),
@@ -823,8 +849,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             stop_deps=(plan.data.get("dependents") if op == "stop" else None),
             other_bands=(plan.data.get("other_bands") if op == "stop" else None),
             commands=(plan.data.get("commands") if op in ("start", "stop") else None),
-            missing_deps=(service.missing_system_deps(target)
-                          if op in ("install", "build") else None),
+            missing_deps=(_gate["block"] if _gate else None),
+            optional_deps=(_gate["warn"] if _gate else None),
             daemon_panels=(service.daemon_start_panels(target, params, band, _dp_display)
                            if op == "start" else None),
             optional_starts=(service.optional_start_components(target)
@@ -961,9 +987,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             purge = True
         # install/build/test run as detached jobs streaming to a log -> show it live.
         if op in ("install", "build", "test"):
-            # Gate install/build on system dependencies: never proceed while a
-            # required dev package / header / device node is missing.
-            missing = service.missing_system_deps(target) if op in ("install", "build") else []
+            # Gate install/build on MANDATORY system dependencies: never proceed while a required
+            # dev package / header / device node of a non-optional component is missing. Optional
+            # deps only warn (surfaced on the confirm page), so they never block here.
+            missing = (service.install_dep_gate(target)["block"]
+                       if op in ("install", "build") else [])
             if missing:
                 flash("System dependencies missing — install them first: "
                       + "; ".join(d["install"] for d in missing if d["install"]), "warn")

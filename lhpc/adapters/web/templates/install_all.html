@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import cmdbox %}
 {% block title %}Install all — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   <p><a href="{{ url_for('stacks_overview') }}">&larr; back to Stacks</a></p>
@@ -45,6 +46,33 @@
         dependency order — one guided run. <strong>This can take several minutes.</strong>
         The run continues if you leave this page.</p>
       {% if gate %}<p class="flash flash-warn">{{ gate }}</p>{% endif %}
+      {% if dep_preflight and dep_preflight.block %}
+        <div class="flash flash-warn">
+          <strong>{{ dep_preflight.block|length }} stack(s) will be SKIPPED — missing mandatory
+          dependencies.</strong> Install the commands below and re-run, or start anyway to skip them.
+          <p class="muted">Commands are <strong>not executed by LHPC</strong> — run them yourself.</p>
+          {% for s in dep_preflight.block %}
+            <p><strong>{{ s.name }}</strong> ({{ s.stack }}):</p>
+            {% for d in s.deps %}
+              <div>{{ d.what }}:</div>
+              {% if d.install %}{{ cmdbox('iablk-' ~ s.stack ~ '-' ~ loop.index0, d.install) }}{% endif %}
+            {% endfor %}
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% if dep_preflight and dep_preflight.warn %}
+        <div class="flash flash-warn">
+          <strong>Optional dependencies missing</strong> — the run proceeds; the components that need
+          them stay unavailable. Install if you want them:
+          {% for s in dep_preflight.warn %}
+            <p><strong>{{ s.name }}</strong> ({{ s.stack }}):</p>
+            {% for d in s.deps %}
+              <div>{{ d.what }}:</div>
+              {% if d.install %}{{ cmdbox('iawarn-' ~ s.stack ~ '-' ~ loop.index0, d.install) }}{% endif %}
+            {% endfor %}
+          {% endfor %}
+        </div>
+      {% endif %}
       <form method="post" action="{{ url_for('install_all_start') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <p><label>Version:
