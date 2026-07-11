@@ -243,7 +243,10 @@ input.wide { width: 100%; min-width: 16rem; }
 .bandswitch a { padding: .25rem .85rem; text-decoration: none; color: var(--brand);
                 background: var(--surface); font-weight: 600;
                 border-left: 1px solid var(--brand); }
-.bandswitch a:first-of-type { border-left: 0; }
+/* A band this stack can't use: greyed, non-clickable segment (same size as the links). */
+.bandswitch .disabled { padding: .25rem .85rem; font-weight: 600; color: var(--muted);
+                        background: var(--bg); cursor: not-allowed; border-left: 1px solid var(--brand); }
+.bandswitch > :first-child { border-left: 0; }   /* first segment (a OR disabled span) has no divider */
 .bandswitch a:hover { background: var(--bg); }
 .bandswitch a.sel { background: var(--brand); color: var(--brand-ink); }
 .cfgsec { margin: .5rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--line); }

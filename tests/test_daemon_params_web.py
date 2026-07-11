@@ -472,3 +472,47 @@ def test_crafted_unknown_band_fails(tmp_path):
 def test_crafted_empty_param_field_rejected(tmp_path):
     c = _daemon_web(tmp_path)
     assert b"malformed daemon field" in _start_post(c, {"dp_433_": "x"}).data
+
+
+# --- in-panel 433/868 band chooser (like the Settings band switch) ---------------------------
+
+def _plain_svc(tmp_path):
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_daemon_params_view_band_sets_are_lists(tmp_path):
+    svc = _plain_svc(tmp_path)
+    assert svc.daemon_params_view("meshcom", "")["all_bands"] == ["433", "868"]
+    assert svc.daemon_params_view("meshcom", "")["bands"] == ["433"]        # fixed 433
+    assert svc.daemon_params_view("meshcore", "")["bands"] == ["868"]       # fixed 868
+    assert svc.daemon_params_view("kiss", "")["bands"] == ["433", "868"]    # switchable
+    assert svc.daemon_params_view("daemon", "")["bands"] == ["433", "868"]  # daemon serves both
+
+
+def test_daemon_params_band_clamped_for_fixed_stack(tmp_path):
+    # ?band=868 must NOT move a fixed-433 stack onto dp_868_* — the shown band clamps back.
+    svc = _plain_svc(tmp_path)
+    assert svc.daemon_params_view("meshcom", "868")["band"] == "433"
+    assert svc.daemon_params_view("kiss", "868")["band"] == "868"           # switchable honours it
+
+
+def test_meshtastic_direct_spi_has_no_daemon_params_view(tmp_path):
+    # Negative case: no panel at all -> the chooser never appears for a non-daemon client.
+    assert _plain_svc(tmp_path).daemon_params_view("meshtastic", "") == {}
+
+
+def test_daemon_params_band_chooser_rendered(tmp_path):
+    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
+
+    def dp_seg(sid):
+        i = body.index('id="stack-daemon-params-' + sid + '"')
+        return body[i:i + 1500]
+
+    # single-band stack (meshcom): its band is a link, the other band a disabled span.
+    ms = dp_seg("meshcom")
+    assert "bandswitch" in ms
+    assert "band=433" in ms and "dp=meshcom" in ms and "#stack-daemon-params-meshcom" in ms
+    assert '<span class="disabled"' in ms and "868 MHz" in ms
+    # dual-band stack (kiss): both bands are links, none disabled.
+    ks = dp_seg("kiss")
+    assert "band=433" in ks and "band=868" in ks and '<span class="disabled"' not in ks

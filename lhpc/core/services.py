@@ -3941,18 +3941,26 @@ class ControllerService:
 
     def daemon_params_view(self, target: str, band: str = "") -> dict:
         """Web view for the daemon-params panel: the grouped, editable radio-parameter rows for
-        ONE band (the page's selected band, or the stack's fixed band). {} for direct-SPI /
-        unknown stacks. Values are the effective config-file values (default + operator save)."""
+        ONE band, plus the in-panel band chooser (`all_bands` = both toggle options, `bands` = the
+        ones this stack can use; the daemon and band-switchable clients get both, a fixed-band stack
+        only its own). {} for direct-SPI / unknown stacks. Values are the effective config-file
+        values (default + operator save)."""
         from . import daemon_params
         sid = self._owner_stack_id(target)                   # owner-stack daemon profile + storage
         is_daemon = self._is_daemon_target(target)
         if not (is_daemon or daemon_params.is_client(sid)):
             return {}
-        b = self._effective_daemon_band(target, band)
+        # Applicable bands = the SAME source config_view uses for view.bands (never new band logic).
+        if is_daemon:
+            applicable = list(self.RADIO_BANDS)                      # the daemon serves both
+        else:
+            applicable = list(self.stack_bands(target)) or [self._effective_daemon_band(target, "")]
+        b = band if band in applicable else applicable[0]            # CLAMP: ?band= never moves a fixed band
         # "Apply live" only makes sense against a live daemon: the daemon page always, or an
         # app stack that is currently running (its daemon dependency is up).
         can_apply = is_daemon or self.stack_running(sid)
-        return {"stack": target, "band": b, "is_daemon": is_daemon, "can_apply": can_apply,
+        return {"stack": target, "band": b, "bands": applicable, "all_bands": list(self.RADIO_BANDS),
+                "is_daemon": is_daemon, "can_apply": can_apply,
                 "rows": daemon_params.stack_view(sid, b, self._daemon_param_overrides(target, b))}
 
     def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "",

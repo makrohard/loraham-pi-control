@@ -7,7 +7,7 @@
      the config/stack form uses the per-panel dp_<PARAM> save route. #}
   {% set dp_pref = ("dp_" + daemon_params.band + "_") if dp_inline else "dp_" %}
   <details class="advcfg dparams" id="stack-daemon-params-{{ stack_id }}"{% if request.args.get('dp') == stack_id %} open data-force-open="1"{% endif %}>
-    <summary>Daemon radio parameters ({{ daemon_params.band }} MHz)</summary>
+    <summary>{% if dp_inline %}Daemon radio parameters ({{ daemon_params.band }} MHz){% else %}Daemon radio parameters{% endif %}</summary>
     <p class="muted">
       {% if dp_inline %}The values lhpc will apply to the daemon for <strong>this start</strong>
       (via the config socket), before the stack's components. Adjust them for this launch, or
@@ -19,6 +19,21 @@
       overwrites them when it starts. <em>Save</em> stores; <em>Apply live</em> pushes them to the
       running daemon now (only while the stack is running, or here on the daemon page); <em>Reset</em>
       restores defaults.{% endif %}</p>
+    {% if not dp_inline %}
+      {# 433/868 chooser (like the Settings band switch); bands this stack can't use are disabled. #}
+      <p><strong>Band:</strong>
+        <span class="bandswitch">
+          {% for b in daemon_params.all_bands %}
+            {% if b in daemon_params.bands %}
+              <a class="{{ 'sel' if b == daemon_params.band else '' }}"
+                 href="{{ url_for('stacks_overview', band=b, open=stack_id, dp=stack_id) }}#stack-daemon-params-{{ stack_id }}">{{ b }} MHz</a>
+            {% else %}
+              <span class="disabled" title="{{ stack_id }} runs on one band only">{{ b }} MHz</span>
+            {% endif %}
+          {% endfor %}
+        </span>
+        <span class="muted">— each band has its own daemon radio parameters</span></p>
+    {% endif %}
     {% if not dp_inline %}
     <form method="post" class="dparams-form"
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
