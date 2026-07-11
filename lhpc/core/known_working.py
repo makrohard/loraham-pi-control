@@ -184,15 +184,6 @@ def newest_commit_for(paths: Paths, stack_id: str, comp_id: str) -> str:
     return ""
 
 
-def remove_store(paths: Paths, stack_id: str) -> bool:
-    """Drop the whole store for a stack (Clean all). Missing is success; no-follow."""
-    try:
-        runtime_fs.unlink(paths, store_path(paths, stack_id))
-        return True
-    except (OSError, PathContainmentError):
-        return False
-
-
 # ---- last-start candidate marker (written by the START path, read by GETs) --------------------
 
 def write_candidate(paths: Paths, stack_id: str, entries: dict, band: str) -> bool:

@@ -3,6 +3,13 @@
 lhpc treats managed source selection as a supply-chain decision. Source-mutating operations
 (install / update) default to the **pinned immutable commit** where a pin exists.
 
+## Contents
+
+- [Selections](#selections)
+- [Verification status](#verification-status-truthful)
+- [Signed commits/tags](#signed-commitstags-optional)
+- [Remote overrides](#remote-overrides)
+
 ## Selections
 
 | `--source` | Web label | Meaning | Production-safe? |

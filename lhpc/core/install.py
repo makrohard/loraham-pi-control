@@ -778,13 +778,6 @@ class Installer:
             return r.returncode == 0 and r.stdout.strip() == spec.branch
         return True                               # dev with no branch: documented permissive
 
-    def _is_dirty(self, dest: Path) -> bool:
-        if not (dest / ".git").exists():
-            return False
-        r = self.system.runner.run(["git", "-C", str(dest), "status", "--porcelain",
-                                     "--untracked-files=no"], 5.0)
-        return r.returncode == 0 and bool(r.stdout.strip())
-
     def _path_bins(self, source_path: str) -> set:
         """Every consumer component's declared built-binary path inside `source_path` — these
         are LHPC-regenerated artifacts, never operator changes."""

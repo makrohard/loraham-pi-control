@@ -3,6 +3,22 @@
 What the controller now guarantees, and how it is enforced. Not a history; these
 are the current rules.
 
+## Contents
+
+- [Structured command execution (no shell)](#structured-command-execution-no-shell)
+- [Verified owned-process stopping](#verified-owned-process-stopping)
+- [Path containment](#path-containment)
+- [Truthful outcomes & readiness](#truthful-outcomes--readiness)
+- [Staged update / activation](#staged-update--activation)
+- [Uninstall protection](#uninstall-protection)
+- [GET no-network guarantee](#get-no-network-guarantee)
+- [Web path safety & confirmation](#web-path-safety--confirmation)
+- [Atomic, locked config writes](#atomic-locked-config-writes)
+- [Package-install correctness](#package-install-correctness)
+- [Test commands](#test-commands)
+- [Verified vs. still-open](#verified-vs-still-open)
+- [Not production-ready](#not-production-ready)
+
 ## Structured command execution (no shell)
 - All normal lifecycle execution is **structured argv with `shell=False`**: `start`
   (`subprocess.Popen(argv, shell=False, cwd, env, start_new_session=True)`), `build`

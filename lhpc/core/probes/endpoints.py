@@ -55,7 +55,7 @@ def parse_endpoint(address: str) -> tuple[str, int, str | None]:
 
 
 # Owner-PID resolution budget: matching a listener is cheap, but resolving its owning
-# PID scans /proc/*/fd, so it is time-bounded (mirrors probes.net._OWNER_BUDGET_S).
+# PID scans /proc/*/fd, so it is time-bounded.
 _OWNER_BUDGET_S = 0.25
 
 

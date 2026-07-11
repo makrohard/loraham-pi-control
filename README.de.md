@@ -9,6 +9,12 @@ Konfiguration jeder App und überwacht und tunt den LoRaHAM-Daemon live.
 > Diese deutsche Anleitung richtet sich an Funkamateur-Betreiber. Code,
 > Oberflächentexte und die übrigen Dokumente sind auf Englisch (siehe `README.md`).
 
+## Inhalt
+
+- [Installation (self-hosted)](#installation-self-hosted)
+- [Wichtige Befehle](#wichtige-befehle)
+- [Sicherheit](#sicherheit)
+
 ## Installation (self-hosted)
 
 Ein Deployment ist **self-hosted**: Das Laufzeitverzeichnis `~/loraham-pi-control` ist ein
@@ -23,9 +29,25 @@ für die **Erstinstallation** — verweigert einen vorhandenen Checkout, keine d
 git-Operationen; **Updates später mit `lhpc self-update`**.
 
 ```bash
+sudo apt install -y nginx     # Voraussetzung für die HTTPS-Konsole (weglassen für nur-lokal)
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
 #   oder aus einem Checkout:  ./install.sh
 #   Optionen:  --target <verzeichnis>   --no-service (kein Web-Dienst)   --no-path (kein CLI-Symlink)
+```
+
+**Konsole öffnen.** Ist `nginx` vorhanden, hat `install.sh` die verwaltete HTTPS-Konsole schon
+gestartet (es führt `lhpc webserver init` + `start-service` aus): im Browser
+**`https://127.0.0.1:8443/`** öffnen — der Browser warnt vor der selbstsignierten CA, bis du sie
+importierst (siehe [`docs/webserver.md`](docs/webserver.md)). Ohne nginx die lokale Konsole mit
+**`lhpc web`** → `http://127.0.0.1:8770/` starten. Für den Zugriff von einem anderen Rechner die
+[mTLS-Freigabe-Anleitung](docs/webserver.md#expose-to-your-lan-with-mtls--runbook) befolgen.
+
+**Stacks bereitstellen.** Rufzeichen setzen, dann alle Stacks in einem geführten Lauf
+installieren/bauen/testen:
+
+```bash
+lhpc config operator --callsign DL1ABC    # dein Rufzeichen (erben alle lizenzierten Stacks)
+lhpc install-all                          # alle Stacks installieren + bauen + testen
 ```
 
 <details><summary>Oder von Hand</summary>
@@ -43,10 +65,10 @@ python3 -m venv ~/loraham-pi-control/venv/lhpc
 # 3. Laufzeit-Layout + Default-Config anlegen (nur Eigentümer, Modus 0700)
 ~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
 
-# 4. Stacks übernehmen + bauen (venv/lhpc/bin in den PATH aufnehmen)
+# 4. Alle Stacks übernehmen + bauen + testen (venv/lhpc/bin in den PATH aufnehmen)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
-lhpc install daemon --yes   # Quelle übernehmen/prüfen …
-lhpc build daemon           # … dann bauen
+lhpc config operator --callsign DL1ABC   # dein Rufzeichen
+lhpc install-all                         # geführt: installieren + bauen + testen
 ```
 </details>
 
@@ -81,7 +103,7 @@ eine Anforderungs-Markierung, die eine statische `lhpc-selfupdate.path`-Unit in 
 gesandboxten Helper-Unit umsetzt — diese stoppt die Konsole, wendet das Update an
 (Live-Identitätsprüfung, alle Locks), synchronisiert das venv und lässt systemd sie wieder
 starten. Die Konsole kann **kein** `systemctl` aufrufen (ihre Unit sperrt den Benutzer-D-Bus),
-und One-Click läuft nur, wenn die drei verwalteten Units byte-genau kanonisch sind — ein
+und One-Click läuft nur, wenn die vier verwalteten Units byte-genau kanonisch sind — ein
 manipuliertes Frontend kann so nicht ausbrechen. Manueller Weg:
 `systemctl --user stop lhpc-web && lhpc self-update --apply`;
 `lhpc self-update --repair-integration` installiert die verwalteten Units (neu). Details:
@@ -91,8 +113,8 @@ Dateisystem nur lesbar außer Laufzeitverzeichnis und `/tmp`, kein breiter Schre
 `$HOME`/`/var`, Benutzer-D-Bus gesperrt; Build-/Tool-Caches liegen laufzeit-eigen unter
 `build/tool-cache/` (nie `~/.platformio`, `~/.espressif` oder `~/.cache`).
 
-Rufzeichen einmalig auf der Web-Konfigseite setzen; bis dahin nutzen die Apps
-`N0CALL`.
+Rufzeichen einmalig mit `lhpc config operator --callsign <RUFZEICHEN>` (oder in den
+**Settings** eines Stacks) setzen; bis dahin nutzen die Apps `N0CALL`.
 
 ## Wichtige Befehle
 
@@ -110,7 +132,8 @@ Verändernde Befehle zeigen erst einen Plan und führen erst nach Bestätigung (
 
 ## Sicherheit
 
-- Web-Konsole lauscht nur lokal (`127.0.0.1`/`::1`); Aktionen sind POST + CSRF.
+- `lhpc web` lauscht nur lokal (`127.0.0.1`/`::1`); Aktionen sind POST + CSRF. Für den
+  Fernzugriff die HTTPS-/mTLS-Konsole hinter nginx nutzen (siehe [`docs/webserver.md`](docs/webserver.md)).
 - Geheimnisse (Rufzeichen, Passwörter, HMAC-Schlüssel) nur in lokaler,
   nicht versionierter Konfiguration (`config/secrets.toml`, Rechte `0600`).
 

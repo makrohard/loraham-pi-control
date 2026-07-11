@@ -5,6 +5,18 @@ It is not a public web service. This document describes the supported way to run
 persistently. **lhpc never installs, enables, or starts any systemd unit for you** — every
 step below is manual and under your control.
 
+## Contents
+
+- [Serving model](#serving-model)
+- [Self-hosted deployment layout](#self-hosted-deployment-layout-the-deployment-standard)
+  - [Security boundary (identity policy)](#security-boundary-the-identity-policy)
+  - [Self-update operating rules](#self-update-operating-rules)
+  - [Recovery](#recovery)
+- [Run it under systemd](#run-it-under-systemd-user-service-no-root)
+  - [Why these unit settings](#why-these-unit-settings)
+  - [Controller status & updates](#controller-status--updates-on-the-web-console)
+- [Security boundary](#security-boundary)
+
 ## Serving model
 
 `lhpc web` prefers a production-capable WSGI server (**waitress**): one process,
@@ -182,7 +194,8 @@ shows an "unchecked/unknown" state.
 
 ## Security boundary
 
-The console is **loopback-only by design**. Remote access is **not** provided by this unit
-and must never be obtained by binding a public address. Exposing it remotely requires a
-separate, explicit design: authenticated **HTTPS** and/or a trusted **reverse proxy** with
-its own access control — future work, opt-in, and out of scope here.
+The `lhpc-web.service` unit itself is **loopback-only** — Waitress binds a `0600` Unix socket and
+opens no TCP port. Remote access is provided by the separate production front-end, not by binding
+this unit to a public address: the managed **`lhpc-nginx.service`** terminates HTTPS and enforces
+client-certificate (mTLS) auth plus a source-CIDR gate, and remote exposure is opt-in behind a typed
+confirmation. See [`webserver.md`](webserver.md) for the topology and the expose-with-mTLS runbook.

@@ -11,6 +11,15 @@ Do it in a maintenance window; nothing here runs radios.
 > `~/src/loraham-pi-control`) is untouched — the in-root deployment checkout is a fresh
 > clone.
 
+## Contents
+
+- [0 — Freeze one exact SHA](#0--freeze-one-exact-sha-never-a-moving-branch)
+- [1 — Quiesce FIRST](#1--quiesce-first-before-any-copy)
+- [2 — Stage a copy](#2--stage-a-copy-same-filesystem)
+- [3 — Place the frozen checkout](#3--place-the-frozen-checkout-deliberately-at-the-exact-sha)
+- [4 — Cut over + build the production venv](#4--cut-over--build-the-production-venv-at-the-final-path)
+- [5 — Rollback](#5--rollback)
+
 ## 0 — Freeze one exact SHA (never a moving branch)
 
 The deployment input is an **immutable commit**, not `origin/main` (which moves). Fetch and

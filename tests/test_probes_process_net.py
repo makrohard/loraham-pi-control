@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from lhpc.core.model import ProcessSpec
-from lhpc.core.probes.backends import FakeSystem, Listener, parse_proc_net_tcp
-from lhpc.core.probes.net import probe_tcp_port
+from lhpc.core.probes.backends import FakeSystem, parse_proc_net_tcp
 from lhpc.core.probes.process import matches, probe_process
 
 
@@ -70,26 +69,3 @@ def test_parse_ipv4_listen_only():
 def test_parse_ipv6():
     lst = parse_proc_net_tcp(_TCP6, "ipv6")
     assert lst and lst[0].port == 0x22B8 and lst[0].family == "ipv6"
-
-
-def test_probe_tcp_port_listening_and_owner():
-    fake = FakeSystem(
-        listeners=[Listener("ipv4", "127.0.0.1", 7000, 555)],
-        owners={555: 4242},
-    )
-    p = probe_tcp_port(fake.system, 7000)
-    assert p.listening and p.owner_pid == 4242 and not p.owner_incomplete
-
-
-def test_probe_tcp_port_owner_incomplete_is_not_blocking():
-    fake = FakeSystem(
-        listeners=[Listener("ipv4", "127.0.0.1", 7000, 999)],
-        owner_incomplete={999},
-    )
-    p = probe_tcp_port(fake.system, 7000)
-    assert p.listening and p.owner_pid is None and p.owner_incomplete
-
-
-def test_probe_tcp_port_not_listening():
-    fake = FakeSystem(listeners=[])
-    assert not probe_tcp_port(fake.system, 7000).listening

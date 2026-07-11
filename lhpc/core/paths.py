@@ -74,15 +74,6 @@ class Paths:
         real = Path(os.path.realpath(path.parent)) / path.name
         return real == base or base in real.parents
 
-    def mutable_leaf(self, path: Path) -> Path:
-        """A runtime-owned mutable leaf: rejects a path that escapes the root (lexical
-        or via a symlinked parent) and refuses a pre-existing symlink leaf (no-follow)."""
-        if not self.contains(path):
-            raise PathContainmentError(f"path escapes runtime root: {path}")
-        if path.is_symlink():
-            raise PathContainmentError(f"refusing a symlink leaf: {path}")
-        return path
-
     def safe_unlink(self, path: Path) -> None:
         """Delete a runtime-owned leaf safely: contained, and never through a symlink
         leaf OR a swapped parent. A missing file is a no-op; an escaping or symlinked

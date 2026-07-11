@@ -51,10 +51,6 @@ SYSTEM_DEPS = (
 )
 
 
-class WebserverError(Exception):
-    """A webserver orchestration step failed (typed diagnostic, never a crash)."""
-
-
 def nginx_installed(system) -> bool:
     """True iff the nginx system binary is present (via `nginx -v`)."""
     res = system.runner.run(["nginx", "-v"], _NGINX_VALIDATE_TIMEOUT_S)

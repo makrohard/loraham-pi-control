@@ -8,6 +8,14 @@ builds it, starts and stops it in dependency order, enforces that only one stack
 uses a radio band at a time, writes each app's config from one place, and monitors
 and live-tunes the LoRaHAM daemon.
 
+## Contents
+
+- [Stacks](#stacks)
+- [Install (self-hosted)](#install-self-hosted)
+- [CLI](#cli)
+- [Web console](#web-console)
+- [Deployment & self-update](#deployment--self-update)
+
 ## Stacks
 
 | Stack | Band(s) | What it is |
@@ -39,10 +47,28 @@ its identity check. It is **initial install only** — refuses an existing check
 destructive git; **update later with `lhpc self-update`**.
 
 ```bash
+sudo apt install -y nginx     # prerequisite for the HTTPS console (skip for loopback-only use)
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
 #   or, from a checkout:  ./install.sh
 #   options:  --target <dir>   --no-service (skip the web service)   --no-path (skip the CLI symlink)
 ```
+
+**Open the console.** When `install.sh` finishes with `nginx` present it has already brought up the
+managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you): browse to
+**`https://127.0.0.1:8443/`** — your browser warns about the self-signed CA until you import it
+(see [`docs/webserver.md`](docs/webserver.md)). Without nginx, start the loopback console with
+**`lhpc web`** → `http://127.0.0.1:8770/`. To reach it from another machine, follow the
+[expose-with-mTLS runbook](docs/webserver.md#expose-to-your-lan-with-mtls--runbook).
+
+**Bring up the stacks.** Set your callsign, then install/build/test every stack in one guided run:
+
+```bash
+lhpc config operator --callsign W1ABC     # your callsign (inherited by all licensed stacks)
+lhpc install-all                          # install + build + test all stacks (adds --source, --no-tests, --tx)
+```
+
+You can do the same from the web console's **Stacks** page. Then start what you need
+(`lhpc stack start <stack>`, or the Start button).
 
 <details><summary>Or do it by hand</summary>
 
@@ -59,13 +85,14 @@ python3 -m venv ~/loraham-pi-control/venv/lhpc
 # 3. Create the runtime layout + default config (owner-only, mode 0700)
 ~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
 
-# 4. Adopt + build stacks (add venv/lhpc/bin to PATH, or use the full path)
+# 4. Adopt + build + test all stacks (add venv/lhpc/bin to PATH, or use the full path)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
-lhpc install --check        # show which stack sources would be adopted
-lhpc install daemon --yes   # adopt + verify a stack's source …
-lhpc build daemon           # … then build it
-lhpc web                    # http://127.0.0.1:8770/  (loopback only)
+lhpc config operator --callsign W1ABC   # your callsign
+lhpc install-all                        # guided install + build + test of every stack
+lhpc web                                # http://127.0.0.1:8770/  (loopback console)
 ```
+For the HTTPS/mTLS console instead of `lhpc web`, install nginx and follow
+[`docs/webserver.md`](docs/webserver.md).
 </details>
 
 `lhpc status` then shows the controller row as **identity ok**. To run it persistently as a
@@ -73,9 +100,9 @@ user service, see [`docs/deployment.md`](docs/deployment.md) (the `deploy/lhpc-w
 template already uses this layout). One-click update stops and restarts the console itself;
 only the manual `lhpc self-update --apply` needs it stopped first.
 
-Set your callsign once in a stack's web **Settings**; until then HAM apps default to
-`N0CALL`. Secrets (passwords, HMAC keys) live only in
-`~/loraham-pi-control/config/secrets.toml`.
+Set your callsign once with `lhpc config operator --callsign <CALL>` (or in a stack's web
+**Settings**); until then HAM apps default to `N0CALL`. Secrets (passwords, HMAC keys) live only
+in `~/loraham-pi-control/config/secrets.toml`.
 
 **Manage the service** — `install.sh` runs the web console as a systemd user service (not in
 your terminal); the installer prints these at the end too:
@@ -138,8 +165,10 @@ lhpc web                     # http://127.0.0.1:8770/  (loopback only)
 - **Settings** — per-stack settings (callsign, frequencies, presets …)
   written into each app's own config file.
 
-Loopback-only bind, POST actions are CSRF-protected, `Content-Security-Policy:
-default-src 'self'`. Not intended to be exposed to a network.
+This bare `lhpc web` mode is **loopback-only** (POST actions are CSRF-protected,
+`Content-Security-Policy: default-src 'self'`) and is not exposed to a network. To reach the
+console from another machine, use the production HTTPS + mTLS front-end (nginx) — see
+[`docs/webserver.md`](docs/webserver.md).
 
 ## Deployment & self-update
 
@@ -161,7 +190,7 @@ footer by itself; **“Check for updates”** does the same on demand.
 `lhpc-selfupdate.path` unit turns into a run of the sandboxed helper — which stops the console,
 applies the update (live identity check, all locks), syncs the venv, and lets systemd bring it
 back. The console **cannot** call `systemctl` (its unit blocks the user D-Bus) and one-click runs
-only when the three managed units are proven byte-exact, so a tampered console can't escape or run
+only when the four managed units are proven byte-exact, so a tampered console can't escape or run
 an unvetted updater. Manual path: `systemctl --user stop lhpc-web && lhpc self-update --apply`;
 `lhpc self-update --repair-integration` (re)installs the managed units. Details:
 [`docs/deployment.md`](docs/deployment.md).
@@ -172,3 +201,7 @@ redirected into a runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.
 `~/.cache`). See
 [`docs/deployment.md`](docs/deployment.md) and the operator relocation runbook in
 [`docs/deployment-migration.md`](docs/deployment-migration.md).
+
+**Backup:** your settings, secrets and certificates all live under `~/loraham-pi-control/config/`
+(plus known-working records in `profiles/`); back them up with a single `tar` — see
+[`docs/operations.md`](docs/operations.md#backup--restore).

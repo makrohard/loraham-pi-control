@@ -18,6 +18,22 @@ interactive mode only; use it or the CLI to bootstrap before nginx is up.)
 > never probes the network during a page load. Desired configuration lives separately in
 > `config/local.toml [webserver]`.
 
+## Contents
+
+- [Default behaviour](#default-behaviour-local-https-no-client-cert)
+- [First-time bootstrap](#first-time-bootstrap-operator-context)
+- [Access modes](#access-modes)
+- [Remote exposure](#remote-exposure-opt-in)
+- [Expose to your LAN with mTLS — runbook](#expose-to-your-lan-with-mtls--runbook)
+- [Certificates and the two-CA PKI](#certificates-and-the-two-ca-pki)
+  - [Install the client certificate in a browser](#install-the-client-certificate-in-a-browser)
+  - [Bundle transfer safety](#bundle-transfer-safety)
+  - [Revocation](#revocation)
+- [Verifying effective state](#verifying-effective-state)
+- [Applying changes / recovery](#applying-changes--recovery)
+- [Local dependencies](#local-dependencies)
+- [Not validated here](#not-validated-here)
+
 ## Default behaviour (local, HTTPS, no client cert)
 
 Out of the box: `bind = 127.0.0.1`, `port = 8443`, HTTPS on, **local access unauthenticated**,
@@ -75,6 +91,44 @@ lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 authentication**. The Monitor and Configuration views show a persistent red warning while
 this is active.
 
+## Expose to your LAN with mTLS — runbook
+
+The end-to-end path to reach the console from another machine on your network, protected by a
+client certificate. Run every `lhpc` command from an interactive operator shell on the Pi (not the
+web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` with the Pi's LAN IP.
+
+1. **Front-end + PKI** (skip if `install.sh` already did it):
+   ```
+   sudo apt install -y nginx
+   lhpc webserver init --dns pi.local --ip 192.168.0.10   # two CAs + server cert (DNS/IP SANs)
+   lhpc webserver start-service                            # generate+validate config, start nginx
+   ```
+2. **Turn on remote access** (default access mode already requires a client cert off-loopback):
+   ```
+   lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+   lhpc webserver apply                                    # validate + reload nginx
+   ```
+3. **Issue a device certificate** and get its bundle off the Pi:
+   ```
+   lhpc webserver cert issue laptop        # prints a ONE-TIME passphrase — record it now
+   lhpc webserver cert export laptop ~/laptop.p12         # write the encrypted .p12 to a file
+   ```
+   Or, from a browser **on the Pi** (loopback only), open the console's Webserver → Certificates
+   panel and click **Download** on the `laptop` row. A remote browser can never pull a fresh key.
+4. **Copy the bundle to the remote machine** over a trusted channel (`scp`, USB) — it is encrypted
+   with the one-time passphrase, but treat it as a private key. Also copy the **server CA**
+   certificate (`config/tls/` on the Pi) so the browser trusts the server.
+5. **Install both in the remote browser** — import the server CA (clears the TLS warning) and the
+   `.p12` (supplies the client credential). See [below](#install-the-client-certificate-in-a-browser).
+6. **Open the port at your firewall/router** — LHPC never touches UFW/nftables/router/DNS; this
+   step is yours.
+7. **Prove it:** `lhpc webserver verify`, then browse to `https://192.168.0.10:8443/` from the
+   remote machine and pick the `laptop` certificate when prompted.
+
+To turn it back off: `lhpc webserver disable-remote && lhpc webserver apply` (then `verify`).
+IPv6 remote exposure is not supported in this release (see above). Command details:
+[`docs/cli.md`](cli.md#webserver).
+
 ## Certificates and the two-CA PKI
 
 Two independent CAs (private keys never leave `config/tls/`, 0600):
@@ -97,14 +151,34 @@ Each client certificate is exported as an **encrypted PKCS#12 `.p12`** bundle un
 `config/tls/exports/` (0600). The private key exists only inside that bundle. The one-time
 passphrase is shown once and never stored or logged.
 
-### Browser installation
+### Install the client certificate in a browser
 
-1. Import the **server TLS CA** certificate into your browser/OS trust store (so the server
-   certificate is trusted).
-2. Where client authentication is required, import the **`.p12` client bundle** (you'll be
-   asked for the one-time passphrase).
+Two imports are needed on the remote machine, and LHPC automates neither:
 
-LHPC does not automate any browser/OS trust-store changes.
+- the **server TLS CA** — so the browser trusts `https://…:8443/` instead of warning;
+- the **`.p12` client bundle** — the device credential mTLS asks for (you'll be prompted for the
+  one-time passphrase from `cert issue`).
+
+**Firefox** (its own store, not the OS): `about:preferences#privacy` → **Certificates** → *View
+Certificates*. Under **Your Certificates** → *Import…* the `.p12`. Under **Authorities** → *Import…*
+the server CA and tick "Trust this CA to identify websites". Firefox prompts you to pick the
+certificate on first connect.
+
+**Chrome / Chromium / Edge** (use the OS store): open *Manage certificates* (Settings → Privacy and
+security → Security → Manage certificates) or the OS tool directly — **Linux**: `certutil -d
+sql:$HOME/.pki/nssdb -A` for the CA and import the `.p12` into the same NSS DB; **macOS**: add both
+to *Keychain Access* and mark the CA trusted; **Windows**: *certmgr.msc* → Trusted Root (CA) and
+Personal (the `.p12`).
+
+**Android**: Settings → Security → *Encryption & credentials* → *Install a certificate* — install
+the CA under "CA certificate" and the `.p12` under "VPN & app user certificate".
+
+**iOS / iPadOS**: AirDrop/email both files, install each profile (Settings → *Profile Downloaded*),
+then Settings → General → *VPN & Device Management* to finish, and for the CA also Settings →
+General → About → *Certificate Trust Settings* → enable full trust.
+
+Without the CA import the connection still works but shows a trust warning; without the `.p12` any
+cert-required access mode rejects the browser.
 
 ### Bundle transfer safety
 

@@ -1,5 +1,17 @@
 # Architecture
 
+## Contents
+
+- [The runtime root](#the-runtime-root)
+- [Package layout](#package-layout)
+- [Manifest and config layers](#manifest-and-config-layers)
+- [Probes and status](#probes-and-status)
+- [Radios and conflicts](#radios-and-conflicts)
+- [Daemon control](#daemon-control)
+- [Web security](#web-security)
+- [Safety hardening](#safety-hardening)
+- [Controller identity & self-update](#controller-identity--self-update)
+
 ## The runtime root
 
 Everything lives under one **runtime root** (`~/loraham-pi-control`, override
@@ -91,7 +103,9 @@ Loopback bind only (`run_server` refuses any non-loopback host). Mutations are P
 CSRF token; page loads call only bounded read-only service methods. Every response sends
 `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
 no-referrer`, `Content-Security-Policy: default-src 'self'`; Jinja autoescaping is on.
-Exposing it to a network would need explicit auth + HTTPS.
+Network exposure is provided by the production front-end (nginx terminating HTTPS + mTLS, opt-in
+behind a typed confirmation), not by binding the app to a public address — see
+[`webserver.md`](webserver.md).
 
 ## Safety hardening
 

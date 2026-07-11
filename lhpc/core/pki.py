@@ -51,10 +51,6 @@ class PKIError(Exception):
 
 # --------------------------------------------------------------------------- paths / layout
 
-def tls_dir(paths: Paths) -> Path:
-    return paths.under(*_TLS)
-
-
 def _p(paths: Paths, *parts: str) -> Path:
     return paths.under(*_TLS, *parts)
 

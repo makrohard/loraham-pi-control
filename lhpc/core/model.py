@@ -432,7 +432,3 @@ class ResourceConflict:
     holders: tuple[str, ...]     # component ids involved
     observed: bool               # True = both components currently running
     message: str = ""
-
-
-# NOTE: the per-component ConfirmedProfile schema (dead code — nothing ever wrote it) was
-# replaced by OPERATOR-CONFIRMED per-stack known-working COMPOSITIONS (core/known_working.py).
