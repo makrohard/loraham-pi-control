@@ -2010,3 +2010,39 @@ def test_update_ui_manual_guidance_for_unsafe_no_apply_advice(tmp_path, monkeypa
     assert "Repair &amp; update" not in b and "Update now" not in b
     assert "resolve them manually" in b
     assert "self-update --apply" not in b            # the wrong advice is gone
+
+
+def test_controller_system_deps_panel(tmp_path, monkeypatch):
+    # The controller row surfaces its OWN system deps (git required, nginx optional) in a stack-styled
+    # panel — git the previously-missed hard dep. With git+nginx forced absent, git reads as a problem
+    # (badge-failed) and nginx as optional (badge-not-installed), each with a copy-paste install command.
+    import shutil
+    real = shutil.which
+    monkeypatch.setattr(shutil, "which",
+                        lambda c: None if c in ("git", "nginx") else real(c))
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert parse(body).by_id("controller-system-deps") is not None
+    i = body.index('id="controller-system-deps"')
+    seg = body[i:body.index("</details>", i)]
+    assert "git" in seg and "nginx" in seg
+    assert "badge-failed" in seg                       # git: required + missing -> problem
+    assert "badge-not-installed" in seg                # nginx: optional + missing -> non-alarming
+    assert "sudo apt install -y nginx" in seg          # copy-paste install command
+
+
+def test_controller_system_deps_makes_no_subprocess(tmp_path):
+    # P0.6: detection is PATH / importlib / fs probes only — the method spawns NOTHING (in particular
+    # it must not run `nginx -v`, which webserver.nginx_installed() would).
+    calls: list[list[str]] = []
+    s = FakeSystem().system
+    inner = s.runner
+
+    class Rec:
+        def run(self, argv, timeout=None, *a, **k):
+            calls.append(list(argv))
+            return inner.run(argv, timeout, *a, **k)
+
+    s.runner = Rec()
+    svc = ControllerService(system=s, paths=Paths(runtime_root=tmp_path))
+    svc.controller_system_deps()
+    assert calls == []

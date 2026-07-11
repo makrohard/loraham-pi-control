@@ -2,7 +2,7 @@
    (a nested collapsible at the same level as Update). Requires: mon (webserver_monitor data),
    modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
 {% from "_macros.html" import flash_classes %}
-<details class="stackrow ws-comp" id="webserver-row">
+<details class="advcfg ws-comp" id="webserver-row">
   <summary>Webserver (HTTPS / mTLS)<a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener">logs</a></summary>
 
   {# ---- Monitor (cached evidence only; collapsed by default) ---- #}

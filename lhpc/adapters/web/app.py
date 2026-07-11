@@ -567,6 +567,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             summary=summarize(snapshot), groups=groups, bulk_mode=service.bulk_mode(),
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
             controller=service.controller_status(),
+            controller_system_deps=service.controller_system_deps(),
             ws_mon=_ws, ws_certs=(_ws or {}).get("pki", {}).get("clients", []),
             ws_modes=list(_WS_MODES), ws_loopback=peer_is_loopback(),
             st=service.self_update_status(), jobs=service.active_jobs(),

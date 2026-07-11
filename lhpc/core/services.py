@@ -2406,6 +2406,17 @@ class ControllerService:
         )
         details.append(f"  systemctl: {hardware.check_systemctl(sys, user=False).detail}")
         details.append(f"  systemctl --user: {hardware.check_systemctl(sys, user=True).detail}")
+        # Controller's OWN system/runtime deps (same source as the /stacks System-dependencies panel).
+        for grp in self.controller_system_deps():
+            for d in grp["deps"]:
+                if d["satisfied"]:
+                    state = "present"
+                elif d["required"]:
+                    state = f"MISSING — {d['install']}" if d["install"] else "MISSING"
+                else:
+                    hint = f": {d['install']}" if d["install"] else ""
+                    state = f"not installed (optional — {d['purpose']}{hint})"
+                details.append(f"  {d['what']}: {state}")
         for dev in (_SPI_DEV, _GPIO_DEV):
             chk = hardware.check_char_device(sys, dev)
             details.append(f"  {dev}: {chk.detail}")
@@ -7184,6 +7195,61 @@ class ControllerService:
             "identity": view.get("identity"),             # {ok, reason, checked_at} or None
             "self_update_cmd": "lhpc self-update",
         }
+
+    def controller_system_deps(self) -> list[dict]:
+        """LHPC's OWN system/runtime dependencies (git, nginx, systemd, install-time tools, venv deps),
+        grouped, each with presence + install command. The SINGLE source of truth for both the
+        controller System-dependencies panel (/stacks) and `lhpc doctor`, so the two never drift.
+        GET-SAFE: presence probes only — `shutil.which` / `System.fs.exists` / `importlib.util.find_spec`
+        — never a subprocess (git/nginx/systemctl are NOT executed)."""
+        import shutil
+        import importlib.util
+        from . import webserver as _ws
+        fs = self._system.fs
+
+        def onpath(cmd: str) -> bool:
+            return shutil.which(cmd) is not None
+
+        def have_mod(mod: str) -> bool:
+            try:
+                return importlib.util.find_spec(mod) is not None
+            except (ImportError, ValueError):
+                return False
+
+        nginx_ok = onpath("nginx") or fs.exists("/usr/sbin/nginx") or fs.exists("/usr/bin/nginx")
+        return [
+            {"title": "System packages (apt)", "deps": [
+                {"what": "git", "required": True, "satisfied": onpath("git"),
+                 "install": "sudo apt install -y git",
+                 "purpose": "self-update fast-forward, initial clone, source adoption"},
+                {"what": "nginx", "required": False, "satisfied": nginx_ok,
+                 "install": _ws.NGINX_INSTALL_CMD,
+                 "purpose": "HTTPS + mTLS front-end — the console runs over loopback without it; "
+                            "exposed/HTTPS access needs it"},
+                {"what": "systemd (systemctl, loginctl)", "required": False, "satisfied": onpath("systemctl"),
+                 "install": "",
+                 "purpose": "the managed --user service + boot linger (only for managed-service mode)"},
+            ]},
+            {"title": "Install-time", "deps": [
+                {"what": "python3 (>= 3.11)", "required": True, "satisfied": onpath("python3"),
+                 "install": "sudo apt install -y python3", "purpose": "the controller runtime"},
+                {"what": "python3-venv", "required": True,
+                 "satisfied": have_mod("venv") and have_mod("ensurepip"),
+                 "install": "sudo apt install -y python3-venv",
+                 "purpose": "builds the LHPC virtualenv (venv + ensurepip)"},
+                {"what": "pip", "required": True, "satisfied": have_mod("pip"),
+                 "install": "sudo apt install -y python3-pip",
+                 "purpose": "editable install + venv sync on self-update"},
+            ]},
+            {"title": "Python venv dependencies (pip, in venv/lhpc)", "deps": [
+                {"what": "flask", "required": True, "satisfied": have_mod("flask"),
+                 "install": "", "purpose": "web console"},
+                {"what": "waitress", "required": True, "satisfied": have_mod("waitress"),
+                 "install": "", "purpose": "production WSGI server (no dev-server fallback)"},
+                {"what": "cryptography", "required": True, "satisfied": have_mod("cryptography"),
+                 "install": "", "purpose": "all PKI (CA / cert / PKCS#12 / CRL)"},
+            ]},
+        ]
 
     def self_update_check(self) -> ActionResult:
         """Explicit upstream freshness check (NETWORK: `git fetch`) — refreshes the cached marker so

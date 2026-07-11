@@ -1,5 +1,8 @@
 # Changelog
 
+## unreleased
+- lhpc dependencies
+
 ## 0.1.4
 - Make web-GUI, meshcom and meshtastic GUI remote exposable With TLS and certificate-auth
 - CLI consistency — `lhpc config` (per-stack settings, callsign, daemon params, operator identity), `stack restart`, `webserver proxy`, `cert export`; every next-step hint points at a real command

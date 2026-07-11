@@ -52,12 +52,42 @@
           <a class="logslink col-logs" href="{{ url_for('controller_logs') }}" target="_blank" rel="noopener">logs</a>
         </summary>
         <div class="stackrow-body">
-          <details class="stackrow" id="controller-update"{% if confirm %} open{% endif %}>
+          <details class="advcfg" id="controller-update"{% if confirm %} open{% endif %}>
             <summary>Update</summary>
-            <div class="stackrow-body">
-              <p class="summary">LHPC's own checkout — managed only here (Update / Webserver), never
+            <div class="body">
+              <p class="muted">LHPC's own checkout — managed only here (Update / Webserver), never
                 installed/built/started like a stack.</p>
               {% include "_update.html" %}
+            </div>
+          </details>
+          {# ----- Controller's own system dependencies (styled like a stack's panel) ----- #}
+          <details class="advcfg" id="controller-system-deps">
+            <summary>System dependencies</summary>
+            <div class="body">
+              <p class="muted">LHPC's own runtime dependencies. Commands shown are
+                <strong>not executed by LHPC</strong> — run them yourself.</p>
+              {% for grp in controller_system_deps %}
+                {% set gi = loop.index0 %}
+                <h4>{{ grp.title }}</h4>
+                <ul class="clean">
+                  {% for d in grp.deps %}
+                    <li>
+                      {% if d.satisfied %}
+                        <span class="badge badge-running">satisfied</span>
+                      {% elif d.required %}
+                        <span class="badge badge-failed">not found</span>
+                      {% else %}
+                        <span class="badge badge-not-installed">not installed</span>
+                      {% endif %}
+                      {{ d.what }}
+                      <span class="muted">· {{ 'required' if d.required else 'optional' }} — {{ d.purpose }}</span>
+                      {% if not d.satisfied and d.install %}
+                        <div class="muted">install it:</div>{{ cmdbox('ctrl-dep-' ~ gi ~ '-' ~ loop.index0, d.install) }}
+                      {% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endfor %}
             </div>
           </details>
           {% if ws_mon %}

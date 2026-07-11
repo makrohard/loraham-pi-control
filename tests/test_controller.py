@@ -761,3 +761,47 @@ def test_restart_instructions_use_deployment_cmd():
     # dev fallback when no controller command is supplied
     fb = selfupdate.restart_instructions(deps_changed=True, deps_sync_cmd="")
     assert any(c.startswith("pip install -e .") for c in fb["commands"])
+
+
+# --- controller's own system dependencies (git the missed one, nginx optional) ---------------
+
+def _svc(tmp_path):
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_controller_system_deps_shape_and_required_flags(tmp_path, monkeypatch):
+    # Force git present, nginx + systemctl absent — no subprocess, pure PATH probe.
+    import shutil
+    real = shutil.which
+    monkeypatch.setattr(shutil, "which",
+                        lambda c: None if c in ("nginx", "systemctl") else real(c))
+    groups = _svc(tmp_path).controller_system_deps()
+    flat = {d["what"]: d for g in groups for d in g["deps"]}
+    # git is REQUIRED and detected (present in the test env)
+    assert flat["git"]["required"] is True and flat["git"]["satisfied"] is True
+    assert flat["git"]["install"] == "sudo apt install -y git"
+    # nginx is OPTIONAL, missing here, carries an apt install command
+    assert flat["nginx"]["required"] is False and flat["nginx"]["satisfied"] is False
+    assert flat["nginx"]["install"] == "sudo apt install -y nginx"
+    # a distinct Python venv-deps group exists and is satisfied (we're running in that venv)
+    titles = [g["title"] for g in groups]
+    assert any("venv" in t for t in titles)
+    assert flat["cryptography"]["satisfied"] is True and flat["flask"]["satisfied"] is True
+
+
+def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    svc = _svc(tmp_path)
+    # doctor must go THROUGH controller_system_deps (single source of truth): if git is reported
+    # missing there, doctor prints it as a MISSING problem line.
+    monkeypatch.setattr(svc, "controller_system_deps", lambda: [
+        {"title": "System packages (apt)", "deps": [
+            {"what": "git", "required": True, "satisfied": False,
+             "install": "sudo apt install -y git", "purpose": "self-update"},
+            {"what": "nginx", "required": False, "satisfied": False,
+             "install": "sudo apt install -y nginx", "purpose": "HTTPS console"},
+        ]},
+    ])
+    out = "\n".join(svc.doctor().details)
+    assert "git: MISSING — sudo apt install -y git" in out          # required -> problem
+    assert "nginx: not installed (optional" in out                  # optional -> not alarming
