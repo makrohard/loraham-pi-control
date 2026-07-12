@@ -144,6 +144,81 @@ def _is_public_default_route(cidr: str) -> bool:
     return net.prefixlen == 0        # 0.0.0.0/0 (or ::/0) — the whole internet
 
 
+_AUTH_LABEL = {"no-auth": "no-auth", "local-open-remote-auth": "remote-auth",
+               "auth-everywhere": "auth-everywhere"}
+
+
+def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = True) -> dict:
+    """SECURITY posture for the FIRST webserver/proxy summary pill — the same meaning for the controller
+    console and every per-stack proxy. The RUNNING (second) pill is context-specific and computed by the
+    caller (see monitor_view / stack_web_view).
+
+    `public` means "all source addresses allowed" (0.0.0.0/0), NOT merely a non-loopback bind (that is
+    `exposed`). `has_cidrs` is whether ANY allowed source CIDR is set. Tri-state `sec_level` →
+    pill-bad / pill-warn / pill-ok:
+      - "bad"  (red)    — reachable off loopback with NO auth (unauthenticated remote access);
+      - "warn" (yellow) — authenticated but bound to ALL source addresses (public 0.0.0.0/0), OR
+                          off loopback with NO allowed CIDRs at all (an unappliable desired state);
+      - "ok"   (green)  — loopback (any auth), or LAN-restricted with auth.
+
+    `iface` labels the exposure: Local (loopback), LAN (off-loopback, restricted CIDRs), All interfaces
+    (off-loopback, public 0.0.0.0/0), or unset (off-loopback with no CIDRs — not appliable)."""
+    auth = _AUTH_LABEL.get(access_mode, access_mode)
+    exposed = not local
+    # FAIL CLOSED on an unrecognized access mode: only the two explicit auth modes count as authenticated,
+    # so a typo / future / hand-edited value never renders a green "authenticated" pill.
+    authed = access_mode in ("local-open-remote-auth", "auth-everywhere")
+    if local:
+        iface = "Local"
+    elif public:
+        iface = "All interfaces"
+    elif has_cidrs:
+        iface = "LAN"
+    else:
+        iface = "unset"           # off loopback, no CIDRs — plan_exposure refuses it; never reaches nginx
+    if exposed and not authed:
+        sec_level = "bad"
+    elif exposed and authed and (public or not has_cidrs):
+        # public 0.0.0.0/0, or a remote intent with no CIDRs at all — the pill must AGREE with the
+        # "no allowed source CIDR" warning shown right below it, not read green.
+        sec_level = "warn"
+    else:
+        sec_level = "ok"
+    return {"iface": iface, "auth": auth, "sec_level": sec_level}
+
+
+def exposure_warnings(*, remote: bool, access_mode: str, allowed_cidrs, bind: str, port: int,
+                      live_scope) -> list:
+    """Standing remote-exposure / auth / live-listener warnings for a webserver listener — the SAME set
+    (wording and values) for the controller console AND every per-stack proxy, so all three Monitor
+    panels read identically. `remote` = DESIRED remote exposure; `live_scope` = the /proc-observed
+    listener scope ("exposed" | "loopback" | "absent" | None). Callers may append their own extra lines
+    (e.g. the console's nginx system-dependency line, a proxy's upstream-bypass line)."""
+    w = []
+    if remote and access_mode == "no-auth":
+        w.append({"level": "danger", "text": "Remote access is enabled without client authentication."})
+    if remote and not allowed_cidrs:
+        w.append({"level": "warn", "text": "Remote exposure desired but no allowed source CIDR is set."})
+    if remote:
+        if live_scope == "exposed":
+            w.append({"level": "ok", "text": f"Remote listener active on {bind}:{port}."})
+        elif live_scope == "loopback":
+            w.append({"level": "warn", "text": "Remote exposure is enabled but the listener is still "
+                                               "loopback-only — run Apply to rebind nginx to 0.0.0.0."})
+        else:            # "absent" — and `live_scope is None` (nothing proven) honestly lands here too
+            w.append({"level": "warn", "text": "Remote exposure is enabled but no listener is active — "
+                                               "start-service, or apply/repair the webserver."})
+    elif live_scope == "exposed":
+        # Desired disabled, but the LIVE listener is still off-loopback — the common saved-but-not-applied
+        # state. Reporting "disabled — loopback only" here would lie about what is actually reachable.
+        w.append({"level": "warn", "text": "Remote exposure is disabled in desired config, but the live "
+                                           f"listener on port {port} is still exposed (off-loopback) — "
+                                           "run Apply to cease it."})
+    else:
+        w.append({"level": "info", "text": "Remote exposure is disabled — listening on loopback only."})
+    return w
+
+
 # --------------------------------------------------------------------------- nginx config generation
 
 def _abs(paths: Paths, parts) -> str:
@@ -697,7 +772,8 @@ def stack_ui_urls(swc) -> list:
     return ([f"{swc.scheme}://{ip}:{swc.port}/", loopback] if ip else [loopback])
 
 
-def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | None = None) -> dict:
+def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | None = None,
+                 served_via_nginx: bool | None = None) -> dict:
     """READ-ONLY status for Monitor/GET. Merges DESIRED config (intent) with EFFECTIVE evidence +
     read-only PKI state. It never infers active/exposed from desired config, and makes NO
     network/subprocess probe — but the console's listener SCOPE is local /proc evidence, allowed here.
@@ -713,36 +789,11 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     proven = (scope == "exposed") if scope is not None else bool(effective.get("remote_listener"))
     if live_listener_scope is not None:
         effective = {**effective, "remote_listener": proven, "listener_scope": scope}
-    warnings = []
-    if cfg.remote_exposed and cfg.access_mode == "no-auth":
-        warnings.append({"level": "danger",
-                         "text": "Remote access is enabled without client authentication."})
-    if cfg.remote_exposed and not cfg.allowed_cidrs:
-        warnings.append({"level": "warn",
-                         "text": "Remote exposure desired but no allowed source CIDR is set."})
-    if cfg.remote_exposed:
-        if scope == "exposed":
-            warnings.append({"level": "ok",
-                             "text": f"Remote listener active on {cfg.bind}:{cfg.port}."})
-        elif scope == "loopback":
-            warnings.append({"level": "warn",
-                             "text": "Remote exposure is enabled but the listener is still "
-                                     "loopback-only — run Apply to rebind nginx to 0.0.0.0."})
-        else:            # "absent" — and `scope is None` (nothing proven) honestly lands here too
-            warnings.append({"level": "warn",
-                             "text": "Remote exposure is enabled but no listener is active — "
-                                     "start-service, or apply/repair the webserver."})
-    elif scope == "exposed":
-        # Desired says disabled, but the LIVE listener is still off-loopback — the common
-        # saved-but-not-applied state (`webserver_disable_remote` writes intent, does not reload).
-        # Reporting "disabled — loopback only" here would be a lie about what is actually reachable.
-        warnings.append({"level": "warn",
-                         "text": "Remote exposure is disabled in desired config, but the live "
-                                 f"listener on port {cfg.port} is still exposed (off-loopback) — "
-                                 "run Apply (or Reset to defaults) to cease it."})
-    else:
-        warnings.append({"level": "info",
-                         "text": "Remote exposure is disabled — the console listens on loopback only."})
+    # Shared remote-exposure/auth/listener warnings (identical wording+values on the console AND every
+    # per-stack proxy — see exposure_warnings). The console appends its own extra lines below.
+    warnings = exposure_warnings(remote=cfg.remote_exposed, access_mode=cfg.access_mode,
+                                 allowed_cidrs=cfg.allowed_cidrs, bind=cfg.bind, port=cfg.port,
+                                 live_scope=scope)
     # Declared system (apt) dependencies with their LAST-PROVEN present/absent status (from cached
     # verify evidence — nginx presence is not re-checked here; only the listener scope, if the caller
     # passed one, is live /proc evidence).
@@ -756,6 +807,12 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     if any(d["status"] == "absent" for d in system_deps):
         warnings.append({"level": "warn",
                          "text": f"nginx (system dependency) is not installed — {NGINX_INSTALL_CMD}"})
+    # Controller running pill: is THIS console session served THROUGH nginx (proxied), or directly by
+    # lhpc-web? It is request-scoped (nginx sets X-LHPC-Peer; the bare :8770 dev server does not), so the
+    # GUI caller supplies it. `nginx_master_active` (global) is the WRONG signal — nginx can be up on :8443
+    # while you view the raw dev server. When unsupplied (non-request callers), fall back to the console
+    # port being live (nginx owns it; lhpc-web has no TCP console listener).
+    via_nginx = served_via_nginx if served_via_nginx is not None else scope not in (None, "absent")
     return {
         "local_ip": local_ip(),
         "desired": {
@@ -768,6 +825,17 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
         # Live console-port scope for the compact summary pill (exposed/loopback/absent/None), and a
         # derived drift flag (live listener disagrees with desired remote intent).
         "live_scope": scope,
+        # Security + running posture for the two summary pills. Security via posture(); the RUNNING pill
+        # for the CONTROLLER is: green "nginx" when this session is proxied through nginx, yellow
+        # "lhpc-web" when served directly (the raw dev server / no proxy). No grey — lhpc-web is always up
+        # while this page renders.
+        "posture": {
+            **posture(local=_is_loopback_bind(cfg.bind),
+                      public=any(_is_public_default_route(c) for c in cfg.allowed_cidrs),
+                      access_mode=cfg.access_mode, has_cidrs=bool(cfg.allowed_cidrs)),
+            "run": "nginx" if via_nginx else "lhpc-web",
+            "run_level": "ok" if via_nginx else "warn",
+        },
         "pending": bool(scope is not None
                         and (scope == "absent" or cfg.remote_exposed != (scope == "exposed"))),
         "checks": checks,

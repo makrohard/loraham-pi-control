@@ -1,11 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Confirm TX — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('install_all_page') }}">&larr; back (cancel)</a></p>
   <div class="card">
     <header><h2>Confirm: bulk run WITH RF transmission</h2></header>
     <div class="body">
-      <p class="flash flash-warn"><strong>This run will TRANSMIT.</strong> After
+      <p class="depnote depnote-warn"><strong>This run will TRANSMIT.</strong> After
         installing, building and host-testing all stacks, LHPC will start the LoRaHAM
         daemon <strong>temporarily</strong>, transmit ONE bounded test frame per
         configured band on the real radios, verify the TX counter, and stop the daemon

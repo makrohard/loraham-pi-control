@@ -93,9 +93,9 @@
   // ACCORDION: opening one MAIN header (a direct .stacklist child row, incl. the controller row)
   // auto-closes the OTHER rows AND their sub-panels, and resets the freshly opened row's OWN sub-panels
   // to closed (a native <details> keeps children's open state across a close/reopen, so we clear it
-  // ourselves). Multiple sub-panels within THIS row stay independently openable — their toggles are not
-  // bound here (only the top-level `.stackrow` rows are; each now sits inside a `.stackrow-wrap`, so this
-  // is a descendant selector, not a direct child).
+  // ourselves). The FIRST submenu level is an accordion too (see attachSubAccordion); deeper levels stay
+  // independently openable. Only the top-level `.stackrow` rows are bound here; each now sits inside a
+  // `.stackrow-wrap`, so this is a descendant selector, not a direct child.
   function attachAccordion() {
     document.querySelectorAll(".stacklist .stackrow").forEach(function (row) {
       row.addEventListener("toggle", function () {
@@ -107,6 +107,27 @@
           o.querySelectorAll("details").forEach(function (s) { s.open = false; });   // + their sub-panels
         });
         row.querySelectorAll("details").forEach(function (s) { s.open = false; });   // own subs start closed
+      });
+    });
+  }
+
+  // SUB-PANEL ACCORDION (EVERY nested level): opening any `.advcfg` sub-panel closes its SIBLING `.advcfg`
+  // panels (those sharing its parent). So each level is single-open — the first submenu (Install / Info /
+  // Settings / Webserver, and the controller's Update / System deps / Webserver), the level below it (e.g.
+  // the Webserver panel's Settings / Monitor / Certificates), and any deeper. Only sibling `.advcfg` are
+  // closed, so opening a child never collapses its own ancestors.
+  function attachSubAccordion() {
+    document.querySelectorAll(".stackrow-body .advcfg").forEach(function (sub) {
+      sub.addEventListener("toggle", function () {
+        if (!sub.open) { return; }                 // react to USER OPEN only
+        if (programmaticOpen) { return; }           // scripted open (restore/hashchange) — leave it be
+        var sibs = sub.parentElement ? sub.parentElement.children : [];
+        for (var i = 0; i < sibs.length; i++) {
+          var o = sibs[i];
+          if (o !== sub && o.tagName === "DETAILS" && o.classList.contains("advcfg") && o.open) {
+            o.open = false;
+          }
+        }
       });
     });
   }
@@ -160,7 +181,7 @@
   // server's redirect hash (e.g. per-stack Webserver Apply redirects to the controller #webserver-row,
   // but the button lived in #stack-webserver-<id>). A plain nav carrying a STALE post memory (no flash,
   // no anchor — e.g. after install/build/test diverted to the log page) is ignored. Otherwise a link/
-  // server-directed focus wins. Failing everything, auto-open the FIRST pending-Apply webserver section.
+  // server-directed focus wins. Failing everything, the saved open set is restored (plain reload).
   var actionReturn = !!(act && (flash || forcedTarget || hashDetails));
   var target = (actEl && actionReturn) ? actEl : (forcedTarget || hashDetails);
 
@@ -177,11 +198,11 @@
     if (flash) { window.scrollTo(0, 0); }             // message on top -> stay on top (section already open)
     else if (target) { target.scrollIntoView(); }     // no message -> jump to the opened section
 
-    // Bind the accordion ONLY now, deferred one task past this frame. The <details> `toggle` event is
+    // Bind the accordions ONLY now, deferred one task past this frame. The <details> `toggle` event is
     // async, so the load-path's programmatic opens above queue toggles that would otherwise hit the
     // accordion and collapse a server-forced row. Binding after they have drained makes that
     // impossible — the listeners do not exist while those toggles fire.
-    setTimeout(attachAccordion, 0);
+    setTimeout(function () { attachAccordion(); attachSubAccordion(); }, 0);
   });
 
   // --- same-page hash navigation (e.g. the global footer "Update →" clicked while on /stacks) ------

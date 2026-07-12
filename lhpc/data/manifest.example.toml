@@ -843,7 +843,7 @@ main = "meshtastic"
     [[stack.component.require]]
     groups = ["spi", "gpio"]
     install = "sudo usermod -aG spi,gpio $USER"
-    note = "spi + gpio group membership — needed to run meshtasticd WITHOUT root. After granting, log out and back in (or reboot) to apply."
+    note = "spi + gpio group membership — needed to run meshtasticd WITHOUT root"
 
     # meshtasticd YAML config generated from the LoRaHAM base, per band (the Lora
     # pins differ between the 433 and 868 boards). Written to the runtime root so no
@@ -1041,6 +1041,7 @@ main = "meshcom-qemu"
     [[stack.component.param]]
     name = "password_file"
     kind = "str"
+    validator = "path"
     arg = "--password-file"
     default = ""
     label = "HMAC password file (blank = open auth)"

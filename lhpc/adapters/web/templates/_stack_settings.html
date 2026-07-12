@@ -80,7 +80,7 @@
                     <input type="hidden" name="key" value="{{ key }}">
                     {% set cur = radio.status.get(key) or radio.config.get(key) %}
                     {% if spec.type == 'enum' %}
-                      <select name="value">
+                      <select name="value" aria-label="{{ key }}">
                         {% for ch in spec.choices %}
                           <option value="{{ ch }}" {% if cur==ch %}selected{% endif %}>{{ ch }}</option>
                         {% endfor %}
@@ -138,7 +138,7 @@
                     {% if r.kind == 'flag' %}
                       <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}>
                     {% elif r.choices %}
-                      <select name="{{ r.field }}">
+                      <select name="{{ r.field }}" aria-label="{{ r.name }}">
                         {% for ch in r.choices %}
                           <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>
                         {% endfor %}

@@ -36,6 +36,28 @@ def test_webserver_component_inline_on_stacks_cached_only(tmp_path):
     assert not (tmp_path / "state" / "webserver.json").exists()
 
 
+def test_console_running_pill_is_request_scoped(tmp_path):
+    # The console running pill reflects HOW THIS SESSION arrived, not whether some nginx is running:
+    # a direct dev-server request (no X-LHPC-Peer) reads yellow "lhpc-web"; a request proxied through
+    # nginx (which sets X-LHPC-Peer) reads green "nginx".
+    app, _ = _app_svc(tmp_path)
+    c = app.test_client()
+    assert ">lhpc-web</span>" in c.get("/stacks").get_data(as_text=True)
+    proxied = c.get("/stacks", headers={"X-LHPC-Peer": "loopback"}).get_data(as_text=True)
+    assert ">nginx</span>" in proxied and ">lhpc-web</span>" not in proxied
+
+
+def test_console_pill_reattaches_port_behind_nginx(tmp_path):
+    # nginx forwards a PORTLESS Host ($host), so the console pill must reattach the nginx console port;
+    # the raw dev server carries the port in Host directly.
+    app, _ = _app_svc(tmp_path)
+    c = app.test_client()
+    proxied = c.get("/stacks", headers={"X-LHPC-Peer": "remote", "Host": "192.168.1.5"}).get_data(as_text=True)
+    assert "192.168.1.5:8443" in proxied                     # host + nginx console port
+    direct = c.get("/stacks", headers={"Host": "127.0.0.1:8770"}).get_data(as_text=True)
+    assert "127.0.0.1:8770" in direct                        # dev server: port already in Host
+
+
 def test_old_webserver_path_redirects_to_stacks(tmp_path):
     app, _ = _app_svc(tmp_path)
     c = app.test_client()
@@ -52,8 +74,12 @@ def test_webserver_logs_page_and_component_link(tmp_path):
     runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "nginx-access.log"),
                             "GET / 200\n", 0o644)
     c = app.test_client()
+    body = c.get("/stacks").data.decode()
+    # each of the three webserver sub-section headers (Settings/Monitor/Certificates) carries its own
+    # "logs" affordance, laid out like the main stack rows (overlay OUTSIDE the summary).
+    assert body.count('aria-label="webserver logs"') == 3
     # component on /stacks links to the logs page
-    assert "/webserver/logs" in c.get("/stacks").data.decode()
+    assert "/webserver/logs" in body
     # error log (default + explicit) and access log render their tails
     assert "[emerg] mkdir failed" in c.get("/webserver/logs").data.decode()
     assert "[emerg] mkdir failed" in c.get("/webserver/logs?src=error").data.decode()
@@ -63,13 +89,13 @@ def test_webserver_logs_page_and_component_link(tmp_path):
 
 
 def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
-    # A remote-exposure with a valid phrase but no CIDR is refused: the failure detail is shown and,
-    # critically, the listener is NOT exposed.
+    # A remote-exposure (bind off-loopback) with a valid phrase but no CIDR is refused via the unified
+    # Apply: the failure detail is shown and, critically, the listener is NOT exposed.
     app, svc = _app_svc(tmp_path)
     c = app.test_client()
     tok = _csrf(c)
-    r = c.post("/webserver/expose",
-               data={"_csrf": tok, "cidrs": "", "confirm_phrase": "enable-remote"},
+    r = c.post("/webserver/configure",
+               data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "", "confirm_phrase": "enable-remote"},
                follow_redirects=True)
     assert "at least one allowed source CIDR" in r.data.decode()  # the actual failure detail
     assert svc.config().webserver.remote_exposed is False         # not exposed (the safety fact)
@@ -94,7 +120,8 @@ def test_expose_requires_confirmation(tmp_path):
     app, svc = _app_svc(tmp_path)
     c = app.test_client()
     tok = _csrf(c)
-    c.post("/webserver/expose", data={"_csrf": tok, "cidrs": "192.168.0.0/24"})  # no confirm
+    # bind off-loopback (remote) with a CIDR but no confirmation phrase -> refused, not exposed.
+    c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "192.168.0.0/24"})
     assert svc.config().webserver.remote_exposed is False
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from lhpc.adapters.cli.main import main
+from lhpc.core.services import ControllerService
 
 
 def test_list_exits_zero(capsys):
@@ -71,6 +72,9 @@ def test_help_topic(capsys):
 
 def test_bootstrap_and_install_check(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    # This test exercises bootstrap ordering, not the dep gate — neutralise the gate so the outcome
+    # doesn't depend on which apt packages this host happens to have.
+    monkeypatch.setattr(ControllerService, "install_dep_gate", lambda self, t: {"block": [], "warn": []})
     assert main(["bootstrap", "--yes"]) == 0
     assert (tmp_path / "rt" / "src").is_dir()      # start/ retired (no wrappers)
     capsys.readouterr()
@@ -82,8 +86,50 @@ def test_bootstrap_and_install_check(tmp_path, monkeypatch, capsys):
 
 def test_install_requires_bootstrap_first(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "absent"))
+    # Neutralise the dep gate (host-independent): this asserts bootstrap ordering, not the gate.
+    monkeypatch.setattr(ControllerService, "install_dep_gate", lambda self, t: {"block": [], "warn": []})
     assert main(["install", "--check"]) == 1
     assert "bootstrap" in capsys.readouterr().out.lower()
+
+
+def test_install_gate_reports_on_check_but_refuses_on_apply(tmp_path, monkeypatch, capsys):
+    # N-2: the dep gate must not preempt the bootstrap precondition or the --check plan. With one
+    # mandatory dep stubbed missing:
+    #  (i)  unbootstrapped + --check -> the bootstrap plan still renders (gate does not preempt);
+    #  (ii) bootstrapped + --check   -> BOTH the blocked report AND the plan render, rc != 0;
+    #  (iii) bootstrapped, apply     -> hard refusal, rc 1, and svc.install is never invoked.
+    monkeypatch.setattr(ControllerService, "install_dep_gate",
+                        lambda self, t: {"block": [{"what": "socat",
+                                                    "install": "sudo apt install -y socat"}],
+                                         "warn": []})
+
+    # (i) unbootstrapped: the plan (bootstrap message) wins; the gate is only reported.
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "absent"))
+    assert main(["install", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "bootstrap" in out.lower()                       # gate did not preempt the plan
+    assert "Install is blocked" in out                      # gate reported, not "Refusing"
+
+    # (ii) bootstrapped: --check renders the plan AND reports the block; rc reflects the block.
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["install", "--check"]) == 1
+    out = capsys.readouterr().out
+    assert "Install is blocked" in out and "socat" in out   # the blocked report
+    assert "planned" in out or "change(s) planned" in out   # AND the rendered plan
+
+    # (iii) apply path: hard refusal before anything runs — svc.install must never be called.
+    called = {"n": 0}
+    def _boom(self, *a, **k):                               # noqa: ANN001, ANN002, ANN003
+        called["n"] += 1
+        raise AssertionError("svc.install must not run when the gate blocks the apply path")
+    monkeypatch.setattr(ControllerService, "install", _boom)
+    capsys.readouterr()
+    assert main(["install"]) == 1
+    out = capsys.readouterr().out
+    assert "Refusing to install" in out
+    assert called["n"] == 0
 
 
 def test_self_update_check_cli(capsys, monkeypatch):

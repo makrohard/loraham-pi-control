@@ -2,10 +2,8 @@
 {% from "_macros.html" import cmdbox %}
 {% block title %}Install all — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('stacks_overview') }}">&larr; back to Stacks</a></p>
-
   {% if needs_ack %}
-  <div class="flash flash-bad">
+  <div class="depnote depnote-bad">
     {% if st and st.unsafe %}
       The bulk run state is unreadable or malformed ({{ st.reason }}).
     {% elif st and st.state == 'interrupted' %}
@@ -45,9 +43,9 @@
       <p class="muted">Installs (or updates), builds and optionally tests every stack in
         dependency order — one guided run. <strong>This can take several minutes.</strong>
         The run continues if you leave this page.</p>
-      {% if gate %}<p class="flash flash-warn">{{ gate }}</p>{% endif %}
+      {% if gate %}<p class="depnote depnote-warn">{{ gate }}</p>{% endif %}
       {% if dep_preflight and dep_preflight.block %}
-        <div class="flash flash-warn">
+        <div class="depnote depnote-warn">
           <strong>{{ dep_preflight.block|length }} stack(s) will be SKIPPED — missing mandatory
           dependencies.</strong> Install the commands below and re-run, or start anyway to skip them.
           <p class="muted">Commands are <strong>not executed by LHPC</strong> — run them yourself.</p>
@@ -61,7 +59,7 @@
         </div>
       {% endif %}
       {% if dep_preflight and dep_preflight.warn %}
-        <div class="flash flash-warn">
+        <div class="depnote depnote-warn">
           <strong>Optional dependencies missing</strong> — the run proceeds; the components that need
           them stay unavailable. Install if you want them:
           {% for s in dep_preflight.warn %}
@@ -156,7 +154,7 @@
           <td></td><td class="muted">{{ st.tx_phase.detail }}</td></tr>
         {% endif %}
       </table>
-      {% if st.error %}<p class="flash flash-warn">{{ st.error }}</p>{% endif %}
+      {% if st.error %}<p class="depnote depnote-warn">{{ st.error }}</p>{% endif %}
       <pre class="logbox logbox-half" id="bulk-logbox">{{ log_seed }}</pre>
       {# Second window — the per-component build/test detail. LIVE: filled by bulk.js. HISTORICAL:
          seeded server-side (complog_seed), like the rollup above. Plain {{ }} keeps the untrusted

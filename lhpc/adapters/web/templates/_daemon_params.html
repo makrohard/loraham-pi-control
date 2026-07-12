@@ -46,7 +46,7 @@
             <th>{{ r.name }}</th>
             <td>
               {% if r.choices %}
-                <select name="{{ dp_pref }}{{ r.name }}" class="dpin"
+                <select name="{{ dp_pref }}{{ r.name }}" class="dpin" aria-label="{{ r.name }}"
                         data-dpdefault="{{ r.default }}" data-config="{{ r.value }}"{% if r.name == 'MODE' %} data-mode-warn{% endif %}>
                   {% for ch in r.choices %}
                     <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>

@@ -38,6 +38,13 @@ from .probes import System
 from .probes.process import probe_process
 from .jobs import JobResult, JobState, run_job, tail_log
 
+# Surfaced when a groups grant is CONFIGURED (usermod done) but not yet EFFECTIVE in this process — the
+# fix is a restart, not another usermod. Kept here so both dependency render sites use the one wording.
+GROUP_RESTART_HINT = "granted, restart pending — reboot or: loginctl terminate-user $USER"
+# Surfaced when the operator is NOT YET a member: grant it, then re-login. State-specific so it never
+# co-appears with GROUP_RESTART_HINT (which would read as both "not granted" and "granted").
+GROUP_MISSING_HINT = "not a member — grant it, then log out/in or reboot to apply"
+
 
 @dataclass
 class StartLaunch:
@@ -155,9 +162,12 @@ class Lifecycle:
         missing = []
         for req in comp.requires:
             if req.groups:
-                # RUN-TIME capability: the current process must be in ALL listed unix groups (rootless
-                # device access). Read through the injectable seam so tests drive it with FakeSystem.
-                if not set(req.groups) <= self.system.fs.user_groups():
+                # RUN-TIME capability: the CHILD we would spawn must be in ALL listed unix groups
+                # (rootless device access). Gate on EFFECTIVE groups — what that child actually
+                # inherits — so a grant that is configured but not yet effective (restart pending)
+                # stays blocked (fail-closed), never spawning a child that dies on a raw permission
+                # error. Read through the injectable seam so tests drive it with FakeSystem.
+                if not set(req.groups) <= self.system.fs.effective_groups():
                     missing.append(req)
                 continue
             if req.check_file:
@@ -170,6 +180,16 @@ class Lifecycle:
                 if shutil.which(req.cmd) is None:
                     missing.append(req)
         return missing
+
+    def group_grant_pending(self, req) -> bool:
+        """A groups Requirement whose grant is CONFIGURED (present in the group database, e.g. after
+        `usermod -aG`) but not yet EFFECTIVE in this process (restart/reboot pending). Such a req is
+        still 'missing' for the START gate above (fail-closed), but the fix is a restart — NOT another
+        usermod — so the render sites swap the grant command for GROUP_RESTART_HINT. False for a
+        non-group req or a genuinely-ungranted one."""
+        g = set(req.groups)
+        return bool(g) and g <= self.system.fs.configured_groups() \
+            and not g <= self.system.fs.effective_groups()
 
     def source_dir(self, comp: Component) -> Path:
         return self.paths.resolve_source(comp.source.path) if comp.source else self.paths.runtime_root

@@ -23,7 +23,7 @@
                 <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}
                        class="spin" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
               {% elif r.choices %}
-                <select name="{{ r.field }}" class="spin"
+                <select name="{{ r.field }}" class="spin" aria-label="{{ r.name }}"
                         data-default="{{ r.default }}" data-config="{{ r.config_value }}">
                   {% for ch in r.choices %}
                     <option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>

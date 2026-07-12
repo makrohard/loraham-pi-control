@@ -208,7 +208,7 @@ def _csrf(client, path="/stacks"):
 
 
 def _row(body, sid):
-    # Summary-only slice (head/status pills live here). The action links (logs / Update available) now
+    # Summary-only slice (head/status pills live here). The action links (logs / Update) now
     # render in a .row-actions overlay AFTER </details> — use _wrap() for those.
     i = body.index('id="stackrow-' + sid + '"')
     return body[i:body.index("</summary>", i)]
@@ -230,7 +230,7 @@ def test_main_behind_paints_head_yellow_and_shows_the_link(tmp_path):
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
     body = _app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True)
     assert "ver-yellow" in _row(body, "daemon") and "@" + A[:9] in _row(body, "daemon")
-    assert ">Update available</a>" in _wrap(body, "daemon")   # link is in the row-actions overlay
+    assert ">Update</a>" in _wrap(body, "daemon")   # link is in the row-actions overlay
 
 
 def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
@@ -241,19 +241,20 @@ def test_only_a_dependency_behind_shows_the_link_but_leaves_head_grey(tmp_path):
                      "radiolib": _entry_for(su.BEHIND, B)})
     cmds = {**_git_src(ds, A), **_git_src(rl, B)}
     body = _app(tmp_path, cmds, [ds, rl]).get("/stacks").get_data(as_text=True)
-    assert ">Update available</a>" in _wrap(body, "daemon")   # any component behind -> link (overlay)
+    assert ">Update</a>" in _wrap(body, "daemon")   # any component behind -> link (overlay)
     assert "ver-yellow" not in _row(body, "daemon")           # but the main's head (summary) stays grey
 
 
 def test_nothing_behind_and_empty_cache_show_neither(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     cmds = _git_src(ds, A)
-    row = _row(_app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True), "daemon")
-    assert "Update available" not in row and "ver-yellow" not in row     # never checked
+    body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
+    # never checked -> no Update link in the overlay, no yellow head pill in the summary
+    assert "update-link" not in _wrap(body, "daemon") and "ver-yellow" not in _row(body, "daemon")
 
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.UP_TO_DATE, A)})
-    row = _row(_app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True), "daemon")
-    assert "Update available" not in row and "ver-yellow" not in row
+    body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
+    assert "update-link" not in _wrap(body, "daemon") and "ver-yellow" not in _row(body, "daemon")
 
 
 def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
@@ -263,24 +264,23 @@ def test_stale_cache_renders_unchecked_not_a_stale_verdict(tmp_path):
     for status in (su.BEHIND, su.UP_TO_DATE):
         _seed(tmp_path, {"loraham-daemon": _entry_for(status, A)})
         body = _app(tmp_path, cmds, [ds]).get("/stacks").get_data(as_text=True)
-        row = _row(body, "daemon")
-        assert "Update available" not in row, status   # no stale nagging
-        assert "ver-yellow" not in row, status         # no stale yellow
-        assert "unchecked" in body                     # Install panel says so
+        assert "update-link" not in _wrap(body, "daemon"), status   # no stale nagging
+        assert "ver-yellow" not in _row(body, "daemon"), status     # no stale yellow
+        assert "unchecked" in body                                  # Install panel says so
 
 
 def test_update_link_opens_the_install_section(tmp_path):
     ds = _repo(tmp_path, "src/loraham-daemon")
     _seed(tmp_path, {"loraham-daemon": _entry_for(su.BEHIND, A)})
     row = _wrap(_app(tmp_path, _git_src(ds, A), [ds]).get("/stacks").get_data(as_text=True), "daemon")
-    i = row.index(">Update available</a>")
+    i = row.index(">Update</a>")
     href = row[row.rindex('href="', 0, i) + 6:row.index('"', row.rindex('href="', 0, i) + 6)]
     assert "open=daemon" in href and "inst=daemon" in href
     assert href.endswith("#stack-install-daemon")
 
 
 def test_every_top_level_row_has_an_actions_overlay(tmp_path):
-    # The logs / "Update available" links live in a .row-actions overlay OUTSIDE each row's <summary>
+    # The logs / "Update" links live in a .row-actions overlay OUTSIDE each row's <summary>
     # (a11y). Every top-level row (controller + each stack) has one.
     body = _app(tmp_path).get("/stacks").get_data(as_text=True)
     assert body.count('class="row-actions"') >= 2         # controller row + at least one stack

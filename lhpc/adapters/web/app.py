@@ -47,6 +47,24 @@ def peer_is_loopback() -> bool:
     hdr = request.headers.get("X-LHPC-Peer", "")
     return hdr == "loopback" if hdr else True
 
+
+def served_via_nginx() -> bool:
+    """True when THIS request reached the console THROUGH nginx (which sets `X-LHPC-Peer`), False when
+    served directly by lhpc-web (the bare :8770 dev server / tests set no such header). Drives the
+    console's running pill — a running nginx on another port must not colour a direct-dev session green."""
+    from flask import request
+    return bool(request.headers.get("X-LHPC-Peer"))
+
+
+def _console_addr(console_port) -> str:
+    """The reached `host:port` for the CONSOLE pill. On the raw dev server `request.host` already carries
+    the port (e.g. 127.0.0.1:8770). Behind nginx `proxy_set_header Host $host` forwards a PORTLESS host, so
+    reattach the nginx console listener port (the port the browser actually used)."""
+    from flask import request
+    if served_via_nginx():
+        return f"{_url_host(request.host or '')}:{console_port}"
+    return request.host or ""
+
 # --- trusted-host helpers (see `_trusted_host`) --------------------------------------------------
 _HOST_MAX = 260                          # a Host header can never legitimately exceed this
 
@@ -253,9 +271,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # dash flips to "running" quickly instead of waiting for the slow refresh.
         pending_interactive = any(not s.get("running") and not s.get("blocker")
                                   for r in radios for s in r["interactive"])
+        # Webserver box: LHCP console (always) + each running web-UI stack. Resolve the request-scoped
+        # reached address + log href here (the service returns structural evidence only).
+        webservers = []
+        try:
+            for w in service.dashboard_webservers(served_via_nginx=served_via_nginx()):
+                if w["kind"] == "console":
+                    addr, logs = _console_addr(w.get("port", "")), url_for("webserver_logs")
+                else:
+                    addr = f"{_url_host(request.host or '')}:{w['port']}" if w.get("enabled") else ""
+                    logs = (url_for("logs_view", target=w["logs_component"]) if w.get("logs_component")
+                            else url_for("stacks_overview") + "#stackrow-" + w["sid"])
+                webservers.append({**w, "addr": addr, "logs": logs})
+        except Exception:
+            webservers = []            # fail-safe: never break the dashboard over the webserver box
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
-            radios=radios, pending_interactive=pending_interactive,
+            radios=radios, pending_interactive=pending_interactive, webservers=webservers,
             # The host the browser used to reach the console — a proxied web-UI link points here on
             # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
             req_host=_url_host(request.host or ""),
@@ -444,6 +476,51 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             out["complog"] = service.bulk_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
+    # ---- MeshCom HMAC password: warn+apply page (its own live progress run) --------------------
+    _HMAC_ACTIONS = {
+        "enable": ("Enable", "The bridge and firmware will require the shared password afterwards."),
+        "disable": ("Disable", "Client authentication will be REMOVED — anyone in range can inject."),
+        "renew": ("Renew", "The shared secret is rotated — every client must be re-provisioned."),
+    }
+
+    @app.get("/stacks/<sid>/hmac/<action>")
+    def hmac_apply_page(sid, action):  # noqa: ANN202
+        if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
+            abort(404)
+        st = service.hmac_apply_status()
+        log_seed = ""
+        if st and not st.get("unsafe"):
+            log_seed = service.hmac_apply_log_chunk(st["run_id"], 0).get("data", "")
+        label, warning = _HMAC_ACTIONS[action]
+        return render_template(
+            "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
+            sid=sid, action=action, action_label=label, warning=warning,
+            st=st, log_seed=log_seed)
+
+    @app.post("/stacks/<sid>/hmac/<action>/apply")
+    def hmac_apply_run(sid, action):  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
+            abort(404)
+        res = service.hmac_apply_start(sid, action)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hmac_apply_page", sid=sid, action=action))
+
+    @app.get("/api/hmac-apply")
+    def hmac_apply_api():  # noqa: ANN202
+        st = service.hmac_apply_status()
+        out = {"state": st if st is not None else {"absent": True},
+               "running": service.hmac_apply_running(), "run_id": "", "log": {}}
+        try:
+            offset = int(request.args.get("offset", "0"))
+        except ValueError:
+            offset = -1
+        if st and not st.get("unsafe"):
+            out["run_id"] = st["run_id"]
+            out["log"] = service.hmac_apply_log_chunk(st["run_id"], offset)
+        return jsonify(**out)
+
     def _effective_freshness(entry, current_head: str) -> str:
         from lhpc.core import stackupdates
         return stackupdates.effective_status(entry, current_head or "")
@@ -507,7 +584,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             upd_states = {c.id: _effective_freshness(_fresh_comps.get(c.id),
                                                      ss.components[c.id].source_head)
                           for c in stack.components}
-            # Deep-link target for the row's "Update available": the behind component itself. The MAIN
+            # Deep-link target for the row's "Update": the behind component itself. The MAIN
             # (== the stack) links to its Install section; a behind DEPENDENCY links to its own
             # #comp-<id> subsection so the operator lands on the component that actually has the update.
             _behind = [cid for cid, v in upd_states.items() if v == "behind"]
@@ -550,6 +627,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "needs_build": service.unbuilt_components(stack.id),
                 "daemon_params": service.daemon_params_view(stack.id, band),
                 "kw_offer": service.known_working_offer(stack.id, snapshot),
+                # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
+                "hmac_enabled": service.hmac_status(stack.id),
                 "restart_required": service.restart_required(stack.id),
                 "conflicts": [c for c in all_conflicts
                               if any(h in member_ids for h in c.holders)],
@@ -572,7 +651,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
         try:
-            _ws = service.webserver_monitor().data
+            _ws = service.webserver_monitor(served_via_nginx=served_via_nginx()).data
         except Exception:
             _ws = None
         ctx = dict(
@@ -590,6 +669,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Banner summary (green if only optional missing, yellow if a mandatory one is) linking to
             # the Dependency Overview. GET-safe (presence probes only).
             dep_summary=service.dependency_overview(),
+            # Reached authority for the webserver-pill addresses: the console's full host:port (nginx
+            # forwards a portless $host, so reattach the console port behind nginx) + host-only for proxies
+            # (they append their own port).
+            req_host=_url_host(request.host or ""),
+            ws_console_addr=_console_addr((_ws or {}).get("desired", {}).get("port", "")),
             confirm=None,
         )
         ctx.update(over)
@@ -1273,7 +1357,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/stacks/<stack_id>/webserver")
     def stack_web_configure(stack_id: str):  # noqa: ANN202
-        """Per-stack web-UI proxy policy. Same typed-confirmation contract as /webserver/expose."""
+        """Per-stack web-UI proxy policy. Same typed-confirmation contract as /webserver/configure."""
         if not _csrf_ok():
             abort(400)
         if service.stack(stack_id) is None or service.stack_web_upstream(stack_id) is None:
@@ -1296,31 +1380,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             flash(d, "warn" if r.ok else "err")
         # Anchor the webserver panel itself (NOT ?cfg, which opens Settings).
         return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
-
-    @app.route("/webserver/expose", methods=["POST"])
-    def webserver_expose():  # noqa: ANN202
-        if not _csrf_ok():
-            abort(400)
-        f = request.form
-        cidrs = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
-        # Typed confirmation (not a checkbox): 'enable-remote' for a normal LAN range,
-        # 'enable-remote-danger' for the elevated case (public 0.0.0.0/0 or no-auth remote).
-        phrase = f.get("confirm_phrase", "").strip()
-        r = service.webserver_expose(cidrs, access_mode=(f.get("access_mode") or None),
-                                     confirm=phrase in ("enable-remote", "enable-remote-danger"),
-                                     confirm_public=(phrase == "enable-remote-danger"))
-        flash(r.summary, "ok" if r.ok else "err")
-        for d in r.details:
-            flash(d, "info" if r.ok else "err")
-        return _ws_back()
-
-    @app.route("/webserver/disable-remote", methods=["POST"])
-    def webserver_disable_remote():  # noqa: ANN202
-        if not _csrf_ok():
-            abort(400)
-        r = service.webserver_disable_remote()
-        flash(r.summary, "ok" if r.ok else "err")
-        return _ws_back()
 
     @app.route("/webserver/reset", methods=["POST"])
     def webserver_reset():  # noqa: ANN202

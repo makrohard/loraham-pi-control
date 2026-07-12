@@ -11,6 +11,7 @@ from pathlib import Path
 from . import daemon_control
 from . import runtime_fs
 from . import validators
+from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
 from .config import (
     ConfigError,
     apply_config_transaction,
@@ -583,9 +584,17 @@ class ParamsConfigMixin:
                     # component is non-optional (mandatory wins over an optional sibling).
                     by_key[key]["mandatory"] = by_key[key]["mandatory"] or not c.optional
                     continue
-                entry = {"what": req.note or req.cmd or req.check_file,
-                         "install": req.install,
-                         "satisfied": req not in missing,
+                sat = req not in missing
+                # Groups req: append the STATE-specific hint (never both). "granted, restart pending"
+                # (configured but not yet effective) suppresses the usermod command — re-granting is not
+                # the fix; "not a member" keeps it. (Still runtime=True, so never in the install gate.)
+                pending = (not sat) and bool(req.groups) and life.group_grant_pending(req)
+                what = req.note or req.cmd or req.check_file
+                if req.groups and not sat:
+                    what = f"{what} — {GROUP_RESTART_HINT if pending else GROUP_MISSING_HINT}"
+                entry = {"what": what,
+                         "install": "" if pending else req.install,
+                         "satisfied": sat,
                          "runtime": bool(req.groups),   # run-time capability (not install-gated)
                          "mandatory": not c.optional}
                 by_key[key] = entry

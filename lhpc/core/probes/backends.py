@@ -73,7 +73,8 @@ class FileSystem(Protocol):
     def exists(self, path: str) -> bool: ...
     def is_socket(self, path: str) -> bool: ...
     def is_char_device(self, path: str) -> bool: ...
-    def user_groups(self) -> frozenset[str]: ...   # unix-group names of the current process
+    def effective_groups(self) -> frozenset[str]: ...   # process's EFFECTIVE group names (start gate)
+    def configured_groups(self) -> frozenset[str]: ...  # operator's CONFIGURED group names (hint)
 
 
 class UnixClient(Protocol):
@@ -330,20 +331,9 @@ class RealFileSystem:
         except OSError:
             return False
 
-    def user_groups(self) -> frozenset[str]:
-        """Unix-group NAMES the invoking OPERATOR is CONFIGURED into — from the group database
-        (`os.getgrouplist`: /etc/group memberships + the primary group), i.e. exactly what
-        `usermod -aG` grants and what `id -nG` shows. NOT `os.getgroups()` (the running process's
-        cached supplementary groups): a long-lived or lingering service that started BEFORE the groups
-        were granted keeps stale supplementary groups, which would report a genuinely-granted member as
-        missing until the service/session is restarted (the manifest's 'log out/reboot to apply' step).
-        Read-only, no subprocess (safe on GET)."""
+    @staticmethod
+    def _names_for_gids(gids) -> frozenset[str]:
         import grp
-        import pwd
-        try:
-            gids = os.getgrouplist(pwd.getpwuid(os.getuid()).pw_name, os.getgid())
-        except (KeyError, OSError):
-            gids = list(set(os.getgroups()) | {os.getgid()})   # fallback if the passwd entry is absent
         names = set()
         for gid in gids:
             try:
@@ -351,6 +341,30 @@ class RealFileSystem:
             except (KeyError, OSError):
                 pass
         return frozenset(names)
+
+    def effective_groups(self) -> frozenset[str]:
+        """Unix-group NAMES the current PROCESS is EFFECTIVELY in — `os.getgroups()` plus the primary
+        gid, i.e. exactly what a child process spawned NOW would inherit and use to open group-owned
+        devices (/dev/spidev*). This is the START-GATE basis: it answers 'can the child we are about to
+        spawn actually get in?'. A group granted via `usermod -aG` AFTER this process started is NOT
+        here until the process/session restarts (under systemd lingering it stays stale until reboot),
+        so gating on it fails closed — start stays blocked rather than spawning a child that then dies
+        with a raw permission error. Read-only, no subprocess (safe on GET)."""
+        return self._names_for_gids(set(os.getgroups()) | {os.getgid()})
+
+    def configured_groups(self) -> frozenset[str]:
+        """Unix-group NAMES the invoking OPERATOR is CONFIGURED into — from the group database
+        (`os.getgrouplist`: /etc/group memberships + the primary group), i.e. exactly what
+        `usermod -aG` grants and what `id -nG` shows. This is the HINT basis: it answers 'has the grant
+        been made?' even when the running process has not yet picked it up (see effective_groups) — used
+        to tell a genuine 'not granted' apart from a 'granted, restart pending'. Read-only, no subprocess
+        (safe on GET)."""
+        import pwd
+        try:
+            gids = os.getgrouplist(pwd.getpwuid(os.getuid()).pw_name, os.getgid())
+        except (KeyError, OSError):
+            gids = list(set(os.getgroups()) | {os.getgid()})   # fallback if the passwd entry is absent
+        return self._names_for_gids(gids)
 
 
 class RealUnixClient:
@@ -424,10 +438,12 @@ class FakeSystem:
     unix_replies: dict[str, bytes] = field(default_factory=dict)
     unix_errors: dict[str, str] = field(default_factory=dict)
     calls: list[list[str]] = field(default_factory=list)
-    # Distinct name from the user_groups() method (a dataclass field cannot share a method's name).
-    # Permissive default so existing tests that start hardware stacks stay green; the missing-capability
-    # case is opted into with user_group_names=frozenset().
-    user_group_names: frozenset[str] = frozenset({"spi", "gpio"})
+    # Distinct names from the group methods (a dataclass field cannot share a method's name). Permissive
+    # defaults so existing tests that start hardware stacks stay green; the missing-capability case is
+    # opted into with effective_group_names=frozenset(), and a "granted, restart pending" state with
+    # configured_group_names={...} while effective_group_names=frozenset().
+    effective_group_names: frozenset[str] = frozenset({"spi", "gpio"})
+    configured_group_names: frozenset[str] = frozenset({"spi", "gpio"})
 
     # CommandRunner
     def run(self, argv: list[str], timeout: float,
@@ -460,8 +476,11 @@ class FakeSystem:
     def is_char_device(self, path: str) -> bool:
         return path in self.char_devices
 
-    def user_groups(self) -> frozenset[str]:
-        return self.user_group_names
+    def effective_groups(self) -> frozenset[str]:
+        return self.effective_group_names
+
+    def configured_groups(self) -> frozenset[str]:
+        return self.configured_group_names
 
     # UnixClient
     sent: list[tuple[str, bytes]] = field(default_factory=list)

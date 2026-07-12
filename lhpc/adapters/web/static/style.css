@@ -100,7 +100,8 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
   background: var(--warnbox-bg); border: 1px solid var(--warnbox-border); color: var(--warnbox-ink);
   padding: .6rem .9rem; border-radius: var(--radius); margin: 0 0 1rem;
 }
-.site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem; }
+.site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem 3.2rem;
+               position: relative; }   /* relative: anchors the theme toggle to the footer's right edge */
 .site-footer .sub { margin-top: .4rem; opacity: .85; }
 /* Footer version/head freshness indicator. */
 .ver { font-weight: 600; }
@@ -108,7 +109,12 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
 .ver-yellow { color: var(--warn); }
 .ver-red { color: var(--bad); }
 .ver-grey { color: var(--muted); }
-.update-link { font-weight: 700; }
+/* "Update" row-action: a GREEN pill with a comfortable touch target (>=24px tall/wide, per WCAG 2.5.8),
+   reusing the theme-aware green tokens. */
+.update-link { font-weight: 700; display: inline-block; padding: .35rem .7rem; border-radius: 6px;
+  line-height: 1.2; text-decoration: none; background: var(--flash-ok-bg);
+  border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
+.update-link:hover { text-decoration: none; border-color: var(--flash-ok-ink); }
 
 /* Overview tiles -------------------------------------------------------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .75rem; margin-bottom: 1.25rem; }
@@ -141,6 +147,16 @@ tr:last-child td { border-bottom: none; }
 .badge-not-applicable::before { content: "– "; }
 
 .pill { display: inline-block; padding: .05rem .45rem; border-radius: 6px; background: var(--pill-bg); color: var(--pill-ink); font-size: .78rem; border: 1px solid var(--line); }
+/* Semantic pill colours (webserver security + running posture), theme-aware via the badge tokens. */
+.pill-ok { background: var(--badge-ok-bg); border-color: var(--badge-ok-border); color: var(--ok); }
+.pill-bad { background: var(--badge-bad-bg); border-color: var(--badge-bad-border); color: var(--bad); }
+.pill-warn { background: var(--badge-warn-bg); border-color: var(--badge-warn-border); color: var(--warn); }
+.pill-off { background: var(--badge-idle-bg); border-color: var(--badge-idle-border); color: var(--badge-idle-ink); }
+/* Dashboard Webserver box: one flex line per entry — name + pills, logs link pushed to the right edge. */
+.wsline { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; padding: .35rem 0; border-bottom: 1px solid var(--line); }
+.wsline:last-child { border-bottom: none; }
+.wsname { font-weight: 600; min-width: 5.5rem; }
+.wslogs { margin-left: auto; }   /* right-align the logs link */
 .tx-enabled { color: var(--bad); font-weight: 600; }
 .tx-disabled { color: var(--idle); }
 
@@ -172,6 +188,15 @@ pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid
 .flash-warn { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
 .flash-bad { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
 .flash-info { background: var(--flash-info-bg); border: 1px solid var(--flash-info-border); color: var(--flash-info-ink); }   /* neutral (details) */
+/* Persistent (GET-rendered) callout notes — same look as a flash, but a distinct channel from the
+   action-flash `.flash*` rules above (which are reserved for one-off action outcomes). Reuses the
+   same --flash-* tokens, so it stays theme-correct. Persistent notes never fade (no `-hide`). */
+.depnote { padding: .5rem .8rem; border-radius: 6px; margin: 0 0 .8rem; }
+.depnote-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.depnote-ok { background: var(--flash-ok-bg); border: 1px solid var(--flash-ok-border); color: var(--flash-ok-ink); }
+.depnote-warn { background: var(--flash-warn-bg); border: 1px solid var(--flash-warn-border); color: var(--flash-warn-ink); }
+.depnote-bad { background: var(--flash-bad-bg); border: 1px solid var(--flash-bad-border); color: var(--flash-bad-ink); }
+.depnote-info { background: var(--flash-info-bg); border: 1px solid var(--flash-info-border); color: var(--flash-info-ink); }
 meter { width: 12rem; height: 1rem; vertical-align: middle; margin-right: .5rem; }
 form label { display: inline-block; margin: .2rem .8rem .2rem 0; }
 /* Text-like inputs only (NOT checkboxes/radios — those theme natively via color-scheme + accent-color). */
@@ -236,12 +261,12 @@ a.iface { text-decoration: none; color: var(--brand); }
 .stackrow-body { padding: .3rem .8rem 1rem; }
 .ss-name { font-weight: 600; }
 .ss-main { font-size: .8rem; }
-/* The action links (logs + "Update available") sit in a .row-actions OVERLAY OUTSIDE the <summary> (so no
+/* The action links (logs + "Update") sit in a .row-actions OVERLAY OUTSIDE the <summary> (so no
    interactive element is nested in the summary toggle — a11y) but are positioned over the row's right
    edge, staying visible + clickable on the collapsed row. pointer-events:none on the container lets clicks
    in its empty area fall through to the summary (row still toggles); the links keep pointer-events. */
 .stackrow-wrap { position: relative; }
-.row-actions { position: absolute; top: 0; right: .8rem; display: flex; align-items: center; gap: .6rem;
+.row-actions { position: absolute; top: 0; right: .8rem; display: flex; align-items: center; gap: .8rem;
                padding: .6rem 0; pointer-events: none; }
 .row-actions > * { pointer-events: auto; }
 .row-actions .update-link { font-size: .82rem; white-space: nowrap; }
@@ -255,7 +280,7 @@ a.iface { text-decoration: none; color: var(--brand); }
   align-items: center;
   column-gap: .5rem;
   row-gap: .2rem;
-  padding-right: 11.5em;   /* room for the logs + "Update available" overlay */
+  padding-right: 11.5em;   /* room for the logs + "Update" overlay */
 }
 .stacklist .stackrow > summary .col-name    { grid-column: 2; min-width: 0; overflow: hidden;
                                                text-overflow: ellipsis; white-space: nowrap; }
@@ -295,6 +320,15 @@ a.iface { text-decoration: none; color: var(--brand); }
   .dptab input:not([type=checkbox]), .dptab select { width: 100%; max-width: 24rem; }
   .setcell { flex-wrap: wrap; }          /* Live radio settings row wraps instead of overflowing */
   input.wide { min-width: 0; }           /* source-remote input (min-width:16rem) must shrink on phones */
+  /* Daemon monitor (dashboard): the live stats table is label/value/label/value — four columns can't fit
+     a phone, and a horizontally-scrolling table IS the overflow. Reflow each row into a 2-column grid so
+     its two pairs stack vertically; every value stays visible with no sideways scroll, and the feed wraps. */
+  .radio-col .monitor table, .radio-col .monitor table tbody { display: block; width: 100%; }
+  .radio-col .monitor table tr { display: grid; grid-template-columns: max-content 1fr;
+                                 column-gap: .6rem; align-items: center; }
+  .radio-col .monitor table th { text-align: left; white-space: nowrap; }
+  .radio-col .monitor table td { min-width: 0; overflow-wrap: anywhere; }
+  .radio-col .feed { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
 .stackrow-link { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
                  padding: .6rem .8rem; border-bottom: 1px solid var(--line);
@@ -318,9 +352,9 @@ input.wide { width: 100%; min-width: 16rem; }
 .cfgsec { margin: .5rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 .cfgsec h3 { margin: .3rem 0 .5rem; font-size: 1rem; }
 .advcfg { margin: .4rem 0; }
-/* Group each top-level sub-panel on /stacks in a subtle box; nested sub-panels stay flat. */
+/* Box every sub-panel on /stacks — including nested ones — for a clear box-in-box hierarchy. Each
+   nested box is inset by its parent's padding + the .advcfg margin. */
 .stacklist .advcfg { border: 1px solid var(--line); border-radius: 8px; padding: .35rem .7rem; }
-.stacklist .advcfg .advcfg { border: 0; border-radius: 0; padding: 0; }
 .advcfg summary { cursor: pointer; color: var(--muted); font-size: .8rem;
                   text-transform: uppercase; letter-spacing: .4px; }
 .act { display: inline-block; margin: 0; }
@@ -423,7 +457,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 
 /* ---- Webserver controller component (inline in the controller row) ---- */
 .ws-comp form { margin: 0.7em 0; }
-.ws-comp .cfgsec > .flash { margin: 0.4em 0; }
+.ws-comp .cfgsec > .depnote { margin: 0.4em 0; }
 .ws-comp button { margin: 0.25em 0.5em 0.25em 0; }
 .ws-comp table.certs a { margin-left: 0.7em; }
 .ws-comp table.certs td, .ws-comp table.certs th { padding: 0.3em 0.7em 0.3em 0; }
@@ -433,6 +467,10 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .ws-comp .setting .muted { margin-left: 0.5em; }
 /* a little breathing room after the System dependencies list, before "Verify now" */
 .ws-comp .sysdeps { margin-bottom: 1em; }
+/* Each sub-section (Settings/Monitor/Certificates) anchors a "logs" overlay on its header, laid out
+   EXACTLY like the main stack rows: the .row-actions overlay is a sibling OUTSIDE the <summary> (a11y),
+   positioned over the header's right edge and visible whether the section is open or collapsed. */
+.ws-comp .ws-sub-wrap { position: relative; }
 
 /* ============================ DARK MODE ==================================
    The whole UI is driven by the :root custom properties above, so a dark theme is just a re-point of
@@ -502,13 +540,14 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
   :root:not([data-theme]) ::-webkit-scrollbar-thumb:hover { background: #4a525d; }
 }
 
-/* Fixed lower-right theme toggle. Light theme shows the MOON (click → dark); dark shows the SUN. */
+/* Theme toggle, pinned to the footer's right edge. Light theme shows the MOON (click → dark);
+   dark shows the SUN. */
 .theme-toggle {
-  position: fixed; right: .9rem; bottom: .9rem; z-index: 40;
+  position: absolute; right: .9rem; top: 50%; transform: translateY(-50%);
   width: 2.3rem; height: 2.3rem; padding: 0; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--surface); color: var(--muted); border: 1px solid var(--line);
-  box-shadow: var(--shadow); cursor: pointer; opacity: .7;
+  cursor: pointer; opacity: .7;
 }
 .theme-toggle:hover { opacity: 1; }
 .theme-toggle svg { width: 1.2rem; height: 1.2rem; display: block; fill: none;

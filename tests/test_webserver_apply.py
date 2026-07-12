@@ -157,3 +157,42 @@ def test_monitor_view_exposes_live_scope(tmp_path):
     v = webserver.monitor_view(Paths(runtime_root=tmp_path), WebserverConfig(),
                                live_listener_scope="loopback")
     assert v["live_scope"] == "loopback" and v["pending"] is False
+
+
+def test_posture_security_is_tri_state():
+    def sec(local, public, mode):
+        return webserver.posture(local=local, public=public, access_mode=mode)["sec_level"]
+    # Loopback is ALWAYS green — even with no-auth (nothing remote reaches it).
+    assert sec(True, False, "no-auth") == "ok"
+    assert sec(True, False, "local-open-remote-auth") == "ok"
+    # Off-loopback + no-auth = RED (unauthenticated remote), whether LAN- or public-scoped.
+    assert sec(False, False, "no-auth") == "bad"
+    assert sec(False, True, "no-auth") == "bad"
+    # Off-loopback + auth, restricted to a LAN (not public) = GREEN.
+    assert sec(False, False, "auth-everywhere") == "ok"
+    assert sec(False, False, "local-open-remote-auth") == "ok"
+    # Off-loopback + auth but PUBLIC (all source addresses, 0.0.0.0/0) = YELLOW.
+    assert sec(False, True, "auth-everywhere") == "warn"
+    assert sec(False, True, "local-open-remote-auth") == "warn"
+    # An UNKNOWN access mode off loopback is treated as UNAUTHENTICATED (fail-closed) — never a green pill.
+    assert sec(False, False, "bogus-mode") == "bad"
+    assert sec(True, False, "bogus-mode") == "ok"          # loopback stays green (nothing remote reaches it)
+    # Off-loopback + auth but NO allowed CIDRs at all is an UNAPPLIABLE desired state -> YELLOW + iface
+    # "unset", so the pill AGREES with the "no allowed source CIDR" warning shown right below it.
+    nocidr = webserver.posture(local=False, public=False, access_mode="auth-everywhere", has_cidrs=False)
+    assert nocidr["sec_level"] == "warn" and nocidr["iface"] == "unset"
+    withcidr = webserver.posture(local=False, public=False, access_mode="auth-everywhere", has_cidrs=True)
+    assert withcidr["sec_level"] == "ok" and withcidr["iface"] == "LAN"      # a real CIDR -> LAN-green
+    # Labels unchanged.
+    p = webserver.posture(local=False, public=True, access_mode="local-open-remote-auth")
+    assert p["iface"] == "All interfaces" and p["auth"] == "remote-auth"
+
+
+def test_monitor_view_running_pill_is_nginx_or_lhpc_web(tmp_path):
+    from lhpc.core.config import WebserverConfig
+    p = Paths(runtime_root=tmp_path)
+    # This session proxied through nginx -> green "nginx"; served directly by lhpc-web -> yellow.
+    up = webserver.monitor_view(p, WebserverConfig(), live_listener_scope="loopback", served_via_nginx=True)
+    assert up["posture"]["run"] == "nginx" and up["posture"]["run_level"] == "ok"
+    down = webserver.monitor_view(p, WebserverConfig(), live_listener_scope="absent", served_via_nginx=False)
+    assert down["posture"]["run"] == "lhpc-web" and down["posture"]["run_level"] == "warn"

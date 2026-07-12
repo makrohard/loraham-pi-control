@@ -68,8 +68,12 @@ class SelfUpdateOpsMixin:
         GET-SAFE: presence probes only — `shutil.which` / `System.fs.exists` / `importlib.util.find_spec`
         — never a subprocess (git/nginx/systemctl are NOT executed)."""
         import shutil
+        import sys
         import importlib.util
         from . import webserver as _ws
+        # Python venv deps must be (re)installed into the SAME interpreter that runs LHPC — never a bare
+        # `pip install` (wrong env / PEP-668). Version floors mirror pyproject.toml.
+        _pipi = f"{sys.executable} -m pip install"
         fs = self._system.fs
 
         def have_cmd(cmd: str, *fallbacks: str) -> bool:
@@ -97,7 +101,11 @@ class SelfUpdateOpsMixin:
                 {"what": "systemd (systemctl, loginctl)", "required": False,
                  "satisfied": (have_cmd("systemctl", "/usr/bin/systemctl", "/bin/systemctl")
                                and have_cmd("loginctl", "/usr/bin/loginctl", "/bin/loginctl")),
+                 # NOT installable by command: if systemctl/loginctl are absent this host is not systemd,
+                 # and `apt install systemd` is not the fix. Explain instead of offering nonsense advice.
                  "install": "",
+                 "note": "managed-service mode is unavailable on this host — the console runs fine "
+                         "without it (loopback/manual start); no package can add systemd here.",
                  "purpose": "the managed --user service + boot linger (only for managed-service mode)"},
             ]},
             {"title": "Install-time", "deps": [
@@ -114,11 +122,12 @@ class SelfUpdateOpsMixin:
             ]},
             {"title": "Python venv dependencies (pip, in venv/lhpc)", "deps": [
                 {"what": "flask", "required": True, "satisfied": have_mod("flask"),
-                 "install": "", "purpose": "web console"},
+                 "install": f"{_pipi} 'flask>=3,<4'", "purpose": "web console"},
                 {"what": "waitress", "required": True, "satisfied": have_mod("waitress"),
-                 "install": "", "purpose": "production WSGI server (no dev-server fallback)"},
+                 "install": f"{_pipi} 'waitress>=3,<4'",
+                 "purpose": "production WSGI server (no dev-server fallback)"},
                 {"what": "cryptography", "required": True, "satisfied": have_mod("cryptography"),
-                 "install": "", "purpose": "all PKI (CA / cert / PKCS#12 / CRL)"},
+                 "install": f"{_pipi} 'cryptography>=42'", "purpose": "all PKI (CA / cert / PKCS#12 / CRL)"},
             ]},
         ]
 

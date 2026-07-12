@@ -313,13 +313,53 @@ def test_view_disabled_proxy_is_absent_and_not_pending(tmp_path):
     assert v["listen_scope"] == "absent" and v["pending"] is False
 
 
-def test_stacks_panel_shows_live_scope(tmp_path):
-    # The stacks-page Webserver header states the LIVE listener scope as a status pill.
-    app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
+def test_stacks_panel_shows_running_state(tmp_path):
+    # The stacks-page Webserver header states the running pill: with the stack's web-UI upstream (18083)
+    # AND the nginx proxy port (8444) both listening, it reads "proxied" (green).
+    app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
+                               {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}])
     svc.stack_web_configure("meshcom", mode="local", port=8444)
     body = app.test_client().get("/stacks").get_data(as_text=True)
     assert 'id="stack-webserver-meshcom"' in body
-    assert "live: all interfaces" in body
+    assert ">proxied</span>" in body
+
+
+def test_stack_running_pill_offline_localonly_proxied(tmp_path):
+    UP = {"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1}   # stack's web-UI upstream
+    PROXY = {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}   # nginx proxy port
+    # (i) stack not started -> upstream absent -> grey "offline"
+    svc = _svc(tmp_path); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    p = svc.stack_web_view("meshcom")["posture"]
+    assert p["run"] == "offline" and p["run_level"] == "off"
+    # (ii) stack started, nginx not proxying -> upstream up, proxy port absent -> yellow "local-only"
+    svc = _svc(tmp_path, [UP]); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    p = svc.stack_web_view("meshcom")["posture"]
+    assert p["run"] == "local-only" and p["run_level"] == "warn"
+    # (iii) stack started AND nginx proxying -> both listening -> green "proxied"
+    svc = _svc(tmp_path, [UP, PROXY]); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    p = svc.stack_web_view("meshcom")["posture"]
+    assert p["run"] == "proxied" and p["run_level"] == "ok"
+
+
+def test_dashboard_webservers_always_has_lhcp_console_and_hides_stopped_stacks(tmp_path):
+    # The dashboard Webserver box always leads with the LHCP console row (with its posture pills); a stack
+    # row appears only when that stack is running — nothing is running here, so only the console row.
+    rows = _svc(tmp_path).dashboard_webservers()
+    assert rows and rows[0]["kind"] == "console" and rows[0]["name"] == "LHCP"
+    assert rows[0]["posture"] and rows[0]["posture"]["run"] in ("nginx", "lhpc-web")
+    assert all(r["kind"] == "console" for r in rows)          # no running web-UI stacks -> no stack rows
+
+
+def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
+    from lhpc.core import webserver as _ws
+    svc = _svc(tmp_path); svc.stack_web_configure("meshcom", mode="local", port=8444)
+    v = svc.stack_web_view("meshcom")
+    # Identical wording/values to the console Monitor — driven by the SINGLE shared source.
+    assert v["warnings"] == _ws.exposure_warnings(
+        remote=False, access_mode="local-open-remote-auth", allowed_cidrs=(),
+        bind="127.0.0.1", port=8444, live_scope=v["listen_scope"])
+    assert any("Remote exposure is disabled — listening on loopback only" in w["text"]
+               for w in v["warnings"])
 
 
 # --- web routes ---------------------------------------------------------------------------------------
@@ -353,7 +393,7 @@ def test_route_saves_and_redirects_to_the_panel(tmp_path):
     assert svc.config().stackweb["meshcom"].port == 8444
 
 
-def test_route_maps_the_typed_phrase_like_webserver_expose(tmp_path):
+def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path):
     app, svc = _app(tmp_path)
     c = app.test_client()
     base = {"_csrf": _csrf(c), "mode": "public", "port": "8444", "cidrs": "0.0.0.0/0"}
@@ -367,7 +407,7 @@ def test_panel_renders_with_the_bypass_warning(tmp_path):
     app, _ = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
     body = app.test_client().get("/stacks").get_data(as_text=True)
     assert 'id="stack-webserver-meshtastic"' in body
-    assert "listening on all interfaces" in body and "flash-bad" in body
+    assert "listening on all interfaces" in body and "depnote-bad" in body
     assert "bypassing this proxy" in body
 
 

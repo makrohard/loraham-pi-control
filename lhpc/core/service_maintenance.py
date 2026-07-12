@@ -429,7 +429,7 @@ class MaintenanceOpsMixin:
         (LHPC never runs system-package commands). `mandatory_missing`/`optional_missing` drive the banner
         colour (yellow if any mandatory unmet, else green if only optional). Composes existing GET-safe
         probes only (shutil.which / fs.exists / find_spec / missing_requirements / is_dir) — no subprocess."""
-        def norm(label, satisfied, mandatory, detail, install, runtime=False):
+        def norm(label, satisfied, mandatory, detail, install, runtime=False, note=""):
             # NARROW action parse: ONLY `lhpc install <target>` / `lhpc build <target>` where the op is a
             # real web action and the target resolves to a known stack — anything else stays copyable.
             op = target = None
@@ -439,13 +439,13 @@ class MaintenanceOpsMixin:
                 op, target, install = parts[1], parts[2], ""
             return {"label": label, "satisfied": bool(satisfied), "mandatory": bool(mandatory),
                     "detail": detail or "", "install": install or "", "op": op, "target": target,
-                    "runtime": bool(runtime)}
+                    "runtime": bool(runtime), "note": note or ""}
 
         sections: list = []
         # LHPC + web server: controller_system_deps groups carry the explicit required flag (nginx here).
         for grp in self.controller_system_deps():
             deps_ = [norm(d.get("what", ""), d.get("satisfied"), d.get("required", True),
-                          d.get("purpose", ""), d.get("install", ""))
+                          d.get("purpose", ""), d.get("install", ""), note=d.get("note", ""))
                      for d in grp.get("deps", [])]
             sections.append({"title": grp.get("title", "LHPC"), "kind": "controller",
                              "stack": None, "deps": deps_})

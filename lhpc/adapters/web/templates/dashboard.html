@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% from "_macros.html" import cmdbox %}
+{% from "_macros.html" import cmdbox, webserver_pills %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   {% if welcome and welcome.fresh %}
-  <div class="flash flash-ok">
+  <div class="depnote depnote-ok">
     <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
     guided run:
     <a href="{{ url_for('install_all_page') }}"><button type="button">Install and Build
       all Stacks</button></a>
   </div>
   {% elif welcome and not welcome.fresh %}
-  <div class="flash flash-warn">
+  <div class="depnote depnote-warn">
     Nothing is installed, but the runtime state needs attention before a fresh install:
     {{ welcome.recovery }}
   </div>
@@ -18,7 +18,7 @@
   {% if restart_required %}
     {# Durable restart-required flags: yellow, explicit — the action opens the normal
        controlled restart confirm (never restarts anything by itself). #}
-    <div class="flash flash-warn">
+    <div class="depnote depnote-warn">
       <span class="ver ver-yellow">Restart required</span> — saved settings differ from the
       running stack{{ 's' if restart_required|length > 1 }}:
       {% for sid in restart_required %}
@@ -44,7 +44,7 @@
         <div class="body">
 
           {% if r.conflict %}
-            <p class="flash flash-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
+            <p class="depnote depnote-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
               {{ r.conflict|join(', ') }} are running together and will fight over the
               radio tuning. Run only one at a time on this band.</p>
           {% endif %}
@@ -62,10 +62,10 @@
               </form>
             </h3>
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}" target="_blank" rel="noopener">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
             </p>
             <details class="monitor" open>
-              <summary>Monitor</summary>
+              <summary>RX-TX Monitor</summary>
               <table class="monrssi">
                 <tr><th>Live RSSI</th>
                   <td><meter id="rd-rssi-{{ r.band }}" min="-130" max="0" low="-110" high="-90" optimum="-30"
@@ -120,11 +120,12 @@
                     <li><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       {{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
-                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" target="_blank" rel="noopener" aria-label="{{ c.id }} logs">logs</a>{% endif %}
+                      {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {% for itf in c.interfaces %}
                         {% if itf.proxy_remote and itf.proxy_port and req_host %}
                           {# Point at the host the browser used to reach the console, on the proxy's
-                             port — correct whether they came via LAN IP, hostname or WAN. #}
+                             port — correct whether they came via LAN IP, hostname or WAN. The two web-UI
+                             links are the ONLY links that open a new tab (they leave the console). #}
                           <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
                         {% elif itf.link %}
                           <a class="iface iface-web" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
@@ -143,7 +144,7 @@
                         </form>
                       {% elif c.interactive %}
                         {% if c.blocker %}
-                          <div class="flash flash-warn">{{ c.blocker }}</div>
+                          <div class="depnote depnote-warn">{{ c.blocker }}</div>
                         {% else %}
                           <div class="muted">Interactive — run it yourself:</div>
                           {{ cmdbox('runc-' ~ c.id, c.command) }}
@@ -197,7 +198,7 @@
                       <button type="submit">&times;</button>
                     </form></p>
                   {% if s.blocker %}
-                    <p class="flash flash-warn">{{ s.name }} is <strong>{{ s.blocker }}</strong></p>
+                    <p class="depnote depnote-warn">{{ s.name }} is <strong>{{ s.blocker }}</strong></p>
                   {% else %}
                     <p class="muted">Run it yourself in a terminal (daemon is ensured):</p>
                     {{ cmdbox('cmd-' ~ s.id, s.command) }}
@@ -215,7 +216,7 @@
               <input type="hidden" name="op" value="start">
               <input type="hidden" name="band" value="{{ r.band }}">
               <input type="hidden" name="from" value="dash">
-              <select name="target">
+              <select name="target" aria-label="Stack to start on {{ r.band }}">
                 {% for s in r.startable %}<option value="{{ s.id }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
               </select>
               <button type="submit">Start</button>
@@ -224,12 +225,28 @@
 
           {% if r.daemon.process_up and not r.daemon.reachable %}
             <p class="links">
-              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}" target="_blank" rel="noopener">daemon log</a>
+              <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
             </p>
           {% endif %}
         </div>
       </div>
     {% endfor %}
+  </div>
+
+  {# Webserver box: LHCP console (always) + a line per RUNNING web-UI stack. Each line: name + the two
+     status pills (security + running), and a right-aligned logs link. #}
+  <div class="card">
+    <header><h2>Webserver</h2></header>
+    <div class="body">
+      {% for w in webservers %}
+        <div class="wsline">
+          <span class="wsname">{{ w.name }}</span>
+          {% if w.posture %}{{ webserver_pills(w.posture, w.addr) }}
+          {% else %}<span class="pill">not proxied</span>{% endif %}
+          <a class="logslink wslogs" href="{{ w.logs }}" aria-label="{{ w.name }} logs">logs</a>
+        </div>
+      {% endfor %}
+    </div>
   </div>
 {% endblock %}
 {% block scripts %}

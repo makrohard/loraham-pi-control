@@ -14,9 +14,9 @@
   </section>
 
   {% if dep_summary.mandatory_missing %}
-    <div class="flash flash-warn"><strong>{{ dep_summary.mandatory_missing }} mandatory dependenc{{ 'y is' if dep_summary.mandatory_missing == 1 else 'ies are' }} missing</strong> — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to resolve.</div>
+    <div class="depnote depnote-warn"><strong>{{ dep_summary.mandatory_missing }} mandatory dependenc{{ 'y is' if dep_summary.mandatory_missing == 1 else 'ies are' }} missing</strong> — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to resolve.</div>
   {% elif dep_summary.optional_missing %}
-    <div class="flash flash-ok">{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.</div>
+    <div class="depnote depnote-ok">{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.</div>
   {% endif %}
 
   {% if not snapshot.runtime_root_exists %}
@@ -90,6 +90,8 @@
                       <span class="muted">· {{ 'required' if d.required else 'optional' }} — {{ d.purpose }}</span>
                       {% if not d.satisfied and d.install %}
                         <div class="muted">install it:</div>{{ cmdbox('ctrl-dep-' ~ gi ~ '-' ~ loop.index0, d.install) }}
+                      {% elif not d.satisfied and d.note %}
+                        <div class="muted">{{ d.note }}</div>
                       {% endif %}
                     </li>
                   {% endfor %}
@@ -107,8 +109,8 @@
       {# Action links OUTSIDE the summary (a11y) but overlaid on the row. #}
       <div class="row-actions">
         {% if controller.update_available %}<a class="update-link"
-          href="{{ url_for('stacks_overview') }}#controller-update">Update available</a>{% endif %}
-        <a class="logslink" href="{{ url_for('controller_logs') }}" target="_blank" rel="noopener" aria-label="controller logs">logs</a>
+          href="{{ url_for('stacks_overview') }}#controller-update">Update</a>{% endif %}
+        <a class="logslink" href="{{ url_for('controller_logs') }}" aria-label="controller logs">logs</a>
       </div>
       </div>
       {% endif %}

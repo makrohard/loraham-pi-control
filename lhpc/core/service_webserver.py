@@ -17,15 +17,17 @@ class WebserverOpsMixin:
     # NEVER routed through the generic stack/component verbs (install/build/test/...): the
     # Webserver "component" is presentation only, so controller isolation is unaffected.
 
-    def webserver_monitor(self) -> "ActionResult":
+    def webserver_monitor(self, served_via_nginx: bool | None = None) -> "ActionResult":
         """READ-ONLY status (Monitor/GET): desired config + effective evidence + PKI state + warnings.
         No network/subprocess probe, no mutation — but the console listener SCOPE is read live from
         /proc (as the stack-proxy bypass warnings below already are), so the panel is accurate on load
-        without a re-verify."""
+        without a re-verify. `served_via_nginx` (request-scoped: is THIS session proxied through nginx?)
+        drives the console running pill — the adapter supplies it from the nginx-set X-LHPC-Peer header."""
         from . import webserver as _ws
         cfg = self.config().webserver
         live_scope = _ws.listener_scope(self._system, cfg.port)   # "exposed" | "loopback" | "absent"
-        view = _ws.monitor_view(self._paths, cfg, live_listener_scope=live_scope)
+        view = _ws.monitor_view(self._paths, cfg, live_listener_scope=live_scope,
+                                served_via_nginx=served_via_nginx)
         # The per-stack web-UI proxies are part of the config nginx loads — show them here too, with
         # the standing warning for any upstream that answers around this proxy.
         proxies = []
@@ -249,7 +251,56 @@ class WebserverOpsMixin:
             "listen_scope": listen_scope,
             "pending": bool(swc.enabled and (
                 listen_scope == "absent" or swc.remote != (listen_scope == "exposed"))),
+            # Security + running posture for the two summary pills. Security via posture(); the RUNNING
+            # pill for a PROXY is: grey "offline" (stack not started — its web-UI upstream is down),
+            # yellow "local-only" (started but nginx is not proxying it), green "proxied" (started + nginx).
+            "posture": {
+                **_ws.posture(local=swc.mode == "local", public=swc.mode == "public",
+                              access_mode=swc.access_mode, has_cidrs=bool(swc.allowed_cidrs)),
+                "run": "offline" if scope == "absent" else (
+                    "local-only" if listen_scope == "absent" else "proxied"),
+                "run_level": "off" if scope == "absent" else (
+                    "warn" if listen_scope == "absent" else "ok"),
+            },
+            # Same remote-exposure/auth/listener warnings the console shows (identical wording+values),
+            # for an ENABLED proxy. A proxy binds 0.0.0.0 when remote, 127.0.0.1 when local.
+            "warnings": _ws.exposure_warnings(
+                remote=swc.remote, access_mode=swc.access_mode, allowed_cidrs=swc.allowed_cidrs,
+                bind="0.0.0.0" if swc.remote else "127.0.0.1", port=swc.port,
+                live_scope=listen_scope) if swc.enabled else [],
         }
+
+    def dashboard_webservers(self, served_via_nginx: bool | None = None) -> list[dict]:
+        """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then each web-UI stack whose
+        MAIN component is currently running/degraded. Structural evidence only — the adapter adds the
+        request-scoped reached address and resolves the log href. Each stack row carries `logs_component`
+        (the web-UI component's id, but ONLY when it actually writes a log) or None → link to the row."""
+        from .model import RunState
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        mon = self.webserver_monitor(served_via_nginx=served_via_nginx).data or {}
+        rows: list[dict] = [{"kind": "console", "name": "LHCP", "posture": mon.get("posture"),
+                             "port": mon.get("desired", {}).get("port"), "logs_component": None}]
+        by_id = {ss.stack.id: ss for ss in self.build_snapshot().stacks}
+        for sid in self.stack_web_eligible():
+            ss, stk = by_id.get(sid), self.stack(sid)
+            if ss is None or stk is None or stk.main_component is None:
+                continue
+            mst = ss.components.get(stk.main_component.id)
+            if mst is None or mst.run_state not in up:      # not started -> no row (per the operator)
+                continue
+            v = self.stack_web_view(sid) or {}
+            swc = v.get("cfg")
+            enabled = bool(swc and swc.enabled)
+            # The web-UI component carries a client http/https endpoint; use its logs ONLY if it writes one.
+            webcomp = next((c for c in stk.components for ep in c.endpoints
+                            if getattr(ep, "client", False) and ep.scheme in ("http", "https")), None)
+            writes_log = bool(webcomp and (webcomp.log_paths
+                                           or (webcomp.run_argv and not webcomp.interactive)))
+            rows.append({"kind": "stack", "name": stk.name, "sid": sid, "enabled": enabled,
+                         "posture": v.get("posture") if enabled else None,
+                         "port": swc.port if enabled else None,
+                         "logs_component": webcomp.id if (webcomp and writes_log) else None})
+        return rows
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
         """A STABLE per-stack default port: `console_port + 1 + position`, where position is the

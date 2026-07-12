@@ -1,12 +1,11 @@
 {% extends "base.html" %}
 {% block title %}confirm live setting — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('stacks_overview', cfg='daemon') ~ '#stack-settings-daemon' }}">&larr; back</a></p>
   <div class="card">
     <header><h2>Confirm live daemon setting <span class="pill">{{ band }} MHz</span></h2></header>
     <div class="body">
       {% if fsk %}
-        <p class="flash flash-warn"><strong>⚠ MODE=FSK</strong> switches the radio off LoRa and
+        <p class="depnote depnote-warn"><strong>⚠ MODE=FSK</strong> switches the radio off LoRa and
           will break LoRa communication on {{ band }} MHz{% if warn_stacks %} — running LoRa
           stack(s) affected: <strong>{{ warn_stacks|join(', ') }}</strong>{% endif %}.</p>
       {% endif %}
@@ -24,7 +23,7 @@
           <button type="submit">Apply {{ key }}={{ value }} (live, non-RF)</button>
         </form>
       {% else %}
-        <p class="flash flash-warn">This setting cannot be applied (see above).</p>
+        <p class="depnote depnote-warn">This setting cannot be applied (see above).</p>
       {% endif %}
     </div>
   </div>

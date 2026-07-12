@@ -56,6 +56,36 @@ def test_doctor_itemizes_unmet_dependencies(tmp_path):
     assert "not executed by LHPC" in blob
 
 
+def test_doctor_ends_with_a_copyable_install_block(tmp_path):
+    # A genuinely-missing dep (spi/gpio not granted) surfaces its grant command in a consolidated,
+    # copyable "Install the missing dependencies:" block at the VERY END — after the per-dep lines.
+    fake = FakeSystem(effective_group_names=frozenset(), configured_group_names=frozenset())
+    details = ControllerService(system=fake.system,
+                                paths=Paths(runtime_root=tmp_path)).doctor().details
+    assert "Install the missing dependencies:" in details
+    hi = details.index("Install the missing dependencies:")
+    # placed after the components/conflicts tally (i.e. at the very end)
+    assert hi > next(i for i, ln in enumerate(details) if "observed resource conflicts" in ln)
+    block = details[hi + 1:]
+    assert any("sudo usermod -aG spi,gpio $USER" in ln for ln in block)   # the grant command, copyable
+    assert not any(ln.strip().startswith(("lhpc install", "lhpc build")) for ln in block)  # no actions
+
+
+def test_every_controller_dep_has_a_copyable_install_command(tmp_path):
+    # Coverage invariant: no controller dependency is ever shown "missing" as a dead end — it must carry
+    # EITHER a copyable install command OR an explanatory note (for genuinely un-installable-by-command
+    # deps like systemd, where `apt install systemd` would be nonsense advice).
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    for grp in svc.controller_system_deps():
+        for d in grp["deps"]:
+            assert d["install"] or d.get("note"), f"{d['what']} has neither install command nor note"
+    # venv deps target the running interpreter, not a bare `pip`
+    import sys
+    flat = [d for grp in svc.controller_system_deps() for d in grp["deps"]]
+    flask = next(d for d in flat if d["what"] == "flask")
+    assert flask["install"] == f"{sys.executable} -m pip install 'flask>=3,<4'"
+
+
 def test_build_requires_manifest_validation():
     base = {
         "stack": [{

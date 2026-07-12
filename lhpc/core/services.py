@@ -72,7 +72,10 @@ from .service_params import ParamsConfigMixin
 from .service_lifecycle_ops import LifecycleOpsMixin
 
 
-class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin):
+from .service_hmac import HmacOpsMixin
+
+
+class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
 
     `system` and `paths` are injectable so tests drive it with fakes.
@@ -532,6 +535,14 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
     def doctor(self) -> ActionResult:
         sys = self._system
         details: list[str] = []
+        # Copyable install/grant commands for every UNSATISFIED dep (mandatory OR optional), collected
+        # here and printed as one block at the VERY END. Shell commands only — `lhpc install`/`build`
+        # action entries are NOT shell commands and are excluded.
+        install_cmds: list[str] = []
+
+        def _add_cmd(cmd: str) -> None:
+            if cmd and cmd not in install_cmds and not cmd.startswith(("lhpc install", "lhpc build")):
+                install_cmds.append(cmd)
 
         root = self._paths.runtime_root
         details.append(
@@ -556,6 +567,8 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                 else:
                     hint = f": {d['install']}" if d["install"] else ""
                     state = f"not installed (optional — {d['purpose']}{hint})"
+                if not d["satisfied"]:
+                    _add_cmd(d["install"])
                 details.append(f"  {d['what']}: {state}")
         for dev in (_SPI_DEV, _GPIO_DEV):
             chk = hardware.check_char_device(sys, dev)
@@ -589,6 +602,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                 line = f"    [{d.kind}] {d.label} — {d.detail}"
                 if d.install_cmd:
                     line += f" | run yourself: {d.install_cmd}"
+                    _add_cmd(d.install_cmd)
                 details.append(line)
         if not any_missing:
             details.append("  dependencies: all declared system/build prerequisites satisfied")
@@ -603,6 +617,11 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         details.append("  components: " + ", ".join(f"{k}={v}" for k, v in sorted(tally.items())))
         observed = self._observed_conflicts(snap)
         details.append(f"  observed resource conflicts: {len(observed)}")
+
+        # Consolidated, copyable install/grant commands for everything unsatisfied — at the very end.
+        if install_cmds:
+            details.append("Install the missing dependencies:")
+            details.extend(f"  {cmd}" for cmd in install_cmds)
 
         return ActionResult(
             ok=not required_missing,
@@ -711,8 +730,29 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                 if a.target == str(dest):
                     a.status, a.detail = result.status, result.detail
                     a.provenance = result.provenance
+        # Password-auth by DEFAULT: after a successful source adoption and BEFORE the caller builds the
+        # firmware, ensure the meshcom HMAC secret + param exist (idempotent — keeps an existing secret),
+        # so the firmware bakes the shared secret in the same install. Covers per-stack + CLI install;
+        # install-all adopts+builds directly (its own hook, before its build). Skip on a failed adopt —
+        # nothing gets built, so don't flip visible HMAC state on a broken install.
+        hmac_err = ""
+        if not any(a.status == "failed" for a in plan.actions):
+            for sid in {st.id for st, _ in install_items}:
+                if self.hmac_applies(sid):
+                    hr = self.hmac_set_secret(sid, "enable")
+                    if not hr.ok:
+                        # FAIL CLOSED: a failed enable must NOT report install success — the firmware would
+                        # otherwise be built (by the caller) with an empty password while the operator
+                        # believes auth is on.
+                        hmac_err = f"{sid}: {self._hmac_redact(hr.summary)}"
+                        break
         retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
         res = self._plan_result(plan, applied=True, next_apply=None)
+        if hmac_err:
+            return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
+                                f"({hmac_err}); fix and re-run before starting the meshcom link.",
+                                details=list(res.details) + extra_out,
+                                next_commands=res.next_commands)
         if not retire_ok:
             return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
                                 details=list(res.details) + extra_out,

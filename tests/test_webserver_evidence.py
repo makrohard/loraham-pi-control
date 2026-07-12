@@ -103,7 +103,7 @@ def test_monitor_not_exposed_is_a_single_disabled_info(tmp_path):
                                   live_listener_scope="loopback")
     exposure = [w for w in view["warnings"] if "exposure" in w["text"] or "listener" in w["text"]]
     assert exposure == [{"level": "info",
-                         "text": "Remote exposure is disabled — the console listens on loopback only."}]
+                         "text": "Remote exposure is disabled — listening on loopback only."}]
 
 
 def test_monitor_desired_disabled_but_live_listener_exposed_warns(tmp_path):

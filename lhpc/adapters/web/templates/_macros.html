@@ -14,6 +14,22 @@
 {{- (' ' ~ parts[1:]|join(' ')) if parts[1:] else '' -}}
 {%- endmacro %}
 
+{# Same severity mapping as flash_classes, but for PERSISTENT (GET-rendered) callout notes — the
+   `depnote` channel is kept distinct from the action-flash `flash-*` channel. #}
+{% macro depnote_classes(level) -%}
+{%- set sev = ((level or '')|string).split()[0]|lower if (level or '')|string else '' -%}
+{%- if sev in ('ok', 'success', 'good') -%}depnote-ok
+{%- elif sev in ('warn', 'warning') -%}depnote-warn
+{%- elif sev in ('err', 'error', 'bad', 'danger', 'fail', 'failed', 'critical') -%}depnote-bad
+{%- else -%}depnote-info
+{%- endif -%}
+{%- endmacro %}
+
+{# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
+   address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all
+   three read identically. `addr` is the reached host:port (request-scoped). #}
+{% macro webserver_pills(p, addr) %}<span class="pill pill-{{ p.sec_level }}">{{ p.auth }} · {{ p.iface }} · {{ addr }}</span> <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
+
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">
   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -30,6 +46,17 @@
   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
   <button type="submit">Check for updates</button>
 </form>
+{% endmacro %}
+
+{# MeshCom HMAC password actions. GET links to the warn+apply page (each action confirms + starts its
+   own slow run there); the state change itself is the CSRF-protected POST on that page. #}
+{% macro hmac_actions(stack_id) %}
+<div class="actline">
+  <span class="grouplabel">HMAC Password</span>
+  <span class="act"><a href="{{ url_for('hmac_apply_page', sid=stack_id, action='enable') }}"><button type="button">Enable</button></a></span>
+  <span class="act"><a href="{{ url_for('hmac_apply_page', sid=stack_id, action='disable') }}"><button type="button">Disable</button></a></span>
+  <span class="act"><a href="{{ url_for('hmac_apply_page', sid=stack_id, action='renew') }}"><button type="button">Renew</button></a></span>
+</div>
 {% endmacro %}
 
 {# Cached per-component freshness, already resolved against the component's CURRENT head by
@@ -80,7 +107,7 @@
   <span class="col-source"><span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ st.source_state.value }}</span></span>
   <span class="col-version">{% if st.source_version %}<span class="pill mono">{{ st.source_version }}</span>{% endif %}</span>
   {# YELLOW only when the MAIN component is behind — this commit IS the main's head. A stale
-     radiolib raises the col-update link instead, and leaves this pill grey (truthfully). #}
+     radiolib raises the row-actions Update link instead, and leaves this pill grey (truthfully). #}
   <span class="col-head">{% if st.source_head %}<span class="pill mono{% if g.update_main == 'behind' %} ver ver-yellow{% endif %}"
     {%- if g.update_main == 'behind' %} title="behind its remote"{% endif %}>@{{ st.source_head[:9] }}</span>{% endif %}</span>
 {% else %}
@@ -91,7 +118,7 @@
 </span>
 {% endmacro %}
 
-{# Row-action links (logs + "Update available") — rendered OUTSIDE the <summary> (as a .row-actions
+{# Row-action links (logs + "Update") — rendered OUTSIDE the <summary> (as a .row-actions
    overlay) so no interactive element is nested inside the summary toggle (a11y), while staying visible
    and clickable on the collapsed row. Opens/scrolls to this stack's Install section (or the specific
    behind component) where the Update/Build buttons and freshness pills live. #}
@@ -99,10 +126,10 @@
 <div class="row-actions">
   {% if g.update_available %}{% if g.update_component and not g.update_component_is_main %}<a class="update-link"
     href="{{ url_for('stacks_overview', open=g.stack.id, comp=g.update_component) }}#comp-{{ g.update_component }}"
-    >Update available</a>{% else %}<a class="update-link"
+    >Update</a>{% else %}<a class="update-link"
     href="{{ url_for('stacks_overview', open=g.stack.id, inst=g.stack.id) }}#stack-install-{{ g.stack.id }}"
-    >Update available</a>{% endif %}{% endif %}
-  {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}" target="_blank" rel="noopener" aria-label="{{ g.main[0].id }} logs">logs</a>{% endif %}
+    >Update</a>{% endif %}{% endif %}
+  {% if g.main %}<a class="logslink" href="{{ url_for('logs_view', target=g.main[0].id) }}" aria-label="{{ g.main[0].id }} logs">logs</a>{% endif %}
 </div>
 {% endmacro %}
 
@@ -125,7 +152,7 @@
   {% elif p.kind == 'str' %}
     <input type="text" name="{{ name }}" value="{{ value }}" autocomplete="off">
   {% else %}
-    <select name="{{ name }}">
+    <select name="{{ name }}" aria-label="{{ p.label or p.name }}">
       {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ ch }}</option>{% endfor %}
     </select>
   {% endif %}

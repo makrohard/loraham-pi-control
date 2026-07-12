@@ -64,11 +64,13 @@ def _apply_flow(run, yes: bool) -> int:
     return _render(run(True))
 
 
-def _print_install_dep_gate(svc, stack) -> bool:
+def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
     """Install-time system-dependency gate for the CLI `install`. Prints a WARN line for each
     missing OPTIONAL dep (advisory — install still proceeds) and, when a MANDATORY dep is missing,
-    an ERR refusal plus the copyable install command(s). Returns True when the install must be
-    refused (a mandatory dep is missing). `stack` None → aggregate over all managed stacks."""
+    an ERR line plus the copyable install command(s). Returns True when a mandatory dep is missing.
+    `check=False` (apply path) phrases it as a hard refusal; `check=True` (read-only preview) phrases
+    it as a report — the caller renders the plan regardless and only reflects the block in the exit
+    code. `stack` None → aggregate over all managed stacks."""
     ids = [stack] if stack else [s.id for s in svc.stacks()]
     block, warn = [], []
     for sid in ids:
@@ -80,7 +82,10 @@ def _print_install_dep_gate(svc, stack) -> bool:
         print(f"WARN  optional dependency not installed for '{sid}': {d['what']}{hint}")
     if not block:
         return False
-    print(f"ERR   Refusing to install '{stack or 'all'}': missing mandatory system dependencies.")
+    if check:
+        print(f"ERR   Install is blocked for '{stack or 'all'}': missing mandatory system dependencies")
+    else:
+        print(f"ERR   Refusing to install '{stack or 'all'}': missing mandatory system dependencies.")
     cmds = []
     for sid, d in block:
         print(f"  {sid}: {d['what']}")
@@ -322,6 +327,21 @@ def build_parser() -> argparse.ArgumentParser:
                            "bounded test frame per ready band (REAL RF — dummy loads!)")
     p_ia.add_argument("--run-id", default="", help=argparse.SUPPRESS)
 
+    p_hmac = sub.add_parser("hmac",
+                            help="MeshCom HMAC password: status, or enable/disable/renew "
+                                 "(rebuilds the firmware — several minutes)")
+    p_hmac.add_argument("action", choices=("status", "enable", "disable", "renew"))
+    p_hmac.add_argument("stack", nargs="?", default="",
+                        help="Target stack (default: the meshcom stack)")
+    p_hmac.add_argument("--yes", action="store_true",
+                        help="Apply now (rebuilds the firmware + restarts the link)")
+
+    # Internal: the detached HMAC-apply driver spawned by the web/CLI apply flow. Not for direct use.
+    p_hd = sub.add_parser("_hmac-apply")
+    p_hd.add_argument("stack")
+    p_hd.add_argument("action", choices=("enable", "disable", "renew"))
+    p_hd.add_argument("run_id")
+
     p_help = sub.add_parser("help", help="Detailed help on a topic")
     p_help.add_argument("topic", nargs="?", help="safety | resources | profiles")
 
@@ -533,10 +553,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "bootstrap":
         return _apply_flow(lambda apply: svc.bootstrap(apply=apply), yes=args.yes)
     if args.command == "install":
-        if _print_install_dep_gate(svc, args.stack):
-            return 1
         if args.check:
-            return _render(svc.install(args.stack, apply=False, source=args.source))
+            # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
+            # always show), then REPORT the dep gate — it never preempts the plan. Exit nonzero when
+            # the plan itself failed, else when the gate blocks (still "not installable").
+            rc = _render(svc.install(args.stack, apply=False, source=args.source))
+            blocked = _print_install_dep_gate(svc, args.stack, check=True)
+            return rc if rc != 0 else (1 if blocked else 0)
+        if _print_install_dep_gate(svc, args.stack, check=False):
+            return 1
         return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),
                            yes=args.yes)
     if args.command == "install-all":
@@ -557,6 +582,28 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return _render(svc.install_all(source=args.source, tests=not args.no_tests,
                                        tx=args.tx, run_id=args.run_id, apply=True))
+    if args.command == "hmac":
+        sid = args.stack or svc.hmac_default_stack()
+        if not sid or not svc.hmac_applies(sid):
+            print(f"HMAC password does not apply to '{args.stack or sid or 'any stack'}'.")
+            return 1
+        if args.action == "status":
+            print(f"HMAC password: {'enabled' if svc.hmac_status(sid) else 'disabled'} ({sid})")
+            return 0
+        if not args.yes:
+            print(f"'{args.action}' rebuilds the MeshCom firmware and restarts the link "
+                  "(several minutes; the link is down until it finishes).")
+            if args.action == "disable":
+                print("It REMOVES client authentication.")
+            elif args.action == "renew":
+                print("It rotates the shared secret — every client must be re-provisioned.")
+            print(f"Re-run to apply:  lhpc hmac {args.action} {sid} --yes")
+            return 0
+        return svc.hmac_apply_cli(sid, args.action, emit=print)
+    if args.command == "_hmac-apply":
+        # Detached driver: stdout/stderr are captured to the run log by spawn_job, so `print`
+        # streams into the live log window. Never prints the secret (the step runner redacts).
+        return svc._hmac_run_steps(args.stack, args.action, args.run_id, emit=print)
     if args.command == "help":
         if not args.topic:
             print("Topics: " + ", ".join(_TOPICS))

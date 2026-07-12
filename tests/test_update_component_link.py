@@ -1,4 +1,4 @@
-"""The row 'Update available' link deep-links to the component that actually has the update:
+"""The row 'Update' link deep-links to the component that actually has the update:
 a behind DEPENDENCY opens its own #comp-<id> subsection; a behind MAIN opens the stack's Install
 section (as before). Freshness is faked at the cached-verdict seam so no real git is needed."""
 

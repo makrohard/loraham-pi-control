@@ -22,7 +22,8 @@ from lhpc.adapters.cli import main as cli
 
 
 def _svc(tmp_path, paths=(), groups=("spi", "gpio")):
-    fake = FakeSystem(user_group_names=frozenset(groups), paths=set(paths))
+    fake = FakeSystem(effective_group_names=frozenset(groups), configured_group_names=frozenset(groups),
+                      paths=set(paths))
     return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
 
 
@@ -118,7 +119,7 @@ def test_confirm_page_blocks_apply_on_mandatory(tmp_path):
     c = _real_app(tmp_path)
     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
                                  "target": "chat"}).get_data(as_text=True)
-    assert "Missing system dependencies" in cf                # flash-bad mandatory block
+    assert "Missing system dependencies" in cf                # depnote-bad mandatory block
     assert 'name="confirmed" value="yes"' not in cf          # Apply form suppressed
 
 

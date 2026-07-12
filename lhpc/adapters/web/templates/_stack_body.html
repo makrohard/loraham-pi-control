@@ -1,13 +1,13 @@
 {# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
    sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill, hmac_actions %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
   {% for job in g.jobs %}
     <p class="jobrun">⏳ {{ job.op }} running ({{ job.target }}) —
-      <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}" target="_blank" rel="noopener">open log</a></p>
+      <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
   {% endfor %}
 
   {% if g.interactive %}
@@ -25,6 +25,11 @@
     {%- if request.args.get('inst') == g.stack.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
     <summary>Install</summary>
     <div class="body">
+      {# First-position flag: MeshCom link running WITHOUT client authentication. #}
+      {% if g.hmac_enabled is not none and not g.hmac_enabled %}
+        <p class="depnote depnote-warn"><span class="ver ver-yellow">HMAC Password disabled</span>
+          — the meshcom bridge/firmware run without client authentication.</p>
+      {% endif %}
       {% if g.installed and g.has_source %}
         {# Cached verdict for the MAIN component, resolved against its current head. Never green
            unless a real check produced it against exactly this commit. #}
@@ -32,17 +37,17 @@
           {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
           {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
       {% elif g.has_source %}
-        <p class="flash flash-warn"><strong>Not installed yet:</strong> the source for
+        <p class="depnote depnote-warn"><strong>Not installed yet:</strong> the source for
           {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.</p>
       {% endif %}
       {% if g.needs_build %}
-        <p class="flash flash-warn"><strong>Build needed:</strong>
+        <p class="depnote depnote-warn"><strong>Build needed:</strong>
           {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }}
           installed but the compiled binary is missing (a fresh clone drops it).
           Run <strong>Build</strong> before starting.</p>
       {% endif %}
       {% if g.restart_required %}
-        <div class="flash flash-warn">
+        <div class="depnote depnote-warn">
           {% if g.restart_required.unsafe %}
             <span class="ver ver-yellow">Restart required (safe-side)</span> — {{ g.restart_required.reason }}
           {% else %}
@@ -60,7 +65,7 @@
         </div>
       {% endif %}
       {% if g.kw_offer %}
-        <div class="flash flash-warn">
+        <div class="depnote depnote-warn">
           This stack started healthy with a source composition that is not yet recorded as known
           working ({{ g.kw_offer.components|join(', ') }}).
           <form method="post" class="act" action="{{ url_for('known_working_confirm', stack_id=g.stack.id) }}">
@@ -71,6 +76,11 @@
       {% endif %}
 
       {{ stack_actions(g.stack.id, g.installed, g.has_source) }}
+
+      {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
+      {% if g.hmac_enabled is not none %}
+        {{ hmac_actions(g.stack.id) }}
+      {% endif %}
 
       {# ----- Dependencies (collapsed): full per-component card + actions + Info evidence ----- #}
       {% if g.deps %}
@@ -93,7 +103,7 @@
                   <div class="actbar">
                     {# logs link lives in the body (not the summary) so no interactive element is nested
                        inside the summary toggle (a11y). #}
-                    <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" target="_blank" rel="noopener" aria-label="{{ comp.id }} logs">logs</a>
+                    <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
                     {% if comp.kind.value == 'service' %}
                       {{ action_btn('start', comp.id, 'Start') }}{{ action_btn('stop', comp.id, 'Stop') }}
                     {% endif %}

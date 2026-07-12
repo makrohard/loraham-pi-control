@@ -83,21 +83,24 @@ def test_init_recreate_requires_confirmation(tmp_path):
 
 
 def test_gui_expose_uses_typed_phrase(tmp_path):
+    # The unified Apply (/webserver/configure) enforces the same typed-phrase ladder the dedicated
+    # expose form used to: wrong phrase refuses, 'enable-remote' clears a private range, and a public
+    # range (0.0.0.0/0) additionally demands the elevated 'enable-remote-danger'.
     app, svc = _app(tmp_path)
     c = app.test_client(); tok = _csrf(c)
-    c.post("/webserver/expose", data={"_csrf": tok, "cidrs": "192.168.0.0/24",
-                                      "confirm_phrase": "nope"})
+    c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "192.168.0.0/24",
+                                         "confirm_phrase": "nope"})
     assert svc.config().webserver.remote_exposed is False        # wrong phrase -> not exposed
-    c.post("/webserver/expose", data={"_csrf": tok, "cidrs": "192.168.0.0/24",
-                                      "confirm_phrase": "enable-remote"})
+    c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "192.168.0.0/24",
+                                         "confirm_phrase": "enable-remote"})
     assert svc.config().webserver.remote_exposed is True
     # a public range needs the elevated phrase
     svc.webserver_disable_remote()
-    c.post("/webserver/expose", data={"_csrf": tok, "cidrs": "0.0.0.0/0",
-                                      "confirm_phrase": "enable-remote"})
+    c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "0.0.0.0/0",
+                                         "confirm_phrase": "enable-remote"})
     assert svc.config().webserver.remote_exposed is False        # normal phrase insufficient
-    c.post("/webserver/expose", data={"_csrf": tok, "cidrs": "0.0.0.0/0",
-                                      "confirm_phrase": "enable-remote-danger"})
+    c.post("/webserver/configure", data={"_csrf": tok, "bind": "0.0.0.0", "cidrs": "0.0.0.0/0",
+                                         "confirm_phrase": "enable-remote-danger"})
     assert svc.config().webserver.remote_exposed is True
 
 

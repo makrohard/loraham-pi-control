@@ -10,14 +10,14 @@
         Shell commands are <strong>not executed by LHPC</strong> — run them yourself; only LHPC's own
         install/build steps are buttons.</p>
       {% if overview.mandatory_missing %}
-        <div class="flash flash-warn"><strong>{{ overview.mandatory_missing }} mandatory</strong>
+        <div class="depnote depnote-warn"><strong>{{ overview.mandatory_missing }} mandatory</strong>
           dependenc{{ 'y' if overview.mandatory_missing == 1 else 'ies' }} missing{% if overview.optional_missing %}
           · {{ overview.optional_missing }} optional{% endif %} — resolve the mandatory ones below.</div>
       {% elif overview.optional_missing %}
-        <div class="flash flash-ok">{{ overview.optional_missing }} optional
+        <div class="depnote depnote-ok">{{ overview.optional_missing }} optional
           dependenc{{ 'y' if overview.optional_missing == 1 else 'ies' }} missing — nothing mandatory.</div>
       {% else %}
-        <div class="flash flash-ok">All dependencies satisfied ✓</div>
+        <div class="depnote depnote-ok">All dependencies satisfied ✓</div>
       {% endif %}
     </div>
   </div>
@@ -40,6 +40,13 @@
                     {{ action_btn(d.op, d.target, d.op|capitalize ~ ' ' ~ d.target) }}
                   {% elif d.install %}
                     <div class="muted">{{ 'grant it:' if d.runtime else 'run it yourself:' }}</div>{{ cmdbox('depov-' ~ si ~ '-' ~ loop.index0, d.install) }}
+                  {% elif d.runtime %}
+                    {# Runtime capability (e.g. group membership) with no command — the detail above
+                       already carries the fix (grant/restart hint); no package install applies. #}
+                  {% elif d.note %}
+                    <div class="muted">{{ d.note }}</div>
+                  {% else %}
+                    <div class="muted">no automatic install command — see docs</div>
                   {% endif %}
                 {% endif %}
               </li>

@@ -13,8 +13,8 @@
   <header class="site-header">
     <div class="wrap header-wrap">
       <div class="header-top">
-        <h1><a href="{{ url_for('dashboard') }}" class="home" title="Dashboard (home)">LoRaHAM&nbsp;Pi&nbsp;Control</a></h1>
-        <a href="{{ url_for('stacks_overview') }}" class="apps-link">Stacks</a>
+        <h1><a href="{{ url_for('dashboard') }}" class="home" title="Dashboard (home)">Home</a></h1>
+        <a href="{{ url_for('stacks_overview') }}" class="apps-link">Apps</a>
       </div>
     </div>
   </header>
@@ -28,19 +28,19 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="site-footer">
-    {# Same destination + description as the header brand link (Dashboard) so the two identical-text
-       "LoRaHAM Pi Control" links have the same purpose. The project source is a separate GitHub link. #}
+    {# Footer brand link — same destination as the header "Home" button (the Dashboard). The project
+       source is a separate GitHub link. #}
     <a href="{{ url_for('dashboard') }}" title="Dashboard (home)">LoRaHAM Pi Control</a>
-    <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-update" class="update-link">Update &rarr;</a>{% endif %} · <a href="https://github.com/makrohard/loraham-pi-control" target="_blank" rel="noopener">GitHub</a>
+    <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-update" class="update-link">Update &rarr;</a>{% endif %} · <a href="https://github.com/makrohard/loraham-pi-control">GitHub</a>
     {# GitHub on the main line (full opacity) — not the dimmed .sub — for good contrast. #}
     <div class="sub">Local operator console · {{ runtime_root|default('') }}</div>
+    {# Theme toggle, pinned to the footer's right edge. Light shows the moon (→ dark); dark the sun.
+       Inline SVG is CSP-safe; the click handler + icon state live in theme.js / style.css. #}
+    <button type="button" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
   </footer>
-  {# Unobtrusive fixed theme toggle (lower-right). Light shows the moon (→ dark); dark shows the sun.
-     Inline SVG markup is CSP-safe; the click handler + icon state live in theme.js / style.css. #}
-  <button type="button" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
-    <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-    <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-  </button>
   <script src="{{ url_for('static', filename='copy.js') }}" defer></script>
   <script src="{{ url_for('static', filename='bandfilter.js') }}" defer></script>
   <script src="{{ url_for('static', filename='daemoncfg.js') }}" defer></script>

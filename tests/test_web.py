@@ -233,12 +233,30 @@ def _log_anchors(body):
             if 'href="/logs/' in a or "/controller/logs" in a or "/webserver/logs" in a]
 
 
-def test_every_log_link_opens_in_a_new_tab(tmp_path):
-    # /stacks renders the controller, per-stack, dependency-card and webserver log links.
-    found = _log_anchors(_client(tmp_path).get("/stacks").get_data(as_text=True))
+def test_only_web_ui_links_open_a_new_tab(tmp_path):
+    # /stacks (log links etc.) never opens a new tab — the nav chrome is the Home/Apps buttons.
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    found = _log_anchors(body)
     assert len(found) >= 3
     for a in found:
-        assert 'target="_blank"' in a and 'rel="noopener"' in a, a
+        assert 'target="_blank"' not in a, a
+    assert 'target="_blank"' not in body
+
+    # The ONLY links that may open a new tab are the dashboard mc/mt web-UI links (they leave the console
+    # for the stack's own web UI). Static invariant across every template.
+    import re
+    import pathlib
+    from lhpc.adapters.web import app as _app
+    tdir = pathlib.Path(_app.__file__).resolve().parent / "templates"
+    offenders, web_ui = [], 0
+    for f in sorted(tdir.glob("*.html")):
+        for m in re.finditer(r'<a\b[^>]*target="_blank"[^>]*>', f.read_text()):
+            if "iface-web" in m.group(0):
+                web_ui += 1
+            else:
+                offenders.append(f"{f.name}: {m.group(0)[:80]}")
+    assert not offenders, "non-web-UI links opening a new tab:\n" + "\n".join(offenders)
+    assert web_ui >= 2                       # the exception exists (the two web-UI links)
 
 
 def test_updating_page_is_static_no_script():
@@ -318,7 +336,7 @@ def test_daemon_config_page_has_live_settings(tmp_path):
     # Live daemon settings now live on the daemon's config page (Monitor page deleted).
     body = _daemon_client(tmp_path).get("/stacks").get_data(as_text=True)
     assert "Live radio settings" in body and 'name="_csrf"' in body
-    assert "<select name=\"value\">" in body          # enum -> dropdown
+    assert 'name="value"' in body and "<select" in body   # enum -> dropdown (attrs may vary)
     assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
 
 
@@ -1272,7 +1290,7 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
     body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
     doc = parse(body)
     # still signalled — now as the col-update link (same column as the stack rows)
-    assert doc.find("a", **{"class": "update-link"}) and ">Update available</a>" in body
+    assert doc.find("a", **{"class": "update-link"}) and ">Update</a>" in body
     assert not doc.by_id("controller-row").has_attr("open")             # controller row collapsed
     assert not doc.by_id("controller-update").has_attr("open")          # nested Update collapsed
     assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed
@@ -1432,7 +1450,7 @@ def test_self_update_diverged_confirm_offers_override(tmp_path, monkeypatch):
 
 
 def test_self_update_last_apply_renders_prewrap(tmp_path):
-    """The last-apply outcome renders in a pre-wrap flash so a (sanitized) multi-word summary is
+    """The last-apply outcome renders in a pre-wrap depnote so a (sanitized) multi-word summary is
     legible instead of collapsed — the fix for the 'garbled Update failed' message."""
     from lhpc.core import selfupdate
     from lhpc.core.paths import Paths
@@ -1444,7 +1462,7 @@ def test_self_update_last_apply_renders_prewrap(tmp_path):
                        "diverged from upstream. fatal: Not possible to fast-forward, aborting.",
                        "finished_at": 2}})
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    assert "flash-pre" in body                                   # pre-wrap container present
+    assert "depnote-pre" in body                                 # pre-wrap container present
     assert "Not possible to fast-forward" in body                # clean summary shown verbatim
 
 
@@ -1901,7 +1919,8 @@ def _manual_required_svc(tmp_path, monkeypatch, summary):
 
 
 def _flash_class(body, needle):
-    """The class list of the flash <p> carrying `needle` (other page banners also use flash-*)."""
+    """The class list of the action-flash <p> carrying `needle` (persistent page banners now use the
+    separate `depnote-*` channel, so this reliably targets the real action flash)."""
     i = body.index(needle)
     start = body.rindex('<p class="flash', 0, i)
     return body[start:body.index(">", start)]

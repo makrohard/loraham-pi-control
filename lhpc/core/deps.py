@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
+
 NOT_EXECUTED_NOTE = "not executed by LHPC — run it yourself"
 
 
@@ -46,13 +48,23 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
             if not key or key in seen_sys:
                 continue
             seen_sys.add(key)
+            sat = req not in missing
+            # A groups grant that is configured but not yet effective (restart pending) is still
+            # unsatisfied, but the fix is a restart, not another usermod — swap the detail + suppress
+            # the grant command.
+            pending = (not sat) and bool(req.groups) and lifecycle.group_grant_pending(req)
+            if sat:
+                detail = "present"
+            elif req.groups:                       # state-specific, never both at once
+                detail = GROUP_RESTART_HINT if pending else GROUP_MISSING_HINT
+            else:
+                detail = f"missing: {req.check_file or req.cmd}"
             out.append(DepItem(
                 kind="system", component=c.id,
                 label=req.note or req.cmd or req.check_file,
-                satisfied=req not in missing,
-                detail=("present" if req not in missing else
-                        f"missing: {req.check_file or req.cmd or ('groups ' + ','.join(req.groups))}"),
-                install_cmd=req.install or "", runtime=bool(req.groups)))
+                satisfied=sat,
+                detail=detail,
+                install_cmd="" if pending else (req.install or ""), runtime=bool(req.groups)))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source

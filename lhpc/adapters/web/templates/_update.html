@@ -6,7 +6,7 @@
    "Return to the console" link once it is back. The dirty state on the confirm step is checked
    FRESH (POST-time, local git only); ticking discard-consent selects the fixed overwrite unit. #}
 {% if not st.available %}
-  <p class="flash flash-warn">Update is unavailable — lhpc is not running from a git
+  <p class="depnote depnote-warn">Update is unavailable — lhpc is not running from a git
     checkout. Reinstall from a git clone to enable it.</p>
 {% else %}
   <table class="paramgrid">
@@ -22,7 +22,7 @@
   {# Controller identity (name/version/identity) is shown in the row summary above, not repeated
      here. Keep the UNSAFE reason visible though — an apply is blocked when identity is unsafe. #}
   {% if controller and controller.identity and controller.identity.status == 'unsafe' %}
-    <p class="flash flash-warn">Controller identity UNSAFE — update apply is blocked.
+    <p class="depnote depnote-warn">Controller identity UNSAFE — update apply is blocked.
       {{ controller.identity.reason }}</p>
   {% endif %}
   <p class="muted">
@@ -35,20 +35,20 @@
      A SUCCESS is redundant with the green/matching-version indicator above, so only a FAILURE is
      shown here (that is not redundant — there is no green to convey it). #}
   {% if st.last_apply and not st.last_apply.ok %}
-    <p class="flash flash-pre flash-warn">Last update run: {{ st.last_apply.summary }}</p>
+    <p class="depnote depnote-pre depnote-warn">Last update run: {{ st.last_apply.summary }}</p>
   {% endif %}
 
   {# Stage-1 confirm: the console stops, updates itself and comes back automatically. #}
   {% if confirm %}
     <section class="cfgsec">
-      <p class="flash flash-warn">Updating will <strong>stop the web console</strong>, fast-forward
+      <p class="depnote depnote-warn">Updating will <strong>stop the web console</strong>, fast-forward
         the checkout, and <strong>start the console again automatically</strong>. The next page is
         static — when the console is back, use its &ldquo;Return to the console&rdquo; link.</p>
       <form method="post" action="{{ url_for('self_update_apply') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="confirmed" value="yes">
         {% if confirm.dirty or confirm.diverged %}
-          <p class="flash flash-warn">
+          <p class="depnote depnote-warn">
             {% if confirm.dirty %}<strong>Local changes are present (modified or untracked
               files).</strong>{% endif %}
             {% if confirm.diverged %}<strong>The local history has diverged from upstream</strong> —
@@ -62,7 +62,7 @@
           {# Name what a force would delete. Consent to a discard the operator cannot see is not
              consent — and a bare "local changes are present" left them guessing which. #}
           {% if confirm.changes %}
-            <p class="flash flash-pre flash-warn">These paths would be discarded:
+            <p class="depnote depnote-pre depnote-warn">These paths would be discarded:
 {% for line in confirm.changes %}
   {{ line }}
 {%- endfor %}</p>
@@ -77,14 +77,14 @@
   {% endif %}
 
   {% if jobs %}
-    <p class="flash flash-warn">An lhpc job is running ({{ jobs|length }}) — updates are blocked
+    <p class="depnote depnote-warn">An lhpc job is running ({{ jobs|length }}) — updates are blocked
       until it finishes.</p>
   {% endif %}
 
   {# Not the managed systemd unit: the unit FILES can verify 'ok' while this console runs in a
      foreground shell, so surface WHY one-click / boot autostart are unavailable, and how to fix it. #}
   {% if updater and not updater.managed %}
-    <p class="flash flash-warn"><strong>This console is running in the foreground.</strong>
+    <p class="depnote depnote-warn"><strong>This console is running in the foreground.</strong>
       One-click update and boot autostart require the managed service. Run:
       <code>lhpc self-update --repair-integration</code></p>
   {% endif %}
@@ -93,11 +93,11 @@
      (old/%h units, no .path) is `fixable` -> "Repair & update" migrates + updates in one click.
      recovery -> recovery command; genuinely-unsafe units -> resolve manually. #}
   {% if updater and updater.status == 'recovery_required' %}
-    <p class="flash flash-warn"><strong>Update recovery required.</strong> A previous update did
+    <p class="depnote depnote-warn"><strong>Update recovery required.</strong> A previous update did
       not finish cleanly. From a shell on this machine, run
       <code>lhpc self-update --recover-request</code>, then try again.</p>
   {% elif updater and updater.status != 'ok' and st.update_available and not updater.fixable %}
-    <p class="flash flash-warn">One-click update needs attention ({{ updater.status }} web/updater
+    <p class="depnote depnote-warn">One-click update needs attention ({{ updater.status }} web/updater
       units). The systemd units aren't safely this deployment's — resolve them manually
       (see <code>docs/deployment.md</code>), then update.</p>
   {% endif %}

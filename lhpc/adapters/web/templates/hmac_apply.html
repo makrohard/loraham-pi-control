@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}HMAC Password — {{ action }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# A run is ACTIVE only while genuinely in progress. An interrupted (driver-gone) run is terminal:
+     the pre-start card returns so the operator can start fresh, and the poller stays off. #}
+  {% set active = st and not st.unsafe and st.phase == 'running' %}
+
+  {% if st and st.unsafe %}
+  <div class="depnote depnote-bad">The HMAC apply state is unreadable or malformed ({{ st.reason }}).</div>
+  {% endif %}
+
+  {# --- Pre-start: this page IS the warning; Apply starts the run. Suppressed while one is live. --- #}
+  {% if not active %}
+  <div class="card">
+    <header><h2>HMAC Password — {{ action_label }}</h2></header>
+    <div class="body">
+      <p class="depnote depnote-warn"><strong>This takes several minutes and interrupts the link.</strong>
+        {{ warning }} The MeshCom firmware is rebuilt and the bridge/node are restarted; the meshcom link is
+        down until it finishes. The run continues if you leave this page.</p>
+      <ul class="muted">
+        <li>Update the password secret</li>
+        <li>Rebuild the MeshCom firmware (the long step)</li>
+        <li>Restart the bridge, then the node</li>
+      </ul>
+      <form method="post" action="{{ url_for('hmac_apply_run', sid=sid, action=action) }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <p><button type="submit" class="{{ 'warnbtn' if action != 'enable' else '' }}">
+          Apply — {{ action_label }}</button>
+          <a href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Cancel</a></p>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {# --- Run view: live step pills + one log window (or the historical result). --- #}
+  {% if st and not st.unsafe %}
+  <div class="card" id="hmac-run" data-run="{{ st.run_id }}" data-sid="{{ st.sid }}">
+    <header>
+      <h2>HMAC {{ st.action }} <span class="pill">{{ st.run_id[:8] }}</span></h2>
+      <span class="badge badge-{{ 'running' if st.phase == 'running' else
+              ('ok' if st.phase == 'done' else 'failed') }}" id="hmac-status">
+        {{ 'in progress' if st.phase == 'running' else
+           ('done' if st.phase == 'done' else
+            ('ended unexpectedly — incomplete' if st.phase == 'interrupted' else 'failed')) }}</span>
+    </header>
+    <div class="body">
+      <table class="tasklist" id="hmac-steps">
+        <tr><th>Step</th><th>Status</th></tr>
+        {% for s in st.steps %}
+        <tr data-step="{{ s.key }}">
+          <td>{{ s.label }}</td>
+          <td><span class="badge badge-{{ 'running' if s.state == 'running'
+                 else ('ok' if s.state == 'done' else ('failed' if s.state == 'failed'
+                 else 'stopped')) }}">{{ s.state }}{% if s.state == 'running' %}&hellip;{% endif %}</span></td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% if st.detail %}<p class="depnote depnote-warn">{{ st.detail }}</p>{% endif %}
+      <p class="muted loglabel">Apply log (live, in execution order)</p>
+      <pre class="logbox logbox-tall" id="hmac-logbox">{{ log_seed }}</pre>
+      <p><a href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Back to Apps</a></p>
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+  {% if active %}
+  <script src="{{ url_for('static', filename='hmac.js') }}"></script>
+  {% endif %}
+{% endblock %}

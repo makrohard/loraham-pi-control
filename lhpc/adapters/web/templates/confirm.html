@@ -2,16 +2,15 @@
 {% from "_macros.html" import cmdbox, param_input %}
 {% block title %}confirm {{ op }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  <p><a href="{{ url_for('dashboard') if frm == 'dash' else ((url_for('stacks_overview', open=target) ~ '#stackrow-' ~ target) if target else url_for('dashboard')) }}">&larr; back</a></p>
   <div class="card">
     <header><h2>Confirm: {{ op }} <span class="pill">{{ target }}{% if band %} {{ band }}{% endif %}</span></h2></header>
     <div class="body">
       {% if tx %}
-        <p class="flash flash-warn"><strong>TX-capable action — transmits real RF.</strong>
+        <p class="depnote depnote-warn"><strong>TX-capable action — transmits real RF.</strong>
           Ensure the antennas are on the connected dummy loads.</p>
       {% endif %}
       {% if missing_deps %}
-        <div class="flash flash-bad">
+        <div class="depnote depnote-bad">
           <strong>Missing system dependencies</strong> — this {{ op }} cannot proceed until
           they are installed. Run each in a terminal, then start the {{ op }} again:
           {% for d in missing_deps %}
@@ -21,7 +20,7 @@
         </div>
       {% endif %}
       {% if optional_deps %}
-        <div class="flash flash-warn">
+        <div class="depnote depnote-warn">
           <strong>Optional dependencies not installed</strong> — recommended but not required;
           you can proceed without them (the components that need them stay unavailable):
           {% for d in optional_deps %}
@@ -47,7 +46,7 @@
           {% if band %}<input type="hidden" name="band" value="{{ band }}">{% endif %}
           {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
           {% if op == 'clean' %}
-            <p class="flash flash-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's
+            <p class="depnote depnote-bad"><strong>DESTRUCTIVE:</strong> Clean removes this stack's
               sources, per-stack configuration, logs, known-working history and state. Retained
               diagnostics are gone. config/local.toml, secrets and other stacks are untouched.
               Type the stack id <strong>{{ target }}</strong> to confirm:</p>
@@ -57,16 +56,16 @@
             <br>
           {% endif %}
           {% if stop_deps %}
-            <p class="flash flash-warn"><strong>Other running stacks depend on this:</strong>
+            <p class="depnote depnote-warn"><strong>Other running stacks depend on this:</strong>
               {{ stop_deps|join(', ') }}. They will be <strong>stopped too</strong>.</p>
             <input type="hidden" name="cascade" value="yes">
           {% endif %}
           {% if other_bands %}
-            <p class="flash flash-warn">The daemon is <strong>one process</strong> also serving
+            <p class="depnote depnote-warn">The daemon is <strong>one process</strong> also serving
               <strong>{{ other_bands|join(', ') }} MHz</strong> — stopping it stops those bands too.</p>
           {% endif %}
           {% if blockers %}
-            <p class="flash flash-warn"><strong>Radio/resource owned by another running stack:</strong>
+            <p class="depnote depnote-warn"><strong>Radio/resource owned by another running stack:</strong>
               {% for b in blockers %}<br>{{ b.resource }} — held by <strong>{{ b.holder_stack }}</strong>{% endfor %}
               <br>Stopping {{ blockers|map(attribute='holder_stack')|unique|join(', ') }} is required to run this stack.</p>
             <input type="hidden" name="stop_owners" value="yes">
@@ -133,13 +132,13 @@
         </form>
         {% if commands %}
           <hr class="sep">
-          <div class="flash flash-warn">
+          <div class="depnote depnote-warn">
             <strong>Then run these yourself in a terminal</strong> (the controller never starts them):
             {% for cmd in commands %}{{ cmdbox('runcmd-' ~ loop.index0, cmd) }}{% endfor %}
           </div>
         {% endif %}
       {% else %}
-        <p class="flash flash-warn">This action cannot proceed (see above).</p>
+        <p class="depnote depnote-warn">This action cannot proceed (see above).</p>
       {% endif %}
     </div>
   </div>

@@ -27,7 +27,7 @@ class _Guard:
 
 
 def _svc(tmp_path, groups=("spi", "gpio"), install=(), paths=()):
-    fake = FakeSystem(user_group_names=frozenset(groups),
+    fake = FakeSystem(effective_group_names=frozenset(groups), configured_group_names=frozenset(groups),
                       paths=set(paths) | {"/usr/bin/meshtasticd", "/dev/spidev0.0"})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     for sid in install:                         # make a stack "installed" (its main source dir present)
@@ -98,6 +98,42 @@ def test_dependencies_page_lists_installed_stack_with_grant_command(tmp_path):
     assert "Python venv dependencies" in body                                  # LHPC controller section
 
 
+def test_pending_group_grant_shows_restart_hint_not_seedocs(tmp_path):
+    # A group grant CONFIGURED but not yet EFFECTIVE (restart pending) shows the restart hint — NOT the
+    # misleading "no automatic install command — see docs" (there is no package to install; the fix is a
+    # restart). Regression: the empty (suppressed) command fell through to the see-docs fallback.
+    fake = FakeSystem(effective_group_names=frozenset(),
+                      configured_group_names=frozenset(("spi", "gpio")),
+                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    mc = svc.stack("meshtastic").main_component
+    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)
+    d = _mt_group_dep(svc.dependency_overview())
+    assert d and d["runtime"] and not d["satisfied"] and d["install"] == ""     # command suppressed
+    assert "restart pending" in d["detail"]
+    body = _client(svc).get("/dependencies").get_data(as_text=True)
+    assert "restart pending" in body and "no automatic install command" not in body
+
+
+def test_command_less_controller_dep_shows_its_note_not_seedocs(tmp_path, monkeypatch):
+    # An un-installable-by-command controller dep (systemd on a non-systemd host: `apt install systemd`
+    # is nonsense) shows its explanatory NOTE instead of "no automatic install command — see docs".
+    # (systemctl exists on the test host, so craft the unmet noted dep rather than fake its absence.)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "controller_system_deps",
+                        lambda self: [{"title": "LHPC", "deps": [
+                            {"what": "systemd (systemctl, loginctl)", "satisfied": False,
+                             "required": False, "purpose": "managed --user service (managed-service mode)",
+                             "install": "",
+                             "note": "managed-service mode is unavailable on this host — no package "
+                                     "can add systemd here."}]}])
+    sysd = next(d for sec in svc.dependency_overview()["sections"] if sec["kind"] == "controller"
+                for d in sec["deps"] if "systemd" in d["label"])
+    assert not sysd["satisfied"] and sysd["install"] == "" and sysd["note"]
+    body = _client(svc).get("/dependencies").get_data(as_text=True)
+    assert "managed-service mode is unavailable" in body and "no automatic install command" not in body
+
+
 def test_dependencies_page_renders_install_action_form(tmp_path):
     body = _client(_svc(tmp_path, install=["daemon"])).get("/dependencies").get_data(as_text=True)
     assert 'name="op" value="install"' in body and 'name="target" value="daemon"' in body
@@ -112,7 +148,7 @@ def test_dependencies_page_is_read_only(tmp_path):
 
 def test_stacks_banner_yellow_when_mandatory_missing(tmp_path):
     body = _client(_svc(tmp_path, groups=(), install=["meshtastic"])).get("/stacks").get_data(as_text=True)
-    assert "flash flash-warn" in body and 'href="/dependencies"' in body
+    assert "depnote depnote-warn" in body and 'href="/dependencies"' in body
     assert "mandatory" in body
 
 
@@ -120,7 +156,7 @@ def test_stacks_banner_green_when_only_optional_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "dependency_overview",
                         lambda self: {"sections": [], "mandatory_missing": 0, "optional_missing": 2})
     body = _client(_svc(tmp_path)).get("/stacks").get_data(as_text=True)
-    assert "flash flash-ok" in body and 'href="/dependencies"' in body
+    assert "depnote depnote-ok" in body and 'href="/dependencies"' in body
     assert "optional dependencies are missing" in body        # green banner text
     assert "mandatory dependenc" not in body                  # not the yellow variant
 

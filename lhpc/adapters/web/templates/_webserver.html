@@ -2,23 +2,23 @@
    per-stack panels: status pills in the summary, a Settings section (one "Apply" that saves + validates +
    reloads; remote exposure is just bind=0.0.0.0 + CIDRs + the typed confirmation), a Monitor section, and
    the controller-only Certificates section. Requires: mon, modes, certs, loopback. GET is read-only. #}
-{% from "_macros.html" import flash_classes %}
+{% from "_macros.html" import depnote_classes, webserver_pills %}
 <details class="advcfg ws-comp" id="webserver-row">
   <summary>Webserver (HTTPS / mTLS)
-    <span class="pill">{{ mon.desired.access_mode }} · :{{ mon.desired.port }}</span>
-    {# LIVE console-port scope (from /proc/net/tcp), the truth which may differ from desired until Apply. #}
-    {% if mon.live_scope == 'exposed' %}<span class="pill">live: all interfaces</span>
-    {% elif mon.live_scope == 'loopback' %}<span class="pill">live: loopback</span>
-    {% else %}<span class="ver ver-yellow">live: not listening</span>{% endif %}
+    {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
+       address = the reached host:port. Second pill = RUNNING: green "nginx" when THIS session is proxied
+       through nginx, yellow "lhpc-web" if served direct. #}
+    {{ webserver_pills(mon.posture, ws_console_addr) }}
     {% if not mon.pki.server_ca.present %}<span class="ver ver-red">PKI absent</span>{% endif %}
   </summary>
 
   {# ===== Settings ===== #}
+  <div class="ws-sub-wrap">
   <details class="advcfg" open>
     <summary>Settings</summary>
     <section class="cfgsec">
       {% if mon.desired.scheme == 'http' %}
-        <p class="flash flash-warn"><strong>Unencrypted listener.</strong> Client certificates are
+        <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
           presented during the TLS handshake, so <code>http</code> cannot authenticate anyone — the
           access mode must be <code>no-auth</code>.</p>
       {% endif %}
@@ -34,13 +34,13 @@
             <td><input name="port" type="number" min="1" max="65535" value="{{ mon.desired.port }}" autocomplete="off"></td>
             <td class="dphelp muted">HTTPS port (default 8443)</td></tr>
           <tr><th>Scheme</th>
-            <td><select name="scheme" class="schemesel" data-authsel="ws-authsel">
+            <td><select name="scheme" class="schemesel" data-authsel="ws-authsel" aria-label="Scheme">
               <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
               <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
             </select></td>
             <td class="dphelp muted">http disables client-certificate auth</td></tr>
           <tr><th>Access mode</th>
-            <td><select name="access_mode" id="ws-authsel">
+            <td><select name="access_mode" id="ws-authsel" aria-label="Access mode">
               {% for m in modes %}
                 <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
                   {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
@@ -73,13 +73,16 @@
         never deletes CAs, certificates, CRL, revocation history, exports, or the session secret.</p>
     </section>
   </details>
+  {# logs link OUTSIDE the summary (a11y) but overlaid on the header — identical to the main stack rows. #}
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  </div>
 
   {# ===== Monitor ===== #}
+  <div class="ws-sub-wrap">
   <details class="advcfg">
     <summary>Monitor</summary>
     <section class="cfgsec">
-      <p><a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener" aria-label="webserver access logs">logs</a></p>
-      {% for w in mon.warnings %}<p class="flash {{ flash_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
+      {% for w in mon.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
       <ul class="kv">
         <li>Local IP address: <code>{{ mon.local_ip or 'unknown' }}</code>
           {% if mon.local_ip %}<span class="muted">→ https://{{ mon.local_ip }}:{{ mon.desired.port }}/ (remote)</span>{% endif %}</li>
@@ -109,8 +112,11 @@
       </form>
     </section>
   </details>
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  </div>
 
   {# ===== Certificates (controller-only; unchanged) ===== #}
+  <div class="ws-sub-wrap">
   <details class="advcfg">
     <summary>Certificates</summary>
     <section class="cfgsec">
@@ -134,7 +140,7 @@
         <button type="submit">Issue</button>
       </form>
       {% if not loopback %}
-        <p class="flash flash-warn">Remote session: a NEW private-key bundle can be downloaded
+        <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
           only from a loopback session. You may still manage existing certificates.</p>
       {% endif %}
       <table class="certs">
@@ -164,4 +170,6 @@
       </table>
     </section>
   </details>
+  <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
+  </div>
 </details>

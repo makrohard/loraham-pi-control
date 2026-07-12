@@ -4,14 +4,14 @@
    Same shape as the controller Webserver panel: status pills in the summary, a Settings section (one
    "Apply" that saves + validates + reloads), and a Monitor section. The proxy reuses the console's
    client CA; `scheme` is the PUBLIC LISTENER scheme, the upstream scheme is fixed by the manifest. #}
+{% from "_macros.html" import depnote_classes, webserver_pills %}
 {% set sw = g.stack_web %}
 <details class="advcfg" id="stack-webserver-{{ g.stack.id }}">
   <summary>Webserver (web UI proxy)
-    {% if sw.cfg.enabled %}<span class="pill">{{ sw.cfg.access_mode }} · :{{ sw.cfg.port }}</span>
-      {# LIVE listener scope (from /proc/net/tcp) — the truth, which may differ from the saved mode. #}
-      {% if sw.listen_scope == 'exposed' %}<span class="pill">live: all interfaces</span>
-      {% elif sw.listen_scope == 'loopback' %}<span class="pill">live: loopback</span>
-      {% else %}<span class="ver ver-yellow">live: not listening</span>{% endif %}
+    {# First pill = SECURITY (red = off-loopback + no auth; yellow = public 0.0.0.0/0 + auth; green = local or LAN+auth),
+       address = reached host + the proxy's port. Second pill = RUNNING: grey "offline" (stack not started),
+       yellow "local-only" (started, not proxied), green "proxied". #}
+    {% if sw.cfg.enabled %}{{ webserver_pills(sw.posture, req_host ~ ':' ~ sw.cfg.port) }}
     {% else %}<span class="pill">not proxied</span>{% endif %}
     {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
   </summary>
@@ -20,7 +20,7 @@
     {# STANDING security fact, not a one-off flash: the upstream answers on a non-loopback interface,
        so nginx is not the only door — whatever `mode`/`auth` say. #}
     {% if sw.bypassable %}
-      <p class="flash flash-bad"><strong>This app's own port {{ sw.upstream_port }} is listening on all interfaces.</strong>
+      <p class="depnote depnote-bad"><strong>This app's own port {{ sw.upstream_port }} is listening on all interfaces.</strong>
         It is reachable directly on the LAN, bypassing this proxy — the access mode does
         <strong>not</strong> protect it. Firewall that port or accept the exposure; LHPC cannot close
         it (the app exposes no bind option).</p>
@@ -31,7 +31,7 @@
       <summary>Settings</summary>
       <div class="body">
         {% if sw.cfg.scheme == 'http' %}
-          <p class="flash flash-warn"><strong>Unencrypted listener.</strong> Client certificates are
+          <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
             presented during the TLS handshake, so <code>http</code> cannot authenticate anyone —
             the access mode must be <code>no-auth</code>.</p>
         {% endif %}
@@ -41,7 +41,7 @@
             <table class="paramgrid dptab">
               <tr>
                 <th>Access</th>
-                <td><select name="mode">
+                <td><select name="mode" aria-label="Access">
                   {% for m in sw.modes %}
                     <option value="{{ m }}"{% if sw.cfg.mode == m %} selected{% endif %}>
                       {% if m == 'local' %}local only (loopback)
@@ -60,7 +60,7 @@
               </tr>
               <tr>
                 <th>Scheme</th>
-                <td><select name="scheme" class="schemesel" data-authsel="authsel-{{ g.stack.id }}">
+                <td><select name="scheme" class="schemesel" data-authsel="authsel-{{ g.stack.id }}" aria-label="Scheme">
                   {% for s in sw.schemes %}
                     <option value="{{ s }}"{% if sw.cfg.scheme == s %} selected{% endif %}>{{ s }}</option>
                   {% endfor %}
@@ -69,7 +69,7 @@
               </tr>
               <tr>
                 <th>Access mode</th>
-                <td><select name="access_mode" id="authsel-{{ g.stack.id }}">
+                <td><select name="access_mode" id="authsel-{{ g.stack.id }}" aria-label="Access mode">
                   {% for m in sw.access_modes %}
                     <option value="{{ m }}"{% if sw.cfg.access_mode == m %} selected{% endif %}
                       {%- if sw.cfg.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
@@ -101,6 +101,8 @@
     <details class="advcfg">
       <summary>Monitor</summary>
       <div class="body">
+        {# Same remote-exposure/auth/listener warnings as the controller console (identical wording). #}
+        {% for w in sw.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
         <p class="summary">Reverse-proxies <code>{{ sw.upstream_scheme }}://{{ sw.upstream_address }}</code>
           through nginx, reusing the console's client certificate.
           {% if sw.cfg.enabled %}
