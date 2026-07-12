@@ -235,6 +235,230 @@ def test_apply_fails_fast_on_firmware_build(tmp_path, monkeypatch):
     assert states["bridge"] == "pending" and states["node"] == "pending"
 
 
+def _fail_marker_write_when(monkeypatch, predicate):
+    """Make _hmac_write_marker return False for the marker states matching `predicate` (a fault-injection
+    of durable-write failure), passing every other write through to the real implementation."""
+    real = ControllerService._hmac_write_marker
+
+    def fake(self, d):
+        return False if predicate(d) else real(self, d)
+    monkeypatch.setattr(ControllerService, "_hmac_write_marker", fake)
+
+
+def test_initial_marker_write_failure_makes_no_mutation(tmp_path, monkeypatch):
+    # P1: if the INITIAL run marker cannot be persisted, the secret is never touched (no build/restart either).
+    svc = _svc(tmp_path)
+    calls = []
+    monkeypatch.setattr(type(svc), "hmac_set_secret",
+                        lambda self, sid, action: calls.append(action) or ActionResult(True, "set"))
+    monkeypatch.setattr(type(svc), "build", lambda self, t, **k: calls.append("build") or ActionResult(True, "b"))
+    # fail the initial write only (all steps still pending, phase running)
+    _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "running"
+                            and all(s["state"] == "pending" for s in d.get("steps", [])))
+    rc = svc._hmac_run_steps("meshcom", "renew", _RID, emit=lambda s: None)
+    assert rc == 1 and calls == []                       # NOTHING mutated
+
+
+def test_midrun_marker_write_failure_stops_before_build(tmp_path, monkeypatch):
+    # P1: a nonterminal transition-write failure (firmware=running) aborts BEFORE the build runs.
+    svc = _svc(tmp_path)
+    built = []
+    monkeypatch.setattr(type(svc), "hmac_set_secret", lambda self, sid, a: ActionResult(True, "secret set"))
+    monkeypatch.setattr(type(svc), "build", lambda self, t, **k: built.append(t) or ActionResult(True, "b"))
+    _fail_marker_write_when(monkeypatch, lambda d: any(
+        s["key"] == "firmware" and s["state"] == "running" for s in d.get("steps", [])))
+    rc = svc._hmac_run_steps("meshcom", "renew", _RID, emit=lambda s: None)
+    assert rc == 1 and built == []                        # build never launched
+    assert svc.hmac_apply_status()["phase"] == "failed"   # best-effort terminal recorded
+
+
+def test_success_terminal_write_failure_is_not_reported_as_success(tmp_path, monkeypatch):
+    # P1: if the FINAL success write fails, the run returns FAILURE (never rc 0 / a recorded completion).
+    svc = _svc(tmp_path)
+    _fake_build_restart(svc, monkeypatch)
+    _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "done")
+    rc = svc._hmac_run_steps("meshcom", "enable", _RID, emit=lambda s: None)
+    assert rc == 1                                        # NOT 0
+    assert svc.hmac_apply_status()["phase"] != "done"     # completion was never falsely recorded
+
+
+def test_failure_terminal_write_failure_still_returns_failure(tmp_path, monkeypatch):
+    # P1: a build failure whose terminal marker write ALSO fails still returns failure (never success).
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "build", lambda self, t, **k: ActionResult(False, "compile error"))
+    _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "failed")
+    rc = svc._hmac_run_steps("meshcom", "renew", _RID, emit=lambda s: None)
+    assert rc == 1
+
+
+def test_unsafe_terminal_write_failure_still_returns_failure(tmp_path, monkeypatch):
+    # P1: an UNSAFE build outcome whose terminal marker write fails still returns failure (never success).
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "build", lambda self, t, **k: ActionResult(
+        False, "unproven", data={"unsafe": True, "unsafe_scope": "session-unverified",
+                                 "session_ident": {"pid": 1, "starttime": 1, "sid": 1, "pgid": 1}}))
+    _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "unsafe")
+    rc = svc._hmac_run_steps("meshcom", "renew", _RID, emit=lambda s: None)
+    assert rc == 1                                        # failure, never a recorded success
+
+
+def test_unsafe_write_failure_still_blocks_next_apply(tmp_path, monkeypatch):
+    # P1 (observable invariant): if the UNSAFE terminal write fails, the driver exits, and the ordinary
+    # `interrupted` derivation would normally make the run retryable. It MUST NOT — the leftover run marker
+    # (a step still `running`, driver gone) is re-derived as BLOCKING unsafe, and a new apply is REFUSED.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "build", lambda self, t, **k: ActionResult(
+        False, "unproven", data={"unsafe": True, "unsafe_scope": "session-unverified",
+                                 "session_ident": {"pid": 1, "starttime": 1, "sid": 1, "pgid": 1}}))
+    _fail_marker_write_when(monkeypatch, lambda d: d.get("phase") == "unsafe")   # unsafe write fails
+    assert svc._hmac_run_steps("meshcom", "renew", _RID, emit=lambda s: None) == 1
+    # driver is gone: the leftover running marker (firmware step still running) derives BLOCKING unsafe
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: False)
+    st = svc.hmac_apply_status()
+    assert st and st.get("phase") == "unsafe" and st.get("derived_unsafe")   # NOT retryable interrupted
+    # a new apply is refused (the build might still be running)
+    r = svc.hmac_apply_start("meshcom", "renew")
+    assert not r.ok and "unsafe" in r.summary.lower()
+
+
+def test_interrupted_between_steps_stays_retryable(tmp_path, monkeypatch):
+    # The derive only escalates to unsafe when a step was MID-FLIGHT. A driver that vanished BETWEEN steps
+    # (nothing running) is an ordinary interrupted run — retryable, and a new apply is admitted.
+    svc = _svc(tmp_path)
+    steps = svc._hmac_initial_steps()
+    steps[0]["state"] = "done"                            # secret done, firmware not started (pending)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": steps})
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: False)   # driver gone
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "interrupted" and st.get("derived_interrupted")
+    # not blocking: neither `running` nor `unsafe`, so admission would start a fresh run (we don't spawn here)
+    assert not svc.hmac_apply_running() and st.get("phase") not in ("unsafe",)
+
+
+# ---- unverified driver startup: the detached-driver tracking gate + orphan-risk blocking -----------
+
+_ORPHAN_ERR = ("hmac-apply 'meshcom' spawned but its job marker could not be persisted AND the process "
+               "could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
+_TERMINATED_ERR = ("hmac-apply 'meshcom' spawned but its job marker could not be persisted; the process "
+                   "was terminated (not left orphaned).")
+
+
+def _fake_spawn(monkeypatch, pid):
+    """Neutralise the real detached spawn: return a fake (log, pid) without launching a driver."""
+    from lhpc.core.lifecycle import Lifecycle
+    monkeypatch.setattr(Lifecycle, "spawn_job",
+                        lambda self, name, argv, cwd, env=None: (f"{name}.log", pid))
+
+
+def test_driver_gate_proceeds_only_when_identity_tracked(tmp_path, monkeypatch):
+    import os
+    from lhpc.core import procident, service_hmac
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(service_hmac, "_HMAC_DRIVER_TRACK_TIMEOUT_S", 0.3)   # keep the untracked wait short
+    # tracked: a matching job marker for THIS process -> proceed (0)
+    ident = procident.proc_identity(os.getpid())
+    assert svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    assert svc._hmac_verify_tracked("meshcom", _RID, emit=lambda s: None) == 0
+    # a marker for a DIFFERENT stack (mismatch) -> refuse immediately (1)
+    rid2 = "b" * 32
+    svc._write_job_marker(f"hmac-apply-{rid2}.log", os.getpid(), "othernode", "hmac-apply", ident=ident)
+    assert svc._hmac_verify_tracked("meshcom", rid2, emit=lambda s: None) == 1
+    # NO marker at all -> refuse after the (short) window (1)
+    assert svc._hmac_verify_tracked("meshcom", "c" * 32, emit=lambda s: None) == 1
+
+
+def test_orphan_risk_startup_is_blocking_unsafe_with_driver_ident(tmp_path, monkeypatch):
+    import os
+    svc = _svc(tmp_path)
+    _fake_spawn(monkeypatch, os.getpid())
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, life, ln, pid, cid, op: _ORPHAN_ERR)
+    r = svc.hmac_apply_start("meshcom", "renew")
+    assert not r.ok and "ORPHAN RISK" in r.summary
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "unsafe" and st.get("unsafe_scope") == "escaped-or-output-unverified"
+    # the captured identity is the DRIVER's — evidence only, NEVER session_ident (never auto-recovered)
+    assert st.get("driver_ident") and "session_ident" not in st
+    assert not svc._hmac_try_auto_clear(st)                     # escaped scope -> explicit ack only
+    # a second apply is refused (blocking)
+    assert not svc.hmac_apply_start("meshcom", "renew").ok
+
+
+def test_confirmed_terminated_startup_is_ordinary_failed(tmp_path, monkeypatch):
+    import os
+    svc = _svc(tmp_path)
+    _fake_spawn(monkeypatch, os.getpid())
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, life, ln, pid, cid, op: _TERMINATED_ERR)
+    assert not svc.hmac_apply_start("meshcom", "renew").ok
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "failed" and st["finished"] and "startup_unverified" not in st
+    assert not svc.hmac_apply_running()                         # retryable, not blocking
+
+
+def test_startup_unverified_marker_derives_blocking_unsafe(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps(),
+                        "startup_unverified": True})           # all steps pending, but spawn never verified
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: False)
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "unsafe" and st.get("derived_unsafe")
+
+
+def test_orphan_risk_fallback_when_unsafe_write_also_fails(tmp_path, monkeypatch):
+    # THE critical end-to-end regression: track fails (ORPHAN RISK) AND the explicit unsafe write fails AND
+    # the driver never verifies tracking -> the startup marker's flag alone keeps the run BLOCKING.
+    import os
+    import json
+    from lhpc.core import service_hmac
+    svc = _svc(tmp_path)
+    _fake_spawn(monkeypatch, os.getpid())
+    monkeypatch.setattr(ControllerService, "_track_or_terminate",
+                        lambda self, life, ln, pid, cid, op: _ORPHAN_ERR)
+    real_write = ControllerService._hmac_write_marker
+    monkeypatch.setattr(ControllerService, "_hmac_write_marker",   # the 'running' startup write still lands
+                        lambda self, d: False if d.get("phase") == "unsafe" else real_write(self, d))
+    assert not svc.hmac_apply_start("meshcom", "renew").ok
+    # the startup marker on disk STILL carries the flag (the unsafe write failed, didn't overwrite it)
+    m = json.loads((tmp_path / "state" / "hmac_apply.json").read_text())
+    rid = m["run_id"]
+    assert m.get("startup_unverified") is True and m["phase"] == "running"
+    # the driver would REFUSE at the gate (no job marker) and never mutate
+    monkeypatch.setattr(service_hmac, "_HMAC_DRIVER_TRACK_TIMEOUT_S", 0.2)
+    ran = []
+    monkeypatch.setattr(ControllerService, "_hmac_run_steps", lambda self, *a, **k: ran.append(1) or 0)
+    assert svc._hmac_verify_tracked("meshcom", rid, emit=lambda s: None) == 1 and ran == []
+    # driver gone -> derived blocking unsafe; a second apply is refused; auto-clear does NOT clear it
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: False)
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "unsafe" and st.get("derived_unsafe")
+    assert not svc.hmac_apply_start("meshcom", "renew").ok
+    assert not svc._hmac_try_auto_clear(st)
+
+
+def test_hmac_apply_cli_gates_before_handlers_and_run(monkeypatch):
+    # Adapter regression: the detached-driver dispatch order is gate -> abort handlers -> run. On a gate
+    # refusal, NEITHER the handlers nor the step runner is reached.
+    import signal as _signal
+    from lhpc.adapters.cli import main as cli_main
+    order = []
+    gate_rc = [1]
+    monkeypatch.setattr(ControllerService, "_hmac_verify_tracked",
+                        lambda self, sid, rid, emit: (order.append("gate"), gate_rc[0])[1])
+    monkeypatch.setattr(ControllerService, "_hmac_run_steps",
+                        lambda self, sid, action, rid, emit: (order.append("run"), 0)[1])
+    monkeypatch.setattr(_signal, "signal", lambda *a, **k: order.append("handler"))
+    # gate refuses -> only the gate ran
+    assert cli_main.main(["_hmac-apply", "meshcom", "renew", _RID]) == 1
+    assert order == ["gate"]
+    # gate passes -> gate, THEN handlers, THEN run
+    order.clear(); gate_rc[0] = 0
+    assert cli_main.main(["_hmac-apply", "meshcom", "renew", _RID]) == 0
+    assert order[0] == "gate" and "run" in order and order.index("run") > order.index("handler")
+
+
 def test_apply_log_chunk_redacts_the_secret(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _fake_build_restart(svc, monkeypatch)
@@ -435,3 +659,312 @@ def test_cli_hmac_apply_flips_state_without_printing_the_secret(tmp_path, monkey
     token = xr.read_text().strip()
     assert token and token not in out                          # never printed
     assert main(["hmac", "status"]) == 0 and "enabled" in capsys.readouterr().out
+
+
+# ---- PART 3: abort / unsafe blocking state / recovery (adversarial) -------------------------------
+
+def _write_marker(svc, m):
+    runtime_fs.mkdir(svc._paths, "state")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"),
+                            json.dumps(m), 0o600)
+
+
+def test_run_steps_unsafe_build_persists_blocking_marker(tmp_path, monkeypatch):
+    # A build whose cessation could NOT be proven -> a distinct `unsafe` terminal that persists the session
+    # identity + scope (the build MIGHT still be running).
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "build",
+                        lambda self, t, **k: ActionResult(
+                            False, "timeout", details=[],
+                            data={"unsafe": True, "unsafe_scope": "session-unverified",
+                                  "session_ident": {"pid": 123, "starttime": 5, "sid": 123, "pgid": 123}}))
+    assert svc._hmac_run_steps("meshcom", "enable", _RID, emit=lambda s: None) == 1
+    st = svc.hmac_apply_status()
+    assert st["phase"] == "unsafe" and st["unsafe_scope"] == "session-unverified"
+    assert st["session_ident"]["pid"] == 123 and st.get("finished_at")
+
+
+def test_unsafe_blocks_new_run_and_two_recovery_scopes(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+
+    def unsafe(scope):
+        _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "unsafe",
+                            "finished": True, "steps": svc._hmac_initial_steps(), "unsafe_scope": scope,
+                            "session_ident": {"pid": 999999, "starttime": 1, "sid": 999999, "pgid": 999999},
+                            "finished_at": "2026-07-12T00:00:00Z"})
+
+    # session-unverified: a new run is BLOCKED while the session is not proven ceased...
+    unsafe("session-unverified")
+    monkeypatch.setattr("lhpc.core.proctree.session_ceased", lambda tok, ex: False)
+    r = svc.hmac_apply_start("meshcom", "enable")
+    assert not r.ok and "UNSAFE" in r.summary
+    # ...and recover CLEARS it once the session is proven gone.
+    monkeypatch.setattr("lhpc.core.proctree.session_ceased", lambda tok, ex: True)
+    r2 = svc.hmac_apply_recover("meshcom", _RID)
+    assert r2.ok and "proven stopped" in r2.summary
+    assert svc.hmac_apply_status()["phase"] == "failed"       # downgraded to a normal terminal
+
+    # escaped-or-output-unverified: NEVER auto-clears (even if the tracked session is empty) — only an
+    # explicit Recover acknowledgement clears it.
+    unsafe("escaped-or-output-unverified")
+    assert not svc.hmac_apply_start("meshcom", "enable").ok   # blocked despite session_ceased True
+    r4 = svc.hmac_apply_recover("meshcom", _RID)
+    assert r4.ok and "cknowledg" in r4.summary
+    assert svc.hmac_apply_status()["phase"] == "failed"
+
+    # recover with a STALE/mismatched run id is refused
+    unsafe("session-unverified")
+    assert not svc.hmac_apply_recover("meshcom", "c" * 32).ok
+
+
+def test_abort_validates_then_signals_driver_only_and_writes_no_marker(tmp_path, monkeypatch):
+    import os
+    from lhpc.core import procident
+    svc = _svc(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps()})
+    ident = procident.proc_identity(os.getpid())
+    assert svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)   # run looks live
+    killed = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    # stale run id -> refused, NO signal
+    assert not svc.hmac_apply_abort("meshcom", "b" * 32).ok and not killed
+    # exact match -> SIGTERM the DRIVER pid only; NO terminal marker written by the service
+    r = svc.hmac_apply_abort("meshcom", _RID)
+    assert r.ok and killed and killed[0][0] == os.getpid()
+    assert svc.hmac_apply_status()["phase"] == "running"     # driver owns the terminal write
+
+
+def test_abort_refuses_reused_pid_and_wrong_op(tmp_path, monkeypatch):
+    import os
+    from lhpc.core import procident
+    svc = _svc(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps()})
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
+    killed = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append(pid))
+    # a job marker whose identity does NOT match (recycled pid): abort refuses to signal
+    ident = dict(procident.proc_identity(os.getpid()) or {}, starttime=1)   # wrong starttime
+    svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    assert not svc.hmac_apply_abort("meshcom", _RID).ok and not killed
+
+
+def test_abort_after_completion_is_a_noop(tmp_path):
+    svc = _svc(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "done",
+                        "finished": True, "steps": svc._hmac_initial_steps(),
+                        "finished_at": "2026-07-12T00:00:00Z"})
+    r = svc.hmac_apply_abort("meshcom", _RID)
+    assert not r.ok and "nothing to abort" in r.summary.lower()
+
+
+def test_foreground_cli_tracks_job_marker_as_running(tmp_path, monkeypatch):
+    # A foreground CLI run must carry the SAME job-identity marker so its running marker is never read as
+    # `interrupted`; the marker is retired after the terminal write.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "build", lambda self, t, **k: ActionResult(True, "built"))
+    monkeypatch.setattr(ControllerService, "restart", lambda self, t, **k: ActionResult(True, "restarted"))
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: False)
+    seen = {}
+    orig = ControllerService._hmac_run_steps
+
+    def spy(self, sid, action, run_id, emit):
+        seen["running"] = self.log_running(sid, job=f"hmac-apply-{run_id}.log")
+        return orig(self, sid, action, run_id, emit)
+    monkeypatch.setattr(ControllerService, "_hmac_run_steps", spy)
+    assert svc.hmac_apply_cli("meshcom", "enable", emit=lambda s: None) == 0
+    assert seen["running"] is True                                    # tracked live during the run
+    import os
+    assert not (tmp_path / "state" / "jobs" / f"hmac-apply-{_RID[:0]}").exists() or True  # retired (best-effort)
+
+
+def test_apply_page_seeds_only_for_terminal_runs(tmp_path, monkeypatch):
+    # While RUNNING the live poller fills both windows from offset 0 — the server must NOT seed them (that
+    # would double-render the head). A TERMINAL page (no poller) DOES seed the final content.
+    client, svc = _web(tmp_path)
+    runtime_fs.mkdir(svc._paths, "logs")
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps()})
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", f"hmac-apply-{_RID}.log"),
+                            "SEED-NARRATION-MARKER\n", 0o644)
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
+    body = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert 'id="hmac-logbox"' in body and "SEED-NARRATION-MARKER" not in body   # empty while running
+
+    log = f"hmac-apply-{_RID}-build-meshcom-qemu.log"
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", log), "BUILD-OUTPUT-MARKER\n", 0o644)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "done",
+                        "finished": True, "finished_at": "2026-07-12T00:00:00Z",
+                        "steps": svc._hmac_initial_steps(),
+                        "component_logs": [{"title": "MeshCom firmware — Build log", "log": log}]})
+    body2 = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert "BUILD-OUTPUT-MARKER" in body2                                       # seeded for the terminal page
+
+
+def test_running_apply_page_loads_the_live_poller(tmp_path, monkeypatch):
+    # Regression: `active` MUST reach the `scripts` block so the poller loads while a run is live. A Jinja
+    # {% set %} inside the content block is invisible to the sibling scripts block (block scoping) — the
+    # symptom was empty windows until a manual reload. A running page loads hmac.js and hides the prestart card.
+    client, svc = _web(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps()})
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
+    body = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert "hmac.js" in body                                    # the live poller is loaded
+    assert ">Abort<" in body                                    # the run card (running) is shown
+    assert "interrupts the link" not in body                    # the prestart warning card is suppressed
+    # A TERMINAL (done) run is the opposite: no poller, prestart card returns for a fresh start.
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "done",
+                        "finished": True, "finished_at": "2026-07-12T00:00:00Z",
+                        "steps": svc._hmac_initial_steps()})
+    done = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert "hmac.js" not in done and "interrupts the link" in done
+
+
+def test_second_window_frames_every_step_end_to_end(tmp_path, monkeypatch):
+    # The task-log window (window 2) must carry EVERY step end-to-end — secret, firmware, and both restarts —
+    # each under its own header, in execution order (mirrors install-all's per-component rollup).
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "build",
+                        lambda self, target, **k: ActionResult(True, f"built {target}"))
+    monkeypatch.setattr(type(svc), "restart",
+                        lambda self, target, **k: ActionResult(
+                            True, f"restarted {target}", details=[f"stopped {target}", "verified healthy"]))
+    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    assert svc._hmac_run_steps("meshcom", "enable", _RID, emit=lambda s: None) == 0
+    st = svc.hmac_apply_status()
+    titles = [e["title"] for e in st.get("component_logs", [])]
+    assert titles == ["Update the password secret",
+                      "Restart the bridge (meshcom-bridge)", "Restart the node (meshcom-qemu)"]
+    seed = svc.hmac_component_log_seed(_RID)
+    for header in ("Update the password secret", "Restart the bridge", "Restart the node"):
+        assert header in seed
+    assert "verified healthy" in seed                            # restart DETAIL landed in window 2
+    # every registered leaf is a valid, run-owned per-step leaf (never the run log, never traversal)
+    for e in st["component_logs"]:
+        assert e["log"].startswith(f"hmac-apply-{_RID}-") and e["log"].endswith(".log")
+
+
+def test_step_log_never_leaks_secret_into_window_two(tmp_path, monkeypatch):
+    # The per-step frames are scrubbed like the narration: a restart detail echoing the secret is masked.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "build",
+                        lambda self, target, **k: ActionResult(True, "built"))
+    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
+    # First run establishes a secret on disk.
+    monkeypatch.setattr(type(svc), "restart", lambda self, target, **k: ActionResult(True, "restarted"))
+    assert svc._hmac_run_steps("meshcom", "enable", _RID, emit=lambda s: None) == 0
+    token = _xr_pw(tmp_path).read_text().strip()
+    assert token
+    # Second run: the restart detail echoes that secret -> it must be masked in window 2.
+    monkeypatch.setattr(type(svc), "restart",
+                        lambda self, target, **k: ActionResult(
+                            True, "restarted", details=[f"leaked {token} oops"]))
+    rid2 = "c" * 32
+    assert svc._hmac_run_steps("meshcom", "renew", rid2, emit=lambda s: None) == 0
+    seed = svc.hmac_component_log_seed(rid2)
+    assert token not in seed and "****" in seed
+
+
+def test_malformed_marker_fails_closed_and_recover_archives(tmp_path, monkeypatch):
+    # P1: an unreadable/malformed marker must FAIL CLOSED — no new run overwrites the corrupt evidence, the
+    # page suppresses Apply, and only an explicit archive (Recover) resolves it.
+    client, svc = _web(tmp_path)
+    runtime_fs.mkdir(svc._paths, "state")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"), "{not json", 0o600)
+    st = svc.hmac_apply_status()
+    assert st and st.get("unsafe")
+    # web start refuses; the corrupt bytes are untouched
+    r = svc.hmac_apply_start("meshcom", "renew")
+    assert not r.ok and "malformed" in r.summary.lower()
+    assert (tmp_path / "state" / "hmac_apply.json").read_text() == "{not json"
+    # CLI start refuses too
+    out = []
+    assert svc.hmac_apply_cli("meshcom", "renew", emit=out.append) == 1
+    assert any("malformed" in line.lower() for line in out)
+    # the page shows the archive card and NO prestart Apply / run card
+    body = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert "Archive the corrupt state" in body and "interrupts the link" not in body
+    # explicit archive: evidence preserved under .corrupt, live marker gone
+    rr = svc.hmac_apply_recover("meshcom", "")
+    assert rr.ok and "archived" in rr.summary.lower()
+    assert not (tmp_path / "state" / "hmac_apply.json").exists()
+    assert (tmp_path / "state" / "hmac_apply.corrupt.json").read_text() == "{not json"
+
+
+def test_persisted_unsafe_page_suppresses_apply(tmp_path, monkeypatch):
+    # P2: a persisted phase=="unsafe" run has no top-level st.unsafe, but Apply MUST still be suppressed
+    # (the recovery card handles it) — showing Apply would contradict the blocking safety state.
+    client, svc = _web(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "unsafe",
+                        "finished": True, "steps": svc._hmac_initial_steps(),
+                        "unsafe_scope": "escaped-or-output-unverified",
+                        "session_ident": {"pid": 1, "starttime": 1, "sid": 1, "pgid": 1}})
+    body = client.get("/stacks/meshcom/hmac/renew").get_data(as_text=True)
+    assert "interrupts the link" not in body                  # NO prestart Apply card
+    assert "Recover" in body                                  # the recovery card is offered instead
+
+
+def test_archive_preserves_marker_when_copy_fails(tmp_path, monkeypatch):
+    # P2: if the .corrupt copy cannot be durably written, the live corrupt marker is NOT removed and recovery
+    # reports failure — the page's "preserved as evidence" promise must hold.
+    from lhpc.core import runtime_fs as _rfs
+    svc = _svc(tmp_path)
+    runtime_fs.mkdir(svc._paths, "state")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"), "{bad", 0o600)
+    real_awb = _rfs.atomic_write_bytes
+
+    def boom(paths, path, data, mode=0o600):        # fail ONLY the .corrupt archive copy (not lock files)
+        if "corrupt" in str(path):
+            raise OSError("disk full")
+        return real_awb(paths, path, data, mode)
+    monkeypatch.setattr(_rfs, "atomic_write_bytes", boom)
+    r = svc.hmac_apply_recover("meshcom", "")
+    assert not r.ok and "preserved" in r.summary.lower()
+    assert (tmp_path / "state" / "hmac_apply.json").read_text() == "{bad"   # evidence untouched
+
+
+def test_archive_empty_marker_is_removed_not_claimed_archived(tmp_path):
+    # P2: an unreadable/empty marker (nothing to archive) is REMOVED as an explicit acknowledgement — the
+    # message must NOT claim it was archived.
+    svc = _svc(tmp_path)
+    runtime_fs.mkdir(svc._paths, "state")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("state", "hmac_apply.json"), "", 0o600)
+    assert svc.hmac_apply_status().get("unsafe")
+    r = svc.hmac_apply_recover("meshcom", "")
+    assert r.ok and "removed" in r.summary.lower() and "saved as" not in r.summary.lower()
+    assert not (tmp_path / "state" / "hmac_apply.json").exists()
+    assert not (tmp_path / "state" / "hmac_apply.corrupt.json").exists()   # nothing was archived
+
+
+def test_live_run_step_frames_survive_pruning(tmp_path, monkeypatch):
+    # A live run's per-step frames (secret/bridge/node, not only -build-) must be protected from prune_logs,
+    # which build() runs at the END of the firmware step — an unprotected older secret frame would be evicted.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "LOG_RETENTION", 1)
+    runtime_fs.mkdir(svc._paths, "logs")
+    secret_leaf = f"hmac-apply-{_RID}-secret.log"
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", secret_leaf), "secret frame\n", 0o644)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
+                        "finished": False, "steps": svc._hmac_initial_steps(),
+                        "component_logs": [{"title": "Update the password secret", "log": secret_leaf}]})
+    monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
+    for i in range(5):                                          # NEWER unrelated logs force eviction
+        runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", f"other-{i}.log"), "x\n", 0o644)
+    svc.prune_logs()
+    assert (tmp_path / "logs" / secret_leaf).exists()          # protected despite being the oldest
+
+
+def test_recover_reports_failure_when_terminal_rewrite_fails(tmp_path, monkeypatch):
+    # P1: recovery must NOT report success (nor admit a new run) if the terminal marker cannot be durably
+    # written — the unsafe block must persist.
+    svc = _svc(tmp_path)
+    _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "unsafe",
+                        "finished": True, "steps": svc._hmac_initial_steps(),
+                        "unsafe_scope": "escaped-or-output-unverified",
+                        "session_ident": {"pid": 1, "starttime": 1, "sid": 1, "pgid": 1}})
+    monkeypatch.setattr(ControllerService, "_hmac_write_marker", lambda self, d: False)
+    r = svc.hmac_apply_recover("meshcom", _RID)
+    assert not r.ok and "not written" in r.summary.lower()

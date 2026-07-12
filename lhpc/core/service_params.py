@@ -930,7 +930,16 @@ class ParamsConfigMixin:
                 "band": cfg_band, "created_at": time.time()})
             targets.append(("state", self._restart_marker_path(sid), payload, 0o600))
         try:
-            apply_config_transaction(self._paths, targets)
+            if self._holds_config_exclusive():
+                # Inside the install-all bulk boundary this thread ALREADY holds the config lock EXCLUSIVELY
+                # (config-stability), so reuse it via the module-private locked body rather than contending
+                # on a second descriptor ("config busy"). The assert forbids the locked path under a SHARED
+                # guard — a config mutation must never run beneath a shared stability guard.
+                from .config import _apply_config_transaction_locked
+                assert self._holds_config_exclusive(), "locked config txn requires the EXCLUSIVE guard"
+                _apply_config_transaction_locked(self._paths, targets)
+            else:
+                apply_config_transaction(self._paths, targets)
         except ConfigError as exc:
             return ActionResult(False, f"Config not saved for '{target}'.", details=[str(exc)])
         self._invalidate_config()               # saved operator/remotes visible immediately

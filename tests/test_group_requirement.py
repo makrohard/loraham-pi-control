@@ -96,6 +96,34 @@ def test_two_tier_group_states_gate_on_effective_hint_on_configured(tmp_path):
     assert not blocked and sd["satisfied"] is True and di.satisfied is True
 
 
+def test_req_remediation_restart_pending_vs_missing():
+    # The shared formatter: a configured-but-not-effective (restart-pending) group grant advises a RESTART,
+    # never re-shows the already-run usermod; a genuinely-missing grant shows the command; a non-group req
+    # is unaffected.
+    from lhpc.core.lifecycle import req_remediation
+    from lhpc.core.model import Requirement
+    g = Requirement(groups=("spi", "gpio"), install="sudo usermod -aG spi,gpio $USER",
+                    note="spi + gpio group membership — needed to run meshtasticd WITHOUT root")
+    m_pending = req_remediation(g, pending=True)
+    assert GROUP_RESTART_HINT in m_pending and "usermod" not in m_pending
+    m_missing = req_remediation(g, pending=False)
+    assert "sudo usermod -aG spi,gpio $USER" in m_missing and GROUP_RESTART_HINT not in m_missing
+    c = Requirement(cmd="socat", install="sudo apt install socat")
+    assert "socat" in req_remediation(c, pending=False) and "apt install socat" in req_remediation(c, pending=False)
+
+
+def test_start_gate_blocked_reason_advises_restart_when_pending(tmp_path):
+    # The START gate itself (not only the display sites) must advise a RESTART for a configured-but-not-
+    # effective grant, instead of re-showing the already-run usermod.
+    svc = _svc(tmp_path, effective=set(), configured={"spi", "gpio"})
+    svc.bootstrap(apply=True)
+    mc = _meshtastic_comp(svc)
+    (svc._paths.runtime_root / mc.source.path).mkdir(parents=True, exist_ok=True)   # "installed"
+    r = svc.start("meshtastic", apply=True)
+    blob = "\n".join(r.details) + " " + r.summary
+    assert GROUP_RESTART_HINT in blob and "usermod" not in blob
+
+
 def test_stacks_page_shows_copyable_usermod_only_when_missing(tmp_path):
     from lhpc.adapters.web.app import create_app
     def body(groups):

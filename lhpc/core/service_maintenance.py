@@ -421,6 +421,72 @@ class MaintenanceOpsMixin:
                                    stack_id, comp_index)
         return deps.grouped(report)
 
+    _TASK_BANNER_EXPIRY_S = 60      # ONE server-side expiry constant (client never removes earlier)
+
+    def _parse_utc(self, ts):
+        """Bounded parse of the canonical persisted UTC timestamp -> epoch seconds, or None."""
+        import time
+        import calendar
+        try:
+            return calendar.timegm(time.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ"))
+        except (ValueError, TypeError):
+            return None
+
+    def running_tasks(self) -> list:
+        """Read-only banner feed for the managed jobs the UI supports (install-all + HMAC apply). RUNNING
+        items are always included; TERMINAL items ONLY when a VALID PERSISTED terminal timestamp exists and
+        is within the server-side expiry (never invent a completion time for a derived-interrupted state);
+        an `unsafe` item NEVER expires. `bulk_status()`/`hmac_apply_status()` are file+/proc reads only (they
+        route job-marker reads through the centralized read-only parser) — this performs NO marker mutation.
+        Colours: running=yellow, done=green, failed/unsafe=red."""
+        import time
+        now = int(time.time())
+        out = []
+
+        def _terminal(ts, states):
+            epoch = self._parse_utc(ts)
+            if epoch is None:
+                return None
+            ago = max(0, now - epoch)
+            return {"finished_ago_s": ago} if ago < self._TASK_BANNER_EXPIRY_S else None
+
+        try:
+            bst = self.bulk_status()
+        except Exception:                          # noqa: BLE001 — a GET must never 500
+            bst = None
+        if bst and not bst.get("unsafe"):
+            rid, state = bst.get("run_id", ""), bst.get("state")
+            base = {"kind": "install-all", "run_id": rid, "label": "Install / build all stacks",
+                    "href": "/install-all"}
+            if state in ("preparing", "running"):
+                out.append({**base, "state": "running"})
+            elif state == "interrupted":
+                out.append({**base, "state": "unsafe"})            # blocking; no expiry
+            elif state in ("completed", "completed-with-failures"):
+                fin = _terminal(bst.get("finished_at", ""), None)
+                if fin is not None:
+                    out.append({**base, "state": "done" if state == "completed" else "failed", **fin})
+
+        try:
+            hst = self.hmac_apply_status()
+        except Exception:                          # noqa: BLE001
+            hst = None
+        if hst and not hst.get("unsafe"):
+            rid, phase = hst.get("run_id", ""), hst.get("phase")
+            sid, action = hst.get("sid", "meshcom"), hst.get("action", "enable")
+            base = {"kind": "hmac", "run_id": rid, "label": f"HMAC {action} on {sid}",
+                    "href": f"/stacks/{sid}/hmac/{action}"}
+            if phase == "running":
+                out.append({**base, "state": "running"})
+            elif phase == "unsafe":
+                out.append({**base, "state": "unsafe"})            # never expires until resolved
+            elif phase in ("done", "failed"):
+                fin = _terminal(hst.get("finished_at", ""), None)
+                if fin is not None:
+                    out.append({**base, "state": "done" if phase == "done" else "failed", **fin})
+            # a derived `interrupted` phase has NO persisted finished_at -> excluded (never invented)
+        return out
+
     def dependency_overview(self) -> dict:
         """Read-only, GET-safe aggregation for the Dependency Overview page + Stacks banner: LHPC's own
         dependencies (including the web-server nginx dep) plus every INSTALLED stack's, each normalized to

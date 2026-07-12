@@ -17,6 +17,11 @@ from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, SourceTxnBlocked
 
+import re as _re
+# A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
+# validated in build() BEFORE any path is constructed (marker-time validation alone is too late).
+_HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
+
 
 class LifecycleOpsMixin:
 
@@ -274,6 +279,11 @@ class LifecycleOpsMixin:
                 except reslock.ResourceBusy as busy:
                     return ActionResult(False, f"Cannot start '{target}': {busy}",
                                         next_commands=[f"lhpc status {target}"])
+        except SourceTxnBlocked as blocked:
+            # The config-stability guard itself was busy (e.g. a bulk install-all run holds config
+            # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
+            return ActionResult(False, f"Cannot start '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
@@ -297,6 +307,11 @@ class LifecycleOpsMixin:
                                               stop_owners=stop_owners, band=band,
                                               daemon_overrides=daemon_overrides,
                                               file_overrides=file_overrides)
+        except SourceTxnBlocked as blocked:
+            # The config-stability guard itself was busy (e.g. a bulk install-all run holds config
+            # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
+            return ActionResult(False, f"Cannot start '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
@@ -534,8 +549,12 @@ class LifecycleOpsMixin:
                 continue
             miss = life.missing_requirements(comp)
             if miss:
+                # A groups grant that is merely restart-PENDING (configured but not yet effective in this
+                # process) must advise a RESTART, not re-show the already-run `usermod` (see req_remediation).
+                from .lifecycle import req_remediation
                 record(comp, stack, Outcome.BLOCKED, "missing "
-                       + "; ".join(f"{r.cmd or r.note} ({r.install})" for r in miss))
+                       + "; ".join(req_remediation(r, bool(r.groups) and life.group_grant_pending(r))
+                                   for r in miss))
                 continue
             if self._running_conflicts(comp, cfg_band):
                 record(comp, stack, Outcome.BLOCKED, "resource conflict")
@@ -1395,6 +1414,9 @@ class LifecycleOpsMixin:
                 except reslock.ResourceBusy as busy:
                     return ActionResult(False, f"Cannot restart '{target}': {busy}",
                                         next_commands=[f"lhpc status {target}"])
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
@@ -1415,6 +1437,9 @@ class LifecycleOpsMixin:
                 return self._restart_impl_inner(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
                                                 file_overrides=file_overrides)
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot restart '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot restart '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
@@ -1459,9 +1484,14 @@ class LifecycleOpsMixin:
                             next_commands=res.next_commands)
 
     def build(self, target: str, apply: bool = False, bulk_ctx=None,
-              on_component_log=None) -> ActionResult:
+              on_component_log=None, log_base_override: str = "",
+              redactor=None, should_cancel=None) -> ActionResult:
         if (_r := self._controller_refusal(target)) is not None:
             return _r
+        # A caller-supplied run-specific log-base prefix (HMAC apply) is validated BEFORE any path is
+        # constructed — a strict controller pattern bound to the FULL 32-hex run id (never marker-time only).
+        if log_base_override and not _HMAC_LOG_BASE_RE.match(log_base_override):
+            return ActionResult(False, f"Refusing to build '{target}': invalid log-base prefix")
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -1513,25 +1543,38 @@ class LifecycleOpsMixin:
                 details = []
                 ok = True
                 run_id = getattr(bulk_ctx, "run_id", "") if bulk_ctx else ""
+                build_meta: dict = {}
                 for _, comp in buildable:
-                    # BULK: run-specific log base + DURABLE ordered registration BEFORE the
-                    # build runs, so the live stream shows only this run's own logs (the
-                    # file does not yet exist under a run-specific name -> no prior content).
+                    # BULK / HMAC: run-specific log base + DURABLE ordered registration BEFORE the
+                    # build runs, so the live stream shows only this run's own logs (the file does not
+                    # yet exist under a run-specific name -> no prior content).
                     log_base = None
                     if run_id and on_component_log is not None:
                         log_base = bulk_mod.component_log_base(run_id, f"build-{comp.id}")
+                    elif log_base_override:
+                        log_base = f"{log_base_override}-build-{comp.id}"
+                    if log_base is not None and on_component_log is not None:
                         n = len(comp.build_steps)
                         for i in range(n):
                             fn = f"{log_base}-{i}.log" if n > 1 else f"{log_base}.log"
                             title = (f"{comp.name} — Build log (step {i + 1}/{n})"
                                      if n > 1 else f"{comp.name} — Build log")
                             on_component_log(title, fn)
-                    res = life.build(comp, log_base=log_base)
+                    res = life.build(comp, log_base=log_base,
+                                     redactor=redactor, should_cancel=should_cancel)
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
                     if not res.ok:
                         details.extend(f"      {ln}" for ln in res.tail[-6:])
+                    # Surface a cooperative-cancellation / UNVERIFIED-stop outcome so the caller (the HMAC
+                    # driver) can persist the correct terminal state; stop the sweep on it.
+                    if getattr(res, "cancelled", False) or getattr(res, "unsafe", False):
+                        build_meta = {"cancelled": res.cancelled, "unsafe": res.unsafe,
+                                      "unsafe_scope": res.unsafe_scope,
+                                      "session_ident": res.session_ident}
+                        ok = False
+                        break
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Build blocked for '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -1540,7 +1583,8 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
         self.prune_logs()
         return ActionResult(ok, f"Build {'succeeded' if ok else 'FAILED'} for '{target}'.",
-                            details=details, next_commands=["lhpc status " + target])
+                            details=details, next_commands=["lhpc status " + target],
+                            data=build_meta)
 
     def log_tail(self, target: str, lines: int = 300, job: str | None = None,
                  band: str = ""):
@@ -1692,6 +1736,20 @@ class LifecycleOpsMixin:
                 bulk_prefix = bulk_mod.component_log_prefix(st["run_id"])
             except (ValueError, KeyError, TypeError):
                 bulk_prefix = ""
+        # Protect the LIVE HMAC apply run's detailed build log(s), bound to the FULL run id — while the run
+        # is RUNNING or UNSAFE/unresolved (they may be needed to diagnose an unverified cancellation).
+        hmac_prefix = ""
+        try:
+            hst = self.hmac_apply_status()
+        except Exception:                            # noqa: BLE001 — pruning must never fail
+            hst = None
+        import re as _re2
+        if (hst and not hst.get("unsafe") and hst.get("phase") in ("running", "unsafe")
+                and _re2.fullmatch(r"[0-9a-f]{32}", hst.get("run_id", ""))):
+            # Protect EVERY per-step leaf of the live run (build- AND secret/bridge/node frames), not just
+            # `-build-`: `build()` prunes at the end of the firmware step and the earlier secret frame (older
+            # mtime) would otherwise be an eviction candidate, blanking it from the second window mid-run.
+            hmac_prefix = f"hmac-apply-{hst['run_id']}-"
         # FAIL-CLOSED logs-root resolution + enumeration (no `is_dir()`/`glob`/`is_symlink`):
         # `under` resolves the path (an ESCAPING `logs/` symlink raises PathContainmentError
         # DURING construction — this was outside the guard and could 500 via build()/
@@ -1721,7 +1779,8 @@ class LifecycleOpsMixin:
         logs.sort(reverse=True)                                    # newest first
         removed, kept, total = 0, 0, 0
         for _mtime, name, f, size in logs:
-            if name in protected or (bulk_prefix and name.startswith(bulk_prefix)):
+            if (name in protected or (bulk_prefix and name.startswith(bulk_prefix))
+                    or (hmac_prefix and name.startswith(hmac_prefix))):
                 continue
             kept += 1
             total += size
@@ -2449,20 +2508,41 @@ class LifecycleOpsMixin:
             })
         return out
 
+    def _read_job_marker(self, job: str) -> dict | None:
+        """THE centralized bounded, no-follow, regular-file-ONLY reader of a job identity marker
+        (`state/jobs/<job>.job`) — reused by `log_running`, active-job inspection, and HMAC abort. Returns
+        the parsed dict, or None for a missing/symlinked/oversized/malformed marker. NEVER deletes or
+        mutates evidence (a caller that needs to signal validates identity/op/target on the returned dict
+        immediately before acting)."""
+        import tomllib
+        import stat as _stat
+        try:
+            slug = validators.path_component(job, field="job log")
+            f = self._paths.under("state", "jobs", slug + ".job")
+        except (validators.ValidationError, PathContainmentError):
+            return None
+        stt = runtime_fs.stat_leaf_nofollow(self._paths, f)
+        if stt is None or not _stat.S_ISREG(stt.st_mode) or stt.st_size > self._JOB_MARKER_MAX:
+            return None
+        try:
+            return tomllib.loads(runtime_fs.read_text_regular(
+                self._paths, f, max_bytes=self._JOB_MARKER_MAX))
+        except (OSError, PathContainmentError, ValueError, tomllib.TOMLDecodeError):
+            return None
+
     def log_running(self, target: str, job: str | None = None) -> bool:
         """Whether the process behind a log is still alive: for a build/test `job`
         it checks the job marker's pid; for a process log it checks the target's
         main component run-state."""
         if job:
-            import tomllib
-            f = self._jobs_dir() / (job + ".job")
+            raw = self._read_job_marker(job)
+            if not raw or "pid" not in raw:
+                return False
             try:
-                # No-follow read (no check-then-open): a symlinked marker -> OSError -> False.
-                raw = tomllib.loads(runtime_fs.read_text(self._paths, f))
                 # FULL identity match (PID-reuse-safe), never bare PID liveness: a recycled
                 # pid running an unrelated process is not this job.
                 return procident.identity_matches(raw, int(raw["pid"]))
-            except (OSError, KeyError, ValueError, tomllib.TOMLDecodeError):
+            except (KeyError, ValueError, TypeError):
                 return False
         s = self.stack(target)
         cid = s.main_component.id if (s and s.main_component) else target

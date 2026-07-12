@@ -668,24 +668,13 @@ class BulkOpsMixin:
         self._lock_state.bulk_cleanup_failed = ""
         res = None
         try:
-            # Password-auth by DEFAULT (install-all): enable the meshcom HMAC secret+param BEFORE entering
-            # the bulk boundary — that boundary holds the config-stability lock, so save_config_bundle
-            # cannot run inside it. The secret only needs to exist before the firmware build (adoption
-            # never touches it). A failure is threaded in so the meshcom ROW fails and its build is SKIPPED
-            # (never bake an empty password while reporting success).
-            hmac_failed: dict = {}
-            for _st, _comps in scope:
-                if self.hmac_applies(_st.id):
-                    hr = self.hmac_set_secret(_st.id, "enable")
-                    if not hr.ok:
-                        hmac_failed[_st.id] = self._hmac_redact(hr.summary)
             if tx and not getattr(self.config().operator, "callsign", ""):
                 # EARLY, NON-MUTATING: no boundary, no running marker, no source action —
                 # only the short-lived launch reservation, released by the finally below.
                 res = ActionResult(False, "Refusing the TX-enabled bulk run: no operator "
                                    "callsign is configured — set it in Settings first.")
             else:
-                res = self._install_all_claimed(scope, source, tests, tx, run_id, emit, hmac_failed)
+                res = self._install_all_claimed(scope, source, tests, tx, run_id, emit)
         finally:
             # ONE converging cleanup path for EVERY claimed exit — pre-boundary refusals,
             # plan conflicts, post-lock refusals, marker-write aborts, lock contention,
@@ -713,8 +702,7 @@ class BulkOpsMixin:
                                 next_commands=["lhpc status"])
         return res
 
-    def _install_all_claimed(self, scope, source, tests, tx, run_id, emit,
-                             hmac_failed=None) -> ActionResult:
+    def _install_all_claimed(self, scope, source, tests, tx, run_id, emit) -> ActionResult:
         from . import bulk as bulk_mod, reslock
         # cheap pre-lock preflight (typed early refusal; authoritative recheck post-lock)
         pre_running = self._bulk_running_components(scope)
@@ -895,19 +883,24 @@ class BulkOpsMixin:
                         continue
                     linked = [c.id for c in comps
                               if (c.source.strategy or "") == "link"]
-                    # Password-auth by DEFAULT: HMAC was enabled BEFORE the bulk boundary (install_all,
-                    # so save_config_bundle isn't blocked by the config-stability lock). FAIL CLOSED: if
-                    # that enable failed, mark the row fail and SKIP the build here — never bake the
-                    # firmware with an empty password while claiming success.
-                    if st.id in (hmac_failed or {}):
-                        r["status"], r["detail"] = "fail", (
-                            f"HMAC password could not be enabled: {hmac_failed[st.id]}")
-                        failed_stacks.add(st.id)
-                        emit(f"  [fail] {st.id}: {r['detail']}")
-                        bw()
-                        continue
                     buildable = [c for c in comps if c.build_steps
                                  and (c.source.strategy or "") != "link"]
+                    # Password-auth by DEFAULT — at the LAST safe point: sources adopted, all refusals passed,
+                    # and there is an actual NON-LINKED build to perform. Enable atomically (override + xr_pw,
+                    # one rollback-safe txn) so THIS build bakes the shared secret; the write reuses the
+                    # boundary's EXCLUSIVE config lock. FAIL CLOSED: on failure mark the row fail + skip the
+                    # build (never bake an empty password as success); do NOT roll HMAC back if a later build
+                    # step fails.
+                    if buildable and self.hmac_applies(st.id):
+                        hr = self.hmac_set_secret(st.id, "enable")
+                        if not hr.ok:
+                            r["status"], r["detail"] = "fail", (
+                                "HMAC password could not be enabled: "
+                                f"{self._hmac_redact(hr.summary)}")
+                            failed_stacks.add(st.id)
+                            emit(f"  [fail] {st.id}: {r['detail']}")
+                            bw()
+                            continue
                     if buildable:
                         emit(f"==== {st.id}: build ====")
                         r["status"] = "building"
@@ -1308,7 +1301,10 @@ class BulkOpsMixin:
         context deactivated before the locks release. Lease-write failure aborts typed —
         the boundary never operates without durable evidence."""
         from . import bulk as bulk_mod, procident
-        with self._config_stable():
+        # EXCLUSIVE config-stability for the WHOLE run: an atomic HMAC enable (or any config write) INSIDE
+        # the boundary reuses this held lock instead of self-contending on a second descriptor. flock SH→EX
+        # conversion is not atomic on Linux, so we take EXCLUSIVE from the start rather than upgrading.
+        with self._config_stable(exclusive=True):
             with self._source_operation_guard(sorted(source_paths), op="install-all"):
                 ident = procident.proc_identity(os.getpid()) or {}
                 if not procident.identity_complete(ident):

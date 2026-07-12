@@ -2,6 +2,7 @@
 {% from "_macros.html" import stack_actions, stack_summary, stack_row_actions, cmdbox %}
 {% block title %}stacks — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+  {% include "_task_banner.html" %}
 
   {# Structural page heading (h1 is the site title in the header) so the heading outline is
      h1 → h2 → h3 with no skipped levels. Visually hidden — the page is self-evidently the stacks list. #}
@@ -150,4 +151,5 @@
 {% block scripts %}
   {# Preserve the tree's open/close + scroll across form-POST actions (external per CSP). #}
   <script src="{{ url_for('static', filename='stacks_state.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='taskbanner.js') }}" defer></script>
 {% endblock %}

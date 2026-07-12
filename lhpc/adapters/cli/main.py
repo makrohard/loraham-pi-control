@@ -330,7 +330,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_hmac = sub.add_parser("hmac",
                             help="MeshCom HMAC password: status, or enable/disable/renew "
                                  "(rebuilds the firmware — several minutes)")
-    p_hmac.add_argument("action", choices=("status", "enable", "disable", "renew"))
+    p_hmac.add_argument("action",
+                        choices=("status", "enable", "disable", "renew", "abort", "recover"))
     p_hmac.add_argument("stack", nargs="?", default="",
                         help="Target stack (default: the meshcom stack)")
     p_hmac.add_argument("--yes", action="store_true",
@@ -590,6 +591,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "status":
             print(f"HMAC password: {'enabled' if svc.hmac_status(sid) else 'disabled'} ({sid})")
             return 0
+        if args.action in ("abort", "recover"):
+            st = svc.hmac_apply_status()
+            run_id = st.get("run_id", "") if (st and not st.get("unsafe")) else ""
+            r = (svc.hmac_apply_abort(sid, run_id) if args.action == "abort"
+                 else svc.hmac_apply_recover(sid, run_id))
+            print(r.summary)
+            return 0 if r.ok else 1
         if not args.yes:
             print(f"'{args.action}' rebuilds the MeshCom firmware and restarts the link "
                   "(several minutes; the link is down until it finishes).")
@@ -603,6 +611,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "_hmac-apply":
         # Detached driver: stdout/stderr are captured to the run log by spawn_job, so `print`
         # streams into the live log window. Never prints the secret (the step runner redacts).
+        # GATE FIRST — prove the parent identity-tracked us BEFORE touching anything. During the gate
+        # SIGTERM/SIGINT keep their DEFAULT action, so an untracked (orphan) driver the parent SIGTERMs
+        # dies cleanly, having mutated nothing.
+        if svc._hmac_verify_tracked(args.stack, args.run_id, emit=print) != 0:
+            return 1
+        # Verified tracked: only NOW install COOPERATIVE cancellation (the handler does ONLY a plain flag
+        # assignment; the runner polls it and terminates the build via its local session token, and THIS
+        # driver then writes the truthful terminal marker).
+        import signal
+        from lhpc.core.service_hmac import _request_hmac_abort
+        signal.signal(signal.SIGTERM, _request_hmac_abort)
+        signal.signal(signal.SIGINT, _request_hmac_abort)
         return svc._hmac_run_steps(args.stack, args.action, args.run_id, emit=print)
     if args.command == "help":
         if not args.topic:

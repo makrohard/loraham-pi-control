@@ -31,13 +31,21 @@ class CommandResult:
     stderr: str
     timed_out: bool = False
     not_found: bool = False     # the executable itself was not found
-    # On a timeout, the typed proctree.Termination outcome value ("terminated" /
-    # "already-ceased" / "unverified" / "incomplete"); "" when the run did not time out.
+    # On a timeout OR a cooperative cancellation, the typed proctree.Termination outcome value
+    # ("terminated" / "already-ceased" / "unverified" / "incomplete"); "" when neither happened.
     termination: str = ""
+    # The controlled (redacting/cancellable) runner path only:
+    cancelled: bool = False          # the run was stopped by should_cancel() (not a timeout)
+    output_unverified: bool = False  # the output pipe could not be proven fully drained (a descendant
+                                     #  may have escaped the session and kept it open) -> unsafe scope
+    log_write_failed: bool = False   # the drain read the output but could NOT persist it to the log file;
+                                     #  cessation/draining may be PROVEN (not unsafe), but the job must not
+                                     #  report success — its detailed log is incomplete
+    session_ident: dict | None = None  # the build's SessionToken fields (for a persisted unsafe marker)
 
     @property
     def may_still_be_running(self) -> bool:
-        """True when the timed-out run's ORIGINAL verified session could not be proven empty
+        """True when the timed-out/cancelled run's ORIGINAL verified session could not be proven empty
         (`unverified`/`incomplete`) — a process may remain alive; surface it rather than assume
         it's gone. NOTE: even a `False` here (the session was emptied) does NOT certify that a
         descendant which escaped via `setsid()` died — that is outside the proven session and
@@ -218,16 +226,59 @@ class RealCommandRunner:
                              termination=termination)
 
     def run_streaming(self, argv: list[str], timeout: float, log_fh,
-                      cwd: str | None = None, env: dict | None = None) -> CommandResult:
-        """Like run(), but the child's stdout+stderr stream DIRECTLY into `log_fh`
-        (kernel-level fd redirect, interleaved) — the log grows LIVE while the command
-        runs instead of being written once at completion. stdout/stderr on the result
-        are empty; callers read the persisted log for tails."""
+                      cwd: str | None = None, env: dict | None = None,
+                      redactor=None, should_cancel=None) -> CommandResult:
+        """Like run(), but the child's output streams LIVE into `log_fh`. Two paths:
+
+        * FAST (default, `redactor` and `should_cancel` both None): kernel-level fd redirect
+          (stdout+stderr straight into `log_fh`, no in-process copy) — unchanged behaviour.
+        * CONTROLLED (a `redactor` and/or `should_cancel` given): a PIPE + one drain thread that
+          continuously reads bounded chunks, passes them through the STATEFUL cross-chunk `redactor`
+          (a duck-typed object with `.feed(bytes)->bytes` and `.flush()->bytes`; None = passthrough)
+          BEFORE writing to `log_fh`, so a secret NEVER reaches the log. The main loop polls
+          `should_cancel()` and the overall timeout; on either it terminates the OWNED session first,
+          closes the read end, and BOUND-joins the drain so an escaped descendant holding stdout can
+          never wedge us. The typed result distinguishes normal-failure / timeout / cancellation and
+          whether the session/pipe were PROVEN clean (see CommandResult)."""
         import os
+        if redactor is None and should_cancel is None:
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                    cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
+                    start_new_session=True,
+                )
+            except FileNotFoundError:
+                return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
+            except OSError as exc:
+                return CommandResult(returncode=126, stdout="", stderr=str(exc))
+            from .. import proctree
+            _leader_token = proctree.capture_session_token(proc.pid)
+            timed_out = False
+            termination = ""
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                termination = proctree.terminate_session(_leader_token, os.getpid()).value
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+            rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
+            return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
+                                 termination=termination)
+        return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel)
+
+    def _run_controlled(self, argv, timeout, log_fh, cwd, env, redactor, should_cancel) -> CommandResult:
+        import os
+        import threading
+        import time as _t
         try:
             proc = subprocess.Popen(
                 argv,
-                stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
                 start_new_session=True,
             )
@@ -236,21 +287,79 @@ class RealCommandRunner:
         except OSError as exc:
             return CommandResult(returncode=126, stdout="", stderr=str(exc))
         from .. import proctree
-        _leader_token = proctree.capture_session_token(proc.pid)
-        timed_out = False
-        termination = ""
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            termination = proctree.terminate_session(_leader_token, os.getpid()).value
+        token = proctree.capture_session_token(proc.pid)
+        drained = threading.Event()
+        # The log handle is TEXT-mode in production (`runtime_fs.open_log_truncate`), but the redactor
+        # yields BYTES — write to the underlying binary buffer (a binary handle, as in tests, has no
+        # `.buffer` and is used directly). Keeping it byte-oriented means redaction happens pre-decode.
+        sink = getattr(log_fh, "buffer", log_fh)
+        write_failed = [False]
+
+        def _emit(data: bytes) -> None:
+            # Best-effort persistence: a write error (e.g. disk full) must NOT crash the thread or stop the
+            # DRAIN — we keep reading the pipe to EOF so the child can never block on a full pipe (deadlock).
+            if not data or write_failed[0]:
+                return
             try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
+                sink.write(data)
+                sink.flush()
+            except Exception:                            # noqa: BLE001 — never crash; keep draining
+                write_failed[0] = True
+
+        def _drain():
+            try:
+                for chunk in iter(lambda: proc.stdout.read(8192), b""):
+                    _emit(redactor.feed(chunk) if redactor is not None else chunk)
+                if redactor is not None:
+                    _emit(redactor.flush())
+            except (OSError, ValueError):                # a torn/closed pipe — final backstop
                 pass
-        rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
+            finally:
+                drained.set()
+
+        dt = threading.Thread(target=_drain, daemon=True)
+        dt.start()
+        timed_out = cancelled = False
+        termination = ""
+        deadline = _t.monotonic() + timeout
+        while True:
+            try:
+                proc.wait(timeout=0.1)
+                break                                     # exited on its own
+            except subprocess.TimeoutExpired:
+                if should_cancel is not None and should_cancel():
+                    cancelled = True
+                    termination = proctree.terminate_session(token, os.getpid()).value
+                    break
+                if _t.monotonic() >= deadline:
+                    timed_out = True
+                    termination = proctree.terminate_session(token, os.getpid()).value
+                    break
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        # Normal exit closes the child's write end -> the drain reads EOF, flushes the redactor carry, and
+        # returns. Join FIRST (do NOT close the pipe under it — that would abort the drain mid-flush).
+        dt.join(timeout=3)
+        if dt.is_alive():
+            # An escaped descendant still holds the write end open (no EOF): force it so the drain can't
+            # wedge us. The redactor carry is deliberately NOT flushed (it may hold an unmasked partial) —
+            # this is the `output_unverified` case, surfaced as an unsafe scope; never a raw leak.
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            dt.join(timeout=2)
+        output_unverified = dt.is_alive() or not drained.is_set()
+        rc = (124 if timed_out else
+              (proc.returncode if proc.returncode is not None else -1))
+        ident = ({"pid": token.pid, "starttime": token.starttime, "sid": token.sid,
+                  "pgid": token.pgid} if token is not None else None)
         return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
-                             termination=termination)
+                             cancelled=cancelled, termination=termination,
+                             output_unverified=output_unverified, session_ident=ident,
+                             log_write_failed=write_failed[0])
 
 
 class RealProcFs:

@@ -15,7 +15,8 @@
      buttons use a muted deep blue in dark mode. */
   --btn-bg: #0b5cab;  --btn-ink: #ffffff;  --btn-hover: #0a4f93;
   --header-ink: #ffffff;   /* nav/banner text — white in BOTH themes (banner is dark-blue in both) */
-  --ok: #1a7f37;
+  --ok: #12722f;   /* darker green so the shared token clears WCAG AA (>=4.5:1) as small badge/flag text
+                      on the light-green --badge-ok-bg/--flash-ok-bg; dark mode keeps its bright #3fb950 */
   --warn: #9a6700;
   --bad: #c1121f;
   --idle: #57606a;
@@ -34,7 +35,7 @@
   --badge-idle-bg: #eef1f4;  --badge-idle-border: #dbe1e8;  --badge-idle-ink: #57606a;
   --pill-bg: #eef2f7;  --pill-ink: #334455;
   --conflict-bg: #fdf0f0;  --conflict-border: #f3b9bf;  --conflict-ink: #7a1620;
-  --flash-ok-bg: #e7f6ec;  --flash-ok-border: #b7e3c4;  --flash-ok-ink: #1a7f37;
+  --flash-ok-bg: #e7f6ec;  --flash-ok-border: #b7e3c4;  --flash-ok-ink: #12722f;
   --flash-warn-bg: #fff8e1; --flash-warn-border: #ffe0a3; --flash-warn-ink: #7a5200;
   --flash-bad-bg: #fdecea;  --flash-bad-border: #f1a9a0;  --flash-bad-ink: #a01b10;
   --flash-info-bg: #eef2f7; --flash-info-border: #cdd7e3; --flash-info-ink: #33414f;
@@ -228,6 +229,11 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
 /* Enlarged, comfortably-spaced tap target for the row "logs" link (≈ WCAG 2.5.8 24×24). The padding
    grows the link inside its own grid cell, not the row layout. */
 .logslink { font-size: .8rem; margin-left: .3rem; display: inline-block; padding: .25rem .45rem; }
+/* A normally-spaced, blue button-style link (e.g. the HMAC pre-start "Cancel") — sits beside a real
+   button in an action row without competing with a yellow warn button. */
+.btnlink { display: inline-block; margin-left: .6rem; padding: .35rem .7rem; border-radius: 8px;
+           border: 1px solid var(--brand); color: var(--brand); text-decoration: none; font-size: .9rem; }
+.btnlink:hover { background: var(--bg); }
 .iface { font-size: .8rem; margin-left: .4rem; padding: .05rem .4rem; border-radius: 6px;
          background: var(--bg); border: 1px solid var(--line); }
 a.iface { text-decoration: none; color: var(--brand); }
@@ -467,6 +473,26 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .ws-comp .setting .muted { margin-left: 0.5em; }
 /* a little breathing room after the System dependencies list, before "Verify now" */
 .ws-comp .sysdeps { margin-bottom: 1em; }
+
+/* ---- Running-task indicator banner (Dash + Stacks) ---- */
+.taskbanner { display: flex; flex-direction: column; gap: .4rem; }
+.taskbanner:empty { display: none; }
+.taskitem { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+            padding: .55rem .8rem; border-radius: 8px; border: 1px solid var(--line);
+            margin-bottom: .3rem; font-size: .92rem; }
+.taskitem .ti-label { font-weight: 600; }
+.taskitem .ti-state { font-variant: small-caps; }
+.taskitem .ti-view { margin-left: auto; white-space: nowrap; }
+.taskitem-running { background: var(--warn-bg, #fef7e0); border-color: var(--warn-line, #e6c760); }
+.taskitem-done    { background: var(--ok-bg, #e6f4ea);   border-color: var(--ok-line, #79c791); }
+.taskitem-failed,
+.taskitem-unsafe  { background: var(--bad-bg, #fdecea);  border-color: var(--bad-line, #e0a3a0); }
+@media (prefers-color-scheme: dark) {
+  .taskitem-running { background: #3a3220; border-color: #6b5a2a; }
+  .taskitem-done    { background: #1f3325; border-color: #2f6b45; }
+  .taskitem-failed,
+  .taskitem-unsafe  { background: #3a2422; border-color: #7a3a36; }
+}
 /* Each sub-section (Settings/Monitor/Certificates) anchors a "logs" overlay on its header, laid out
    EXACTLY like the main stack rows: the .row-actions overlay is a sibling OUTSIDE the <summary> (a11y),
    positioned over the header's right edge and visible whether the section is open or collapsed. */

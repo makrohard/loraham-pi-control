@@ -175,6 +175,15 @@ def _ownership_state(token: SessionToken, exclude_pid: int) -> str:
     return "owned" if session_members(token.sid, exclude_pid) else "ceased"
 
 
+def session_ceased(token: SessionToken | None, exclude_pid: int) -> bool:
+    """Non-signalling proof that the ORIGINAL owned session is EMPTY (leader gone AND no member remains).
+    Used by HMAC recovery to auto-clear a `session-unverified` block only when the tracked session is
+    provably gone. A recycled/unprovable leader pid returns False (fail-closed — never claim ceased)."""
+    if not isinstance(token, SessionToken) or not token.complete:
+        return False
+    return _ownership_state(token, exclude_pid) == "ceased"
+
+
 def terminate_session(token: SessionToken | None, exclude_pid: int, *,
                       term_grace: float = 2.0, kill_grace: float = 1.0) -> Termination:
     """TERM then bounded-KILL the owned process group described by `token`, checking the whole

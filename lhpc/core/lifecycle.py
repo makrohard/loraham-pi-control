@@ -46,6 +46,16 @@ GROUP_RESTART_HINT = "granted, restart pending — reboot or: loginctl terminate
 GROUP_MISSING_HINT = "not a member — grant it, then log out/in or reboot to apply"
 
 
+def req_remediation(req, pending: bool) -> str:
+    """One-line remediation for a (missing) Requirement — shared by the START gate and the dependency
+    render sites. A groups grant that is merely restart-PENDING shows GROUP_RESTART_HINT (re-running
+    `usermod` would NOT help); everything else shows its grant/install command."""
+    label = req.cmd or req.note or req.check_file or ""
+    if req.groups and pending:
+        return f"{label} — {GROUP_RESTART_HINT}"
+    return f"{label} ({req.install})" if req.install else label
+
+
 @dataclass
 class StartLaunch:
     """Result of the RAW launch only: did the shell-free Popen + identity observation
@@ -211,7 +221,7 @@ class Lifecycle:
     # -- build / start / stop / logs --------------------------------------
 
     def build(self, comp: Component, timeout: float = 600.0,
-              log_base: str | None = None) -> JobResult:
+              log_base: str | None = None, redactor=None, should_cancel=None) -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
@@ -236,7 +246,8 @@ class Lifecycle:
                                  returncode=1, log_path="", tail=[str(exc)])
             name = base + (f"-{i}" if len(steps) > 1 else "")
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
-                           env=(env or None), logs_dir=self.logs_dir(), timeout=timeout)
+                           env=(env or None), logs_dir=self.logs_dir(), timeout=timeout,
+                           redactor=redactor, should_cancel=should_cancel)
             if not last.ok:
                 return last
         if last is None:        # nothing to build

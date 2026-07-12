@@ -2,6 +2,7 @@
 {% from "_macros.html" import cmdbox, webserver_pills %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {% block content %}
+  {% include "_task_banner.html" %}
   {% if welcome and welcome.fresh %}
   <div class="depnote depnote-ok">
     <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
@@ -251,4 +252,5 @@
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='dash.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='taskbanner.js') }}" defer></script>
 {% endblock %}

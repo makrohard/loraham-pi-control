@@ -1,0 +1,13 @@
+{# Running-task indicator (install-all + HMAC apply). Server-rendered initial state; taskbanner.js
+   re-renders from the read-only /api/tasks. Colours: running=yellow, done=green, failed/unsafe=red.
+   The server owns visibility (60 s expiry; `unsafe` never expires) — the client only renders its list. #}
+<div class="taskbanner" id="task-banner">
+  {% for t in tasks %}
+  <div class="taskitem taskitem-{{ t.state }}" data-key="{{ t.kind }}-{{ t.run_id }}">
+    <span class="ti-label">{{ t.label }}</span>
+    <span class="ti-state">{{ {'running': 'running…', 'done': 'finished', 'failed': 'failed',
+                               'unsafe': 'UNSAFE — needs attention'}.get(t.state, t.state) }}</span>
+    <a class="ti-view" href="{{ t.href }}">view &rarr;</a>
+  </div>
+  {% endfor %}
+</div>

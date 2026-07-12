@@ -5,10 +5,12 @@
 ## 0.1.5
 
 - Dependency overview + Checks
-- daemon params per stack and freqency 
+- daemon params per stack and frequency
 - consistent webserver controls
 - GUI: Add dark mode, polish styles
 - hardening and refactor services.py
+- Start gate predicts the spawned ch
+- MeshCom HMAC Auth + Task indicators
 
 ## 0.1.4
 - Make web-GUI, meshcom and meshtastic GUI remote exposable With TLS and certificate-auth

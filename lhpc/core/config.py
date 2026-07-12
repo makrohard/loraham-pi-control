@@ -978,56 +978,66 @@ def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, i
     replace each; roll back all on failure; remove the journal only on success.
     Raises ConfigError("recovery-required: …") if a restore fails (journal kept)."""
     with config_lock(paths):
-        if recover_config_transaction(paths) == "":
-            raise ConfigError("recovery-required: a pending config journal could not be "
-                              "recovered; resolve it before saving config again")
-        jp = _txn_journal(paths)
-        journal = {"version": _JOURNAL_VERSION, "targets": []}
-        for kind, p, _content, mode in targets:
-            if p.is_symlink():
-                raise ConfigError(f"refusing a symlink-leaf config target: {p}")
-            rel = os.path.relpath(str(p), str(paths.runtime_root))
-            from . import runtime_fs
-            try:
-                pre, existed = runtime_fs.read_text(paths, p), True   # no-follow read
-            except FileNotFoundError:
-                pre, existed = None, False
-            except (OSError, PathContainmentError) as exc:   # unreadable/unsafe -> NOT "nonexistent"
-                raise ConfigError(f"config target exists but is unreadable: {p} ({exc})")
-            journal["targets"].append({"kind": kind, "rel": rel, "pre": pre,
-                                       "existed": existed, "mode": mode})
-        for rec in journal["targets"]:        # prove every target resolves safely first
-            _resolve_journal_target(paths, rec)
-        _atomic_write(paths, jp, json.dumps(journal), 0o600)   # anchored write creates parents
+        _apply_config_transaction_locked(paths, targets)
+
+
+def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path, str, int]]) -> None:
+    """MODULE-PRIVATE transaction body — assumes the config lock is ALREADY held EXCLUSIVELY by the caller.
+    NOT a general lock-bypass API: the ONLY external caller is `ControllerService.save_config_bundle`, and
+    ONLY when it holds the EXCLUSIVE config-stability guard (`_holds_config_exclusive()`, the install-all
+    bulk boundary). Everyone else MUST use `apply_config_transaction()`, which acquires the lock. Steps
+    (unchanged): recover/block any pending journal; journal each pre-image; atomically replace; roll back
+    all on failure; remove the journal on success."""
+    if recover_config_transaction(paths) == "":
+        raise ConfigError("recovery-required: a pending config journal could not be "
+                          "recovered; resolve it before saving config again")
+    jp = _txn_journal(paths)
+    journal = {"version": _JOURNAL_VERSION, "targets": []}
+    for kind, p, _content, mode in targets:
+        if p.is_symlink():
+            raise ConfigError(f"refusing a symlink-leaf config target: {p}")
+        rel = os.path.relpath(str(p), str(paths.runtime_root))
+        from . import runtime_fs
         try:
-            for kind, p, content, mode in targets:
-                # `content` may be a callable rendered INSIDE this lock (merge-in-transaction),
-                # so it reads the LATEST file and preserves keys owned by another writer. A raise
-                # here (e.g. an unsupported manual value) triggers the rollback below.
-                _atomic_write(paths, p, content(paths) if callable(content) else content, mode)
-        except Exception as failure:
-            for rec in journal["targets"]:        # roll back everything
-                p = _resolve_journal_target(paths, rec)
-                try:
-                    if rec["existed"]:
-                        _atomic_write(paths, p, rec["pre"], int(rec["mode"]))
-                    else:
-                        runtime_fs.unlink(paths, p)   # descriptor-anchored, no-follow
-                except (OSError, PathContainmentError) as exc:
-                    raise ConfigError(f"recovery-required: rollback failed ({exc}); "
-                                      "journal retained") from exc
+            pre, existed = runtime_fs.read_text(paths, p), True   # no-follow read
+        except FileNotFoundError:
+            pre, existed = None, False
+        except (OSError, PathContainmentError) as exc:   # unreadable/unsafe -> NOT "nonexistent"
+            raise ConfigError(f"config target exists but is unreadable: {p} ({exc})")
+        journal["targets"].append({"kind": kind, "rel": rel, "pre": pre,
+                                   "existed": existed, "mode": mode})
+    for rec in journal["targets"]:        # prove every target resolves safely first
+        _resolve_journal_target(paths, rec)
+    _atomic_write(paths, jp, json.dumps(journal), 0o600)   # anchored write creates parents
+    try:
+        for kind, p, content, mode in targets:
+            # `content` may be a callable rendered INSIDE this lock (merge-in-transaction),
+            # so it reads the LATEST file and preserves keys owned by another writer. A raise
+            # here (e.g. an unsupported manual value) triggers the rollback below.
+            _atomic_write(paths, p, content(paths) if callable(content) else content, mode)
+    except Exception as failure:
+        for rec in journal["targets"]:        # roll back everything
+            p = _resolve_journal_target(paths, rec)
             try:
-                runtime_fs.unlink(paths, jp)          # rolled back cleanly
+                if rec["existed"]:
+                    _atomic_write(paths, p, rec["pre"], int(rec["mode"]))
+                else:
+                    runtime_fs.unlink(paths, p)   # descriptor-anchored, no-follow
             except (OSError, PathContainmentError) as exc:
-                raise ConfigError(f"recovery-required: journal cleanup failed ({exc}); "
+                raise ConfigError(f"recovery-required: rollback failed ({exc}); "
                                   "journal retained") from exc
-            raise ConfigError("config transaction failed and was rolled back: "
-                              f"{failure}") from failure
         try:
-            runtime_fs.unlink(paths, jp)              # success — remove the journal
+            runtime_fs.unlink(paths, jp)          # rolled back cleanly
         except (OSError, PathContainmentError) as exc:
             raise ConfigError(f"recovery-required: journal cleanup failed ({exc}); "
                               "journal retained") from exc
+        raise ConfigError("config transaction failed and was rolled back: "
+                          f"{failure}") from failure
+    try:
+        runtime_fs.unlink(paths, jp)              # success — remove the journal
+    except (OSError, PathContainmentError) as exc:
+        raise ConfigError(f"recovery-required: journal cleanup failed ({exc}); "
+                          "journal retained") from exc
 
 
 

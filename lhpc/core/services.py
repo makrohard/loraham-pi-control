@@ -53,6 +53,11 @@ from .service_base import (ActionResult, ConfigWrite, SourceTxnBlocked, _StopRun
 __all__ = ["ControllerService", "ActionResult", "ConfigWrite", "SourceTxnBlocked",
            "_StopRun", "_canon_git_url", "_proc_start_time", "_proc_ceased"]
 
+# A SHARED config-stability acquire (start/restart) waits at most this long before a typed refusal: long
+# enough to sail past an ordinary EXCLUSIVE config SAVE (milliseconds), short enough that it does NOT hang
+# for the whole install-all run when the bulk boundary holds config EXCLUSIVE — it refuses instead.
+_CONFIG_STABLE_SHARED_TIMEOUT_S = 3.0
+
 
 from .service_webserver import WebserverOpsMixin
 
@@ -108,15 +113,21 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         self._cfg_stable_state = threading.local()
 
     @contextmanager
-    def _config_stable(self):
-        """Hold saved configuration STABLE for the duration of an applied lifecycle transition — a
-        SHARED read lock on the runtime config lock file. Config MUTATIONS take the EXCLUSIVE
-        `config_lock` (LOCK_EX), so a concurrent save (this process or another) WAITS until the
-        protected transition completes, and a start WAITS for an in-progress save. Independent starts
-        share the lock and never serialise. RE-ENTRANT per thread, so a public start/restart nests
-        with the internal `_start_impl`/`_restart_impl` (and stop/start within a restart) without
-        self-deadlock. LOCK ORDER: this guard is acquired BEFORE any lifecycle/resource lock; a
-        lock/read failure raises here so the caller fails typed BEFORE any lifecycle side effect."""
+    def _config_stable(self, exclusive: bool = False):
+        """Hold saved configuration STABLE on the runtime config lock file. Two modes:
+          * SHARED (default) — a read lock for the duration of an applied lifecycle transition. Config
+            MUTATIONS take the EXCLUSIVE `config_lock`, so a concurrent save WAITS for the transition and a
+            start WAITS for an in-progress save; independent starts share and never serialise.
+          * EXCLUSIVE — the install-all bulk boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
+            write inside the boundary reuses this held lock (see `save_config_bundle`) instead of contending
+            on a second descriptor. Acquired BOUNDED (a bulk run must not hang on a stuck holder) → typed
+            `SourceTxnBlocked` on timeout.
+        RE-ENTRANT per thread. The OUTERMOST entry FIXES the mode and holds it UNCHANGED — nested entries are
+        depth-only and NEVER convert it (SH↔EX conversion is not atomic on Linux). Nested exclusive-under-
+        exclusive and shared-under-exclusive are allowed; a nested EXCLUSIVE beneath a SHARED guard is
+        REJECTED (a config mutation must never run under a shared stability guard). LOCK ORDER: acquired
+        BEFORE any lifecycle/resource lock; a failure raises here so the caller fails typed with no side
+        effect. Thread-local mode/fd state is cleared on the outermost exit, including exceptional exits."""
         import fcntl
         from . import runtime_fs
         st = self._cfg_stable_state
@@ -124,11 +135,33 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         if depth == 0:
             fh = runtime_fs.open_lock(self._paths, self._paths.under("config", ".lock"))
             try:
-                fcntl.flock(fh, fcntl.LOCK_SH)
-            except OSError:
+                # BOTH modes acquire BOUNDED (LOCK_NB + poll) → typed busy, so a caller NEVER hangs
+                # indefinitely: a SHARED reader (start/restart) that meets a long-running EXCLUSIVE holder
+                # (the install-all boundary) is REFUSED after a short wait rather than blocking for the
+                # whole run; the EXCLUSIVE acquirer (the boundary) waits the full config timeout for
+                # in-flight SHARED transitions to finish. Uncontended acquisition succeeds immediately.
+                from .config import CONFIG_LOCK_TIMEOUT_S, _CONFIG_LOCK_POLL_S
+                lock_op = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
+                timeout = CONFIG_LOCK_TIMEOUT_S if exclusive else _CONFIG_STABLE_SHARED_TIMEOUT_S
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(fh, lock_op)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise SourceTxnBlocked(
+                                "config-stability lock is busy — a long-running config operation "
+                                "holds it; try again shortly")
+                        time.sleep(_CONFIG_LOCK_POLL_S)
+            except BaseException:
                 fh.close()
                 raise
             st.fh = fh
+            st.exclusive = exclusive
+        elif exclusive and not getattr(st, "exclusive", False):
+            # Never convert a held SHARED guard to EXCLUSIVE; a config mutation must not run beneath it.
+            raise RuntimeError("config-stability: EXCLUSIVE requested beneath a SHARED guard")
         st.depth = depth + 1
         try:
             yield
@@ -136,10 +169,19 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
             st.depth -= 1
             if st.depth == 0:
                 try:
-                    fcntl.flock(st.fh, fcntl.LOCK_UN)
+                    try:
+                        fcntl.flock(st.fh, fcntl.LOCK_UN)
+                    finally:
+                        st.fh.close()
                 finally:
-                    st.fh.close()
                     st.fh = None
+                    st.exclusive = False
+
+    def _holds_config_exclusive(self) -> bool:
+        """True iff THIS thread currently holds the config-stability guard in EXCLUSIVE mode — the only
+        state in which a config write may reuse the held lock (see `save_config_bundle`)."""
+        st = self._cfg_stable_state
+        return getattr(st, "depth", 0) > 0 and getattr(st, "exclusive", False)
 
     # ---- config / installer ---------------------------------------------
 

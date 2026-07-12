@@ -1,16 +1,30 @@
 {% extends "base.html" %}
 {% block title %}HMAC Password — {{ action }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
-  {# A run is ACTIVE only while genuinely in progress. An interrupted (driver-gone) run is terminal:
-     the pre-start card returns so the operator can start fresh, and the poller stays off. #}
-  {% set active = st and not st.unsafe and st.phase == 'running' %}
+  {# `active` is passed from the view (a run genuinely in progress). It MUST come from the context, not a
+     Jinja {% set %} here: a block-local set is invisible to the sibling `scripts` block, which gates the
+     live poller. An interrupted (driver-gone) run is terminal: the pre-start card returns, the poller stays off. #}
 
+  {# --- Unreadable/malformed state: FAIL CLOSED. No Apply until the corrupt evidence is archived. --- #}
   {% if st and st.unsafe %}
-  <div class="depnote depnote-bad">The HMAC apply state is unreadable or malformed ({{ st.reason }}).</div>
+  <div class="card">
+    <header><h2>HMAC apply state unreadable</h2></header>
+    <div class="body">
+      <p class="depnote depnote-bad">The HMAC apply state is unreadable or malformed ({{ st.reason }}).
+        Starting a new run is blocked until the corrupt state is archived (the file is preserved as evidence).</p>
+      <form method="post" action="{{ url_for('hmac_apply_recover_route', sid=sid, action=action) }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="warnbtn">Archive the corrupt state</button>
+        <a class="btnlink" href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Cancel</a>
+      </form>
+    </div>
+  </div>
   {% endif %}
 
-  {# --- Pre-start: this page IS the warning; Apply starts the run. Suppressed while one is live. --- #}
-  {% if not active %}
+  {# --- Pre-start: this page IS the warning; Apply starts the run. Suppressed while a run is live, while the
+     state is malformed (st.unsafe), AND while a persisted run is blocking-unsafe (phase=='unsafe') — the
+     recovery card handles that case; showing Apply would contradict the blocking safety state. --- #}
+  {% if not active and not (st and (st.unsafe or st.phase == 'unsafe')) %}
   <div class="card">
     <header><h2>HMAC Password — {{ action_label }}</h2></header>
     <div class="body">
@@ -26,24 +40,42 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <p><button type="submit" class="{{ 'warnbtn' if action != 'enable' else '' }}">
           Apply — {{ action_label }}</button>
-          <a href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Cancel</a></p>
+          <a class="btnlink" href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Cancel</a></p>
       </form>
     </div>
   </div>
   {% endif %}
 
-  {# --- Run view: live step pills + one log window (or the historical result). --- #}
+  {# --- Run view: a LIVE run (running) or a BLOCKING unsafe run is an OPEN card; a finished run
+     (done/failed/interrupted) is COLLAPSED history — the page never opens onto an old task list/log
+     (mirrors install-all). Malformed state (st.unsafe) is handled by the fail-closed card above. --- #}
   {% if st and not st.unsafe %}
+  {% set collapsed = st.phase in ('done', 'failed', 'interrupted') %}
+  {% if collapsed %}
+  <details class="card" id="hmac-run" data-run="{{ st.run_id }}" data-sid="{{ st.sid }}">
+    <summary>Last run {{ st.run_id[:8] }} — HMAC {{ st.action }},
+      {{ 'done' if st.phase == 'done' else
+         ('ended unexpectedly — incomplete' if st.phase == 'interrupted' else 'failed') }}{% if st.finished_at %},
+      finished {{ st.finished_at }}{% endif %} (historical result — expand to view)</summary>
+  {% else %}
   <div class="card" id="hmac-run" data-run="{{ st.run_id }}" data-sid="{{ st.sid }}">
     <header>
       <h2>HMAC {{ st.action }} <span class="pill">{{ st.run_id[:8] }}</span></h2>
-      <span class="badge badge-{{ 'running' if st.phase == 'running' else
-              ('ok' if st.phase == 'done' else 'failed') }}" id="hmac-status">
-        {{ 'in progress' if st.phase == 'running' else
-           ('done' if st.phase == 'done' else
-            ('ended unexpectedly — incomplete' if st.phase == 'interrupted' else 'failed')) }}</span>
+      <span class="badge badge-{{ 'running' if st.phase == 'running' else 'failed' }}" id="hmac-status">
+        {{ 'in progress' if st.phase == 'running' else 'UNSAFE — build not proven stopped' }}</span>
     </header>
+  {% endif %}
     <div class="body">
+      {% if st.phase == 'unsafe' %}
+      <p class="depnote depnote-bad"><strong>Unsafe:</strong> the firmware build could not be proven
+        stopped — it MIGHT still be running. Inspect processes (<code>ps</code>) and terminate any stray
+        build before recovering.</p>
+      <form method="post" action="{{ url_for('hmac_apply_recover_route', sid=sid, action=action) }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="run_id" value="{{ st.run_id }}">
+        <button type="submit" class="warnbtn">Recover — I have checked; no build process remains</button>
+      </form>
+      {% endif %}
       <table class="tasklist" id="hmac-steps">
         <tr><th>Step</th><th>Status</th></tr>
         {% for s in st.steps %}
@@ -56,11 +88,20 @@
         {% endfor %}
       </table>
       {% if st.detail %}<p class="depnote depnote-warn">{{ st.detail }}</p>{% endif %}
-      <p class="muted loglabel">Apply log (live, in execution order)</p>
-      <pre class="logbox logbox-tall" id="hmac-logbox">{{ log_seed }}</pre>
-      <p><a href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Back to Apps</a></p>
+      <p class="muted loglabel">Apply log (LHPC narration, in execution order)</p>
+      <pre class="logbox logbox-half" id="hmac-logbox">{{ log_seed }}</pre>
+      <p class="muted loglabel">Task logs (every step end-to-end, each under its own header)</p>
+      <pre class="logbox logbox-half" id="hmac-complog">{{ complog_seed }}</pre>
+      {# Abort lives at the bottom-left while a run is live (yellow warn button). #}
+      {% if st.phase == 'running' %}
+      <form method="post" action="{{ url_for('hmac_apply_abort_route', sid=sid, action=action) }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="run_id" value="{{ st.run_id }}">
+        <button type="submit" class="warnbtn">Abort</button>
+      </form>
+      {% endif %}
     </div>
-  </div>
+  {% if collapsed %}</details>{% else %}</div>{% endif %}
   {% endif %}
 {% endblock %}
 {% block scripts %}

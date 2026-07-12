@@ -295,12 +295,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
             welcome=service.bulk_welcome(),
+            tasks=service.running_tasks(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
     def dash_signature_api():  # noqa: ANN202
         # Cheap structural-state signature; the dashboard reloads only when it changes.
         return jsonify(sig=service.dash_signature())
+
+    @app.get("/api/tasks")
+    def tasks_api():  # noqa: ANN202
+        # Running-task banner feed (install-all + HMAC apply). STRICTLY read-only — no marker mutation.
+        return jsonify(tasks=service.running_tasks())
 
     _SRC_LABELS = (("pinned", "Known working"), ("dev", "Development"),
                    ("stable", "Latest stable"))
@@ -488,14 +494,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
             abort(404)
         st = service.hmac_apply_status()
-        log_seed = ""
-        if st and not st.get("unsafe"):
+        # `active` is computed HERE (not with a Jinja {% set %} inside a block — that would be
+        # invisible to the sibling `scripts` block, so the live poller would never load).
+        active = bool(st and not st.get("unsafe") and st.get("phase") == "running")
+        log_seed = complog_seed = ""
+        # Seed the windows ONLY for a TERMINAL run (no live poller then). While RUNNING, the poller fills
+        # both from offset 0 — seeding too would double-render the head.
+        if st and not st.get("unsafe") and not active:
             log_seed = service.hmac_apply_log_chunk(st["run_id"], 0).get("data", "")
+            complog_seed = service.hmac_component_log_seed(st["run_id"])
         label, warning = _HMAC_ACTIONS[action]
         return render_template(
             "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
             sid=sid, action=action, action_label=label, warning=warning,
-            st=st, log_seed=log_seed)
+            st=st, active=active, log_seed=log_seed, complog_seed=complog_seed)
 
     @app.post("/stacks/<sid>/hmac/<action>/apply")
     def hmac_apply_run(sid, action):  # noqa: ANN202
@@ -504,6 +516,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
             abort(404)
         res = service.hmac_apply_start(sid, action)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hmac_apply_page", sid=sid, action=action))
+
+    @app.post("/stacks/<sid>/hmac/<action>/abort")
+    def hmac_apply_abort_route(sid, action):  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
+            abort(404)
+        res = service.hmac_apply_abort(sid, request.form.get("run_id", ""))
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("hmac_apply_page", sid=sid, action=action))
+
+    @app.post("/stacks/<sid>/hmac/<action>/recover")
+    def hmac_apply_recover_route(sid, action):  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
+            abort(404)
+        res = service.hmac_apply_recover(sid, request.form.get("run_id", ""))
         flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 
@@ -516,9 +548,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             offset = int(request.args.get("offset", "0"))
         except ValueError:
             offset = -1
+        try:
+            ci = int(request.args.get("ci", "0"))
+            co = int(request.args.get("co", "0"))
+        except ValueError:
+            ci, co = 0, 0
         if st and not st.get("unsafe"):
             out["run_id"] = st["run_id"]
             out["log"] = service.hmac_apply_log_chunk(st["run_id"], offset)
+            out["complog"] = service.hmac_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
     def _effective_freshness(entry, current_head: str) -> str:
@@ -674,6 +712,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # (they append their own port).
             req_host=_url_host(request.host or ""),
             ws_console_addr=_console_addr((_ws or {}).get("desired", {}).get("port", "")),
+            tasks=service.running_tasks(),
             confirm=None,
         )
         ctx.update(over)

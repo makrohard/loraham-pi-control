@@ -38,6 +38,12 @@ class JobResult:
     returncode: int
     log_path: str
     tail: list[str] = field(default_factory=list)
+    # Controlled (cancellable) runner only:
+    cancelled: bool = False          # stopped by a cooperative cancellation request
+    unsafe: bool = False             # process cessation OR safe output draining could NOT be proven
+    unsafe_scope: str = ""           # "session-unverified" | "escaped-or-output-unverified"
+    log_write_failed: bool = False   # the detailed log could not be persisted -> NOT success (not unsafe)
+    session_ident: dict | None = None  # the build session's identity (for a persisted unsafe marker)
 
     @property
     def ok(self) -> bool:
@@ -54,6 +60,8 @@ def run_job(
     paths,
     timeout: float = DEFAULT_TIMEOUT_S,
     env: dict | None = None,
+    redactor=None,
+    should_cancel=None,
 ) -> JobResult:
     """Run one bounded command (structured argv, shell=False), persist its output,
     return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
@@ -90,7 +98,8 @@ def run_job(
             # fails under load ("CLI accepts --radio help"). The log still streams
             # (fd redirect); only the tools' own block buffering remains.
             result = run_streaming(argv, timeout=timeout, log_fh=log_fh,
-                                   cwd=cwd, env={**(env or {}), "PYTHONUNBUFFERED": "1"})
+                                   cwd=cwd, env={**(env or {}), "PYTHONUNBUFFERED": "1"},
+                                   redactor=redactor, should_cancel=should_cancel)
             try:
                 log_fh.flush()
                 os.fsync(log_fh.fileno())
@@ -114,16 +123,36 @@ def run_job(
         except OSError:
             pass
 
+    # A drained-but-UNPERSISTED log: the child may have exited 0 and been proven stopped, but its detailed
+    # log could not be written — never report that as a success (the persisted evidence is incomplete).
+    log_write_failed = getattr(result, "log_write_failed", False)
     if result.timed_out:
         state = JobState.TIMEOUT
-    elif result.returncode == 0:
+    elif result.returncode == 0 and not log_write_failed:
         state = JobState.SUCCEEDED
     else:
         state = JobState.FAILED
 
     tail: deque[str] = deque(output.splitlines(), maxlen=DEFAULT_MAX_TAIL)
+    if log_write_failed:
+        tail.append("[job output could not be fully persisted to its log — treated as FAILED]")
+    # Controlled-runner outcome: an UNVERIFIED stop (session members not proven ceased, or the output
+    # pipe not proven drained) is a distinct blocking condition — the build MIGHT still be executing.
+    cancelled = getattr(result, "cancelled", False)
+    may_run = getattr(result, "may_still_be_running", False)
+    out_unv = getattr(result, "output_unverified", False)
+    # EITHER unproven condition is independently blocking — session members not proven ceased OR the output
+    # pipe not proven drained (an escaped descendant still holds stdout). `output_unverified` must flag unsafe
+    # even on a clean rc=0 exit of the DIRECT child: the SUCCEEDED direct process does not prove a descendant
+    # stopped. (`may_still_be_running` is only ever set by the cancel/timeout terminate path.)
+    unsafe = bool(may_run or out_unv)
+    scope = ("session-unverified" if may_run
+             else ("escaped-or-output-unverified" if out_unv else ""))
     return JobResult(name=name, state=state, returncode=result.returncode,
-                     log_path=str(log_path), tail=list(tail))
+                     log_path=str(log_path), tail=list(tail),
+                     cancelled=cancelled, unsafe=unsafe, unsafe_scope=scope,
+                     log_write_failed=log_write_failed,
+                     session_ident=getattr(result, "session_ident", None))
 
 
 def tail_log(log_path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> list[str]:

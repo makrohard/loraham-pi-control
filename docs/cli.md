@@ -44,7 +44,7 @@ does is available here too.
 `lhpc bootstrap [--yes]` — create the runtime root and a starter config.
 
 ### install
-`lhpc install [<stack>] [--check] [--source pinned|dev|stable] [--yes]` — adopt/verify managed sources into the runtime root. `--check` is a dry run.
+`lhpc install [<stack>] [--check] [--source pinned|dev|stable] [--yes]` — adopt/verify managed sources into the runtime root. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
 
 ### install-all
 `lhpc install-all [--source pinned|dev|stable] [--no-tests] [--tx] [--yes]` — install/update, build and test **all** stacks in one guided run. `--tx` transmits one bounded test frame per ready band (real RF — dummy loads); it requires host tests.
@@ -140,6 +140,12 @@ lhpc webserver cert discard-export <label>
 
 ### self-update
 `lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` — check for, or apply, lhpc's own update. `--apply` fast-forwards and restarts the console; `--overwrite` resets a diverged/dirty checkout; `--repair-integration` reinstalls the managed console + updater units.
+
+### hmac
+`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — MeshCom HMAC (bridge↔firmware) password. `status` prints enabled/disabled (default stack: meshcom). `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes) — without `--yes` they warn and print the confirm hint; with `--yes` they apply, streaming each step (secret → firmware → bridge → node). The secret value is never printed. Password-auth is on by default at install. `abort` cooperatively cancels a running apply (SIGTERM to the driver, which stops the build and writes the terminal state). `recover` clears a blocking `unsafe` state left when a cancelled/timed-out build could not be proven stopped — auto for a `session-unverified` scope once the session is proven gone, or as your explicit acknowledgement (after inspecting `ps`) for an `escaped-or-output-unverified` scope.
+
+### _hmac-apply
+Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.
 
 ### help
 `lhpc help [<topic>]` — detailed help on a topic: `safety`, `resources`, `profiles`.

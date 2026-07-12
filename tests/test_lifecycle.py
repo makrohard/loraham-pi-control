@@ -61,6 +61,35 @@ def test_run_job_failure_state(tmp_path):
     assert not res.ok and res.returncode == 1
 
 
+def test_run_job_output_unverified_alone_is_unsafe(tmp_path):
+    # P1: an escaped descendant holding the output pipe open (output_unverified) makes the job UNSAFE even
+    # when the DIRECT child exited 0 — a SUCCEEDED direct process does NOT prove a descendant stopped.
+    class _Runner:
+        def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
+                          redactor=None, should_cancel=None):
+            log_fh.write("built ok\n")
+            return CommandResult(0, "", "", output_unverified=True)   # clean exit, pipe NOT proven drained
+
+    res = run_job(_Runner(), name="build-x", argv=["true"], cwd=None,
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path))
+    assert res.returncode == 0                                        # the direct child succeeded
+    assert res.unsafe is True and res.unsafe_scope == "escaped-or-output-unverified"
+
+
+def test_run_job_log_write_failure_is_not_success(tmp_path):
+    # P2: a clean-exiting, fully-drained build whose LOG could not be persisted must NOT be SUCCEEDED — the
+    # recorded evidence is incomplete (but it is not `unsafe`: cessation/draining were proven).
+    class _Runner:
+        def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
+                          redactor=None, should_cancel=None):
+            return CommandResult(0, "", "", log_write_failed=True)
+
+    res = run_job(_Runner(), name="build-x", argv=["true"], cwd=None,
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path))
+    assert not res.ok and res.returncode == 0 and res.log_write_failed is True
+    assert not res.unsafe                                             # proven stop/drain -> not unsafe
+
+
 def test_stop_without_process_identity(tmp_path):
     # No ownership record and no process identity -> nothing owned to stop.
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE)
