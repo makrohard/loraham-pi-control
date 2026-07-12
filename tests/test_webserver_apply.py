@@ -111,3 +111,49 @@ def test_controller_component_isolation(tmp_path):
     for verb in ("install", "update", "uninstall", "clean", "build", "test", "start", "stop"):
         r = getattr(svc, verb)("loraham-pi-control")
         assert not r.ok and "self-update" in " ".join(r.next_commands)
+
+
+# --- unified "Apply" (configure + apply in one action) + exposure gate + monitor live_scope ----------
+
+def test_configure_apply_remote_no_auth_needs_elevated_confirmation(tmp_path):
+    # Single Apply must STILL refuse remote no-auth without the elevated typed confirmation, and save
+    # nothing (the safety invariant survives the Save+Apply merge).
+    svc = _svc(tmp_path)
+    r = svc.webserver_configure_apply(bind="0.0.0.0", access_mode="no-auth",
+                                      allowed_cidrs=["0.0.0.0/0"])          # no confirmation
+    assert not r.ok and "elevated confirmation" in r.summary
+    assert svc.config().webserver.remote_exposed is False                  # nothing written
+
+
+def test_configure_apply_saves_remote_with_elevated_confirmation(tmp_path):
+    # WITH the elevated confirmation it saves ALL fields in one write (incl. remote_exposed derived
+    # from bind + allowed_cidrs), then applies (apply itself may repair-require without nginx here).
+    svc = _svc(tmp_path)
+    svc.webserver_configure_apply(bind="0.0.0.0", access_mode="no-auth",
+                                  allowed_cidrs=["0.0.0.0/0"], confirm=True, confirm_public=True)
+    cfg = svc.config().webserver
+    assert cfg.bind == "0.0.0.0" and cfg.remote_exposed is True and cfg.access_mode == "no-auth"
+    assert list(cfg.allowed_cidrs) == ["0.0.0.0/0"]
+
+
+def test_configure_apply_loopback_needs_no_confirmation(tmp_path):
+    # A loopback config derives remote_exposed=False and applies with no confirmation gate.
+    svc = _svc(tmp_path)
+    svc.webserver_configure_apply(bind="127.0.0.1", port=8443)
+    cfg = svc.config().webserver
+    assert cfg.bind == "127.0.0.1" and cfg.remote_exposed is False
+
+
+def test_plan_exposure_elevates_and_flags_cleartext_http():
+    from lhpc.core.config import WebserverConfig
+    p = webserver.plan_exposure(WebserverConfig(bind="0.0.0.0", remote_exposed=True,
+                                                allowed_cidrs=("192.168.0.0/24",),
+                                                scheme="http", access_mode="no-auth"))
+    assert p["remote"] and p["danger"] == "elevated" and p["cleartext"] is True
+
+
+def test_monitor_view_exposes_live_scope(tmp_path):
+    from lhpc.core.config import WebserverConfig
+    v = webserver.monitor_view(Paths(runtime_root=tmp_path), WebserverConfig(),
+                               live_listener_scope="loopback")
+    assert v["live_scope"] == "loopback" and v["pending"] is False

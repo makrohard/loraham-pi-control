@@ -313,13 +313,13 @@ def test_view_disabled_proxy_is_absent_and_not_pending(tmp_path):
     assert v["listen_scope"] == "absent" and v["pending"] is False
 
 
-def test_stacks_panel_shows_live_scope_and_pending_apply(tmp_path):
-    # The stacks-page Webserver header states the LIVE scope + a pending-Apply flag on drift.
+def test_stacks_panel_shows_live_scope(tmp_path):
+    # The stacks-page Webserver header states the LIVE listener scope as a status pill.
     app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 1}])
     svc.stack_web_configure("meshcom", mode="local", port=8444)
     body = app.test_client().get("/stacks").get_data(as_text=True)
     assert 'id="stack-webserver-meshcom"' in body
-    assert "live: all interfaces" in body and "pending Apply" in body
+    assert "live: all interfaces" in body
 
 
 # --- web routes ---------------------------------------------------------------------------------------

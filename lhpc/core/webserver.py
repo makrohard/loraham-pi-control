@@ -80,7 +80,8 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
             problems.append("remote_exposed is false but bind is non-loopback; refuse "
                             "(set bind=127.0.0.1 or enable remote exposure explicitly)")
         return {"remote": False, "problems": problems, "danger": "none",
-                "public": False, "cidrs": list(cfg.allowed_cidrs)}
+                "public": False, "cidrs": list(cfg.allowed_cidrs),
+                "no_auth": cfg.access_mode == "no-auth", "cleartext": cfg.scheme == "http"}
 
     # Exposing remotely:
     if not bind_is_remote:
@@ -88,12 +89,14 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
     if not cfg.allowed_cidrs:
         problems.append("remote exposure requires at least one allowed source CIDR")
     public = any(_is_public_default_route(c) for c in cfg.allowed_cidrs)
-    danger = "elevated" if public else "normal"
-    if cfg.access_mode == "no-auth":
-        danger = "elevated"      # remote + no client auth is always a strong-confirmation case
+    no_auth = cfg.access_mode == "no-auth"
+    cleartext = cfg.scheme == "http"
+    # Remote + (public | no client auth | unencrypted http) each demand the strong phrase — mirror
+    # plan_stack_exposure so the console and a per-stack proxy elevate on the same conditions.
+    danger = "elevated" if (public or no_auth or cleartext) else "normal"
     return {"remote": True, "problems": problems, "danger": danger,
             "public": public, "cidrs": list(cfg.allowed_cidrs),
-            "no_auth": cfg.access_mode == "no-auth"}
+            "no_auth": no_auth, "cleartext": cleartext}
 
 
 def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
@@ -762,6 +765,11 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
             "scheme": cfg.scheme,
         },
         "effective": effective,                 # last proven; empty => unknown
+        # Live console-port scope for the compact summary pill (exposed/loopback/absent/None), and a
+        # derived drift flag (live listener disagrees with desired remote intent).
+        "live_scope": scope,
+        "pending": bool(scope is not None
+                        and (scope == "absent" or cfg.remote_exposed != (scope == "exposed"))),
         "checks": checks,
         "system_deps": system_deps,
         "pki": pki.pki_status(paths),

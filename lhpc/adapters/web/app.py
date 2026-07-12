@@ -1258,8 +1258,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             fields["dns_sans"] = [x.strip() for x in f.get("dns_sans", "").split(",") if x.strip()]
         if "ip_sans" in f:
             fields["ip_sans"] = [x.strip() for x in f.get("ip_sans", "").split(",") if x.strip()]
-        r = service.webserver_configure(**fields)
+        if "cidrs" in f:
+            fields["allowed_cidrs"] = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
+        # Single "Apply": save-and-apply. remote_exposed is derived from bind in the service; a remote/
+        # public/no-auth/http config needs the typed confirmation (same contract as the per-stack proxy).
+        phrase = f.get("confirm_phrase", "").strip()
+        r = service.webserver_configure_apply(
+            **fields, confirm=phrase in ("enable-remote", "enable-remote-danger"),
+            confirm_public=(phrase == "enable-remote-danger"))
         flash(r.summary, "ok" if r.ok else "err")
+        for d in r.details:
+            flash(d, "warn")
         return _ws_back()
 
     @app.post("/stacks/<stack_id>/webserver")
@@ -1272,7 +1281,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         f = request.form
         cidrs = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
         phrase = f.get("confirm_phrase", "").strip()
-        r = service.stack_web_configure(
+        # Single "Apply": save-and-apply in one action (autosave, then validate + reload).
+        r = service.stack_web_configure_apply(
             stack_id,
             mode=(f.get("mode") or None),
             port=(f.get("port") or None),
@@ -1281,14 +1291,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             cidrs=cidrs if "cidrs" in f else None,
             confirm=phrase in ("enable-remote", "enable-remote-danger"),
             confirm_public=(phrase == "enable-remote-danger"))
-        # A successful save is only INTENT — surface it as a warning (yellow), not a green "done",
-        # so the operator sees it still needs Apply. Details (incl. any bypass warning) ride along.
-        flash(r.summary + (" — click Apply to make it live." if r.ok else ""),
-              "warn" if r.ok else "err")
+        flash(r.summary, "ok" if r.ok else "err")
         for d in r.details:
             flash(d, "warn" if r.ok else "err")
-        # Anchor the webserver panel itself (NOT ?cfg, which opens Settings). The panel reopens via
-        # the client's action memory / the hash, and the page focuses it.
+        # Anchor the webserver panel itself (NOT ?cfg, which opens Settings).
         return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
 
     @app.route("/webserver/expose", methods=["POST"])

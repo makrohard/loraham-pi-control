@@ -210,13 +210,6 @@ a.iface { text-decoration: none; color: var(--brand); }
 .complist .iface { display: block; width: fit-content; margin: .15rem 0 0 1.4rem; }
 /* Web-UI links read as buttons — give them breathing room above and below. */
 .complist .iface-web { margin-top: .5rem; margin-bottom: .5rem; padding: .2rem .55rem; }
-/* `.act.ws-apply` (0,0,2,0) out-specifies `.act { margin: 0 }` (0,0,1,0) below — spacing only. The Apply
-   button itself now uses the SAME outline look as every other blue button (no filled override). */
-.act.ws-apply { margin-top: 1.25rem; margin-bottom: 1rem; }
-/* Pending Apply: the per-stack webserver Apply turns yellow while saved settings are not live yet.
-   `.act.ws-apply button.pending` (0,0,3,1) out-specifies the outline `.act button` / base `button`. */
-.act.ws-apply button.pending { background: var(--warnbtn-bg); color: var(--warnbtn-ink); border-color: var(--warnbtn-border); }
-.act.ws-apply button.pending:hover { background: var(--warn); color: #1a1400; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
                    padding: .1rem .5rem; cursor: pointer;

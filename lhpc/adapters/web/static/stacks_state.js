@@ -169,13 +169,7 @@
   //    chain, so a link to another row can never leave two main rows open. The toggle-save above then
   //    re-persists exactly that chain.
   //  - Only a plain reload (no explicit target) restores the saved open set.
-  //  - Pending-Apply auto-open is the last resort, when nothing else opened.
-  var restoredAny = false;
-  if (!target) { restoredAny = restoreOpenSet(); }
-  if (!target && !restoredAny) {
-    var pend = document.querySelector("details[data-ws-pending]");   // querySelector => the FIRST one only
-    if (pend) { target = pend; }
-  }
+  if (!target) { restoreOpenSet(); }
   if (target) { openWithAncestors(target); }
 
   // --- scroll (after the open relayout changes page height) --------------------------------------

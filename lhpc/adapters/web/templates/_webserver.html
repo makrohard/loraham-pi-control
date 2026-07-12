@@ -1,19 +1,85 @@
-{# Controller-owned Webserver component, rendered INLINE in the controller row on /stacks
-   (a nested collapsible at the same level as Update). Requires: mon (webserver_monitor data),
-   modes, certs, loopback. GET is cached/read-only. Security decisions live in the service. #}
+{# Controller-owned Webserver console, rendered INLINE in the /stacks controller row. Same shape as the
+   per-stack panels: status pills in the summary, a Settings section (one "Apply" that saves + validates +
+   reloads; remote exposure is just bind=0.0.0.0 + CIDRs + the typed confirmation), a Monitor section, and
+   the controller-only Certificates section. Requires: mon, modes, certs, loopback. GET is read-only. #}
 {% from "_macros.html" import flash_classes %}
 <details class="advcfg ws-comp" id="webserver-row">
-  <summary>Webserver (HTTPS / mTLS)</summary>
+  <summary>Webserver (HTTPS / mTLS)
+    <span class="pill">{{ mon.desired.access_mode }} · :{{ mon.desired.port }}</span>
+    {# LIVE console-port scope (from /proc/net/tcp), the truth which may differ from desired until Apply. #}
+    {% if mon.live_scope == 'exposed' %}<span class="pill">live: all interfaces</span>
+    {% elif mon.live_scope == 'loopback' %}<span class="pill">live: loopback</span>
+    {% else %}<span class="ver ver-yellow">live: not listening</span>{% endif %}
+    {% if not mon.pki.server_ca.present %}<span class="ver ver-red">PKI absent</span>{% endif %}
+  </summary>
 
-  {# ---- Monitor (cached evidence only; collapsed by default) ---- #}
+  {# ===== Settings ===== #}
+  <details class="advcfg" open>
+    <summary>Settings</summary>
+    <section class="cfgsec">
+      {% if mon.desired.scheme == 'http' %}
+        <p class="flash flash-warn"><strong>Unencrypted listener.</strong> Client certificates are
+          presented during the TLS handshake, so <code>http</code> cannot authenticate anyone — the
+          access mode must be <code>no-auth</code>.</p>
+      {% endif %}
+      {# Single "Apply": saves ALL fields then validates + reloads. remote_exposed follows `bind`
+         (0.0.0.0 → remote); a remote/public/no-auth/http config needs the typed confirmation below. #}
+      <form method="post" action="{{ url_for('webserver_configure') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <table class="paramgrid dptab">
+          <tr><th>Bind</th>
+            <td><input name="bind" value="{{ mon.desired.bind }}" autocomplete="off"></td>
+            <td class="dphelp muted">127.0.0.1 (loopback) or 0.0.0.0 (remote/LAN)</td></tr>
+          <tr><th>Port</th>
+            <td><input name="port" type="number" min="1" max="65535" value="{{ mon.desired.port }}" autocomplete="off"></td>
+            <td class="dphelp muted">HTTPS port (default 8443)</td></tr>
+          <tr><th>Scheme</th>
+            <td><select name="scheme" class="schemesel" data-authsel="ws-authsel">
+              <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
+              <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
+            </select></td>
+            <td class="dphelp muted">http disables client-certificate auth</td></tr>
+          <tr><th>Access mode</th>
+            <td><select name="access_mode" id="ws-authsel">
+              {% for m in modes %}
+                <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
+                  {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select></td>
+            <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
+          <tr><th>Allowed CIDRs</th>
+            <td><input name="cidrs" value="{{ mon.desired.allowed_cidrs|join(',') }}" placeholder="192.168.0.0/24" autocomplete="off"></td>
+            <td class="dphelp muted">Required when bind is 0.0.0.0 (remote)</td></tr>
+          <tr><th>DNS SANs</th>
+            <td><input name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}" autocomplete="off"></td>
+            <td class="dphelp muted">Hostnames for the server certificate</td></tr>
+          <tr><th>IP SANs</th>
+            <td><input name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}" autocomplete="off"></td>
+            <td class="dphelp muted">LAN IPs for the server certificate (never 0.0.0.0)</td></tr>
+          <tr><th>Confirm</th>
+            <td><input name="confirm_phrase" autocomplete="off"></td>
+            <td class="dphelp muted">Remote (bind 0.0.0.0) needs <code>enable-remote</code> — or
+              <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth, or http remote</td></tr>
+        </table>
+        <button type="submit">Apply</button>
+      </form>
+      {# Reset — distinct safety function (loopback defaults + disable every proxy + prove cessation). #}
+      <form method="post" action="{{ url_for('webserver_reset') }}" class="cfgreset">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input name="confirm_phrase" placeholder="type 'reset'" autocomplete="off">
+        <button type="submit">Reset to defaults</button>
+      </form>
+      <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off; it
+        never deletes CAs, certificates, CRL, revocation history, exports, or the session secret.</p>
+    </section>
+  </details>
+
+  {# ===== Monitor ===== #}
   <details class="advcfg">
     <summary>Monitor</summary>
     <section class="cfgsec">
-      {# logs link in the body (not the summary) — no interactive element nested in the summary (a11y). #}
       <p><a class="logslink" href="{{ url_for('webserver_logs', src='access') }}" target="_blank" rel="noopener" aria-label="webserver access logs">logs</a></p>
-      {% for w in mon.warnings %}
-        <p class="flash {{ flash_classes(w.level) }}">{{ w.text }}</p>
-      {% endfor %}
+      {% for w in mon.warnings %}<p class="flash {{ flash_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
       <ul class="kv">
         <li>Local IP address: <code>{{ mon.local_ip or 'unknown' }}</code>
           {% if mon.local_ip %}<span class="muted">→ https://{{ mon.local_ip }}:{{ mon.desired.port }}/ (remote)</span>{% endif %}</li>
@@ -44,83 +110,7 @@
     </section>
   </details>
 
-  {# ---- Settings (collapsed) — one setting per line: name, input, short description ---- #}
-  <details class="advcfg settings">
-    <summary>Settings</summary>
-    <section class="cfgsec">
-      <form method="post" action="{{ url_for('webserver_configure') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label for="ws-bind">Bind</label>
-          <input id="ws-bind" name="bind" value="{{ mon.desired.bind }}">
-          <span class="muted">127.0.0.1 (loopback) or 0.0.0.0 (remote)</span></p>
-        <p class="setting"><label for="ws-port">Port</label>
-          <input id="ws-port" name="port" value="{{ mon.desired.port }}">
-          <span class="muted">HTTPS port (default 8443)</span></p>
-        <p class="setting"><label for="ws-scheme">Scheme</label>
-          <select id="ws-scheme" name="scheme" class="schemesel" data-authsel="ws-authsel">
-            <option value="https"{{ ' selected' if mon.desired.scheme == 'https' else '' }}>https</option>
-            <option value="http"{{ ' selected' if mon.desired.scheme == 'http' else '' }}>http</option>
-          </select>
-          <span class="muted">http disables client-certificate auth entirely (no TLS handshake)</span></p>
-        <p class="setting"><label for="ws-authsel">Access mode</label>
-          <select name="access_mode" id="ws-authsel">
-            {% for m in modes %}
-              {# Cosmetic only — webserver_configure refuses http + a cert-based mode server-side. #}
-              <option value="{{ m }}"{{ ' selected' if m == mon.desired.access_mode else '' }}
-                {%- if mon.desired.scheme == 'http' and m != 'no-auth' %} disabled{% endif %}>{{ m }}</option>
-            {% endfor %}
-          </select>
-          <span class="muted">Client-certificate (mTLS) policy</span></p>
-        <p class="setting"><label for="ws-dns-sans">DNS SANs</label>
-          <input id="ws-dns-sans" name="dns_sans" value="{{ mon.desired.dns_sans|join(',') }}">
-          <span class="muted">Comma-separated hostnames for the server certificate</span></p>
-        <p class="setting"><label for="ws-ip-sans">IP SANs</label>
-          <input id="ws-ip-sans" name="ip_sans" value="{{ mon.desired.ip_sans|join(',') }}">
-          <span class="muted">Comma-separated LAN IPs (never 0.0.0.0)</span></p>
-        <button type="submit">Save desired config</button>
-      </form>
-      <form method="post" action="{{ url_for('webserver_apply') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <button type="submit">Apply (validate + reload)</button>
-      </form>
-
-      <h3>Remote exposure</h3>
-      <form method="post" action="{{ url_for('webserver_expose') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label for="ws-expose-cidrs">Allowed CIDRs</label>
-          <input id="ws-expose-cidrs" name="cidrs" placeholder="192.168.0.0/24">
-          <span class="muted">At least one required for remote exposure</span></p>
-        <p class="setting"><label for="ws-expose-access-mode">Access mode</label>
-          <select id="ws-expose-access-mode" name="access_mode">
-            <option value="">(keep)</option>
-            {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-          </select></p>
-        <p class="setting"><label for="ws-expose-confirm">Confirm</label>
-          <input id="ws-expose-confirm" name="confirm_phrase" autocomplete="off">
-          <span class="muted">Type <code>enable-remote</code> — or <code>enable-remote-danger</code>
-            for public <code>0.0.0.0/0</code> / no-auth remote</span></p>
-        <button type="submit">Enable remote exposure</button>
-      </form>
-      <form method="post" action="{{ url_for('webserver_disable_remote') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <button type="submit">Disable remote</button>
-      </form>
-
-      <h3>Reset</h3>
-      <form method="post" action="{{ url_for('webserver_reset') }}">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p class="setting"><label for="ws-reset-confirm">Confirm</label>
-          <input id="ws-reset-confirm" name="confirm_phrase" autocomplete="off">
-          <span class="muted">Type <code>reset</code> to confirm</span></p>
-        <button type="submit">Reset to default</button>
-      </form>
-      <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off;
-        it never deletes CAs, certificates, CRL, revocation history, exports, or the session
-        secret. Verify to prove the remote listener has ceased.</p>
-    </section>
-  </details>
-
-  {# ---- Certificates (collapsed) ---- #}
+  {# ===== Certificates (controller-only; unchanged) ===== #}
   <details class="advcfg">
     <summary>Certificates</summary>
     <section class="cfgsec">
@@ -174,5 +164,4 @@
       </table>
     </section>
   </details>
-
 </details>

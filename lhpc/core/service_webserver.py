@@ -115,6 +115,55 @@ class WebserverOpsMixin:
         return ActionResult(True, "webserver configuration saved (desired; run verify/apply)",
                             next_commands=["lhpc webserver verify"])
 
+    def webserver_configure_apply(self, *, bind=None, port=None, scheme=None, access_mode=None,
+                                  dns_sans=None, ip_sans=None, allowed_cidrs=None,
+                                  confirm=False, confirm_public=False) -> "ActionResult":
+        """Unified controller Settings action (the single 'Apply' button): derive `remote_exposed` from
+        `bind`, gate remote exposure with `plan_exposure` (elevated confirm for public/no-auth/http), then
+        — only on accept — save ALL fields in ONE write (incl. `remote_exposed` + `allowed_cidrs`), add the
+        host IP SAN + reissue the server cert on exposure, and apply (staged validate + reload). On refusal
+        it saves nothing and applies nothing. Folds in the former dedicated Remote-exposure form."""
+        from . import config as _config, webserver as _ws
+        from .config import WebserverConfig
+        from .validators import ValidationError
+        cur = self.config().webserver
+        e_bind = cur.bind if bind is None else bind
+        e_port = cur.port if port is None else int(port)
+        e_scheme = cur.scheme if scheme is None else scheme
+        e_access = cur.access_mode if access_mode is None else access_mode
+        e_cidrs = tuple(cur.allowed_cidrs) if allowed_cidrs is None else tuple(allowed_cidrs)
+        e_dns = tuple(cur.dns_sans) if dns_sans is None else tuple(dns_sans)
+        e_ip = tuple(cur.ip_sans) if ip_sans is None else tuple(ip_sans)
+        remote = not _ws._is_loopback_bind(e_bind)          # remote_exposed follows the bind
+        probe = WebserverConfig(bind=e_bind, port=e_port, scheme=e_scheme, access_mode=e_access,
+                                remote_exposed=remote, allowed_cidrs=e_cidrs,
+                                dns_sans=e_dns, ip_sans=e_ip)
+        plan = _ws.plan_exposure(probe)
+        if plan["problems"]:
+            return ActionResult(False, "cannot apply webserver configuration", details=plan["problems"])
+        if plan["remote"]:
+            if plan["danger"] == "elevated" and not confirm_public:
+                what = ("a public source range (0.0.0.0/0)" if plan["public"]
+                        else "no client authentication" if plan.get("no_auth")
+                        else "an unencrypted (http) listener")
+                return ActionResult(False, f"remote exposure with {what} needs elevated confirmation",
+                                    details=["re-run with the elevated confirmation to proceed"])
+            if not confirm:
+                return ActionResult(False, "remote exposure needs explicit confirmation",
+                                    details=["re-run with confirmation to proceed"])
+        try:
+            _config.save_webserver_config(self._paths, bind=e_bind, port=e_port, scheme=e_scheme,
+                                          access_mode=e_access, remote_exposed=remote,
+                                          allowed_cidrs=list(e_cidrs), dns_sans=list(e_dns),
+                                          ip_sans=list(e_ip))
+        except (ValidationError, _config.ConfigError) as exc:
+            return ActionResult(False, f"invalid webserver config: {exc}")
+        self._invalidate_config()
+        san_notes = self._expose_add_san_and_reissue() if remote else []
+        ar = self.webserver_apply()
+        return ActionResult(ar.ok, ar.summary, details=[*san_notes, *ar.details],
+                            next_commands=ar.next_commands, data=ar.data)
+
     # ---- per-stack web-UI reverse proxies -------------------------------------------------
 
     def stack_web_upstream(self, stack_id: str):
@@ -266,6 +315,17 @@ class WebserverOpsMixin:
         details.append("lhpc webserver apply           # render + validate + reload nginx")
         return ActionResult(True, f"web UI proxy for '{stack_id}' saved (desired; run apply)",
                             details=details, next_commands=["lhpc webserver apply"])
+
+    def stack_web_configure_apply(self, stack_id: str, **kwargs) -> "ActionResult":
+        """Unified per-stack Settings action (the single 'Apply' button): save this proxy's policy (with
+        its two-level typed confirmation) then apply (staged validate + reload). Save-only failures (incl.
+        a needed confirmation) short-circuit — nothing is applied."""
+        r = self.stack_web_configure(stack_id, **kwargs)
+        if not r.ok:
+            return r
+        ar = self.webserver_apply()
+        return ActionResult(ar.ok, ar.summary, details=[*r.details, *ar.details],
+                            next_commands=ar.next_commands, data=ar.data)
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
                          confirm_public=False) -> "ActionResult":
