@@ -88,7 +88,7 @@ def load_manifest(path: Path | None = None) -> tuple[Stack, ...]:
     """Load and parse the manifest into Stack/Component objects (read-only). Also VALIDATES
     any present `[controller]` table (strict parser, result discarded) so an invalid
     controller declaration is rejected here — not silently ignored by dashboard, bootstrap,
-    bulk, or normal stack paths. The `tuple[Stack, ...]` return contract is unchanged."""
+    auto-install, or normal stack paths. The `tuple[Stack, ...]` return contract is unchanged."""
     stacks, _controller = _load_stacks_and_controller(path)
     return stacks
 

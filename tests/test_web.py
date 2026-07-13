@@ -157,7 +157,7 @@ def test_get_routes_make_no_network_calls(tmp_path):
     for path in ("/", "/stacks", "/stacks/daemon",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
                  "/api/dash-signature", "/api/logs/loraham-daemon",
-                 "/install-all", "/api/install-all"):
+                 "/auto-install", "/api/auto-install"):
         client.get(path)
     offenders = [c for c in calls if _is_network(c)]
     assert not offenders, f"GET routes ran network commands: {offenders}"

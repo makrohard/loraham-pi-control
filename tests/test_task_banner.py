@@ -1,4 +1,4 @@
-"""PART 4: the running-task indicator banner (install-all + HMAC apply), server-authoritative expiry."""
+"""PART 4: the running-task indicator banner (auto-install + HMAC apply), server-authoritative expiry."""
 
 import calendar
 import json
@@ -201,8 +201,8 @@ def test_running_tasks_is_get_safe_never_cleans_jobs(tmp_path, monkeypatch):
     assert True not in called                             # never the mutating (cleanup=True) variant
 
 
-def test_spawn_web_job_blocked_by_bulk_gate(tmp_path, monkeypatch):
+def test_spawn_web_job_blocked_by_auto_install_gate(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    monkeypatch.setattr(ControllerService, "_bulk_gate", lambda self: "a bulk run is already in progress")
+    monkeypatch.setattr(ControllerService, "_auto_install_gate", lambda self: "a auto-install run is already in progress")
     log, admission, reason = svc.spawn_web_job("build", "meshcom")
-    assert log is None and admission == "blocked" and "blocked" in reason and "bulk" in reason
+    assert log is None and admission == "blocked" and "blocked" in reason and "auto-install" in reason

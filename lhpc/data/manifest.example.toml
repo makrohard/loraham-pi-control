@@ -14,7 +14,7 @@
 # =====================================================================
 # Controller identity: LHPC's OWN checkout (a dedicated NON-stack entity).
 # Observable + self-updatable, but NEVER installed/adopted/built/tested/
-# started/stopped/uninstalled/cleaned/bulk-processed. Exactly these keys are
+# started/stopped/uninstalled/cleaned/auto-install-processed. Exactly these keys are
 # allowed; source_path and branch are FIXED. Use `lhpc self-update` to change it.
 # =====================================================================
 [controller]
@@ -1007,7 +1007,7 @@ main = "meshcom-qemu"
   bin = "build/meshcom-loraham-bridge"
   # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
   # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
-  # build/CTestTestfile.cmake, so install-all runs this right after the build. COMPONENT-level key
+  # build/CTestTestfile.cmake, so auto-install runs this right after the build. COMPONENT-level key
   # (must precede the [[…param]] sub-tables, else TOML binds it to the last param table and it is
   # lost — same gotcha as meshcom-qemu's test).
   test = "ctest --test-dir build --output-on-failure"
@@ -1151,7 +1151,7 @@ main = "meshcom-qemu"
   run = "scripts/run.sh {env} {qemu}"
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
-  # itself and stops exactly that instance afterwards — so install-all runs it right after the
+  # itself and stops exactly that instance afterwards — so auto-install runs it right after the
   # build (no running stack needed). A guest that is already running is probed and left alone.
   # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
   # last param table (TOML), leaving the component with no test ("skipped (no host tests)").

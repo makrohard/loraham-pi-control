@@ -65,7 +65,7 @@ managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you):
 
 ```bash
 lhpc config operator --callsign W1ABC     # your callsign (inherited by all licensed stacks)
-lhpc install-all                          # install + build + test all stacks (adds --source, --no-tests, --tx)
+lhpc auto-install                          # install + build + test all stacks (adds --source, --no-tests, --tx)
 ```
 
 You can do the same from the web console's **Stacks** page. Then start what you need
@@ -89,7 +89,7 @@ python3 -m venv ~/loraham-pi-control/venv/lhpc
 # 4. Adopt + build + test all stacks (add venv/lhpc/bin to PATH, or use the full path)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc config operator --callsign W1ABC   # your callsign
-lhpc install-all                        # guided install + build + test of every stack
+lhpc auto-install                        # guided install + build + test of every stack
 lhpc web                                # http://127.0.0.1:8770/  (loopback console)
 ```
 For the HTTPS/mTLS console instead of `lhpc web`, install nginx and follow

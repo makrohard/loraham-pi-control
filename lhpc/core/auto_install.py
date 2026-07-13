@@ -1,19 +1,19 @@
-"""Bulk install/update run: operation lease, immutable-run context, and durable run state.
+"""auto-install install/update run: operation lease, immutable-run context, and durable run state.
 
-The bulk driver ("Install and Build all Stacks") holds ONE outer operation boundary —
+The auto-install driver ("Install and Build all Stacks") holds ONE outer operation boundary —
 config-stable shared lock + the source-transaction index handoff + ALL affected source-path
 locks — for its whole lifetime, and composes the existing typed lifecycle operations under
 it. This module owns the pure data pieces:
 
-  * `BulkOperationContext` — the EXPLICIT proof object passed to every composed operation
+  * `AutoInstallOperationContext` — the EXPLICIT proof object passed to every composed operation
     (install/update/build/test and the TX phase's start/stop). Ops validate that the
-    context is the thread's ACTIVE bulk boundary and that it covers their source paths;
+    context is the thread's ACTIVE auto-install boundary and that it covers their source paths;
     they never reacquire or release the covered locks.
-  * the LEASE marker `state/bulk-lease.json` — durable visibility + crash evidence of the
+  * the LEASE marker `state/auto-install-lease.json` — durable visibility + crash evidence of the
     held boundary, bound to the driver's full process identity. A DEAD lease remains
-    MUTATION-BLOCKING for new bulk runs until the explicit acknowledgement flow verifies
+    MUTATION-BLOCKING for new auto-install runs until the explicit acknowledgement flow verifies
     the dead identity, verifies no pending source transaction, and archives it (no-follow).
-  * the RUN marker `state/bulk-install.json` — the task-list state machine, written at
+  * the RUN marker `state/auto-install.json` — the task-list state machine, written at
     EVERY transition; a write failure STOPS the run (no progress without durable
     evidence). Read tri-state: absent | valid | unsafe — malformed is NEVER "absent".
 
@@ -31,22 +31,24 @@ from . import runtime_fs
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
-LEASE = ("state", "bulk-lease.json")
-MARKER = ("state", "bulk-install.json")
-RESERVATION = ("state", "bulk-start.json")
+LEASE = ("state", "auto-install-lease.json")
+MARKER = ("state", "auto-install.json")
+RESERVATION = ("state", "auto-install-start.json")
+PLAN = ("state", "auto-install-plan.json")
 
 RUN_STATES = ("preparing", "running", "completed", "completed-with-failures",
-              "interrupted", "unsafe")
+              "aborted", "interrupted", "unsafe")
 STACK_STATUSES = ("pending", "downloading", "building", "testing",
                   "success", "fail", "blocked")
 TX_STATUSES = ("skipped", "pending", "running", "success", "fail")
 
-# Terminal run states: a NEW run may start over these without acknowledgement.
-TERMINAL_OK = ("completed", "completed-with-failures")
+# Terminal run states: a NEW run may start over these without acknowledgement. `aborted` is a clean
+# operator-requested stop (retryable, no orphan-ack needed); `unsafe`/`interrupted` are NOT here.
+TERMINAL_OK = ("completed", "completed-with-failures", "aborted")
 
 
-class BulkOperationContext:
-    """Explicit outer bulk-operation boundary handed to every composed operation.
+class AutoInstallOperationContext:
+    """Explicit outer auto-install-operation boundary handed to every composed operation.
 
     Carries the run identity and the EXACT set of source paths whose locks (plus the
     config-stability lock) the driver holds. `covers()` is the fail-closed check each
@@ -66,30 +68,30 @@ def log_name_for(run_id: str) -> str:
     """The run's log filename — derived EXCLUSIVELY from a validated run_id (marker `log`
     fields are informational and never opened). Raises ValueError on a bad id."""
     if not RUN_ID_RE.match(run_id or ""):
-        raise ValueError("invalid bulk run id")
-    return f"install-all-{run_id[:8]}"
+        raise ValueError("invalid auto-install run id")
+    return f"auto-install-{run_id[:8]}"
 
 
-# A component build/test log created BY a bulk run: a single flat leaf under logs/ whose
+# A component build/test log created BY a auto-install run: a single flat leaf under logs/ whose
 # name embeds the FULL 32-hex run id, so it is EXACTLY owned by one run (a prior run's log
 # can never collide with — or be mistaken for — this run's, even when two run ids share
 # their first eight hex characters) and is a strict, controller-derived character set.
 # Browser-supplied strings are NEVER used to build these.
 _LOG_BASE_RE = re.compile(r"^[0-9A-Za-z._-]{1,80}$")
-COMPONENT_LOG_RE = re.compile(r"^install-all-[0-9a-f]{32}-[0-9A-Za-z._-]{1,80}\.log$")
+COMPONENT_LOG_RE = re.compile(r"^auto-install-[0-9a-f]{32}-[0-9A-Za-z._-]{1,80}\.log$")
 
 
 def component_log_prefix(run_id: str) -> str:
-    """The exact `install-all-<full-run-id>-` filename prefix that binds a component log to
+    """The exact `auto-install-<full-run-id>-` filename prefix that binds a component log to
     ONE run — used both to build names and to protect/recognise a run's logs. Raises
     ValueError on a bad run id."""
     if not RUN_ID_RE.match(run_id or ""):
-        raise ValueError("invalid bulk run id")
-    return f"install-all-{run_id}-"
+        raise ValueError("invalid auto-install run id")
+    return f"auto-install-{run_id}-"
 
 
 def component_log_name(run_id: str, base: str) -> str:
-    """Run-specific component-log filename `install-all-<full-run-id>-<base>.log`. `base`
+    """Run-specific component-log filename `auto-install-<full-run-id>-<base>.log`. `base`
     is a controller-derived job base (e.g. `build-loraham-daemon`, `test-<comp>`, with an
     optional `-<step>` suffix) restricted to a strict charset. Raises ValueError on a bad
     run id or base — never produces a path with separators, `..`, or NULs."""
@@ -111,7 +113,7 @@ def is_component_log_for(run_id: str, name: str) -> bool:
     any other name (including a different run that shares the first eight hex chars)."""
     if not RUN_ID_RE.match(run_id or "") or not COMPONENT_LOG_RE.match(name or ""):
         return False
-    return name.startswith(f"install-all-{run_id}-")
+    return name.startswith(f"auto-install-{run_id}-")
 
 
 def component_logs(marker) -> list:
@@ -161,7 +163,7 @@ def read_lease(paths: Paths):
     except FileNotFoundError:
         return "absent", None
     except (OSError, PathContainmentError, ValueError) as exc:
-        return "unsafe", {"reason": f"bulk lease unreadable ({exc})"}
+        return "unsafe", {"reason": f"auto-install lease unreadable ({exc})"}
     try:
         d = json.loads(raw)
         if (d.get("version") == 1 and RUN_ID_RE.match(str(d.get("run_id", "")))
@@ -171,13 +173,69 @@ def read_lease(paths: Paths):
             return "valid", d
     except (json.JSONDecodeError, TypeError, AttributeError):
         pass
-    return "unsafe", {"reason": "bulk lease malformed"}
+    return "unsafe", {"reason": "auto-install lease malformed"}
 
 
 def clear_lease(paths: Paths) -> bool:
     """Remove OUR OWN lease at the end of the held boundary (driver only)."""
     try:
         runtime_fs.unlink(paths, paths.under(*LEASE))
+        return True
+    except FileNotFoundError:
+        return True
+    except (OSError, PathContainmentError):
+        return False
+
+
+# ---- per-stack selection plan (fixed file, written under the start lock before the reservation) ----
+
+def write_plan(paths: Paths, run_id: str, stacks: dict) -> bool:
+    """Persist the per-stack auto-install selection for `run_id`. `stacks` =
+    {sid: {install: bool, version: str, tests: bool, tx: bool}}. Written atomically under the held
+    `auto-install-start` lock, immediately before the reservation, so concurrent starts cannot
+    clobber the single fixed file."""
+    body = json.dumps({"version": 1, "run_id": run_id, "stacks": stacks}, indent=1)
+    try:
+        runtime_fs.write_marker(paths, paths.under(*PLAN), body)
+        return True
+    except (OSError, PathContainmentError):
+        return False
+
+
+def read_plan(paths: Paths):
+    """(state, data), state ∈ absent|valid|unsafe. STRUCTURAL validation only (run_id + a stacks
+    dict whose entries carry a str `version` and bool `install`/`tests`/`tx`); the service layer
+    revalidates run_id-match, keys==scope, and version∈SOURCE_CHOICES."""
+    try:
+        raw = runtime_fs.read_text_regular(paths, paths.under(*PLAN))
+    except FileNotFoundError:
+        return "absent", None
+    except (OSError, PathContainmentError, ValueError) as exc:
+        return "unsafe", {"reason": f"auto-install plan unreadable ({exc})"}
+    try:
+        d = json.loads(raw)
+        stacks = d.get("stacks")
+        if (d.get("version") == 1 and RUN_ID_RE.match(str(d.get("run_id", "")))
+                and isinstance(stacks, dict) and stacks
+                and all(isinstance(v, dict) and isinstance(v.get("version"), str)
+                        and isinstance(v.get("install"), bool)
+                        and isinstance(v.get("tests"), bool)
+                        and isinstance(v.get("tx"), bool)
+                        for v in stacks.values())):
+            return "valid", d
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    return "unsafe", {"reason": "auto-install plan malformed"}
+
+
+def clear_plan(paths: Paths, run_id: str) -> bool:
+    """Remove the plan ONLY when it belongs to `run_id` (so an old/stale driver can never delete a
+    newer run's plan). Absent is success."""
+    state, d = read_plan(paths)
+    if state == "valid" and d.get("run_id") != run_id:
+        return True                                   # not ours — leave it
+    try:
+        runtime_fs.unlink(paths, paths.under(*PLAN))
         return True
     except FileNotFoundError:
         return True
@@ -222,7 +280,7 @@ def archive(paths: Paths, which, suffix: str) -> tuple:
         return False, f"could not archive {src.name}: {exc}"
 
 
-# ---- bulk-start reservation --------------------------------------------------------------
+# ---- auto-install-start reservation --------------------------------------------------------------
 
 
 RES_PHASES = ("spawning", "spawned", "claimed", "orphan-risk")
@@ -241,9 +299,9 @@ def _reservation_body(run_id: str, pid: int, ident: dict, phase: str,
 
 def write_reservation(paths: Paths, run_id: str, pid: int, ident: dict,
                       phase: str = "spawning") -> tuple:
-    """EXCLUSIVE no-clobber, no-follow creation of the bulk-start reservation (the launch
+    """EXCLUSIVE no-clobber, no-follow creation of the auto-install-start reservation (the launch
     slot binding the validated run_id). Phase `spawning` exists only INSIDE the held
-    bulk-start lock; before the lock releases the slot is REBOUND to the spawned child
+    auto-install-start lock; before the lock releases the slot is REBOUND to the spawned child
     (`bind_reservation`) so the durable liveness authority is the actual run process,
     never the long-lived web server. (True, "") on success; (False, reason) otherwise."""
     if not RUN_ID_RE.match(run_id or ""):
@@ -257,9 +315,9 @@ def write_reservation(paths: Paths, run_id: str, pid: int, ident: dict,
         m.close()
         return True, ""
     except FileExistsError:
-        return False, "a bulk-start reservation already exists"
+        return False, "a auto-install-start reservation already exists"
     except (OSError, PathContainmentError) as exc:
-        return False, f"bulk-start reservation could not be persisted ({exc})"
+        return False, f"auto-install-start reservation could not be persisted ({exc})"
 
 
 def mark_reservation_child(paths: Paths, run_id: str, pid: int, ident: dict,
@@ -267,7 +325,7 @@ def mark_reservation_child(paths: Paths, run_id: str, pid: int, ident: dict,
     """Record whether a child process may exist for a still-`spawning` slot: "uncertain"
     IMMEDIATELY BEFORE spawn_job (so any later residual record demands the operator's
     orphan confirmation), "none" when it is durably known no live child can remain
-    (nothing spawned, or cessation identity-proven). Caller holds the bulk-start lock."""
+    (nothing spawned, or cessation identity-proven). Caller holds the auto-install-start lock."""
     if child not in ("none", "uncertain"):
         return False
     try:
@@ -283,7 +341,7 @@ def bind_reservation(paths: Paths, run_id: str, pid: int, ident: dict,
                      phase: str) -> bool:
     """Atomic rebind of the reservation to the CHILD's pid + complete identity (phase
     `spawned`, performed before the launch lock releases) or to the claiming driver
-    (phase `claimed`). Caller holds the bulk-start lock and has verified run_id/phase."""
+    (phase `claimed`). Caller holds the auto-install-start lock and has verified run_id/phase."""
     if phase not in RES_PHASES:
         return False
     try:
@@ -302,7 +360,7 @@ def read_reservation(paths: Paths):
     except FileNotFoundError:
         return "absent", None
     except (OSError, PathContainmentError, ValueError) as exc:
-        return "unsafe", {"reason": f"bulk-start reservation unreadable ({exc})"}
+        return "unsafe", {"reason": f"auto-install-start reservation unreadable ({exc})"}
     try:
         d = json.loads(raw)
         if (d.get("version") == 1 and RUN_ID_RE.match(str(d.get("run_id", "")))
@@ -313,7 +371,7 @@ def read_reservation(paths: Paths):
             return "valid", d
     except (json.JSONDecodeError, TypeError, AttributeError):
         pass
-    return "unsafe", {"reason": "bulk-start reservation malformed"}
+    return "unsafe", {"reason": "auto-install-start reservation malformed"}
 
 
 def write_orphan_risk(paths: Paths, run_id: str, pid: int, reason: str,
@@ -321,7 +379,7 @@ def write_orphan_risk(paths: Paths, run_id: str, pid: int, reason: str,
     """Record the TERMINAL `orphan-risk` reservation phase: a spawned child whose
     cessation could not be proven. Durable, mutation-blocking evidence carrying the child
     PID when known and the exact reason; acknowledgement requires the operator's explicit
-    inspection confirmation. Overwrites OUR slot under the held bulk-start lock."""
+    inspection confirmation. Overwrites OUR slot under the held auto-install-start lock."""
     body = json.dumps({
         "version": 1, "run_id": run_id, "pid": int(pid) if pid else 1,
         "phase": "orphan-risk", "reason": reason,
@@ -364,7 +422,11 @@ def new_marker(run_id: str, mode: str, source: str, tests: bool, tx: bool,
             "stacks": [{"id": s["id"], "name": s.get("name", s["id"]),
                         "status": "pending", "detail": "", "op": s.get("op", ""),
                         "tests": {"ran": False, "ok": None, "detail": ""},
-                        "tx": {"ran": False, "ok": None, "detail": ""}}
+                        "tx": {"ran": False, "ok": None, "detail": ""},
+                        # Per-stack SELECTION (version/tests/tx) for the historical view. Carried only
+                        # when the driver supplied it — never synthesized (a version="" would fail
+                        # valid_marker); older markers simply omit it.
+                        **({"selected": s["selected"]} if "selected" in s else {})}
                        for s in stacks]}
 
 
@@ -382,6 +444,13 @@ def valid_marker(d) -> bool:
                         and st.get("status") in STACK_STATUSES
                         and isinstance(st.get("tests"), dict)
                         and isinstance(st.get("tx"), dict)
+                        # `selected` is OPTIONAL (back-compat with pre-selection markers); when
+                        # present it must be complete + valid.
+                        and ("selected" not in st
+                             or (isinstance(st["selected"], dict)
+                                 and st["selected"].get("version") in ("pinned", "dev", "stable")
+                                 and isinstance(st["selected"].get("tests"), bool)
+                                 and isinstance(st["selected"].get("tx"), bool)))
                         for st in d["stacks"]))
     except (TypeError, AttributeError):
         return False
@@ -405,11 +474,11 @@ def read_marker(paths: Paths):
     except FileNotFoundError:
         return "absent", None
     except (OSError, PathContainmentError, ValueError) as exc:
-        return "unsafe", {"reason": f"bulk run marker unreadable ({exc})"}
+        return "unsafe", {"reason": f"auto-install run marker unreadable ({exc})"}
     try:
         d = json.loads(raw)
     except json.JSONDecodeError:
-        return "unsafe", {"reason": "bulk run marker malformed (not JSON)"}
+        return "unsafe", {"reason": "auto-install run marker malformed (not JSON)"}
     if not valid_marker(d):
-        return "unsafe", {"reason": "bulk run marker malformed (schema)"}
+        return "unsafe", {"reason": "auto-install run marker malformed (schema)"}
     return "valid", d

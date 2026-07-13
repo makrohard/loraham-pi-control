@@ -32,7 +32,7 @@ genuine duplicates; never delete a distinct guard. `docs/hardening-0.1.md` is th
 
 - **RF / TX safety** — TX never auto-enabled; TX actions need explicit opt-in + passing tests + a
   callsign; daemon TXMODE apply/readback gating; bounded one-frame TX test.
-  (`test_lifecycle`, `test_daemon_readiness`, `test_truthful_outcomes`, `test_install_all` TX gates.)
+  (`test_lifecycle`, `test_daemon_readiness`, `test_truthful_outcomes`, `test_auto_install` TX gates.)
 - **Resource coordination** — one physical band/SPI owner at a time; conflicting starts refused;
   reslock serialization; recheck-running-after-locks. (`test_reslock`, `test_resource_coord`,
   `test_op_serialization`, `test_race_safety`.)

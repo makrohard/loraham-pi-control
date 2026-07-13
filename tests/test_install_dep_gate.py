@@ -1,6 +1,6 @@
 """Mandatory system dependencies block Install; optional ones only warn — uniformly across the
-service classifier, the CLI, the web confirm page, and install-all (plan preflight + mid-run gate +
-the /install-all page). Deterministic: FakeSystem drives `check_file` presence via `exists`; the one
+service classifier, the CLI, the web confirm page, and auto-install (plan preflight + mid-run gate +
+the /auto-install page). Deterministic: FakeSystem drives `check_file` presence via `exists`; the one
 `cmd` dep (kiss `socat`) is driven by patching `shutil.which`.
 
 Fixtures of note:
@@ -132,33 +132,33 @@ def test_confirm_page_warns_but_allows_apply_on_optional(tmp_path, _socat_absent
     assert 'name="confirmed" value="yes"' in cf              # Apply form still present
 
 
-# --- install-all -----------------------------------------------------------------------------------
+# --- auto-install -----------------------------------------------------------------------------------
 
-def test_install_all_plan_preflight_lists_blocked_and_advises_abort(tmp_path):
-    r = _svc(tmp_path).install_all(apply=False)              # bare FakeSystem -> header deps missing
+def test_auto_install_plan_preflight_lists_blocked_and_advises_abort(tmp_path):
+    r = _svc(tmp_path).auto_install(apply=False)              # bare FakeSystem -> header deps missing
     assert r.ok
     assert any(d.startswith("  [blocked] chat:") for d in r.details)
     assert any("will be SKIPPED" in d for d in r.details)
 
 
-def test_install_all_page_shows_skip_warning_without_disabling_start(tmp_path, monkeypatch):
-    # Isolate the dep card from the bulk-state gate so the Start button's only possible disabler
+def test_auto_install_page_shows_skip_warning_without_disabling_start(tmp_path, monkeypatch):
+    # Isolate the dep card from the auto-install-state gate so the Start button's only possible disabler
     # would be a dep-based one — which we deliberately do NOT add.
-    monkeypatch.setattr(ControllerService, "_bulk_gate", lambda self: "")
+    monkeypatch.setattr(ControllerService, "_auto_install_gate", lambda self: "")
     c = _real_app(tmp_path)
-    body = c.get("/install-all").get_data(as_text=True)
+    body = c.get("/auto-install").get_data(as_text=True)
     assert "will be SKIPPED" in body and "chat" in body      # mandatory-missing stack listed
     assert '<button type="submit" disabled>' not in body     # dep block does NOT disable Start
 
 
-def test_install_all_preflight_helper_classifies_block_vs_warn(tmp_path, _socat_absent):
-    pf = _svc(tmp_path).install_all_dep_preflight()
+def test_auto_install_preflight_helper_classifies_block_vs_warn(tmp_path, _socat_absent):
+    pf = _svc(tmp_path).auto_install_dep_preflight()
     assert any(s["stack"] == "chat" for s in pf["block"])     # ncurses -> block
     assert any(s["stack"] == "kiss" for s in pf["warn"])      # socat -> warn only
 
 
 @pytest.mark.needs_session
-def test_install_all_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
+def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
     # Stub freeze/adopt/build/test so the run reaches the per-stack loop fast — but leave the REAL
     # dep gate in place. meshtastic is independent with mandatory deps missing -> it must be BLOCKED
     # by the early gate, before its source phase is ever entered.
@@ -170,12 +170,12 @@ def test_install_all_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
                         locked=False: PlanAction("adopt", "", f"adopt {comp.id}",
                                                  status="done", detail="ok"))
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None, **k: ActionResult(True, "built"))
+                        lambda self, t, apply=False, auto_install_ctx=None, **k: ActionResult(True, "built"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
+                        lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "tested"))
     lines = []
-    _svc(tmp_path).install_all(apply=True, tests=True, emit=lines.append)
+    _svc(tmp_path).auto_install(apply=True, tests=True, emit=lines.append)
     joined = "\n".join(lines)
     assert "==== meshtastic: BLOCKED (missing mandatory system deps" in joined
     assert "==== meshtastic: sources ====" not in joined      # never reached the source phase

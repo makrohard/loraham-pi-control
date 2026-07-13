@@ -1,4 +1,4 @@
-/* Running-task indicator: 2 s poll of the read-only /api/tasks (install-all + HMAC + build/test/install
+/* Running-task indicator: 2 s poll of the read-only /api/tasks (auto-install + HMAC + build/test/install
  * jobs). The SERVER owns visibility (done expires after 60 s; failed/unsafe STAY) — the client renders
  * whatever the server returns, keyed by kind+run_id. A `failed` item gets a ✕ (dismiss); an `unsafe` JOB
  * gets a Recover button — both POST (CSRF) to /api/tasks/{dismiss,recover}. CSP-safe: createElement /

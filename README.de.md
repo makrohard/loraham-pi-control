@@ -68,7 +68,7 @@ installieren/bauen/testen:
 
 ```bash
 lhpc config operator --callsign DL1ABC    # dein Rufzeichen (erben alle lizenzierten Stacks)
-lhpc install-all                          # alle Stacks installieren + bauen + testen (auch --source, --no-tests, --tx)
+lhpc auto-install                          # alle Stacks installieren + bauen + testen (auch --source, --no-tests, --tx)
 ```
 
 Dasselbe geht über die Seite **Stacks** der Web-Konsole. Danach starten, was du brauchst
@@ -92,7 +92,7 @@ python3 -m venv ~/loraham-pi-control/venv/lhpc
 # 4. Alle Stacks übernehmen + bauen + testen (venv/lhpc/bin in den PATH aufnehmen)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc config operator --callsign DL1ABC   # dein Rufzeichen
-lhpc install-all                         # geführt: installieren + bauen + testen
+lhpc auto-install                         # geführt: installieren + bauen + testen
 lhpc web                                 # http://127.0.0.1:8770/  (lokale Konsole)
 ```
 Für die HTTPS-/mTLS-Konsole statt `lhpc web` nginx installieren und

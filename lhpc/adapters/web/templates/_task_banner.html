@@ -1,7 +1,7 @@
-{# Running-task indicator (install-all + HMAC + build/test/install jobs). Server-rendered initial state;
+{# Running-task indicator (auto-install + HMAC + build/test/install jobs). Server-rendered initial state;
    taskbanner.js re-renders from the read-only /api/tasks. Colours: running=yellow, done=green,
    failed/unsafe=red. The server owns visibility (done expires after 60 s; failed/unsafe STAY). A `failed`
-   banner gets a ✕ (dismiss); an `unsafe` JOB gets a Recover button; unsafe hmac/install-all keep View →. #}
+   banner gets a ✕ (dismiss); an `unsafe` JOB gets a Recover button; unsafe hmac/auto-install keep View →. #}
 <div class="taskbanner" id="task-banner" data-csrf="{{ csrf_token() }}">
   {% for t in tasks %}
   <div class="taskitem taskitem-{{ t.state }}" data-key="{{ t.kind }}-{{ t.run_id }}"

@@ -558,7 +558,7 @@ class ParamsConfigMixin:
         `block` = missing deps of a MANDATORY (non-optional) component — install must not proceed until
         they are satisfied. `warn` = missing deps of an OPTIONAL component — advisory only, the operator
         may proceed. Run-time capabilities (groups) are excluded from both (they gate start, not install).
-        The SINGLE classifier reused by the CLI, web and install-all gates. GET-safe (no subprocess)."""
+        The SINGLE classifier reused by the CLI, web and auto-install gates. GET-safe (no subprocess)."""
         missing = self.missing_system_deps(target)
         # Unknown optionality defaults to mandatory (fail-safe: block rather than silently skip).
         return {"block": [d for d in missing if d.get("mandatory", True)],
@@ -929,7 +929,7 @@ class ParamsConfigMixin:
             targets.append(("state", self._restart_marker_path(sid), payload, 0o600))
         try:
             if self._holds_config_exclusive():
-                # Inside the install-all bulk boundary this thread ALREADY holds the config lock EXCLUSIVELY
+                # Inside the auto-install auto-install boundary this thread ALREADY holds the config lock EXCLUSIVELY
                 # (config-stability), so reuse it via the module-private locked body rather than contending
                 # on a second descriptor ("config busy"). The assert forbids the locked path under a SHARED
                 # guard — a config mutation must never run beneath a shared stability guard.

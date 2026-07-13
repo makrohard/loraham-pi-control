@@ -1,15 +1,15 @@
-/* Bulk install-all run view: 2 s poll of /api/install-all.
+/* auto-install auto-install run view: 2 s poll of /api/auto-install.
  * - task rows + run badge updated via textContent ONLY (never innerHTML)
  * - append-only log via cursor/offset chunks (byte-capped server-side)
  * - the cursor RESETS when run_id changes (a new run never appends onto the old one)
  * - terminal states slow polling down */
 (function () {
   "use strict";
-  var runCard = document.getElementById("bulk-run");
+  var runCard = document.getElementById("ai-run");
   if (!runCard) return;
-  var logbox = document.getElementById("bulk-logbox");
-  var complog = document.getElementById("bulk-complog");
-  var badge = document.getElementById("bulk-status");
+  var logbox = document.getElementById("ai-logbox");
+  var complog = document.getElementById("ai-complog");
+  var badge = document.getElementById("ai-status");
   var ci = 0, co = 0;                              // component-log stream cursor
   var COMPLOG_MAX = 1500000;                       // big scrollback, front-trimmed
   var runId = runCard.getAttribute("data-run") || "";
@@ -45,7 +45,7 @@
       if (d.run_id === expect) { window.location.reload(); return; }  // marker landed
       if (!d.spawn_live) {
         // The spawn ended WITHOUT our marker: a pre-claim refusal — show its output.
-        window.location.href = "/install-all?spawn=" + encodeURIComponent(expect);
+        window.location.href = "/auto-install?spawn=" + encodeURIComponent(expect);
       }
       return;
     }
@@ -77,6 +77,7 @@
     else if (st.state === "completed") setBadge("run completed", "badge-ok");
     else if (st.state === "completed-with-failures")
       setBadge("completed with failures", "badge-failed");
+    else if (st.state === "aborted") setBadge("aborted by operator", "badge-stopped");
     else setBadge("ended unexpectedly — incomplete", "badge-failed");
     var log = d.log || {};
     if (typeof log.offset === "number") {
@@ -120,7 +121,7 @@
   }
 
   function tick() {
-    fetch("/api/install-all?offset=" + offset + "&ci=" + ci + "&co=" + co,
+    fetch("/api/auto-install?offset=" + offset + "&ci=" + ci + "&co=" + co,
           {cache: "no-store"})
       .then(function (r) { return r.json(); })
       .then(render)
@@ -129,4 +130,91 @@
 
   timer = setInterval(tick, interval);
   tick();
+})();
+
+/* Selection-table assistance (convenience only — the server does the authoritative refuse+warn):
+ * - the "All" master row sets every applicable (enabled) row of its column;
+ * - dependency assistance: a mandatory-and-not-ready dependency of a checked stack is force-checked
+ *   AND disabled (released when nothing needs it); an optional/already-ready dependency is nudged on
+ *   when its dependant is checked but stays editable;
+ * - a disabled-but-checked Install box is re-enabled on submit so it still POSTs its value. */
+(function () {
+  "use strict";
+  var form = document.getElementById("ai-form");
+  var table = document.getElementById("ai-select");
+  if (!form || !table) return;
+  function rows() { return table.querySelectorAll('tr[data-stack]'); }
+  function cell(row, cls) { return row.querySelector("." + cls); }
+  function depsOf(row) {
+    try { return JSON.parse(row.getAttribute("data-deps") || "[]"); } catch (e) { return []; }
+  }
+  var byId = {};
+  rows().forEach(function (r) { byId[r.getAttribute("data-stack")] = r; });
+
+  function bindAll(masterId, rowCls, isSelect) {
+    var m = document.getElementById(masterId);
+    if (!m) return;
+    m.addEventListener("change", function () {
+      rows().forEach(function (r) {
+        var el = cell(r, rowCls);
+        if (!el || el.disabled) return;
+        if (isSelect) el.value = m.value; else el.checked = m.checked;
+      });
+      if (rowCls === "ai-install") recompute();
+    });
+  }
+  bindAll("ai-all-install", "ai-install", false);
+  bindAll("ai-all-tests", "ai-tests", false);
+  bindAll("ai-all-tx", "ai-tx", false);
+  bindAll("ai-all-version", "ai-version", true);
+
+  function recompute() {
+    // start from a clean slate: re-enable every Install box, then re-derive forced ones
+    rows().forEach(function (r) { var b = cell(r, "ai-install"); if (b) b.disabled = false; });
+    var checked = {}, queue = [], seen = {};
+    rows().forEach(function (r) {
+      var b = cell(r, "ai-install"), sid = r.getAttribute("data-stack");
+      if (b && b.checked) { checked[sid] = true; queue.push(sid); }
+    });
+    while (queue.length) {
+      var sid = queue.shift();
+      if (seen[sid]) continue; seen[sid] = true;
+      var row = byId[sid];
+      if (!row) continue;
+      depsOf(row).forEach(function (d) {
+        var depRow = byId[d.stack], b = depRow && cell(depRow, "ai-install");
+        if (!b) return;
+        if (d.mandatory && !d.ready) {          // FORCE: needed and not yet built
+          b.checked = true; b.disabled = true;
+          if (!seen[d.stack]) queue.push(d.stack);
+        }
+      });
+    }
+  }
+
+  function nudge(sid) {                          // one-shot recommend on check (stays editable)
+    var row = byId[sid];
+    if (!row) return;
+    depsOf(row).forEach(function (d) {
+      if (d.mandatory && !d.ready) return;       // handled by recompute (forced)
+      var depRow = byId[d.stack], b = depRow && cell(depRow, "ai-install");
+      if (b && !b.disabled && !b.checked) { b.checked = true; nudge(d.stack); }
+    });
+  }
+
+  rows().forEach(function (r) {
+    var b = cell(r, "ai-install");
+    if (!b) return;
+    b.addEventListener("change", function () {
+      if (b.checked) nudge(r.getAttribute("data-stack"));
+      recompute();
+    });
+  });
+  form.addEventListener("submit", function () {
+    rows().forEach(function (r) {
+      var b = cell(r, "ai-install");
+      if (b && b.disabled && b.checked) b.disabled = false;   // disabled boxes don't POST
+    });
+  });
+  recompute();
 })();

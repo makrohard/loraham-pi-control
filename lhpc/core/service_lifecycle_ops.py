@@ -223,7 +223,7 @@ class LifecycleOpsMixin:
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
-              file_overrides: dict | None = None, bulk_ctx=None) -> ActionResult:
+              file_overrides: dict | None = None, auto_install_ctx=None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
@@ -231,10 +231,10 @@ class LifecycleOpsMixin:
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         from . import reslock
-        if bulk_ctx is not None:
+        if auto_install_ctx is not None:
             order = self._run_order(target) or []
-            ctx_err = self._bulk_ctx_error(
-                bulk_ctx, {c.source.path for _, c in order if c.source})
+            ctx_err = self._auto_install_ctx_error(
+                auto_install_ctx, {c.source.path for _, c in order if c.source})
             if ctx_err:
                 return ActionResult(False, f"Refusing to start '{target}': {ctx_err}")
         if not apply:
@@ -280,7 +280,7 @@ class LifecycleOpsMixin:
                     return ActionResult(False, f"Cannot start '{target}': {busy}",
                                         next_commands=[f"lhpc status {target}"])
         except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. a bulk install-all run holds config
+            # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
             return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -308,7 +308,7 @@ class LifecycleOpsMixin:
                                               daemon_overrides=daemon_overrides,
                                               file_overrides=file_overrides)
         except SourceTxnBlocked as blocked:
-            # The config-stability guard itself was busy (e.g. a bulk install-all run holds config
+            # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
             return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -1164,7 +1164,7 @@ class LifecycleOpsMixin:
         return daemon_sid, release
 
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
-             band: str = "", release_daemon: bool = True, bulk_ctx=None) -> ActionResult:
+             band: str = "", release_daemon: bool = True, auto_install_ctx=None) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
@@ -1172,8 +1172,8 @@ class LifecycleOpsMixin:
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         from . import reslock
-        if bulk_ctx is not None:
-            ctx_err = self._bulk_ctx_error(bulk_ctx, set())
+        if auto_install_ctx is not None:
+            ctx_err = self._auto_install_ctx_error(auto_install_ctx, set())
             if ctx_err:
                 return ActionResult(False, f"Refusing to stop '{target}': {ctx_err}")
         # A daemon stop is FORCED-cascade — resolve that BEFORE acquiring the lock bundle so the
@@ -1485,7 +1485,7 @@ class LifecycleOpsMixin:
                             results=tuple(stopped.results) + tuple(res.results),
                             next_commands=res.next_commands)
 
-    def build(self, target: str, apply: bool = False, bulk_ctx=None,
+    def build(self, target: str, apply: bool = False, auto_install_ctx=None,
               on_component_log=None, log_base_override: str = "",
               redactor=None, should_cancel=None) -> ActionResult:
         if (_r := self._controller_refusal(target)) is not None:
@@ -1536,23 +1536,23 @@ class LifecycleOpsMixin:
         # caught under the index lock before the source locks are taken.
         from . import reslock
         src_paths = sorted({c.source.path for _, c in buildable if c.source})
-        ctx_err = self._bulk_ctx_error(bulk_ctx, src_paths)
+        ctx_err = self._auto_install_ctx_error(auto_install_ctx, src_paths)
         if ctx_err:
             return ActionResult(False, f"Refusing to build '{target}': {ctx_err}")
         try:
             with self._source_operation_guard(src_paths, op="build"):
-                from . import bulk as bulk_mod
+                from . import auto_install as ai_mod
                 details = []
                 ok = True
-                run_id = getattr(bulk_ctx, "run_id", "") if bulk_ctx else ""
+                run_id = getattr(auto_install_ctx, "run_id", "") if auto_install_ctx else ""
                 build_meta: dict = {}
                 for _, comp in buildable:
-                    # BULK / HMAC: run-specific log base + DURABLE ordered registration BEFORE the
+                    # auto-install / HMAC: run-specific log base + DURABLE ordered registration BEFORE the
                     # build runs, so the live stream shows only this run's own logs (the file does not
                     # yet exist under a run-specific name -> no prior content).
                     log_base = None
                     if run_id and on_component_log is not None:
-                        log_base = bulk_mod.component_log_base(run_id, f"build-{comp.id}")
+                        log_base = ai_mod.component_log_base(run_id, f"build-{comp.id}")
                     elif log_base_override:
                         log_base = f"{log_base_override}-build-{comp.id}"
                     if log_base is not None and on_component_log is not None:
@@ -1705,8 +1705,8 @@ class LifecycleOpsMixin:
         src_paths = {c.source.path for c in comps if c.source}
         src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
-        # ---- Part G: refuse up-front (bulk lease / undismissed-unsafe same-source / source-txn busy) ----
-        gate = self._bulk_gate()
+        # ---- Part G: refuse up-front (auto-install lease / undismissed-unsafe same-source / source-txn busy) ----
+        gate = self._auto_install_gate()
         if gate:
             return None, "blocked", f"blocked — {gate}"
         ublk = self._web_unsafe_source_block(src_keys)
@@ -1822,7 +1822,7 @@ class LifecycleOpsMixin:
         and never following a symlink. Returns the number removed. Called at operation
         boundaries; there is no background cleaner."""
         from .paths import PathContainmentError
-        from . import bulk as bulk_mod, jobresult
+        from . import auto_install as ai_mod, jobresult
         protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
         protected = {f"{n}.log" for n in protected} | {n for n in protected}
         # Housekeeping: drop `done` job-result markers older than the banner expiry (failed/unsafe stay),
@@ -1840,22 +1840,22 @@ class LifecycleOpsMixin:
                     protected.add(log)
         except Exception:                                # noqa: BLE001 — pruning must never fail
             pass
-        # Protect the LIVE bulk run's own component build/test logs (requirement #7): its
+        # Protect the LIVE auto-install run's own component build/test logs (requirement #7): its
         # durable descriptors are this run's evidence — a mid-run prune must never remove a
         # component log the stream still owns, even if the retention budget is exceeded.
         # Retired runs' logs carry no such protection and age out normally.
         try:
-            st = self.bulk_status()
+            st = self.auto_install_status()
         except Exception:                        # noqa: BLE001 — pruning must never fail
             st = None
-        bulk_prefix = ""
+        auto_install_prefix = ""
         if st and not st.get("unsafe") and st.get("state") in ("preparing", "running"):
             try:
-                # FULL-run-id component-log prefix (`install-all-<run32>-`) — matches the
+                # FULL-run-id component-log prefix (`auto-install-<run32>-`) — matches the
                 # exact names the run writes; the 8-hex run-log prefix would not.
-                bulk_prefix = bulk_mod.component_log_prefix(st["run_id"])
+                auto_install_prefix = ai_mod.component_log_prefix(st["run_id"])
             except (ValueError, KeyError, TypeError):
-                bulk_prefix = ""
+                auto_install_prefix = ""
         # Protect the LIVE HMAC apply run's detailed build log(s), bound to the FULL run id — while the run
         # is RUNNING or UNSAFE/unresolved (they may be needed to diagnose an unverified cancellation).
         hmac_prefix = ""
@@ -1899,7 +1899,7 @@ class LifecycleOpsMixin:
         logs.sort(reverse=True)                                    # newest first
         removed, kept, total = 0, 0, 0
         for _mtime, name, f, size in logs:
-            if (name in protected or (bulk_prefix and name.startswith(bulk_prefix))
+            if (name in protected or (auto_install_prefix and name.startswith(auto_install_prefix))
                     or (hmac_prefix and name.startswith(hmac_prefix))):
                 continue
             kept += 1
@@ -2088,14 +2088,16 @@ class LifecycleOpsMixin:
                             next_commands=[f"lhpc status {target}"])
 
     def test(self, target: str, tx: bool = False,
-             apply: bool = False, bulk_ctx=None, on_component_log=None) -> ActionResult:
-        """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`)."""
+             apply: bool = False, auto_install_ctx=None, on_component_log=None,
+             should_cancel=None) -> ActionResult:
+        """Run host tests (RX-safe) or a bounded one-frame TX test (`tx=True`). `should_cancel`
+        (auto-install Abort) is polled while each host test runs."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
-        ctx_err = self._bulk_ctx_error(bulk_ctx,
+        ctx_err = self._auto_install_ctx_error(auto_install_ctx,
                                        {c.source.path for _, c in items if c.source})
         if ctx_err:
             return ActionResult(False, f"Refusing to test '{target}': {ctx_err}")
@@ -2117,32 +2119,41 @@ class LifecycleOpsMixin:
             from . import reslock
             details = []
             ok = True
+            test_meta: dict = {}
             src_paths = sorted({c.source.path for _, c in items if c.source and c.test_argv})
-            from . import bulk as bulk_mod
-            run_id = getattr(bulk_ctx, "run_id", "") if bulk_ctx else ""
+            from . import auto_install as ai_mod
+            run_id = getattr(auto_install_ctx, "run_id", "") if auto_install_ctx else ""
             try:
                 with self._source_operation_guard(src_paths, op="host-test"):
                     for _, comp in items:
-                        # An integration test needs the stack already running. A bulk/install-all
+                        # An integration test needs the stack already running. A auto-install/auto-install
                         # sweep builds without starting, so DEFER it there (never a false failure);
-                        # an explicit `lhpc test` (no bulk_ctx) runs it against the running stack.
-                        if comp.test_argv and comp.test_requires_running and bulk_ctx is not None:
+                        # an explicit `lhpc test` (no auto_install_ctx) runs it against the running stack.
+                        if comp.test_argv and comp.test_requires_running and auto_install_ctx is not None:
                             details.append(f"  [deferred] {comp.id}: needs the running stack "
                                            f"(run `lhpc test {target}` after starting it)")
                             continue
-                        # BULK: run-specific test-log base + DURABLE ordered registration
+                        # auto-install: run-specific test-log base + DURABLE ordered registration
                         # BEFORE the test runs (same guarantees as the build path).
                         log_base = None
                         if run_id and on_component_log is not None and comp.test_argv:
-                            log_base = bulk_mod.component_log_base(run_id, f"test-{comp.id}")
+                            log_base = ai_mod.component_log_base(run_id, f"test-{comp.id}")
                             on_component_log(f"{comp.name} — Test log", f"{log_base}.log")
-                        res = life.host_test(comp, log_base=log_base)
+                        res = life.host_test(comp, log_base=log_base, should_cancel=should_cancel)
                         if res is None:
                             details.append(f"  [skip] {comp.id}: no host test")
                             continue
                         ok = ok and res.ok
                         details.append(f"  [{res.state.value}] {comp.id} "
                                        f"(rc {res.returncode}, log {res.log_path})")
+                        # Surface cooperative-cancellation / UNVERIFIED-stop (mirror build()) so the
+                        # auto-install driver persists the correct terminal state; stop the sweep on it.
+                        if getattr(res, "cancelled", False) or getattr(res, "unsafe", False):
+                            test_meta = {"cancelled": res.cancelled, "unsafe": res.unsafe,
+                                         "unsafe_scope": res.unsafe_scope,
+                                         "session_ident": res.session_ident}
+                            ok = False
+                            break
             except SourceTxnBlocked as blocked:
                 return ActionResult(False, f"Host test blocked for '{target}': {blocked}",
                                     next_commands=[f"lhpc status {target}"])
@@ -2150,7 +2161,8 @@ class LifecycleOpsMixin:
                 return ActionResult(False, f"Host test blocked for '{target}': {busy}",
                                     next_commands=[f"lhpc status {target}"])
             return ActionResult(ok, f"Host test {'passed' if ok else 'FAILED'} for '{target}'.",
-                                details=details, next_commands=[f"lhpc status {target}"])
+                                details=details, next_commands=[f"lhpc status {target}"],
+                                data=test_meta)
 
         # TX-capable test — explicit, gated, bounded. TX is a DAEMON operation; the
         # band(s) come from the target's components (or, for the daemon itself, the
@@ -2187,7 +2199,16 @@ class LifecycleOpsMixin:
                                 data={"changes": len(bands)})
         details = []
         ok = True
+        attempted_bands: list = []
         for band in bands:
+            # Operator Abort between frames: stop BEFORE the next transmit. A bare `break` would be
+            # UNtruthful (ok stays True → "PASSED"); return a non-success cancelled result instead.
+            if should_cancel and should_cancel():
+                return ActionResult(
+                    False, f"TX test cancelled by operator (Abort) after {len(attempted_bands)} "
+                    "band attempt(s).", details=details,
+                    data={"cancelled": True, "attempted_bands": attempted_bands})
+            attempted_bands.append(band)                   # a frame may transmit even if unconfirmed
             res = life.run_daemon_tx_test(band, payload)
             ok = ok and res.ok
             details.append(f"  [{'ok' if res.ok else 'fail'}] band {res.band}: {res.detail} "

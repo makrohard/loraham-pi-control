@@ -32,14 +32,14 @@ echo "$EXPECTED_SHA"        # write this down; every step below asserts it
 ```
 
 Capture the starting state: unit + service status, `git status --porcelain`/branch/remotes/
-HEAD, running managed stacks, and any active build/test/bulk job, reservation, source
+HEAD, running managed stacks, and any active build/test/auto-install job, reservation, source
 journal, or self-update journal. Do not proceed from a **dirty** checkout unless its diff is
 captured and accepted.
 
 ## 1 — Quiesce FIRST (before any copy)
 
 Stop the web service **and every managed unit/process that can write under the runtime
-root**, and verify none remain (no jobs, no bulk run, no unresolved journal, no relevant
+root**, and verify none remain (no jobs, no auto-install run, no unresolved journal, no relevant
 PIDs). Hold this quiescent state through copy → verification → clone → cutover, so the trees
 cannot change under the migration. Do **not** attempt a live copy + delta re-sync: the
 no-`--delete` copy rule below means deletions would not mirror safely.

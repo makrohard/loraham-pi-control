@@ -55,7 +55,7 @@ __all__ = ["ControllerService", "ActionResult", "ConfigWrite", "SourceTxnBlocked
 
 # A SHARED config-stability acquire (start/restart) waits at most this long before a typed refusal: long
 # enough to sail past an ordinary EXCLUSIVE config SAVE (milliseconds), short enough that it does NOT hang
-# for the whole install-all run when the bulk boundary holds config EXCLUSIVE — it refuses instead.
+# for the whole auto-install run when the auto-install boundary holds config EXCLUSIVE — it refuses instead.
 _CONFIG_STABLE_SHARED_TIMEOUT_S = 3.0
 
 
@@ -65,7 +65,7 @@ from .service_webserver import WebserverOpsMixin
 from .service_selfupdate import SelfUpdateOpsMixin
 
 
-from .service_bulk import BulkOpsMixin
+from .service_auto_install import AutoInstallOpsMixin
 
 
 from .service_maintenance import MaintenanceOpsMixin
@@ -80,7 +80,7 @@ from .service_lifecycle_ops import LifecycleOpsMixin
 from .service_hmac import HmacOpsMixin
 
 
-class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin):
+class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
 
     `system` and `paths` are injectable so tests drive it with fakes.
@@ -118,9 +118,9 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
           * SHARED (default) — a read lock for the duration of an applied lifecycle transition. Config
             MUTATIONS take the EXCLUSIVE `config_lock`, so a concurrent save WAITS for the transition and a
             start WAITS for an in-progress save; independent starts share and never serialise.
-          * EXCLUSIVE — the install-all bulk boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
+          * EXCLUSIVE — the auto-install auto-install boundary holds `LOCK_EX` for the WHOLE run, so an atomic config
             write inside the boundary reuses this held lock (see `save_config_bundle`) instead of contending
-            on a second descriptor. Acquired BOUNDED (a bulk run must not hang on a stuck holder) → typed
+            on a second descriptor. Acquired BOUNDED (a auto-install run must not hang on a stuck holder) → typed
             `SourceTxnBlocked` on timeout.
         RE-ENTRANT per thread. The OUTERMOST entry FIXES the mode and holds it UNCHANGED — nested entries are
         depth-only and NEVER convert it (SH↔EX conversion is not atomic on Linux). Nested exclusive-under-
@@ -137,7 +137,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
             try:
                 # BOTH modes acquire BOUNDED (LOCK_NB + poll) → typed busy, so a caller NEVER hangs
                 # indefinitely: a SHARED reader (start/restart) that meets a long-running EXCLUSIVE holder
-                # (the install-all boundary) is REFUSED after a short wait rather than blocking for the
+                # (the auto-install boundary) is REFUSED after a short wait rather than blocking for the
                 # whole run; the EXCLUSIVE acquirer (the boundary) waits the full config timeout for
                 # in-flight SHARED transitions to finish. Uncontended acquisition succeeds immediately.
                 from .config import CONFIG_LOCK_TIMEOUT_S, _CONFIG_LOCK_POLL_S
@@ -233,7 +233,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         Raises `reslock.ResourceBusy` if the index or a source lock is contended.
 
                 RE-ENTRANT per THREAD (shared `_held_counts` with the lifecycle guard): a source key
-        already held by an OUTER boundary in this thread — e.g. the bulk-operation lease —
+        already held by an OUTER boundary in this thread — e.g. the auto-install-operation lease —
         is not re-flocked, the index/recovery step is skipped for fully-covered nests (the
         outer boundary performed it and holds the locks, so no foreign journal can appear
         for a covered path), and a nested exit never releases the outer flocks. Independent
@@ -256,6 +256,15 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                                 "resolve it before any source operation")
                         for k in missing:
                             self._acquire_key(src_stack, k, op, "")
+                # OUTERMOST non-auto-install source op: with the source locks now held, recheck the
+                # auto-install gate and REFUSE if a run is running/interrupted/UNSAFE. This closes the
+                # window where an `unsafe` auto-install has released its locks but a process may still
+                # hold the checkout. Nested ops UNDER the auto-install boundary (`missing` empty, fully
+                # covered) skip this, so the run never self-blocks; the run's own op is `auto-install`.
+                if missing and op != "auto-install":
+                    ai_block = self._auto_install_gate()
+                    if ai_block:
+                        raise SourceTxnBlocked(f"an auto-install run needs recovery first — {ai_block}")
                 # Index released; source lock(s) remain held by src_stack for the operation.
                 for k in keys:
                     counts[k] = counts.get(k, 0) + 1
@@ -285,11 +294,11 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         except reslock.ResourceBusy as exc:
             return f"a source operation is already in progress ({getattr(exc, 'key', '')})"
 
-    # ---- bulk run: status, gates, log, ack, spawn, driver (M2.1) -----------
+    # ---- auto-install run: status, gates, log, ack, spawn, driver (M2.1) -----------
 
-    BULK_OP = "install-all"
+    AUTO_INSTALL_OP = "auto-install"
 
-    # Keep in sync with COMPLOG_MAX in static/bulk.js (the live window's scrollback cap, 1.5 MB):
+    # Keep in sync with COMPLOG_MAX in static/auto_install.js (the live window's scrollback cap, 1.5 MB):
     # a historical seed must not be larger than what the live view would keep.
     _COMPLOG_SEED_MAX_BYTES = 1_500_000
     _COMPLOG_SEED_MAX_READS = 512            # hard iteration bound (normal runs drain in <10 reads)
@@ -703,7 +712,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "pinned", bulk_ctx=None, on_admit=None) -> ActionResult:
+                source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
         if (_r := self._controller_refusal(stack_id)) is not None:
             return _r
         if stack_id and self.stack(stack_id) is None:
@@ -741,7 +750,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         install_items = [(st, c) for st in self.stacks()
                          if not stack_id or st.id == stack_id
                          for c in st.components if c.source]
-        ctx_err = self._bulk_ctx_error(bulk_ctx,
+        ctx_err = self._auto_install_ctx_error(auto_install_ctx,
                                        {c.source.path for _, c in install_items})
         if ctx_err:
             return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': "
@@ -755,15 +764,15 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         # WEB-JOB admission (P1-4): a detached web install must record `running` (authoritative admission)
         # only AFTER it holds its source guard, and must mutate nothing if it was superseded meanwhile.
         # Wrap the adoption loop in the ONE source boundary and adopt in the outer-held `locked` mode (exactly
-        # as install-all does under its bulk boundary); a False `on_admit` releases the guard and installs nothing.
+        # as auto-install does under its auto-install boundary); a False `on_admit` releases the guard and installs nothing.
         _guard_paths = sorted({c.source.path for _, c in install_items if c.source})
-        _locked_adopt = (bulk_ctx is not None) or (on_admit is not None)
+        _locked_adopt = (auto_install_ctx is not None) or (on_admit is not None)
         _guard = (self._source_operation_guard(_guard_paths, op="install")
                   if on_admit is not None else contextlib.nullcontext())
         with _guard:
             if on_admit is not None and not on_admit():
                 return ActionResult(False, "Install superseded before admission — nothing was changed.")
-            for path, comp, resolved in groups:
+            for path, comp, selector, resolved in groups:
                 dest = self._paths.resolve_source(path)
                 # DESCRIPTOR-PROVEN skip: only a healthy managed DIRECTORY is "already
                 # installed". Anything else (absent, symlink, regular/special file) flows
@@ -792,7 +801,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                     pass                       # unsafe parent -> adopt_source refuses typed
                 st_of = next((st2 for st2 in self.stacks()
                               if any(c2.id == comp.id for c2 in st2.components)), None)
-                result = self._adopt_dev_fallback(inst, st_of, comp, source, resolved,
+                result = self._adopt_dev_fallback(inst, st_of, comp, selector, resolved,
                                                   force=False,
                                                   locked=_locked_adopt)
                 if result.status == "done":
@@ -804,7 +813,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         # Password-auth by DEFAULT: after a successful source adoption and BEFORE the caller builds the
         # firmware, ensure the meshcom HMAC secret + param exist (idempotent — keeps an existing secret),
         # so the firmware bakes the shared secret in the same install. Covers per-stack + CLI install;
-        # install-all adopts+builds directly (its own hook, before its build). Skip on a failed adopt —
+        # auto-install adopts+builds directly (its own hook, before its build). Skip on a failed adopt —
         # nothing gets built, so don't flip visible HMAC state on a broken install.
         hmac_err = ""
         if not any(a.status == "failed" for a in plan.actions):

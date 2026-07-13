@@ -54,7 +54,7 @@ lhpc/
     service_base.py        # shared types: ActionResult, ConfigWrite, typed exceptions
     service_webserver.py   # nginx/TLS/mTLS console + per-stack proxy operations
     service_selfupdate.py  # controller self-update orchestration + updater integration
-    service_bulk.py        # install-all / bulk-run driver, markers, log streaming
+    service_auto_install.py        # auto-install / ai-run driver, markers, log streaming
     service_maintenance.py # source update / uninstall / clean / known-working / source-check
     service_params.py      # param & config resolution, saves, config-file generation, daemon params
     service_lifecycle_ops.py # start/stop/restart/build/test orchestration, jobs, dashboards
@@ -143,7 +143,7 @@ services itself, interactive components get their copy-paste command on the dash
 LHPC's own checkout is a **dedicated controller identity** — a top-level `[controller]`
 manifest table (strict allow-list; fixed `source_path = "src/loraham-pi-control"` and
 `branch = "main"`), NOT a stack. It is observable and self-updatable but never installed,
-built, started, cleaned, or bulk-processed: every generic verb aimed at its id refuses in
+built, started, cleaned, or auto-install-processed: every generic verb aimed at its id refuses in
 the central service layer and points to `lhpc self-update`.
 
 `controller_identity_live()` reports a **tri-state** verdict, used only at startup refresh,

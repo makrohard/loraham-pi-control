@@ -294,7 +294,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Durable restart-required flags (file reads only): a yellow "Restart now"
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
-            welcome=service.bulk_welcome(),
+            welcome=service.auto_install_welcome(),
             tasks=service.running_tasks(),
             dash_sig=service.dash_signature())
 
@@ -305,7 +305,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/api/tasks")
     def tasks_api():  # noqa: ANN202
-        # Running-task banner feed (install-all + HMAC + build/test/install jobs). STRICTLY read-only.
+        # Running-task banner feed (auto-install + HMAC + build/test/install jobs). STRICTLY read-only.
         return jsonify(tasks=service.running_tasks())
 
     @app.post("/api/tasks/dismiss")
@@ -329,19 +329,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     _SRC_LABELS = (("pinned", "Known working"), ("dev", "Development"),
                    ("stable", "Latest stable"))
 
-    def bulk_mod2_run_id_re():
-        from lhpc.core import bulk as bulk_mod
-        return bulk_mod.RUN_ID_RE
+    def auto_install_mod2_run_id_re():
+        from lhpc.core import auto_install as ai_mod
+        return ai_mod.RUN_ID_RE
 
-    def bulk_mod_terminal_ok():
-        from lhpc.core import bulk as bulk_mod
-        return bulk_mod.TERMINAL_OK
+    def auto_install_mod_terminal_ok():
+        from lhpc.core import auto_install as ai_mod
+        return ai_mod.TERMINAL_OK
 
-    @app.get("/install-all")
-    def install_all_page():  # noqa: ANN202
-        st = service.bulk_status()
-        mode = service.bulk_mode()
-        running = service.bulk_running()
+    @app.get("/auto-install")
+    def auto_install_page():  # noqa: ANN202
+        st = service.auto_install_status()
+        mode = service.auto_install_mode()
+        running = service.auto_install_running()
         # A JUST-SPAWNED run: reservation live but the driver hasn't written its marker
         # yet — show a 'starting' card immediately (never a blank page after the POST).
         starting = False
@@ -350,9 +350,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # run may start over it without acknowledgement) and during the brief "spawning"
         # phase — the POST redirect lands within milliseconds of the spawn.
         if st is None or (not st.get("unsafe")
-                          and st.get("state") in bulk_mod_terminal_ok()):
-            from lhpc.core import bulk as bulk_mod, procident
-            rstate, res = bulk_mod.read_reservation(service._paths)
+                          and st.get("state") in auto_install_mod_terminal_ok()):
+            from lhpc.core import auto_install as ai_mod, procident
+            rstate, res = ai_mod.read_reservation(service._paths)
             if (rstate == "valid"
                     and res.get("phase") in ("spawning", "spawned", "claimed")
                     and res.get("run_id") != (st or {}).get("run_id")
@@ -364,48 +364,72 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # actual output instead of silently falling back to the old run's card.
         spawn_failed = ""
         spawn_arg = request.args.get("spawn", "")
-        if (spawn_arg and bulk_mod2_run_id_re().match(spawn_arg)
+        if (spawn_arg and auto_install_mod2_run_id_re().match(spawn_arg)
                 and (st is None or st.get("run_id") != spawn_arg)):
-            chunk = service.bulk_log_chunk(spawn_arg, 0)
+            chunk = service.auto_install_log_chunk(spawn_arg, 0)
             if chunk.get("data"):
                 spawn_failed = chunk["data"][-4000:]
-        gate = service._bulk_gate()
-        recovery = service.bulk_recovery_reason()
+        gate = service._auto_install_gate()
+        recovery = service.auto_install_recovery_reason()
         needs_ack = bool(recovery)
         orphan_risk = "ORPHAN RISK" in recovery
+        # The manual process-inspection checkbox must be reachable for EVERY unsafe case that needs
+        # confirm_orphan: escaped-or-output, unknown/malformed scope, or a session-unverified whose
+        # identity can't be reconstructed (i.e. NOT safely auto-recoverable).
+        needs_process_confirmation = bool(
+            st and not st.get("unsafe") and st.get("state") == "unsafe"
+            and (st.get("unsafe_scope") != "session-unverified"
+                 or service._auto_install_reconstruct_token(st.get("session_ident")) is None))
         chunk = {"offset": 0, "data": ""}
         complog_seed = ""
         if st and not st.get("unsafe"):
-            chunk = service.bulk_log_chunk(st["run_id"], 0)
+            chunk = service.auto_install_log_chunk(st["run_id"], 0)
             # Historical (collapsed) run: seed the detailed per-component log window server-side,
             # exactly as log_seed seeds the rollup. Same condition the template uses for `collapsed`.
             if (not running and not needs_ack
-                    and st.get("state") in ("completed", "completed-with-failures")):
-                complog_seed = service.bulk_component_log_seed(st["run_id"])
+                    and st.get("state") in ("completed", "completed-with-failures", "aborted")):
+                complog_seed = service.auto_install_component_log_seed(st["run_id"])
         return render_template(
-            "install_all.html", version=__version__, runtime_root=_runtime_root(),
+            "auto_install.html", version=__version__, runtime_root=_runtime_root(),
             st=st, mode=mode, running=running, gate=gate, needs_ack=needs_ack,
-            recovery=recovery, orphan_risk=orphan_risk, starting=starting, starting_run=starting_run,
-            spawn_failed=spawn_failed, dep_preflight=service.install_all_dep_preflight(),
-            log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS)
+            recovery=recovery, orphan_risk=orphan_risk,
+            needs_process_confirmation=needs_process_confirmation,
+            starting=starting, starting_run=starting_run,
+            spawn_failed=spawn_failed, dep_preflight=service.auto_install_dep_preflight(),
+            log_seed=chunk.get("data", ""), complog_seed=complog_seed, src_labels=_SRC_LABELS,
+            rows=service.auto_install_rows())
 
     _TX_CONFIRM_TTL_S = 300.0
 
-    def _stage_tx_confirmation(source: str, tests: bool) -> str:
-        """SERVER-SIDE single-use RF confirmation: session-bound token tied to the exact
-        source/tests/TX choices, the CSRF context, and a short expiry. Consumed atomically
-        by the confirming POST — hidden-field values are never trusted on their own."""
+    def _parse_ai_selection():
+        """Build {sid: {install, version, tests, tx}} by iterating the KNOWN stack ids (never split a
+        form name — a stray/invalid key is simply ignored). Returns (selection, canonical) where
+        canonical is a stable string for RF-confirmation binding."""
+        sel = {}
+        for row in service.auto_install_rows():
+            sid = row["id"]
+            sel[sid] = {"install": request.form.get(f"install:{sid}") == "yes",
+                        "version": request.form.get(f"version:{sid}", "dev"),
+                        "tests": request.form.get(f"tests:{sid}") == "yes",
+                        "tx": request.form.get(f"tx:{sid}") == "yes"}
+        canonical = ";".join(f"{sid}:{int(v['install'])}{v['version']}{int(v['tests'])}{int(v['tx'])}"
+                             for sid, v in sorted(sel.items()))
+        return sel, canonical
+
+    def _stage_tx_confirmation(canonical: str) -> str:
+        """SERVER-SIDE single-use RF confirmation: session-bound token tied to the EXACT selection
+        (canonical string), the CSRF context, and a short expiry. Consumed atomically by the
+        confirming POST — hidden-field values are never trusted on their own."""
         token = _secrets.token_hex(16)
-        session["_bulk_tx_confirm"] = {"token": token, "source": source,
-                                       "tests": bool(tests), "tx": True,
-                                       "csrf": session.get("_csrf", ""),
-                                       "exp": time.time() + _TX_CONFIRM_TTL_S}
+        session["_auto_install_tx_confirm"] = {"token": token, "canonical": canonical,
+                                               "csrf": session.get("_csrf", ""),
+                                               "exp": time.time() + _TX_CONFIRM_TTL_S}
         return token
 
-    def _consume_tx_confirmation(token: str, source: str, tests: bool) -> str:
-        """Validate + CONSUME the staged confirmation in one step (popped before any
-        spawn — replay-proof). Returns "" when valid, else the typed refusal."""
-        staged = session.pop("_bulk_tx_confirm", None)          # single-use: always consumed
+    def _consume_tx_confirmation(token: str, canonical: str) -> str:
+        """Validate + CONSUME the staged confirmation in one step (popped before any spawn —
+        replay-proof). Returns "" when valid, else the typed refusal."""
+        staged = session.pop("_auto_install_tx_confirm", None)          # single-use: always consumed
         if not isinstance(staged, dict):
             return "no valid RF confirmation is staged — start again from the form"
         try:
@@ -416,65 +440,66 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return "the RF confirmation has expired — start again"
             if not (token and _secrets.compare_digest(token, staged["token"])):
                 return "the RF confirmation token does not match — start again"
-            if not _secrets.compare_digest(session.get("_csrf", ""),
-                                           staged.get("csrf", "")):
+            if not _secrets.compare_digest(session.get("_csrf", ""), staged.get("csrf", "")):
                 return "the RF confirmation belongs to a different session — start again"
-            if staged.get("source") != source or staged.get("tests") != bool(tests)                     or staged.get("tx") is not True:
-                return ("the confirmed choices (version/tests/TX) changed after "
-                        "confirmation — start again")
+            if staged.get("canonical") != canonical:
+                return ("the selection changed after confirmation — start again")
         except (TypeError, KeyError):
             return "the staged RF confirmation is malformed — start again"
         return ""
 
-    @app.post("/install-all/start")
-    def install_all_start():  # noqa: ANN202
+    @app.post("/auto-install/start")
+    def auto_install_start():  # noqa: ANN202
         if not _csrf_ok():
             abort(400)
-        source = request.form.get("source", "")
-        tests = request.form.get("tests") == "yes"
-        tx = request.form.get("tx") == "yes"
-        if source not in service.SOURCE_CHOICES:
-            flash("Unknown source choice.", "warn")
-            return redirect(url_for("install_all_page"))
-        if tx and not tests:
-            flash("The TX test requires host tests to be enabled.", "warn")
-            return redirect(url_for("install_all_page"))
-        if tx:
+        selection, canonical = _parse_ai_selection()
+        errs = service.auto_install_check_selection(selection)
+        if errs:
+            flash(errs[0], "warn")
+            return redirect(url_for("auto_install_page"))
+        if any(v["tx"] for v in selection.values()):
             token = request.form.get("confirm_token", "")
             if not token:
-                # FIRST TX-enabled POST: stage the server-side confirmation and render
-                # the second page carrying the bound choices + one-time token.
-                token = _stage_tx_confirmation(source, tests)
+                # FIRST TX-enabled POST: stage the server-side confirmation and render the second
+                # page carrying the bound selection + one-time token.
+                token = _stage_tx_confirmation(canonical)
                 return render_template(
-                    "install_all_confirm.html", version=__version__,
-                    runtime_root=_runtime_root(), source=source, tests=tests,
-                    confirm_token=token,
-                    src_label=dict(_SRC_LABELS).get(source, source))
-            why = _consume_tx_confirmation(token, source, tests)
+                    "auto_install_confirm.html", version=__version__,
+                    runtime_root=_runtime_root(), selection=selection, canonical=canonical,
+                    confirm_token=token, src_labels=_SRC_LABELS)
+            why = _consume_tx_confirmation(token, canonical)
             if why:
                 flash(f"RF confirmation refused: {why}.", "warn")
-                return redirect(url_for("install_all_page"))
-        job, err = service.spawn_bulk_job(source, tests, tx)
+                return redirect(url_for("auto_install_page"))
+        job, err = service.spawn_auto_install_job(selection)
         if err:
             flash(err, "warn")
         else:
-            flash("Bulk run started — this can take several minutes.", "ok")
-        return redirect(url_for("install_all_page"))
+            flash("auto-install run started — this can take several minutes.", "ok")
+        return redirect(url_for("auto_install_page"))
 
-    @app.post("/install-all/ack")
-    def install_all_ack():  # noqa: ANN202
+    @app.post("/auto-install/ack")
+    def auto_install_ack():  # noqa: ANN202
         if not _csrf_ok():
             abort(400)
-        res = service.bulk_ack(
+        res = service.auto_install_ack(
             confirm_orphan=request.form.get("confirm_orphan") == "yes")
         flash(res.summary, "ok" if res.ok else "warn")
-        return redirect(url_for("install_all_page"))
+        return redirect(url_for("auto_install_page"))
 
-    @app.get("/api/install-all")
-    def install_all_api():  # noqa: ANN202
-        st = service.bulk_status()
+    @app.post("/auto-install/abort")
+    def auto_install_abort_route():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        res = service.auto_install_abort(request.form.get("run_id", ""))
+        flash(res.summary, "ok" if res.ok else "warn")
+        return redirect(url_for("auto_install_page"))
+
+    @app.get("/api/auto-install")
+    def auto_install_api():  # noqa: ANN202
+        st = service.auto_install_status()
         out = {"state": st if st is not None else {"absent": True},
-               "running": service.bulk_running(), "run_id": "", "log": {}}
+               "running": service.auto_install_running(), "run_id": "", "log": {}}
         try:
             offset = int(request.args.get("offset", "0"))
         except ValueError:
@@ -482,22 +507,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Whether a spawn reservation is LIVE (spawning/spawned/claimed, identity
         # proven): the starting card uses this to detect a child that ended BEFORE
         # writing its marker (e.g. the running-components preflight refusal).
-        from lhpc.core import bulk as bulk_mod, procident
-        rstate, res = bulk_mod.read_reservation(service._paths)
+        from lhpc.core import auto_install as ai_mod, procident
+        rstate, res = ai_mod.read_reservation(service._paths)
         out["spawn_live"] = bool(
             rstate == "valid"
             and res.get("phase") in ("spawning", "spawned", "claimed")
             and procident.identity_matches(res.get("ident", {}), res.get("pid", -1)))
         if st and not st.get("unsafe"):
             out["run_id"] = st["run_id"]
-            out["log"] = service.bulk_log_chunk(st["run_id"], offset)
+            out["log"] = service.auto_install_log_chunk(st["run_id"], offset)
             # Second window: the sequential per-component build/test log stream.
             try:
                 ci = int(request.args.get("ci", "0"))
                 co = int(request.args.get("co", "0"))
             except ValueError:
                 ci, co = 0, 0
-            out["complog"] = service.bulk_component_log_chunk(st["run_id"], ci, co)
+            out["complog"] = service.auto_install_component_log_chunk(st["run_id"], ci, co)
         return jsonify(**out)
 
     # ---- MeshCom HMAC password: warn+apply page (its own live progress run) --------------------
@@ -712,7 +737,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _ws = None
         ctx = dict(
             version=__version__, runtime_root=_runtime_root(), snapshot=snapshot,
-            summary=summarize(snapshot), groups=groups, bulk_mode=service.bulk_mode(),
+            summary=summarize(snapshot), groups=groups, auto_install_mode=service.auto_install_mode(),
             observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
             controller=service.controller_status(),
             controller_system_deps=service.controller_system_deps(),

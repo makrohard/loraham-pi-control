@@ -318,7 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--web-result", default="", help=argparse.SUPPRESS)
     p_install.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
 
-    p_ia = sub.add_parser("install-all",
+    p_ia = sub.add_parser("auto-install",
                           help="Install/update, build and test ALL stacks in one guided "
                                "run (this can take several minutes)")
     p_ia.add_argument("--yes", action="store_true", help="Apply without confirmation")
@@ -597,11 +597,35 @@ def main(argv: list[str] | None = None) -> int:
         jobresult.terminalize(svc._paths, web, aid, "done" if rc == 0 else "failed",
                               detail="" if rc == 0 else "install failed")
         return rc
-    if args.command == "install-all":
+    if args.command == "auto-install":
+        import signal as _signal
+        from lhpc.core.service_auto_install import (_request_auto_install_abort,
+                                                    _reset_auto_install_abort)
+
+        def _run_apply(**kw):
+            # Install the cooperative-abort handlers for the apply run only (foreground CLI OR the
+            # web-spawned detached driver); the flag is polled by the driver and threaded into
+            # build/test. Handlers are restored afterwards so a library caller/test is unaffected.
+            _reset_auto_install_abort()
+            prev = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
+            _signal.signal(_signal.SIGTERM, _request_auto_install_abort)
+            _signal.signal(_signal.SIGINT, _request_auto_install_abort)
+            try:
+                return svc.auto_install(apply=True, **kw)
+            finally:
+                _signal.signal(_signal.SIGTERM, prev[0])
+                _signal.signal(_signal.SIGINT, prev[1])
+
+        # WEB-SPAWNED child: `--run-id` is present -> the driver loads+validates the per-stack plan
+        # file (claim-first); NEVER a fall-back to the global flags. This branch runs unattended.
+        if args.run_id:
+            return _render(_run_apply(run_id=args.run_id, load_plan=True))
         if args.tx and args.no_tests:
             print("Refusing: --tx requires host tests (drop --no-tests).")
             return 2
-        plan = svc.install_all(source=args.source, tests=not args.no_tests, tx=args.tx,
+        # DIRECT CLI (no plan file): the global flags build a uniform per-stack selection inside
+        # the driver (tx only on the TX-capable stack).
+        plan = svc.auto_install(source=args.source, tests=not args.no_tests, tx=args.tx,
                                apply=False)
         rc = _render(plan)
         if not plan.ok or plan.data.get("changes", 0) == 0:
@@ -613,8 +637,7 @@ def main(argv: list[str] | None = None) -> int:
                 + " sequence for ALL stacks? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(svc.install_all(source=args.source, tests=not args.no_tests,
-                                       tx=args.tx, run_id=args.run_id, apply=True))
+        return _render(_run_apply(source=args.source, tests=not args.no_tests, tx=args.tx))
     if args.command == "hmac":
         sid = args.stack or svc.hmac_default_stack()
         if not sid or not svc.hmac_applies(sid):

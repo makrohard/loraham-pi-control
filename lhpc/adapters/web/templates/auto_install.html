@@ -1,24 +1,24 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cmdbox %}
-{% block title %}Install all — LoRaHAM Pi Control{% endblock %}
+{% block title %}Auto-install — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   {% if needs_ack %}
   <div class="depnote depnote-bad">
     {% if st and st.unsafe %}
-      The bulk run state is unreadable or malformed ({{ st.reason }}).
+      The auto-install run state is unreadable or malformed ({{ st.reason }}).
     {% elif st and st.state == 'interrupted' %}
-      The previous bulk run ended unexpectedly — incomplete. Its state and lease are
+      The previous auto-install run ended unexpectedly — incomplete. Its state and lease are
       retained as evidence.
     {% else %}
       {{ recovery }}
     {% endif %}
     A new run is blocked until you acknowledge: LHPC verifies the old run is dead and no
     source transaction is pending, then archives the state.
-    <form method="post" action="{{ url_for('install_all_ack') }}" class="inline">
+    <form method="post" action="{{ url_for('auto_install_ack') }}" class="inline">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      {% if orphan_risk %}
+      {% if orphan_risk or needs_process_confirmation %}
         <label><input type="checkbox" name="confirm_orphan" value="yes">
-          I have inspected/terminated the listed process myself</label>
+          I have inspected/terminated any surviving build/test process myself</label>
       {% endif %}
       <button class="warnbtn" type="submit">Acknowledge &amp; recover</button>
     </form>
@@ -31,12 +31,13 @@
           {% elif mode == 'update' %}Update all Stacks
           {% else %}Install and update all stacks{% endif %}</h2>
       {% if st and not st.unsafe %}
-        <span class="badge badge-{{ 'running' if running else ('stopped' if st.state in ('completed','completed-with-failures') else 'failed') }}"
-              id="bulk-status">
+        <span class="badge badge-{{ 'running' if running else ('stopped' if st.state in ('completed','completed-with-failures','aborted') else 'failed') }}"
+              id="ai-status">
           {{ 'run in progress' if running else
              ('run completed' if st.state == 'completed' else
               ('completed with failures' if st.state == 'completed-with-failures' else
-               'ended unexpectedly — incomplete')) }}</span>
+               ('aborted by operator' if st.state == 'aborted' else
+                'ended unexpectedly — incomplete'))) }}</span>
       {% endif %}
     </header>
     <div class="body">
@@ -71,26 +72,36 @@
           {% endfor %}
         </div>
       {% endif %}
-      <form method="post" action="{{ url_for('install_all_start') }}">
+      <form method="post" action="{{ url_for('auto_install_start') }}" id="ai-form">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <p><label>Version:
-          <select name="source">
-            {% for key, label in src_labels %}
-              <option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select></label></p>
-        <p><label><input type="checkbox" name="tests" value="yes" checked>
-          Run host tests (RX-safe) after building</label></p>
-        <p><label><input type="checkbox" name="tx" value="yes">
-          Allow the TX test</label><br>
-          <span class="muted">Starts the LoRaHAM daemon <strong>temporarily</strong>,
-          transmits ONE bounded test frame per configured band on the real radios —
-          into the antennas/dummy loads — then stops the daemon again. Requires host
-          tests and a configured callsign. You will confirm this on a second page.</span></p>
-        <p><button type="submit" {% if gate or running %}disabled{% endif %}>
-          {% if mode == 'install' %}Install and Build all Stacks
-          {% elif mode == 'update' %}Update all Stacks
-          {% else %}Install and update all stacks{% endif %}</button></p>
+        <table class="tasklist" id="ai-select">
+          <tr><th>Stack</th><th>Installed</th><th>Install/Update</th><th>Version</th>
+              <th>Run Tests</th><th>TX-Test</th></tr>
+          <tr class="ai-allrow"><th>All</th><td class="muted">—</td>
+            <td><input type="checkbox" id="ai-all-install" checked></td>
+            <td><select id="ai-all-version" aria-label="Version for all stacks">
+              {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select></td>
+            <td><input type="checkbox" id="ai-all-tests" checked></td>
+            <td><input type="checkbox" id="ai-all-tx"></td></tr>
+          {% for r in rows %}
+          <tr data-stack="{{ r.id }}" data-deps='{{ r.deps|tojson }}'>
+            <td>{{ r.name }}</td>
+            <td class="muted">{{ 'yes' if r.installed else 'no' }}</td>
+            <td><input type="checkbox" class="ai-install" name="install:{{ r.id }}" value="yes" checked></td>
+            <td><select class="ai-version" name="version:{{ r.id }}" aria-label="Version for {{ r.name }}">
+              {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            </select></td>
+            <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if r.testable %} checked{% else %} disabled{% endif %}></td>
+            <td><input type="checkbox" class="ai-tx" name="tx:{{ r.id }}" value="yes"{% if not r.tx_capable %} disabled{% endif %}></td>
+          </tr>
+          {% endfor %}
+        </table>
+        <p class="muted">Untick a stack to skip it. The <strong>TX-Test</strong> (daemon only) starts the
+          daemon <strong>temporarily</strong> and transmits ONE bounded frame per configured band on the
+          real radios — into the antennas/dummy loads — then stops it again. Requires host tests + a
+          configured callsign; you confirm it on a second page.</p>
+        <p><button type="submit" {% if gate or running %}disabled{% endif %}>Auto-install</button></p>
       </form>
     </div>
   </div>
@@ -106,27 +117,27 @@
   </div>
   {% endif %}
   {% if starting %}
-  <div class="card" id="bulk-run" data-run="" data-run-expect="{{ starting_run }}">
+  <div class="card" id="ai-run" data-run="" data-run-expect="{{ starting_run }}">
     <header><h2>Run starting…
-      <span class="badge badge-running" id="bulk-status">launching</span></h2></header>
-    <div class="body"><p class="muted">The bulk run was spawned and is initializing —
+      <span class="badge badge-running" id="ai-status">launching</span></h2></header>
+    <div class="body"><p class="muted">The auto-install run was spawned and is initializing —
       the task table appears in a moment (this page updates automatically).</p>
-      <pre class="logbox logbox-tall" id="bulk-logbox"></pre></div>
+      <pre class="logbox logbox-tall" id="ai-logbox"></pre></div>
   </div>
   {% endif %}
   {# The run card is OPEN only while a run is live or needs acknowledgement; a finished
      run is collapsed history — the page never opens onto an old task list/log. While a
      NEW run is starting the old card is suppressed (it would also duplicate the
-     poller's #bulk-run anchor). #}
+     poller's #ai-run anchor). #}
   {% if st and not st.unsafe and not starting %}
   {% set collapsed = (not running and not needs_ack
-                      and st.state in ('completed', 'completed-with-failures')) %}
+                      and st.state in ('completed', 'completed-with-failures', 'aborted')) %}
   {% if collapsed %}
-  <details class="card" id="bulk-run" data-run="{{ st.run_id }}">
+  <details class="card" id="ai-run" data-run="{{ st.run_id }}">
     <summary>Last run {{ st.run_id[:8] }} — {{ st.state }}, finished
       {{ st.finished_at or '?' }} (historical result — expand to view)</summary>
   {% else %}
-  <div class="card" id="bulk-run" data-run="{{ st.run_id }}">
+  <div class="card" id="ai-run" data-run="{{ st.run_id }}">
     <header>
       <h2>Run {{ st.run_id[:8] }} <span class="pill">{{ st.mode }} / {{ st.source }}</span>
         <span class="muted fs-sm">
@@ -135,8 +146,17 @@
     </header>
   {% endif %}
     <div class="body">
-      <table class="tasklist" id="bulk-tasks">
-        <tr><th>Stack</th><th>Status</th><th>Tests</th><th>Detail</th></tr>
+      {% if running %}
+      <form method="post" action="{{ url_for('auto_install_abort_route') }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="run_id" value="{{ st.run_id }}">
+        <button type="submit" class="warnbtn">Abort</button>
+      </form>
+      {% endif %}
+      {# Version is the LAST column ON PURPOSE: the live poller (auto_install.js) writes Status/Tests/
+         Detail by fixed child index (1/2/3), so keeping Version at the end leaves those aligned. #}
+      <table class="tasklist" id="ai-tasks">
+        <tr><th>Stack</th><th>Status</th><th>Tests</th><th>Detail</th><th>Version</th></tr>
         {% for r in st.stacks %}
         <tr data-stack="{{ r.id }}">
           <td>{{ r.name }}</td>
@@ -146,28 +166,29 @@
           <td>{% if r.tests.ran %}{{ 'passed' if r.tests.ok else 'FAILED' }}{% else %}{{ r.tests.detail or '—' }}{% endif %}
               {% if r.tx.ran %} / TX {{ 'passed' if r.tx.ok else 'FAILED' }}{% endif %}</td>
           <td class="muted">{{ r.detail }}</td>
+          <td class="muted">{{ r.selected.version if r.selected else '—' }}</td>
         </tr>
         {% endfor %}
         {% if st.tx %}
         <tr data-stack="__tx__"><td>TX test (daemon)</td>
           <td><span class="badge">{{ st.tx_phase.status }}</span></td>
-          <td></td><td class="muted">{{ st.tx_phase.detail }}</td></tr>
+          <td></td><td class="muted">{{ st.tx_phase.detail }}</td><td></td></tr>
         {% endif %}
       </table>
       {% if st.error %}<p class="depnote depnote-warn">{{ st.error }}</p>{% endif %}
-      <pre class="logbox logbox-half" id="bulk-logbox">{{ log_seed }}</pre>
-      {# Second window — the per-component build/test detail. LIVE: filled by bulk.js. HISTORICAL:
+      <pre class="logbox logbox-half" id="ai-logbox">{{ log_seed }}</pre>
+      {# Second window — the per-component build/test detail. LIVE: filled by auto_install.js. HISTORICAL:
          seeded server-side (complog_seed), like the rollup above. Plain {{ }} keeps the untrusted
          log output HTML-escaped inside the <pre>. #}
       <p class="muted loglabel">Component build &amp; test logs
         {% if collapsed %}(historical, in execution order){% else %}(live, in execution order){% endif %}</p>
-      <pre class="logbox logbox-half" id="bulk-complog">{% if collapsed %}{{ complog_seed }}{% endif %}</pre>
+      <pre class="logbox logbox-half" id="ai-complog">{% if collapsed %}{{ complog_seed }}{% endif %}</pre>
     </div>
   {% if collapsed %}</details>{% else %}</div>{% endif %}
   {% endif %}
 {% endblock %}
 {% block scripts %}
-  {% if starting or (st and not st.unsafe and (running or st.state in ('preparing', 'running'))) %}
-  <script src="{{ url_for('static', filename='bulk.js') }}"></script>
-  {% endif %}
+  {# Always loaded: the poller IIFE self-disables when no run card is present; the selection-table
+     assistance IIFE (All row + dependency auto-select) runs whenever the start form is shown. #}
+  <script src="{{ url_for('static', filename='auto_install.js') }}"></script>
 {% endblock %}

@@ -21,7 +21,7 @@ _XR_PW = ("config", "secrets", "xr_pw")
 _XR_PW_VALUE = "{runtime}/config/secrets/xr_pw"
 _HMAC_PARAM = "password_file"
 
-# --- apply-run infrastructure (modeled on the install-all bulk driver, scoped to one stack) ---------
+# --- apply-run infrastructure (modeled on the auto-install auto-install driver, scoped to one stack) ---------
 _MARKER = ("state", "hmac_apply.json")
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _STEP_ORDER = ("secret", "firmware", "bridge", "node")
@@ -53,7 +53,7 @@ _HMAC_COMPONENT_LOG_RE = re.compile(r"^hmac-apply-[0-9a-f]{32}-[0-9A-Za-z._-]{1,
 
 def _is_hmac_component_log(run_id: str, name: str) -> bool:
     """True iff `name` is a well-formed HMAC per-step log leaf OWNED by `run_id` (mirror of
-    bulk.is_component_log_for). Fail-closed on any other name."""
+    auto-install.is_component_log_for). Fail-closed on any other name."""
     if not _RUN_ID_RE.match(run_id or "") or not _HMAC_COMPONENT_LOG_RE.match(name or ""):
         return False
     return name.startswith(f"hmac-apply-{run_id}-")
@@ -127,7 +127,7 @@ def _reset_hmac_abort():
 
 
 def _hmac_now_utc() -> str:
-    """Canonical persisted UTC timestamp — the SAME format the bulk marker uses."""
+    """Canonical persisted UTC timestamp — the SAME format the auto-install marker uses."""
     import time as _t
     return _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime())
 
@@ -211,7 +211,7 @@ class HmacOpsMixin:
     #
     # A change is SLOW (the firmware bakes the secret at build), so applying it runs as a detached
     # driver (`lhpc _hmac-apply <sid> <action> <run_id>`) writing a marker `state/hmac_apply.json` +
-    # a run log `logs/hmac-apply-<run_id>.log`, exactly like install-all. The SAME step runner backs
+    # a run log `logs/hmac-apply-<run_id>.log`, exactly like auto-install. The SAME step runner backs
     # the CLI foreground run. The secret value NEVER reaches the marker, the log (redacted at read),
     # or any ActionResult.
 
@@ -343,14 +343,14 @@ class HmacOpsMixin:
                     break
                 if nbytes == -1:                     # UNSAFE leaf — frame a notice, advance if possible
                     if offset == 0:
-                        parts.append(self._bulk_log_frame(title, f"logs/{fname} — [unavailable]"))
+                        parts.append(self._auto_install_log_frame(title, f"logs/{fname} — [unavailable]"))
                     if index < len(logs) - 1:
                         index, offset = index + 1, 0
                         continue
                     break
                 if nbytes:
                     if offset == 0:
-                        parts.append(self._bulk_log_frame(title, f"logs/{fname}"))
+                        parts.append(self._auto_install_log_frame(title, f"logs/{fname}"))
                     # the file is byte-scrubbed at write; read-time redact is kept as defense-in-depth
                     parts.append(self._hmac_redact(text))
                     offset += nbytes
@@ -438,7 +438,7 @@ class HmacOpsMixin:
                 ident = procident.proc_identity(pid)
                 err = self._track_or_terminate(life, ln, pid, stack_id, "hmac-apply")
                 if err:
-                    # Mirror the bulk spawn path (service_bulk.py): an UNPROVEN-cessation tracking failure
+                    # Mirror the auto-install spawn path (service_auto_install.py): an UNPROVEN-cessation tracking failure
                     # ("ORPHAN RISK") means the driver MIGHT still be building — a BLOCKING unsafe state, never
                     # an ordinary retryable `failed`. A proven-terminated failure stays ordinary `failed`.
                     if "ORPHAN RISK" in err:
@@ -922,7 +922,7 @@ class HmacOpsMixin:
             emit(f"Restarting the {what} ({target})…")
             rr = self.restart(target, apply=True)
             # Detailed restart output goes to the second (task-log) window, framed with a header — the
-            # narration keeps only the high-level line + summary (mirrors the firmware step + install-all).
+            # narration keeps only the high-level line + summary (mirrors the firmware step + auto-install).
             _register_step_log(f"Restart the {what} ({target})",
                                f"hmac-apply-{run_id}-{key}.log",
                                "\n".join(rr.details) or rr.summary)

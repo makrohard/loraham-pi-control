@@ -349,17 +349,24 @@ class MaintenanceOpsMixin:
           * incompatible resolutions block BEFORE any candidate/source/registry/config
             mutation.
 
-        Returns (groups, error): groups = ordered [(path, comp, (expected, label))]."""
+        Returns (groups, error): groups = ordered [(path, comp, selector, (expected, label))].
+        `selector` is the per-stack Version choice carried through to adoption."""
         from . import known_working, source_registry
+        # `source` may be a uniform selector string OR a per-stack resolver `source_of(stack_id)`
+        # (the auto-install driver passes the latter for per-stack Version). The SELECTOR is part
+        # of the source identity below, so two stacks sharing a path with different selectors
+        # conflict even if they resolve to the same commit.
+        _sel = source if callable(source) else (lambda _sid, _s=source: _s)
         compositions: dict = {}
-        if source == "pinned":
-            for st in {s.id: s for s, _ in items}.values():
+        for st in {s.id: s for s, _ in items}.values():
+            if _sel(st.id) == "pinned":
                 compositions[st.id] = known_working.compatible_composition(
                     self._paths, st, lambda c: self._effective_remote(c))
         by_path: dict = {}
         for st, comp in items:
             spec = comp.source
-            if source != "pinned" or spec.artifact:
+            sel = _sel(st.id)
+            if sel != "pinned" or spec.artifact:
                 resolved = ("", "")
             else:
                 entries = compositions.get(st.id)
@@ -368,45 +375,45 @@ class MaintenanceOpsMixin:
                                 "known working (operator-confirmed composition)")
                 else:
                     resolved = ("", "fallback: manifest pin — no known-working record")
-            ident = (spec.strategy or "", bool(spec.artifact),
+            ident = (sel, spec.strategy or "", bool(spec.artifact),
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
-            by_path.setdefault(spec.path, []).append((st, comp, ident, resolved))
+            by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
         frozen_cache: dict = {}
         for path, members in by_path.items():
-            idents = {m[2] for m in members}
+            idents = {m[3] for m in members}
             if len(idents) > 1:
-                who = ", ".join(f"{st.id}/{c.id}" for st, c, _, _ in members)
+                who = ", ".join(f"{st.id}/{c.id}" for st, c, _, _, _ in members)
                 conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
-                                 "resolve to incompatible source identities (strategy/"
+                                 "resolve to incompatible source identities (selector/strategy/"
                                  "remote/known-working) — resolve or re-confirm before "
                                  "installing/updating")
                 continue
-            st, comp, _, resolved = members[0]
-            if freeze and not resolved[0] and (source != "pinned"
+            st, comp, sel, _, resolved = members[0]
+            if freeze and not resolved[0] and (sel != "pinned"
                                                or comp.source.artifact):
-                # FROZEN selector resolution (bulk plan): one exact immutable commit per
+                # FROZEN selector resolution (auto-install plan): one exact immutable commit per
                 # group, resolved HERE — adoption never performs a second lookup.
                 # ARTIFACT sources freeze their declared default-branch HEAD for EVERY
                 # selector (incl. 'pinned' — they never use known-working entries): the
                 # plan-time commit IS this run's immutable artifact identity.
                 if path not in frozen_cache:
-                    frozen_cache[path] = self._frozen_ref(comp, source)
+                    frozen_cache[path] = self._frozen_ref(comp, sel)
                 (fz, why) = frozen_cache[path]
                 if fz[0] is None:
                     # DEFAULT POLICY: latest dev with a DISCLOSED fallback to the
                     # known-working composition (then the manifest pin) when dev is
                     # unreachable — never a silent substitute, never pinned-by-default.
                     fb = self._kw_fallback_expected(st, comp)
-                    if source == "dev" and fb[0]:
+                    if sel == "dev" and fb[0]:
                         resolved = fb
                     else:
-                        conflicts.append(f"source {path!r}: exact {source} resolution "
+                        conflicts.append(f"source {path!r}: exact {sel} resolution "
                                          f"failed — {why}")
                         continue
                 else:
                     resolved = fz
-            groups.append((path, comp, resolved))
+            groups.append((path, comp, sel, resolved))
         if conflicts:
             return None, conflicts
         return groups, None
@@ -462,7 +469,7 @@ class MaintenanceOpsMixin:
         return ("running", None) if live else ("failed", self._JOB_HINT.get(("*", "incomplete")))
 
     def running_tasks(self) -> list:
-        """STRICTLY READ-ONLY banner feed (install-all + HMAC + detached build/test/install jobs). RUNNING
+        """STRICTLY READ-ONLY banner feed (auto-install + HMAC + detached build/test/install jobs). RUNNING
         never expires; `done` drops after the server-side expiry; `failed`/`unsafe` STAY (failed is
         ✕-dismissible, unsafe needs Recover). Every helper is file+/proc read only — no marker mutation
         (jobs use `active_jobs(cleanup=False)`/`log_running`/`jobresult.read_results`, all no-follow, bounded).
@@ -484,17 +491,21 @@ class MaintenanceOpsMixin:
             return {"finished_ago_s": max(0, now - epoch)} if epoch is not None else {}
 
         try:
-            bst = self.bulk_status()
+            bst = self.auto_install_status()
         except Exception:                          # noqa: BLE001 — a GET must never 500
             bst = None
         if bst and not bst.get("unsafe"):
             rid, state = bst.get("run_id", ""), bst.get("state")
-            base = {"kind": "install-all", "run_id": rid, "label": "Install / build all stacks",
-                    "href": "/install-all"}
+            base = {"kind": "auto-install", "run_id": rid, "label": "Install / build all stacks",
+                    "href": "/auto-install"}
             if state in ("preparing", "running"):
                 out.append({**base, "state": "running"})
-            elif state == "interrupted":
+            elif state in ("interrupted", "unsafe"):
                 out.append({**base, "state": "unsafe"})            # blocking; no expiry
+            elif state == "aborted":
+                fin = _done_within(bst.get("finished_at", ""))     # clean operator stop -> transient
+                if fin is not None:
+                    out.append({**base, "state": "done", **fin})
             elif state == "completed":
                 fin = _done_within(bst.get("finished_at", ""))
                 if fin is not None:
@@ -584,9 +595,9 @@ class MaintenanceOpsMixin:
             if state != "failed":
                 return False
             return jobresult.remove(self._paths, run_id, attempt_id)
-        if kind == "install-all":
+        if kind == "auto-install":
             try:
-                st = self.bulk_status()
+                st = self.auto_install_status()
             except Exception:                              # noqa: BLE001
                 st = None
             if not (st and not st.get("unsafe") and st.get("state") == "completed-with-failures"):
@@ -604,7 +615,7 @@ class MaintenanceOpsMixin:
 
     def task_recover(self, kind: str, run_id: str, attempt_id: str) -> bool:
         """Explicit-ack recovery of an UNSAFE build/test/install job (kind=job) → non-blocking failed.
-        hmac/install-all keep their own recover flows. Durable-confirmed."""
+        hmac/auto-install keep their own recover flows. Durable-confirmed."""
         from . import jobresult
         if kind != "job" or not run_id:
             return False
@@ -852,7 +863,7 @@ class MaintenanceOpsMixin:
                                      for cid, e in sorted(cand["entries"].items())])
 
     def update(self, target: str = "", apply: bool = False,
-               source: str = "pinned", bulk_ctx=None) -> ActionResult:
+               source: str = "pinned", auto_install_ctx=None) -> ActionResult:
         """Refresh the managed source(s) from GitHub (version per `source`:
         dev/stable/pinned), falling back to the local checkout on failure. Skips
         optional libs/firmware unless one is targeted directly.
@@ -872,7 +883,7 @@ class MaintenanceOpsMixin:
         else:
             required = {dep for _, c in all_items if not c.optional for dep in c.build_requires}
             items = [(s, c) for s, c in all_items if not c.optional or c.id in required]
-        ctx_err = self._bulk_ctx_error(bulk_ctx, {c.source.path for _, c in items})
+        ctx_err = self._auto_install_ctx_error(auto_install_ctx, {c.source.path for _, c in items})
         if ctx_err:
             return ActionResult(False, f"Refusing to update '{target or 'all'}': {ctx_err}")
         if not apply:
@@ -950,9 +961,9 @@ class MaintenanceOpsMixin:
                     mutated_paths = []
                     stacks_by_comp = {c2.id: st2 for st2 in self.stacks()
                                       for c2 in st2.components}
-                    for path, c, resolved in groups:
+                    for path, c, selector, resolved in groups:
                         r = self._adopt_dev_fallback(
-                            inst, stacks_by_comp.get(c.id), c, source, resolved,
+                            inst, stacks_by_comp.get(c.id), c, selector, resolved,
                             force=True, locked=True)
                         out.append(f"  [{r.status}] {c.id}: {r.detail}")
                         if r.status == "failed":

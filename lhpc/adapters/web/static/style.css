@@ -453,7 +453,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .warnbtn { background: var(--warnbtn-bg); color: var(--warnbtn-ink); border: 1px solid var(--warnbtn-border); font-weight: 600; }
 .warnbtn:hover { background: var(--warn); color: #fff; }
 
-/* bulk install-all run view */
+/* auto-install auto-install run view */
 .logbox-tall { max-height: 44rem; }
 .logbox-half { max-height: 22rem; }
 .tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }

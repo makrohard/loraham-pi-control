@@ -3,7 +3,7 @@
 # LoRaHAM Pi Control — controller UNINSTALLER.
 #
 # Removes the selected LHPC CONTROLLER deployment. It does NOT inspect, stop, or wait for
-# managed stacks (daemon, MeshCom, MeshCore, direct-radio apps, builds, tests, bulk jobs).
+# managed stacks (daemon, MeshCom, MeshCore, direct-radio apps, builds, tests, auto-install jobs).
 #
 #   default : remove src/, venv/, state/, logs/ and generated controller dirs, the
 #             ~/.local/bin/lhpc link and the managed systemd units — KEEP config/, backups/,

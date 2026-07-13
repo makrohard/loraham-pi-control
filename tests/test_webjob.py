@@ -235,7 +235,7 @@ def test_web_install_noop_admits_not_blocked(tmp_path, monkeypatch):
     assert jobresult.reserve(svc._paths, web, aid, "install", "daemon", "daemon", [])
     admit = []
 
-    def fake_install(self, stack_id=None, apply=False, source="pinned", bulk_ctx=None, on_admit=None):
+    def fake_install(self, stack_id=None, apply=False, source="pinned", auto_install_ctx=None, on_admit=None):
         if apply and on_admit:
             admit.append(on_admit())                       # a NO-OP install that STILL admits
         return ActionResult(True, "Nothing to do.", data={"changes": 0})

@@ -111,30 +111,30 @@ def evaluate(runner, dest: str, spec, source: str,
     frozen_note = ""
     if expected_commit and (getattr(spec, "artifact", False) or source in ("dev",
                                                                            "stable")):
-        # FROZEN BULK IDENTITY: the plan's exact commit is authoritative for EVERY
+        # FROZEN auto-install IDENTITY: the plan's exact commit is authoritative for EVERY
         # selector — branch membership, tag names, or artifact status never substitute
         # for commit equality. A tree without a verifiable Git identity cannot comply.
         head = runner.run(["git", "-C", dest, "rev-parse", "HEAD"], 5.0)
         if head.returncode != 0 or not head.stdout.strip():
             return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
                                     "no verifiable immutable identity (not a Git "
-                                    "checkout) — refusing under a frozen bulk plan")
+                                    "checkout) — refusing under a frozen auto-install plan")
         if head.stdout.strip() != expected_commit:
             return ProvenanceResult(UNVERIFIED_BLOCKED, False, True,
                                     f"HEAD {head.stdout.strip()[:9]} differs from the "
-                                    f"bulk-frozen commit {expected_commit[:9]} — "
+                                    f"auto-install-frozen commit {expected_commit[:9]} — "
                                     "refusing (frozen plan is authoritative)")
-        frozen_note = (f"; exact bulk-frozen commit {expected_commit[:9]} verified")
+        frozen_note = (f"; exact auto-install-frozen commit {expected_commit[:9]} verified")
     if getattr(spec, "artifact", False):
         # A declared single-file/artifact-style source: EVERY selector resolves to the same
         # declared artifact (the maintainer's default branch) — truthfully labelled, never
         # blocked as unverified, never claimed production-safe.
         if frozen_note:
-            # FROZEN bulk plan: what is installed is the PLAN-TIME commit — never claim
+            # FROZEN auto-install plan: what is installed is the PLAN-TIME commit — never claim
             # "current default branch" for a frozen adoption.
             return ProvenanceResult(ARTIFACT_HEAD, True, False,
                                     "declared artifact default-branch commit FROZEN for "
-                                    f"this bulk run ({expected_commit[:9]})")
+                                    f"this auto-install run ({expected_commit[:9]})")
         return ProvenanceResult(ARTIFACT_HEAD, True, False,
                                 "declared artifact source — installs the maintainer's "
                                 "current default branch (same for every selector)")

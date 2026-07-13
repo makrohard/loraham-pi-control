@@ -344,7 +344,7 @@ class Installer:
             # source is never updated in place (skip). Any other symlink (dangling, unknown,
             # injected) is NOT an installable destination: refuse with zero mutation.
             if (spec.strategy or "") == "link":
-                # FROZEN BULK IDENTITY: even the leave-as-is skip must prove the linked
+                # FROZEN auto-install IDENTITY: even the leave-as-is skip must prove the linked
                 # tree is exactly at the frozen commit — a moved external checkout is a
                 # refusal, never a silent success under a frozen plan.
                 if pinned_expected is not None and pinned_expected[0]:
@@ -354,12 +354,12 @@ class Installer:
                             head.stdout.strip() != pinned_expected[0]:
                         action.status = "failed"
                         action.detail = (
-                            "linked tree is not at the bulk-frozen commit "
+                            "linked tree is not at the auto-install-frozen commit "
                             f"{pinned_expected[0][:9]} — refusing (frozen plan is "
                             "authoritative; update the external checkout)")
                         return action
                     action.status, action.detail = "skipped", (
-                        "linked dev tree — left as-is (exact bulk-frozen commit "
+                        "linked dev tree — left as-is (exact auto-install-frozen commit "
                         f"{pinned_expected[0][:9]} verified)")
                     return action
                 action.status, action.detail = "skipped", "linked dev tree — left as-is"
@@ -476,7 +476,7 @@ class Installer:
         # operator confirmation cannot alter an already-planned operation — else resolved
         # here (single-component adoption).
         if pinned_expected is not None and pinned_expected[0]:
-            # FROZEN plan identity (bulk): one exact immutable commit resolved at plan
+            # FROZEN plan identity (auto-install): one exact immutable commit resolved at plan
             # time — used verbatim for EVERY selector; no second selector lookup here.
             expected, kw_label = pinned_expected
         elif source == "pinned":
@@ -754,7 +754,7 @@ class Installer:
         so it is rejected rather than reported as a successful selected adoption."""
         run = self.system.runner.run
         if expected_pin:
-            # FROZEN BULK IDENTITY: link/copy/local fallback may activate ONLY at exactly
+            # FROZEN auto-install IDENTITY: link/copy/local fallback may activate ONLY at exactly
             # the frozen commit, for EVERY selector — branch/tag/artifact shortcuts never
             # substitute. A non-Git tree has no verifiable identity: refuse.
             head = run(["git", "-C", str(local), "rev-parse", "HEAD"], 5.0)

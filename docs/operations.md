@@ -85,7 +85,7 @@ lhpc webserver apply                                        # regenerate nginx f
 systemctl --user start lhpc-web.service lhpc-nginx.service
 ```
 
-Sources are not in the backup — re-adopt them with `lhpc install` (or `lhpc install-all`); the
+Sources are not in the backup — re-adopt them with `lhpc install` (or `lhpc auto-install`); the
 restored `config/` and known-working records then drive the rebuild.
 
 ## Web console

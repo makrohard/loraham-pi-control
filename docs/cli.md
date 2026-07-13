@@ -14,7 +14,7 @@ does is available here too.
 ## Commands
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
-- [bootstrap](#bootstrap) · [install](#install) · [install-all](#install-all)
+- [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
 - [config](#config)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
@@ -46,8 +46,8 @@ does is available here too.
 ### install
 `lhpc install [<stack>] [--check] [--source pinned|dev|stable] [--yes]` — adopt/verify managed sources into the runtime root. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
 
-### install-all
-`lhpc install-all [--source pinned|dev|stable] [--no-tests] [--tx] [--yes]` — install/update, build and test **all** stacks in one guided run. `--tx` transmits one bounded test frame per ready band (real RF — dummy loads); it requires host tests.
+### auto-install
+`lhpc auto-install [--source pinned|dev|stable] [--no-tests] [--tx] [--yes]` — install/update, build and test **all** stacks in one guided run. `--tx` transmits one bounded test frame per ready band (real RF — dummy loads); it requires host tests.
 
 ---
 

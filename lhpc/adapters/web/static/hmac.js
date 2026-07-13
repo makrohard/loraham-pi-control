@@ -89,7 +89,7 @@
       .catch(function () { /* transient */ });
   }
 
-  // 1 s poll (smoother than install-all's 2 s): the poller runs ONLY while the run is live, then reloads
+  // 1 s poll (smoother than auto-install's 2 s): the poller runs ONLY while the run is live, then reloads
   // once to the collapsed historical view — so the faster cadence never outlives the run.
   timer = setInterval(tick, 1000);
   tick();

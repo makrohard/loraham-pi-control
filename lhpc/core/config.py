@@ -64,7 +64,7 @@ def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
 
     BOUNDED acquire (AUDIT CC1): the exclusive lock is polled non-blocking up to
     `timeout`, then raises `ConfigLockBusy`. A blocking `LOCK_EX` here would wedge — a
-    bulk run holds the SHARED config-stability lock for its ENTIRE duration (minutes),
+    auto-install run holds the SHARED config-stability lock for its ENTIRE duration (minutes),
     so a Settings save on one of the web server's fixed thread pool would block that
     thread until the run ended; repeated retries could freeze the whole UI. Failing fast
     with a truthful 'busy, retry shortly' keeps the server responsive."""
@@ -984,8 +984,8 @@ def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, i
 def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path, str, int]]) -> None:
     """MODULE-PRIVATE transaction body — assumes the config lock is ALREADY held EXCLUSIVELY by the caller.
     NOT a general lock-bypass API: the ONLY external caller is `ControllerService.save_config_bundle`, and
-    ONLY when it holds the EXCLUSIVE config-stability guard (`_holds_config_exclusive()`, the install-all
-    bulk boundary). Everyone else MUST use `apply_config_transaction()`, which acquires the lock. Steps
+    ONLY when it holds the EXCLUSIVE config-stability guard (`_holds_config_exclusive()`, the auto-install
+    auto-install boundary). Everyone else MUST use `apply_config_transaction()`, which acquires the lock. Steps
     (unchanged): recover/block any pending journal; journal each pre-image; atomically replace; roll back
     all on failure; remove the journal on success."""
     if recover_config_transaction(paths) == "":

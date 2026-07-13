@@ -48,7 +48,7 @@
 
   {# --- Run view: a LIVE run (running) or a BLOCKING unsafe run is an OPEN card; a finished run
      (done/failed/interrupted) is COLLAPSED history — the page never opens onto an old task list/log
-     (mirrors install-all). Malformed state (st.unsafe) is handled by the fail-closed card above. --- #}
+     (mirrors auto-install). Malformed state (st.unsafe) is handled by the fail-closed card above. --- #}
   {% if st and not st.unsafe %}
   {% set collapsed = st.phase in ('done', 'failed', 'interrupted') %}
   {% if collapsed %}

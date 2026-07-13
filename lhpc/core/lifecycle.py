@@ -229,7 +229,7 @@ class Lifecycle:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
-        `log_base` overrides the default `build-<comp.id>` job/log name — the bulk driver
+        `log_base` overrides the default `build-<comp.id>` job/log name — the auto-install driver
         passes a RUN-SPECIFIC base so a run's build log can never collide with a prior
         run's. Multi-step components append `-<i>` to whichever base is used."""
         base = log_base or f"build-{comp.id}"
@@ -1011,9 +1011,10 @@ class Lifecycle:
         return log.name, pid
 
     def host_test(self, comp: Component, timeout: float = 300.0,
-                  log_base: str | None = None) -> JobResult | None:
-        # `log_base` (bulk driver) overrides the default `test-<comp.id>` job/log name
+                  log_base: str | None = None, should_cancel=None) -> JobResult | None:
+        # `log_base` (auto-install driver) overrides the default `test-<comp.id>` job/log name
         # with a RUN-SPECIFIC one, so a run's test log never collides with a prior run's.
+        # `should_cancel` (auto-install Abort) is polled while the test runs — like build().
         base = log_base or f"test-{comp.id}"
         if not comp.test_argv:
             return None
@@ -1029,7 +1030,8 @@ class Lifecycle:
             return JobResult(name=base, state=JobState.FAILED,
                              returncode=1, log_path="", tail=[str(exc)])
         return run_job(self.system.runner, name=base, argv=argv, paths=self.paths,
-                       cwd=src, logs_dir=self.logs_dir(), timeout=timeout)
+                       cwd=src, logs_dir=self.logs_dir(), timeout=timeout,
+                       should_cancel=should_cancel)
 
     # -- daemon readiness + bounded TX test --------------------------------
 

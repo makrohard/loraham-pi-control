@@ -1,6 +1,6 @@
 """PART 1: the EXCLUSIVE config-stability guard (no SH↔EX conversion) + locked-transaction reuse.
 
-The install-all bulk boundary holds the config lock EXCLUSIVE for the whole run so an atomic config write
+The auto-install auto-install boundary holds the config lock EXCLUSIVE for the whole run so an atomic config write
 inside it reuses the held lock instead of self-contending on a second descriptor ("config busy")."""
 
 import threading

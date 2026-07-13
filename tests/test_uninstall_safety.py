@@ -362,7 +362,7 @@ def test_recordless_leaf_keeps_manifest_fallback(tmp_path):
 
 
 def test_adopt_over_shrunk_record_restores_manifest_membership(tmp_path):
-    # A genuine re-adopt (update/bulk) of the shared checkout refreshes it for EVERY
+    # A genuine re-adopt (update/auto-install) of the shared checkout refreshes it for EVERY
     # declared consumer: membership = record ∪ manifest declarers again.
     from lhpc.core.install import Installer
     from lhpc.core.config import Config
@@ -377,7 +377,7 @@ def test_adopt_over_shrunk_record_restores_manifest_membership(tmp_path):
     assert set(meta["components"]) >= {"loraham-chat", "loraham-igate"}  # merged back
 
 
-def test_bulk_reconcile_absent_leaf_never_reports_dirty(tmp_path):
+def test_auto_install_reconcile_absent_leaf_never_reports_dirty(tmp_path):
     # Addendum regression: an ABSENT source leaf can never yield the "local changes
     # present" row text (the user saw a HISTORICAL run's rows; the card now shows its
     # started/finished time).

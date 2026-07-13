@@ -331,9 +331,9 @@ class Component:
     build_steps: tuple[dict, ...] = ()    # typed build steps ({argv, env, pkgconfig})
     test_argv: tuple[str, ...] = ()       # structured host-test argv (no shell)
     test_requires_running: bool = False   # host test needs the stack already RUNNING (integration
-                                          # test, e.g. probing a running QEMU guest); bulk/install-all
+                                          # test, e.g. probing a running QEMU guest); auto-install/auto-install
                                           # DEFERS it (can't start during a build sweep), `lhpc test`
-                                          # runs it. Without this it would fail in install-all.
+                                          # runs it. Without this it would fail in auto-install.
     readiness: str = ""                   # process | endpoint | daemon-band | manual | external-systemd
     readiness_timeout: float = 0.0        # seconds to wait for ready=true endpoints at start
                                           # (0 = use the service default); raise it for a
@@ -378,7 +378,7 @@ class ControllerSpec:
     """LHPC's OWN checkout as a dedicated controller identity — NOT a Stack/Component and
     NOT a managed source. It is observable and explicitly self-updatable, but is never
     installed, adopted, built, tested, started, stopped, uninstalled, cleaned, or
-    bulk-processed. Parsed from the single top-level `[controller]` manifest table with an
+    auto-install-processed. Parsed from the single top-level `[controller]` manifest table with an
     EXACT allow-list; `source_path`/`branch` are fixed so the identity proof derives its
     contained path from a validated value, never a divergent literal."""
 

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Confirm TX — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  <div class="card">
+    <header><h2>Confirm: auto-install run WITH RF transmission</h2></header>
+    <div class="body">
+      <p class="depnote depnote-warn"><strong>This run will TRANSMIT.</strong> After
+        installing, building and host-testing all stacks, LHPC will start the LoRaHAM
+        daemon <strong>temporarily</strong>, transmit ONE bounded test frame per
+        configured band on the real radios, verify the TX counter, and stop the daemon
+        again. Attach dummy loads or intend the transmission.</p>
+      <p class="muted">The exact per-stack selection below is bound into this one confirmation.</p>
+      <ul class="clean">
+        {% for sid, v in selection.items() if v.install %}
+          <li><strong>{{ sid }}</strong> — {{ v.version }}{% if v.tests %} · tests{% endif %}{% if v.tx %} · <strong>TX</strong>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('auto_install_start') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {% for sid, v in selection.items() %}
+          {% if v.install %}<input type="hidden" name="install:{{ sid }}" value="yes">{% endif %}
+          <input type="hidden" name="version:{{ sid }}" value="{{ v.version }}">
+          {% if v.tests %}<input type="hidden" name="tests:{{ sid }}" value="yes">{% endif %}
+          {% if v.tx %}<input type="hidden" name="tx:{{ sid }}" value="yes">{% endif %}
+        {% endfor %}
+        <input type="hidden" name="confirm_token" value="{{ confirm_token }}">
+        <p><button class="warnbtn" type="submit">Yes — run everything and transmit</button></p>
+      </form>
+    </div>
+  </div>
+{% endblock %}

@@ -125,9 +125,9 @@ def test_install_fails_closed_when_hmac_enable_fails(tmp_path, monkeypatch):
     assert svc.hmac_status("meshcom") is False and not _xr_pw(tmp_path).exists()
 
 
-def _install_all_harness(monkeypatch, build_ok=True):
-    # Neutralise clone/build/test/frozen-ref so a full install_all run reaches every row's build without
-    # network or a toolchain (mirrors tests/test_install_all.py's stubs).
+def _auto_install_harness(monkeypatch, build_ok=True):
+    # Neutralise clone/build/test/frozen-ref so a full auto_install run reaches every row's build without
+    # network or a toolchain (mirrors tests/test_auto_install.py's stubs).
     from lhpc.core.install import Installer, PlanAction
     monkeypatch.setattr(Installer, "adopt_source",
                         lambda self, comp, force=False, source="pinned", pinned_expected=None,
@@ -135,36 +135,36 @@ def _install_all_harness(monkeypatch, build_ok=True):
                                                  status="skipped", detail="stub"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
-                        lambda self, t, apply=False, bulk_ctx=None, **k:
+                        lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(build_ok, "built" if build_ok else "boom"))
     monkeypatch.setattr(ControllerService, "test",
-                        lambda self, t, tx=False, apply=False, bulk_ctx=None, **k:
+                        lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "tested"))
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
 
 
-def test_install_all_actually_enables_hmac(tmp_path, monkeypatch):
-    # The default-on enable happens BEFORE the bulk boundary (the boundary holds the config lock, so the
+def test_auto_install_actually_enables_hmac(tmp_path, monkeypatch):
+    # The default-on enable happens BEFORE the auto-install boundary (the boundary holds the config lock, so the
     # old in-boundary call always silently failed). After a full run, meshcom succeeds AND HMAC is on.
     svc = _svc(tmp_path)
-    _install_all_harness(monkeypatch)
+    _auto_install_harness(monkeypatch)
     assert svc.hmac_status("meshcom") is False
-    r = svc.install_all(apply=True, tests=False, emit=lambda s: None)
-    rows = {x["id"]: x for x in svc.bulk_status()["stacks"]}
+    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
     assert rows["meshcom"]["status"] == "success" and r.ok
     assert svc.hmac_status("meshcom") is True and _xr_pw(tmp_path).exists()
 
 
-def test_install_all_fails_meshcom_row_when_hmac_enable_fails(tmp_path, monkeypatch):
-    # FAIL CLOSED in install-all: a failed enable marks the meshcom row fail and SKIPS its build — the
+def test_auto_install_fails_meshcom_row_when_hmac_enable_fails(tmp_path, monkeypatch):
+    # FAIL CLOSED in auto-install: a failed enable marks the meshcom row fail and SKIPS its build — the
     # firmware is never baked with an empty password while the run reports success.
     svc = _svc(tmp_path)
-    _install_all_harness(monkeypatch)
+    _auto_install_harness(monkeypatch)
     monkeypatch.setattr(ControllerService, "save_config_bundle",
                         lambda self, *a, **k: ActionResult(False, "boom"))   # forces enable to fail
-    r = svc.install_all(apply=True, tests=False, emit=lambda s: None)
-    rows = {x["id"]: x for x in svc.bulk_status()["stacks"]}
+    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
     assert rows["meshcom"]["status"] == "fail" and not r.ok
     assert "HMAC password could not be enabled" in rows["meshcom"]["detail"]
     assert svc.hmac_status("meshcom") is False        # never enabled
@@ -825,7 +825,7 @@ def test_running_apply_page_loads_the_live_poller(tmp_path, monkeypatch):
 
 def test_second_window_frames_every_step_end_to_end(tmp_path, monkeypatch):
     # The task-log window (window 2) must carry EVERY step end-to-end — secret, firmware, and both restarts —
-    # each under its own header, in execution order (mirrors install-all's per-component rollup).
+    # each under its own header, in execution order (mirrors auto-install's per-component rollup).
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "build",
                         lambda self, target, **k: ActionResult(True, f"built {target}"))

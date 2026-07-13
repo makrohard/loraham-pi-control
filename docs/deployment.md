@@ -56,7 +56,7 @@ The unit sets `LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs
 
 LHPC's checkout is a **dedicated controller identity**: it is observable and self-updatable,
 but it is **never** installed, adopted, built, tested, started, stopped, uninstalled,
-cleaned, or bulk-processed — every generic verb (`lhpc install/update/uninstall/clean/
+cleaned, or auto-install-processed — every generic verb (`lhpc install/update/uninstall/clean/
 build/test/stack start|stop <controller-id>`) refuses centrally and points you at
 `lhpc self-update`. `lhpc status` shows a distinct `[controller]` row with its cached
 version / update / identity state.

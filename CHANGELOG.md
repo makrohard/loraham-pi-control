@@ -17,12 +17,12 @@
 - CLI consistency — `lhpc config` (per-stack settings, callsign, daemon params, operator identity), `stack restart`, `webserver proxy`, `cert export`; every next-step hint points at a real command
 - per-component update availability indicator
 - GUI polishing
-- Docs: install-all flow, expose-with-mTLS + browser client-cert runbook, backup/restore, per-file tables of contents
+- Docs: auto-install flow, expose-with-mTLS + browser client-cert runbook, backup/restore, per-file tables of contents
 - Cleanup: slimmed, behaviour-focused test suite; removed dead code (no functional change)
 
 ## 0.1.3
 - self-hosting
-- install-all
+- auto-install
 - stack lifecycle
 - GUI changes
 

@@ -482,7 +482,8 @@ def test_incompatible_known_working_across_shared_consumers_blocks(tmp_path):
                "source_rel": "src/shared", "strategy": ""}}, {"confirmed_at": 2.0})
     groups2, conflicts2 = svc._plan_source_groups([(st1, c1), (st2, c2)], "pinned")
     assert conflicts2 is None and len(groups2) == 1
-    assert groups2[0][2][0] == "a" * 40                   # one frozen resolution
+    assert groups2[0][2] == "pinned"                      # carried selector
+    assert groups2[0][3][0] == "a" * 40                   # one frozen resolution
 
 
 def test_update_adopts_shared_group_once(tmp_path, monkeypatch):

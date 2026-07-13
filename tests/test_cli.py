@@ -223,49 +223,54 @@ def test_clean_requires_purge_and_yes(monkeypatch, capsys):
     assert calls["apply"] is True and calls["purge"] is True
 
 
-def test_install_all_verb_tx_requires_tests(capsys):
+def test_auto_install_verb_tx_requires_tests(capsys):
     from lhpc.adapters.cli.main import main
-    rc = main(["install-all", "--tx", "--no-tests", "--yes"])
+    rc = main(["auto-install", "--tx", "--no-tests", "--yes"])
     assert rc == 2
     assert "requires host tests" in capsys.readouterr().out
 
 
-def test_install_all_verb_plumbs_flags(monkeypatch, tmp_path, capsys):
+def test_auto_install_verb_plumbs_flags(monkeypatch, tmp_path, capsys):
     from lhpc.adapters.cli import main as cli_main
     from lhpc.core.services import ActionResult, ControllerService
     seen = []
     def fake(self, source="pinned", tests=True, tx=False, run_id="", apply=False,
-             emit=print):
-        seen.append((source, tests, tx, run_id, apply))
+             emit=print, selection=None, load_plan=False):
+        seen.append((source, tests, tx, run_id, apply, load_plan))
         return ActionResult(True, "plan", data={"changes": 1})
-    monkeypatch.setattr(ControllerService, "install_all", fake)
-    rc = cli_main.main(["install-all", "--yes", "--source", "stable", "--no-tests",
-                        "--run-id", "a" * 32])
+    monkeypatch.setattr(ControllerService, "auto_install", fake)
+    # WEB-SPAWNED child: --run-id -> ONE call that loads+validates the plan (no dry-run, no flags)
+    rc = cli_main.main(["auto-install", "--yes", "--run-id", "a" * 32])
+    assert rc == 0 and len(seen) == 1
+    assert seen[0][3:] == ("a" * 32, True, True)                 # run_id, apply, load_plan
+    # DIRECT CLI (no --run-id): dry-run then apply, global flags plumbed, no plan load
+    seen.clear()
+    rc = cli_main.main(["auto-install", "--yes", "--source", "stable", "--no-tests"])
     assert rc == 0
-    assert seen[0] == ("stable", False, False, "", False)        # dry-run first
-    assert seen[1] == ("stable", False, False, "a" * 32, True)   # then apply, bound run_id
+    assert seen[0] == ("stable", False, False, "", False, False)  # dry-run first
+    assert seen[1] == ("stable", False, False, "", True, False)   # then apply
 
 
-def test_install_all_unbootstrapped_cli_refuses(tmp_path, monkeypatch, capsys):
+def test_auto_install_unbootstrapped_cli_refuses(tmp_path, monkeypatch, capsys):
     import lhpc.core.paths as paths_mod
     from lhpc.adapters.cli.main import main
     absent = tmp_path / "absent-root"
     monkeypatch.setenv(paths_mod.ENV_RUNTIME_ROOT, str(absent))
-    rc = main(["install-all", "--yes"])
+    rc = main(["auto-install", "--yes"])
     out = capsys.readouterr().out
     assert rc != 0 and "not bootstrapped" in out
     assert not absent.exists()
 
 
-def test_install_all_default_source_is_dev(monkeypatch, capsys):
+def test_auto_install_default_source_is_dev(monkeypatch, capsys):
     from lhpc.adapters.cli import main as cli_main
     from lhpc.core.services import ActionResult, ControllerService
     seen = []
-    monkeypatch.setattr(ControllerService, "install_all",
+    monkeypatch.setattr(ControllerService, "auto_install",
                         lambda self, source="x", tests=True, tx=False, run_id="",
                         apply=False, emit=print:
                         (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
-    cli_main.main(["install-all", "--yes"])
+    cli_main.main(["auto-install", "--yes"])
     assert seen and seen[0] == "dev"
 
 
