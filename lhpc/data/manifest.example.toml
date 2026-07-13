@@ -203,7 +203,7 @@ id = "chat"
 name = "LoRaHAM Chat"
 summary = "Interactive daemon-backed APRS/chat client (loraham_chat) on 433."
 main = "loraham-chat"
-operator_box = false   # callsign lives in the app's own config file (CALL); no locator used
+operator_box = false   # callsign lives in the app's own config file (CALL)
 
   [[stack.component]]
   id = "loraham-chat"
@@ -283,7 +283,7 @@ id = "igate"
 name = "LoRaHAM iGate"
 summary = "APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
 main = "loraham-igate"
-operator_box = false   # callsign is the iGate's own -c param; position is lat/lon, no locator
+operator_box = false   # callsign is the iGate's own -c param; position is lat/lon
 
   [[stack.component]]
   id = "loraham-igate"

@@ -26,7 +26,7 @@ def _snapshot(tmp_path):
 def _seed(svc, tmp_path):
     # A known-good baseline (local.toml + stacks/daemon.toml).
     r = svc.save_config_bundle("daemon", values={"radio": "both"},
-                               callsign="N0CALL", locator="",
+                               callsign="N0CALL",
                                remotes={"loraham-daemon": "", "radiolib": ""})
     assert r.ok
     return _snapshot(tmp_path)
@@ -242,7 +242,7 @@ def test_local_root_scalars_and_types_survive_bundle_save(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('rootstr = "hi"\nenabled = true\nlimit = 5\nratio = 1.25\n'
                  '"quoted.key" = "q"\n[operator]\ncallsign = "OLD"\n[extra]\nflag = false\nn = 9\n')
-    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa").ok
+    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC").ok
     d = tomllib.loads(p.read_text())
     assert d["rootstr"] == "hi" and d["enabled"] is True and d["limit"] == 5 and d["ratio"] == 1.25
     assert d["quoted.key"] == "q"                              # quoted root key stays literal
@@ -263,7 +263,7 @@ def test_local_unsupported_structures_block_and_preserve(tmp_path, bad):
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(bad)
     before = p.read_text()
-    r = svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa")
+    r = svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC")
     assert not r.ok and p.read_text() == before                # refused, byte-for-byte preserved
 
 
@@ -273,7 +273,7 @@ def test_operator_and_component_remote_use_safe_renderer(tmp_path):
     paths = _svc(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('keepme = 42\nenabled = true\n')
-    cfgmod.save_operator_config(paths, "DL1ABC", "JO31")
+    cfgmod.save_operator_config(paths, "DL1ABC")
     cfgmod.save_component_remote(paths, "loraham-daemon", "https://x/y.git")
     d = tomllib.loads(p.read_text())
     assert d["keepme"] == 42 and d["enabled"] is True          # unrelated root scalars/types kept
@@ -286,7 +286,7 @@ def test_operator_save_refuses_when_local_has_unsupported(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('arr = [1, 2]\n'); before = p.read_text()
     with pytest.raises(cfgmod.ConfigError):
-        cfgmod.save_operator_config(paths, "DL1ABC", "JO31")
+        cfgmod.save_operator_config(paths, "DL1ABC")
     assert p.read_text() == before                              # preserved, not mutated
 
 
@@ -330,11 +330,12 @@ def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
     from lhpc.core import config as cfg
     paths = _svc(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('rootn = 3\n[operator]\ncallsign = "OLD"\nlocator = "AA00"\n'
+    p.write_text('rootn = 3\n[operator]\ncallsign = "OLD"\nlegacy = "AA00"\n'
                  'note = "portable profile"\nenabled = true\ncount = 5\n[extra]\nx = 1\n')
-    cfg.save_operator_config(paths, "DJ0CHE", "JO31")
+    cfg.save_operator_config(paths, "DJ0CHE")
     d = tomllib.loads(p.read_text())
-    assert d["operator"]["callsign"] == "DJ0CHE" and d["operator"]["locator"] == "JO31"
+    assert d["operator"]["callsign"] == "DJ0CHE"
+    assert d["operator"]["legacy"] == "AA00"                   # an unrelated [operator] scalar is left untouched
     assert d["operator"]["note"] == "portable profile"        # extra string preserved
     assert d["operator"]["enabled"] is True and d["operator"]["count"] == 5   # bool/int types kept
     assert d["rootn"] == 3 and d["extra"]["x"] == 1            # unrelated root scalar + table kept
@@ -344,10 +345,11 @@ def test_bundle_operator_update_preserves_extra_operator_keys(tmp_path):
     import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('[operator]\ncallsign = "OLD"\nlocator = "AA00"\nnote = "keep"\nflag = false\n')
-    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC", locator="JO31aa").ok
+    p.write_text('[operator]\ncallsign = "OLD"\nlegacy = "AA00"\nnote = "keep"\nflag = false\n')
+    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC").ok
     op = tomllib.loads(p.read_text())["operator"]
     assert op["callsign"] == "DK0ABC" and op["note"] == "keep" and op["flag"] is False
+    assert op["legacy"] == "AA00"                               # an unrelated [operator] scalar is left untouched
 
 
 def test_scalar_operator_shape_rejects_operator_save(tmp_path):
@@ -356,7 +358,7 @@ def test_scalar_operator_shape_rejects_operator_save(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('operator = "manual text"\n'); before = p.read_text()
     with pytest.raises(cfg.ConfigError):
-        cfg.save_operator_config(paths, "DJ0CHE", "JO31")
+        cfg.save_operator_config(paths, "DJ0CHE")
     assert p.read_text() == before                            # byte-for-byte preserved
 
 

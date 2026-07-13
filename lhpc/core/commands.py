@@ -5,7 +5,7 @@ A run/build/test command is an argv TOKEN TEMPLATE: an ordered list where each
 entry is either a literal token or a single whole placeholder. Placeholders:
 
     {param:NAME}      a run-param -> 0+ validated argv tokens (emit_param)
-    {operator:callsign} / {operator:locator}   -> one validated token
+    {operator:callsign}   -> one validated token
     {band}            -> one token (the selected band)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
@@ -64,7 +64,6 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
                 raw = (raw.replace("{callsign}", op.callsign or "N0CALL")
-                          .replace("{locator}", op.locator or "")
                           .replace("{runtime}", runtime).replace("{source}", source))
                 val = validators.validate_param(p, raw)
                 out.extend(emit_param(p, val))
@@ -72,9 +71,6 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
             if kind == "operator" and name == "callsign":
                 out.append(validators.callsign(op.callsign or "N0CALL",
                                                 field="callsign") or "N0CALL")
-                continue
-            if kind == "operator" and name == "locator":
-                out.append(validators.locator(op.locator, field="locator"))
                 continue
             if inner == "band":
                 if band:
@@ -280,8 +276,7 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             else:
                 sv = []
             graw = str((params or {}).get(guard, gp.default))
-            graw = (graw.replace("{callsign}", op.callsign or "N0CALL")
-                        .replace("{locator}", op.locator or "")).strip()
+            graw = graw.replace("{callsign}", op.callsign or "N0CALL").strip()
             if graw in [str(v) for v in sv]:
                 continue
         kind = step.get("kind")

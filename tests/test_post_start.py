@@ -232,7 +232,7 @@ def test_tcp_send_retry_render():
     class _C:
         run_params = []
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     script = commands.render_post_launcher(steps, _C(), {}, _Op(), "/rt", "/src", "433")
     assert "'repeat': 5" in script and "'interval': 10" in script
     assert "range(reps)" in script and "time.sleep(s[\"interval\"])" in script
@@ -252,7 +252,7 @@ def _run_launcher(steps, timeout=25):
     class _C:
         run_params = []
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     script = commands.render_post_launcher(steps, _C(), {}, _Op(), "/rt", "/src", "")
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(script); path = f.name
@@ -319,7 +319,7 @@ def test_malformed_retry_fails_at_render():
     class _C:
         run_params = []
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     for bad in ({"repeat": 0}, {"repeat": -1}, {"interval": -1}, {"interval": float("inf")}):
         step = {"kind": "tcp_send", "port": 1234, "data": "x\n", **bad}
         with pytest.raises(commands.CommandError):
@@ -472,7 +472,7 @@ def _run_bound(binding, port, data="P\n", repeat=4, interval=1, timeout=18):
     class _C:
         run_params = []
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     step = {"kind": "tcp_send", "port": port, "data": data, "optional": True,
             "repeat": repeat, "interval": interval}
     script = commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "", binding=binding)
@@ -600,7 +600,7 @@ def test_render_rejects_bad_retry_and_guard_metadata():
             name = "call"; default = "x"; kind = "str"; validator = ""
         run_params = [_P()]
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     base = {"kind": "tcp_send", "port": 1234, "data": "x\n"}
     for bad in ({"repeat": 1.5}, {"repeat": True}, {"interval": True},
                 {"skip_if_param": "unknown_param"}):
@@ -722,7 +722,7 @@ def test_render_rejects_malformed_binding_and_nonstring_skip_values():
             name = "call"; default = "x"; kind = "str"; validator = ""
         run_params = [_P()]
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     send = {"kind": "tcp_send", "port": 1, "data": "x\n"}
     for badb in ({"main_launch_id": "m", "main_pid": 0, "main_starttime": 1, "main_pgid": 1,
                   "main_sid": 1},                                     # non-positive pid
@@ -751,7 +751,7 @@ def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
     class _C:
         run_params = []
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("127.0.0.1", 0)); port = srv.getsockname()[1]; srv.listen(8); srv.settimeout(20)
     stamps = []
@@ -850,7 +850,7 @@ def test_render_skip_values_strict_falsey_and_valid():
             name = "call"; default = "x"; kind = "str"; validator = ""
         run_params = [_P()]
     class _Op:
-        callsign = "N0CALL"; locator = ""
+        callsign = "N0CALL"
     base = {"kind": "tcp_send", "port": 1, "data": "x\n", "skip_if_param": "call"}
     def render(step):
         return commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "")

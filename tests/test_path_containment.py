@@ -32,7 +32,7 @@ def test_corrupt_local_config_is_preserved_not_overwritten(tmp_path):
     (cfg_dir / "local.toml").write_text(corrupt)
     # Saving operator identity must REFUSE (raise), leaving the file untouched.
     with pytest.raises(ConfigError):
-        save_operator_config(Paths(runtime_root=tmp_path), "N0CALL", "")
+        save_operator_config(Paths(runtime_root=tmp_path), "N0CALL")
     assert (cfg_dir / "local.toml").read_text() == corrupt        # preserved verbatim
 
 

@@ -1901,7 +1901,7 @@ def _manual_required_svc(tmp_path, monkeypatch, summary):
     from lhpc.core.outcomes import Outcome, CompResult
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)      # satisfies enforce_identity
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1TST"\nlocator = "JN88"\n')
+        '[operator]\ncallsign = "OE1TST"\n')
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     res = CompResult(component="loraham-chat", action="stop", stack="chat",
@@ -1958,7 +1958,7 @@ def test_start_notes_flash_yellow_and_long(tmp_path, monkeypatch):
     from lhpc.core.paths import Paths
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1TST"\nlocator = "JN88"\n')
+        '[operator]\ncallsign = "OE1TST"\n')
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "run_action",

@@ -36,11 +36,11 @@ from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
 
 
-def set_call(svc, callsign="DJ0CHE", locator=""):
+def set_call(svc, callsign="DJ0CHE"):
     """Configure a valid operator callsign so a LICENSED stack (chat/igate/voice/meshcom) passes
     CALL-enforcement — the realistic precondition for starting one. Returns the service."""
     from lhpc.core.config import save_operator_config
-    save_operator_config(svc._paths, callsign, locator)
+    save_operator_config(svc._paths, callsign)
     svc._invalidate_config()
     return svc
 

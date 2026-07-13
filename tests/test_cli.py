@@ -319,25 +319,24 @@ def test_config_unknown_stack(tmp_path, monkeypatch, capsys):
     assert "unknown stack" in capsys.readouterr().out
 
 
-def test_config_operator_partial_update_preserves(tmp_path, monkeypatch, capsys):
+def test_config_operator_sets_and_normalizes_callsign(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "operator", "--callsign", "W1ABC"]) == 0
-    assert main(["config", "operator", "--locator", "JN58"]) == 0     # must not clear callsign
+    assert main(["config", "operator", "--callsign", "w1abc"]) == 0     # normalizes to upper
     from lhpc.core.services import ControllerService
     op = ControllerService().config().operator
-    assert op.callsign == "W1ABC" and op.locator == "JN58"
+    assert op.callsign == "W1ABC"
 
 
 def test_config_operator_reserved_rejects_positional(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["config", "operator", "call", "X"]) == 2
-    assert "only --callsign/--locator" in capsys.readouterr().out
+    assert "only --callsign" in capsys.readouterr().out
 
 
 def test_config_stack_rejects_operator_flags(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["config", "meshcom", "--callsign", "X"]) == 2
-    assert "apply only to 'lhpc config operator'" in capsys.readouterr().out
+    assert "applies only to 'lhpc config operator'" in capsys.readouterr().out
 
 
 def test_config_conflicting_modes_rejected(tmp_path, monkeypatch, capsys):
@@ -387,7 +386,7 @@ def test_config_ambiguous_param_refuses_without_mutating():
     fake = _Fake()
     args = argparse.Namespace(stack="x", param="call", value="V", band="", reset=False,
                               daemon_param=None, apply_daemon=False, reset_daemon=False,
-                              callsign=None, locator=None, yes=False)
+                              callsign=None, yes=False)
     import io
     import contextlib
     buf = io.StringIO()

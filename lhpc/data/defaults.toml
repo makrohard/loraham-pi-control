@@ -27,7 +27,6 @@ adopt_search_root = ""
 [operator]
 # Filled in only in the runtime-local config/local.toml (never here):
 #   callsign = "YOURCALL"
-#   locator  = "JO00aa"
 
 [webserver]
 # DESIRED production-webserver configuration (Nginx -> Waitress/Unix-socket -> Flask).

@@ -126,7 +126,7 @@ def _check_token(cid: str, tok: str, names: set) -> None:
             if name not in names:
                 raise ManifestError(f"{cid}: unknown parameter placeholder {tok!r}")
         elif kind == "operator":
-            if name not in ("callsign", "locator"):
+            if name != "callsign":
                 raise ManifestError(f"{cid}: unknown operator placeholder {tok!r}")
         elif inner not in ("band", "runtime", "source"):
             raise ManifestError(f"{cid}: unknown placeholder {tok!r}")
@@ -395,7 +395,7 @@ def _tok(t: str) -> str:
     """Map a legacy `{name}` placeholder to a structured token form."""
     if t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t:
         name = t[1:-1]
-        if name in ("callsign", "locator"):
+        if name == "callsign":
             return "{operator:" + name + "}"
         if name in ("runtime", "source", "band"):
             return t

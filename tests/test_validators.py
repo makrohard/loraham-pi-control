@@ -129,7 +129,7 @@ def test_validate_param_dispatch():
 
 def _life(tmp_path, callsign="N0CALL"):
     from conftest import real_spawn
-    cfg = Config(operator=OperatorConfig(callsign=callsign, locator=""))
+    cfg = Config(operator=OperatorConfig(callsign=callsign))
     return Lifecycle(Paths(runtime_root=tmp_path), (), cfg, FakeSystem().system,
                      spawn=real_spawn)
 

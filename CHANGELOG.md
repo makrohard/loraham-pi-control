@@ -3,7 +3,6 @@
 ## unreleased
 
 ## 0.1.5
-
 - Dependency overview + Checks
 - daemon params per stack and frequency
 - consistent webserver controls
@@ -11,6 +10,7 @@
 - hardening and refactor services.py
 - Start gate predicts the spawned ch
 - MeshCom HMAC Auth + Task indicators
+- Remove unused Locator-foo
 
 ## 0.1.4
 - Make web-GUI, meshcom and meshtastic GUI remote exposable With TLS and certificate-auth

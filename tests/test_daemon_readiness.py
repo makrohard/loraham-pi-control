@@ -78,7 +78,7 @@ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
     svc = _svc(tmp_path, b"STATUS RADIO=FAILED TXMODE=MANAGED\n")
     # operator identity present so the block is on readiness, not identity
     from lhpc.core.config import save_operator_config
-    save_operator_config(svc._paths, "DJ0CHE", "")
+    save_operator_config(svc._paths, "DJ0CHE")
     res = svc.test("daemon", tx=True, apply=True)
     assert not res.ok and ("READY" in res.summary or any("READY" in d for d in res.details))
 

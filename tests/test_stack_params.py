@@ -46,7 +46,7 @@ def test_licensed_refuses_empty_and_n0call(tmp_path):
 
 def test_licensed_default_uses_operator_callsign(tmp_path):
     svc = _svc(tmp_path)
-    save_operator_config(svc._paths, "DJ0CHE", ""); svc._invalidate_config()
+    save_operator_config(svc._paths, "DJ0CHE"); svc._invalidate_config()
     assert svc.enforce_identity("igate")[0] is True       # default {callsign} -> DJ0CHE
 
 

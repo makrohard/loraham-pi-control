@@ -15,7 +15,7 @@ def _svc(tmp_path):
 def test_saved_operator_is_visible_immediately(tmp_path):
     svc = _svc(tmp_path)
     assert svc.config().operator.callsign == ""            # primes the cache
-    r = svc.save_config_bundle("daemon", callsign="DJ0CHE-7", locator="")
+    r = svc.save_config_bundle("daemon", callsign="DJ0CHE-7")
     assert r.ok
     assert svc.config().operator.callsign == "DJ0CHE-7"    # NOT the stale cache
 
@@ -40,7 +40,7 @@ def test_operator_wrong_type_is_diagnostic_not_crash(tmp_path):
     (tmp_path / "config").mkdir(parents=True)
     (tmp_path / "config" / "local.toml").write_text('operator = "x"\n')
     cfg = load_config(Paths(runtime_root=tmp_path))        # must NOT raise
-    assert cfg.operator.callsign == "" and cfg.operator.locator == ""
+    assert cfg.operator.callsign == ""
     assert any("operator" in d for d in cfg.diagnostics)
 
 

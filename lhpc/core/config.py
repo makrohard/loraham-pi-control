@@ -98,7 +98,6 @@ class OperatorConfig:
     """Operator identity/settings — sourced ONLY from the runtime-local layer."""
 
     callsign: str = ""
-    locator: str = ""
 
     @property
     def configured(self) -> bool:
@@ -465,7 +464,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
             return ""
         return v
 
-    operator = OperatorConfig(callsign=_str_field("callsign"), locator=_str_field("locator"))
+    operator = OperatorConfig(callsign=_str_field("callsign"))
 
     remotes_raw = local.get("remotes", {})   # runtime-local only, never tracked
     if not isinstance(remotes_raw, dict):
@@ -691,11 +690,12 @@ def _write_local_tables(paths: Paths, path: Path, updates: dict) -> Path:
     return path
 
 
-def save_operator_config(paths: Paths, callsign: str, locator: str) -> Path:
-    """Persist operator identity into the runtime-local layer (git-ignored)."""
+def save_operator_config(paths: Paths, callsign: str) -> Path:
+    """Persist operator identity into the runtime-local layer (git-ignored). Patches only the
+    `callsign` key — any other existing `[operator]` scalar is preserved."""
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
-        return _write_local_tables(paths, path, {"operator": {"callsign": callsign, "locator": locator}})
+        return _write_local_tables(paths, path, {"operator": {"callsign": callsign}})
 
 
 def _cert_days(value, field: str) -> int:

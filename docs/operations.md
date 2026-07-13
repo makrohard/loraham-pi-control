@@ -127,7 +127,7 @@ override; **Reset to defaults** submits the defaults.
 **Local config (`local.toml`).** Writes are type-safe and fail-closed: scalars and flat tables keep
 their exact types (bool/int/finite-float/string, quotes, control chars, Unicode, quoted keys all
 round-trip), validated by re-parse before the atomic write. A managed update **patches only its own
-keys** — an operator save touches only `callsign`/`locator`, a remote save only that component's key
+keys** — an operator save touches only `callsign`, a remote save only that component's key
 (blank clears it); everything else is preserved. An unsupported structure (array, nested table,
 datetime, NaN/inf, control-char key, invalid Unicode) or a wrong table shape (`operator = "text"`,
 `remotes = "x"`) refuses the save and preserves the file byte-for-byte. A remote may be changed only

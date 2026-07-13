@@ -8,7 +8,7 @@ NOT relied upon — values are validated by type and rejected, not quoted.
 `safe_text` is the default for free-form string fields: it rejects control
 characters, NUL, newlines, every shell metacharacter, and path separators, so a
 value can neither alter a command's argv structure nor escape a config path. The
-typed validators (callsign, locator, freq, host, port, band, node_name) add
+typed validators (callsign, freq, host, port, band, node_name) add
 stricter, field-specific rules on top.
 """
 
@@ -57,16 +57,6 @@ def callsign(value, *, field: str = "callsign", allow_empty: bool = True) -> str
     # 1-8 alphanumerics with an optional -SSID (0-99). Covers club/portable calls.
     if not re.fullmatch(r"[A-Za-z0-9]{1,8}(-[0-9]{1,2})?", s):
         raise ValidationError(f"{field}: invalid callsign {s!r}")
-    return s
-
-
-def locator(value, *, field: str = "locator") -> str:
-    s = str(value).strip()
-    if not s:
-        return ""
-    # Maidenhead: 2 fields, optional 2 squares, optional 2 subsquares.
-    if not re.fullmatch(r"[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?([0-9]{2})?", s):
-        raise ValidationError(f"{field}: invalid Maidenhead locator {s!r}")
     return s
 
 
@@ -236,7 +226,6 @@ def sync_word(value, *, field: str = "sync word") -> str:
 # Named validators selectable from the manifest via a param's `validator` field.
 _NAMED = {
     "callsign": callsign,
-    "locator": locator,
     "freq": freq,
     "host": host,
     "port": port,

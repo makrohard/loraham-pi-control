@@ -174,7 +174,7 @@ def _cmd_config(svc, args) -> int:
             return 2
         args.param = rest[0] if rest else None
         args.value = rest[1] if len(rest) > 1 else None
-    op_flags = args.callsign is not None or args.locator is not None
+    op_flags = args.callsign is not None
 
     # ----- operator (RESERVED — never a stack id) -----
     if stack == "operator":
@@ -183,20 +183,19 @@ def _cmd_config(svc, args) -> int:
                                  ("--apply-daemon", args.apply_daemon),
                                  ("--reset-daemon", args.reset_daemon)) if v]
         if stray:
-            print("ERR   'lhpc config operator' takes only --callsign/--locator "
+            print("ERR   'lhpc config operator' takes only --callsign "
                   f"(remove: {', '.join(stray)})")
             return 2
         if not op_flags:
             op = svc.config().operator
             print("OK    operator identity:")
             print(f"  callsign = {op.callsign or '(unset)'}")
-            print(f"  locator  = {op.locator or '(unset)'}")
             return 0
-        return _render(svc.set_operator_identity(callsign=args.callsign, locator=args.locator))
+        return _render(svc.set_operator_identity(callsign=args.callsign))
 
     # ----- stack config -----
     if op_flags:
-        print("ERR   --callsign/--locator apply only to 'lhpc config operator'")
+        print("ERR   --callsign applies only to 'lhpc config operator'")
         return 2
     if svc.stack(stack) is None:
         print(f"ERR   unknown stack '{stack}'")
@@ -360,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Per-stack settings (callsign/params/daemon params) and the global operator identity.
     p_cfg = sub.add_parser("config", help="View or set stack settings and operator identity")
-    p_cfg.add_argument("stack", help="Stack id, or 'operator' for the global callsign/locator")
+    p_cfg.add_argument("stack", help="Stack id, or 'operator' for the global callsign")
     # ONE greedy trailing group, not two nargs="?" positionals: on Python 3.12.x argparse cannot
     # backfill split-across-an-optional positionals (`config <stack> --reset <param> <value>` dies with
     # SystemExit(2) before the handler's graceful conflict check). `nargs="*"` collects them uniformly;
@@ -379,7 +378,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.add_argument("--reset-daemon", action="store_true", dest="reset_daemon",
                        help="Reset this stack's daemon parameters")
     p_cfg.add_argument("--callsign", help="(operator only) set the global operator callsign")
-    p_cfg.add_argument("--locator", help="(operator only) set the global Maidenhead locator")
 
     p_build = sub.add_parser("build", help="Build a stack/component")
     p_build.add_argument("target", help="Stack/component id")

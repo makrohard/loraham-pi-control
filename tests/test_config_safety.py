@@ -18,7 +18,7 @@ def test_stack_config_write_is_atomic_and_no_temp_left(tmp_path):
 
 
 def test_local_config_is_mode_0600(tmp_path):
-    p = save_operator_config(Paths(runtime_root=tmp_path), "N0CALL", "")
+    p = save_operator_config(Paths(runtime_root=tmp_path), "N0CALL")
     assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
@@ -61,7 +61,7 @@ def test_runtime_config_write_goes_through_runtime_fs(tmp_path, monkeypatch):
         return real(paths, path, text, mode)
     monkeypatch.setattr(runtime_fs, "atomic_write", spy)
     paths = Paths(runtime_root=tmp_path)
-    cfgmod.save_operator_config(paths, "N0CALL", "")
+    cfgmod.save_operator_config(paths, "N0CALL")
     assert seen.get("called", "").endswith("config/local.toml")
 
 
@@ -76,7 +76,7 @@ def test_save_operator_config_refuses_symlinked_local(tmp_path):
     # A symlinked runtime config is refused at the no-follow READ (ConfigError) before any
     # write, OR at the no-follow write — either way it is never followed/written through.
     with pytest.raises((OSError, PathContainmentError, cfgmod.ConfigError)):
-        cfgmod.save_operator_config(paths, "N0CALL", "")
+        cfgmod.save_operator_config(paths, "N0CALL")
     assert outside.read_text() == ""                            # never written through
 
 

@@ -339,7 +339,7 @@ def _tx_env(tmp_path, monkeypatch, callsign="OE1TST", start_ok=True, test_ok=Tru
     if callsign:
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
         (tmp_path / "config" / "local.toml").write_text(
-            f'[operator]\ncallsign = "{callsign}"\nlocator = "JN88"\n')
+            f'[operator]\ncallsign = "{callsign}"\n')
     calls = []
     monkeypatch.setattr(svc, "start", lambda t, apply=False, bulk_ctx=None, **k:
                         (calls.append(("start", t)),
@@ -1017,7 +1017,7 @@ def test_abort_path_with_reservation_clear_failure_is_typed(tmp_path, monkeypatc
 def _callsign(tmp_path, call="OE1TST"):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "local.toml").write_text(
-        f'[operator]\ncallsign = "{call}"\nlocator = "JN88"\n')
+        f'[operator]\ncallsign = "{call}"\n')
 
 
 def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):

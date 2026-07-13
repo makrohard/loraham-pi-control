@@ -62,10 +62,10 @@ lhpc config <stack> --reset [--yes]    # reset this stack's settings to defaults
 lhpc config <stack> --daemon-param KEY=VALUE   # persist a band-scoped daemon param (repeatable)
 lhpc config <stack> --apply-daemon     # apply saved daemon params to the running daemon
 lhpc config <stack> --reset-daemon     # reset daemon params
-lhpc config operator [--callsign CALL] [--locator LOC]   # show / set the GLOBAL operator identity
+lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identity
 ```
 
-- `operator` is a reserved subcommand (not a stack id). `--callsign`/`--locator` apply only to it, and a one-field update preserves the other field.
+- `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it.
 - Every licensed stack inherits `operator`'s callsign by default, so `lhpc config operator --callsign W1ABC` unblocks them all; use `lhpc config <stack> <call-param> <value>` for a per-stack override.
 - A `<param>` name shared by several components must be qualified as `<component>.<param>` — the command refuses rather than guessing.
 - `--band` selects the band for band-switchable stacks.

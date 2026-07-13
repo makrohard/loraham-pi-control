@@ -212,7 +212,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
 
     def _invalidate_config(self) -> None:
         """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
-        after every successful config mutation so a saved callsign/locator/remote/param is
+        after every successful config mutation so a saved callsign/remote/param is
         immediately visible to subsequent web AND CLI service actions (no stale cache)."""
         with self._config_lock:
             self._config = None
@@ -610,7 +610,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         )
         op = self.config().operator
         details.append(
-            f"  operator: {op.callsign + ' (' + op.locator + ')' if op.configured else 'not configured (set in runtime config/local.toml)'}"
+            f"  operator: {op.callsign if op.configured else 'not configured (set in runtime config/local.toml)'}"
         )
         details.append(f"  systemctl: {hardware.check_systemctl(sys, user=False).detail}")
         details.append(f"  systemctl --user: {hardware.check_systemctl(sys, user=True).detail}")

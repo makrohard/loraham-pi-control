@@ -27,10 +27,10 @@ def test_operator_absent_by_default(tmp_path):
 def test_local_overrides_merge(tmp_path):
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1XYZ"\nlocator = "JN88"\n[web]\nport = 9999\n'
+        '[operator]\ncallsign = "OE1XYZ"\n[web]\nport = 9999\n'
     )
     cfg = load_config(_paths(tmp_path))
-    assert cfg.operator.callsign == "OE1XYZ" and cfg.operator.locator == "JN88"
+    assert cfg.operator.callsign == "OE1XYZ"
     assert cfg.operator.configured
     assert cfg.get("web", "port") == 9999          # override wins
     assert cfg.get("install", "source_strategy") == "adopt"  # default preserved
@@ -54,12 +54,29 @@ def test_save_stack_config_validates(tmp_path):
     assert good.ok and svc.stack_config("daemon")["radio"] == "868"
 
 
-def test_save_operator_preserves_callsign_locally(tmp_path):
+def test_save_operator_writes_callsign_locally(tmp_path):
     from lhpc.core.config import save_operator_config
     paths = _paths(tmp_path)
-    save_operator_config(paths, "n0call-10", "AA00aa")
+    save_operator_config(paths, "n0call-10")           # fresh file: writes ONLY callsign
     cfg = load_config(paths)
-    assert cfg.operator.callsign == "n0call-10" and cfg.operator.locator == "AA00aa"
+    assert cfg.operator.callsign == "n0call-10"
+    import dataclasses
+    assert {f.name for f in dataclasses.fields(cfg.operator)} == {"callsign"}   # only callsign remains
+
+
+def test_save_operator_preserves_unrelated_keys(tmp_path):
+    # A callsign save patches ONLY callsign — any other [operator] scalar and other tables survive.
+    import tomllib
+    from lhpc.core.config import save_operator_config
+    paths = _paths(tmp_path)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.toml").write_text(
+        '[operator]\ncallsign = "OLD"\nnote = "keep"\n[web]\nport = 8770\n')
+    save_operator_config(paths, "W1ABC")
+    data = tomllib.loads((tmp_path / "config" / "local.toml").read_text())
+    assert data["operator"]["callsign"] == "W1ABC"
+    assert data["operator"]["note"] == "keep"          # unrelated [operator] key preserved
+    assert data["web"]["port"] == 8770                 # unrelated table preserved
 
 
 def test_config_view_splits_basic_advanced_and_operator(tmp_path):
@@ -67,7 +84,7 @@ def test_config_view_splits_basic_advanced_and_operator(tmp_path):
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
     view = svc.config_view("daemon")
-    assert view["operator"] is None          # daemon does not consume callsign/locator
+    assert view["operator"] is None          # daemon does not consume callsign
     # The daemon's start options (radio/tx/CAD/…) are NOT on the Config page — they
     # are chosen on confirm:start. The page carries the live tuning settings instead.
     assert view["components"] == []
@@ -86,7 +103,7 @@ def test_save_config_writes_operator_and_params(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    r = svc.save_config("igate", {"tx_freq": "434.000"}, callsign="oe1abc", locator="JN88")
+    r = svc.save_config("igate", {"tx_freq": "434.000"}, callsign="oe1abc")
     assert r.ok
     assert svc.config().operator.callsign == "OE1ABC"   # global operator saved (normalised upper)
     assert svc.config_view("igate")["values"]["tx_freq"] == "434.000"
@@ -193,7 +210,7 @@ def test_run_param_default_uses_operator_callsign(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.config import save_operator_config, save_stack_config
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    save_operator_config(svc._paths, "DL1ABC", "JO31"); svc._config = None
+    save_operator_config(svc._paths, "DL1ABC"); svc._config = None
     assert svc.stack_config("igate")["call"] == "DL1ABC"      # default substituted, not '{callsign}'
     # an explicitly saved value is NOT re-substituted
     save_stack_config(svc._paths, "igate", {"call": "DK0XYZ"})

@@ -520,8 +520,8 @@ class ParamsConfigMixin:
 
     def stack_config(self, target: str, band: str = "") -> dict:
         """Effective run config for `target` (and band): the component-scoped saved value, else a
-        UNIQUE flat legacy value, else the per-band/manifest default (operator `{callsign}`/
-        `{locator}` tokens substituted in DEFAULTS only — a saved value is used verbatim). An
+        UNIQUE flat legacy value, else the per-band/manifest default (operator `{callsign}`
+        tokens substituted in DEFAULTS only — a saved value is used verbatim). An
         ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
@@ -530,8 +530,7 @@ class ParamsConfigMixin:
         op = self.config().operator
 
         def _op_subst(v: str) -> str:
-            return (str(v).replace("{callsign}", op.callsign or "")
-                          .replace("{locator}", op.locator or ""))
+            return str(v).replace("{callsign}", op.callsign or "")
 
         out = {}
         for c in self._target_components(target):
@@ -627,14 +626,14 @@ class ParamsConfigMixin:
                     and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
         main = s.main_component if s else None
         # Operator identity is only relevant to stacks that actually substitute
-        # {callsign}/{locator} into a run/pre command (e.g. iGate) — not the daemon.
+        # {callsign} into a run/pre command (e.g. iGate) — not the daemon.
         # Stacks that edit their callsign in their own config (operator_box=false) don't show the
         # shared Operator box — the callsign lives in their config/run params instead.
         uses_operator = (s is not None and s.operator_box) and any(
             tok in (c.run_cmd or "") or tok in (c.pre_cmd or "")
             or any(tok in (p.default or "") for p in c.run_params)
             or any(tok in (p.default or "") for p in (c.config_file.params if c.config_file else ()))
-            for c in members for tok in ("{callsign}", "{locator}"))
+            for c in members for tok in ("{callsign}",))
         sources = [{"id": c.id, "name": c.name,
                     "remote": cfg.remotes.get(c.id) or c.source.remote,
                     "default": c.source.remote,
@@ -643,7 +642,7 @@ class ParamsConfigMixin:
         bands = self.stack_bands(target)
         cfg_band = self._config_band(target, band)
         view = {
-            "operator": ({"callsign": cfg.operator.callsign, "locator": cfg.operator.locator}
+            "operator": ({"callsign": cfg.operator.callsign}
                          if uses_operator else None),
             # Each component carries its OWN field-name map (`fields`) and its OWN
             # component-scoped value map (`values`) so duplicate run/file names across components
@@ -702,16 +701,16 @@ class ParamsConfigMixin:
         return view
 
     def save_config(self, target: str, values: dict,
-                    callsign: str | None = None, locator: str | None = None,
+                    callsign: str | None = None,
                     band: str = "") -> ActionResult:
         """Save operator identity (if supplied) and the stack's run parameters as ONE
         all-or-recoverable transaction (via `save_config_bundle`): if the stack config fails to
         validate/persist, operator identity is NOT partially written."""
         return self.save_config_bundle(target, values=values, callsign=callsign,
-                                       locator=locator, band=band)
+                                       band=band)
 
     def save_config_bundle(self, target: str, *, values: dict | None = None,
-                           callsign: str | None = None, locator: str | None = None,
+                           callsign: str | None = None,
                            band: str = "", remotes: dict | None = None) -> ActionResult:
         """Validate the WHOLE Config-page submission, then persist it as ONE
         all-or-recoverable transaction (local.toml + the per-stack config file).
@@ -770,12 +769,11 @@ class ParamsConfigMixin:
                 clean_params.append(("r", c, p, validators.validate_param(p, v)))
             except validators.ValidationError as exc:
                 errors.append(str(exc))
-        op_change = callsign is not None or locator is not None
-        cs = loc = None
+        op_change = callsign is not None
+        cs = None
         if op_change:
             try:
                 cs = validators.callsign(callsign or "", field="callsign").upper()
-                loc = validators.locator(locator or "", field="locator")
             except validators.ValidationError as exc:
                 errors.append(str(exc))
         # A remote submission is a PATCH for THIS stack's own source components only (enforced in
@@ -832,7 +830,7 @@ class ParamsConfigMixin:
         targets: list = []
         local_path = self._paths.runtime_root / "config" / "local.toml"
         if op_change or remotes is not None:
-            def _render_local(p, opc=op_change, _cs=cs, _loc=loc, patch=remote_patch,
+            def _render_local(p, opc=op_change, _cs=cs, patch=remote_patch,
                               do_remotes=(remotes is not None)):
                 # Read the LATEST local.toml INSIDE the transaction lock and MERGE — preserving
                 # every unrelated table and every other component's remote override. A malformed
@@ -840,8 +838,8 @@ class ParamsConfigMixin:
                 existing = _load_runtime_toml(self._paths, local_path)   # no-follow; ConfigError on corrupt
                 data = dict(existing)                     # keep root scalars + every other table
                 if opc:
-                    # Patch ONLY callsign/locator — preserve any other [operator] scalar keys.
-                    _patch_local_table(data, "operator", {"callsign": _cs, "locator": _loc})
+                    # Patch ONLY callsign — preserve any other [operator] scalar keys.
+                    _patch_local_table(data, "operator", {"callsign": _cs})
                 if do_remotes:
                     # Patch owned component keys only (None clears); other remotes preserved. A
                     # non-table `operator`/`remotes` value is rejected here -> transaction rollback.
@@ -947,32 +945,25 @@ class ParamsConfigMixin:
                             details=self._apply_hints(target, modes) + remote_notes,
                             next_commands=[f"lhpc stack start {target}"])
 
-    def set_operator_identity(self, callsign: str | None = None,
-                              locator: str | None = None) -> ActionResult:
+    def set_operator_identity(self, callsign: str | None = None) -> ActionResult:
         """Set the GLOBAL operator identity (`[operator]` in local.toml) — the shared callsign every
-        licensed stack inherits via each identity param's `{callsign}` default. PARTIAL UPDATE: an
-        argument left as None PRESERVES the current stored value (so `--callsign` alone never clears
-        the locator, and vice versa); an explicit empty string clears that field. Validates format."""
+        licensed stack inherits via each identity param's `{callsign}` default. An explicit empty
+        string clears it. Validates format; preserves any other `[operator]` scalar keys."""
         from . import config as _config
-        from .validators import callsign as _v_call, locator as _v_loc, ValidationError
-        if callsign is None and locator is None:
-            return ActionResult(False, "nothing to set — pass --callsign and/or --locator")
-        cur = self.config().operator
-        new_call = cur.callsign if callsign is None else callsign
-        new_loc = cur.locator if locator is None else locator
+        from .validators import callsign as _v_call, ValidationError
+        if callsign is None:
+            return ActionResult(False, "nothing to set — pass --callsign")
         try:
-            new_call = _v_call(new_call).upper()
-            new_loc = _v_loc(new_loc)
+            new_call = _v_call(callsign).upper()
         except ValidationError as exc:
             return ActionResult(False, f"invalid operator identity: {exc}")
         try:
-            _config.save_operator_config(self._paths, new_call, new_loc)
+            _config.save_operator_config(self._paths, new_call)
         except (OSError, _config.ConfigError) as exc:
             return ActionResult(False, f"could not save operator identity: {exc}")
         self._invalidate_config()
         return ActionResult(True, "operator identity saved",
-                            details=[f"  callsign = {new_call or '(unset)'}",
-                                     f"  locator  = {new_loc or '(unset)'}"])
+                            details=[f"  callsign = {new_call or '(unset)'}"])
 
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
@@ -1100,8 +1091,7 @@ class ParamsConfigMixin:
 
     def _op_subst(self, text: str) -> str:
         op = self.config().operator
-        return (str(text).replace("{callsign}", op.callsign or "")
-                         .replace("{locator}", op.locator or ""))
+        return str(text).replace("{callsign}", op.callsign or "")
 
     def _identity_field(self, target: str) -> dict | None:
         """The operator-identity field CALL/node enforcement guards, or None. Scoped to the target:
@@ -1348,14 +1338,9 @@ class ParamsConfigMixin:
             call = validators.callsign(op.callsign or "N0CALL") or "N0CALL"
         except validators.ValidationError:
             call = "N0CALL"
-        try:
-            loc = validators.locator(op.locator or "")
-        except validators.ValidationError:
-            loc = ""
 
         def subst(text: str) -> str:
             return (text.replace("{callsign}", call)
-                        .replace("{locator}", loc)
                         .replace("{runtime}", runtime)
                         .replace("{band}", cfg_band))    # for per-band config keys
 

@@ -1255,7 +1255,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         result = service.save_config_bundle(
             stack_id, values=values,
             callsign=request.form.get("op_callsign"),
-            locator=request.form.get("op_locator"), band=band, remotes=remotes)
+            band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)

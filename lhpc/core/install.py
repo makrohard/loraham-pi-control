@@ -85,7 +85,6 @@ _LOCAL_STARTER = """\
 
 # [operator]
 # callsign = "YOURCALL"
-# locator  = "JO00aa"
 
 # [web]
 # host = "127.0.0.1"

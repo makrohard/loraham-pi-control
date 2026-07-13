@@ -237,7 +237,6 @@ def _render(post, params=None):
 
     class _Op:
         callsign = "OE1ABC"
-        locator = "JN88"
     comp = _mk_comp_with_post(post)
     return commands.render_post_launcher(list(post), comp, params or {}, _Op(),
                                          "/rt", "/rt/src", "")
