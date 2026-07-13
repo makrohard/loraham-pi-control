@@ -10,6 +10,7 @@ from lhpc.adapters.web.app import create_app
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.lifecycle import GROUP_RESTART_CMD, GROUP_RESTART_HINT
 
 
 _MUTATING = {"start", "stop", "build", "update", "test", "uninstall", "daemon_set"}
@@ -98,21 +99,48 @@ def test_dependencies_page_lists_installed_stack_with_grant_command(tmp_path):
     assert "Python venv dependencies" in body                                  # LHPC controller section
 
 
-def test_pending_group_grant_shows_restart_hint_not_seedocs(tmp_path):
-    # A group grant CONFIGURED but not yet EFFECTIVE (restart pending) shows the restart hint — NOT the
-    # misleading "no automatic install command — see docs" (there is no package to install; the fix is a
-    # restart). Regression: the empty (suppressed) command fell through to the see-docs fallback.
+def test_pending_group_grant_shows_restart_command_not_seedocs(tmp_path):
+    # A group grant CONFIGURED but not yet EFFECTIVE (restart pending) is a DISTINCT state: it flags
+    # restart_pending, keeps the grant unsatisfied for gating but OUT of mandatory_missing, and offers a
+    # copyable RESTART command (never another usermod, never the "see docs" fallback).
     fake = FakeSystem(effective_group_names=frozenset(),
                       configured_group_names=frozenset(("spi", "gpio")),
                       paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     mc = svc.stack("meshtastic").main_component
     (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)
-    d = _mt_group_dep(svc.dependency_overview())
-    assert d and d["runtime"] and not d["satisfied"] and d["install"] == ""     # command suppressed
-    assert "restart pending" in d["detail"]
+    ov = svc.dependency_overview()
+    d = _mt_group_dep(ov)
+    assert d and d["runtime"] and not d["satisfied"]
+    assert d["restart_pending"] is True and d["install"] == GROUP_RESTART_CMD    # copyable restart cmd
+    assert d["detail"] == GROUP_RESTART_HINT and "missing" not in d["detail"]
+    # summary: pending is NOT counted mandatory-missing; the page stays yellow via restart_pending.
+    assert ov["restart_pending"] >= 1
+    assert not any(sec.get("stack") == "meshtastic" and dd is d and dd["mandatory"] and not dd.get("restart_pending")
+                   for sec in ov["sections"] for dd in sec["deps"])
     body = _client(svc).get("/dependencies").get_data(as_text=True)
-    assert "restart pending" in body and "no automatic install command" not in body
+    assert "restart pending" in body                       # badge + summary
+    # the copyable restart command renders (Jinja HTML-escapes the quotes; copy.js copies textContent).
+    assert "loginctl terminate-user" in body and "apply the grant:" in body
+    assert "no automatic install command" not in body and "sudo usermod" not in body
+
+
+def test_pending_only_page_is_not_all_satisfied_nor_mandatory_missing(tmp_path):
+    # A page whose ONLY unmet dep is a restart-pending grant: header must read "restart pending" (yellow),
+    # not "All dependencies satisfied" and not "mandatory dependencies missing".
+    fake = FakeSystem(effective_group_names=frozenset(),
+                      configured_group_names=frozenset(("spi", "gpio")),
+                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    mc = svc.stack("meshtastic").main_component
+    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)
+    ov = svc.dependency_overview()
+    mt_mandatory_missing = sum(1 for sec in ov["sections"] if sec.get("stack") == "meshtastic"
+                               for dd in sec["deps"]
+                               if not dd["satisfied"] and dd["mandatory"] and not dd.get("restart_pending"))
+    assert mt_mandatory_missing == 0 and ov["restart_pending"] >= 1
+    body = _client(svc).get("/dependencies").get_data(as_text=True)
+    assert "restart pending" in body and "All dependencies satisfied" not in body
 
 
 def test_command_less_controller_dep_shows_its_note_not_seedocs(tmp_path, monkeypatch):
@@ -168,3 +196,18 @@ def test_stacks_no_banner_when_all_satisfied(tmp_path, monkeypatch):
     # no dependency banner (neither colour) — but the bottom Dependency Overview box link is still there
     assert "dependencies are missing" not in body and "dependency is missing" not in body
     assert "Dependency Overview</button>" in body
+
+
+def test_stacks_banner_yellow_when_restart_pending(tmp_path):
+    # A restart-pending grant is excluded from mandatory_missing/optional_missing, so the /stacks banner
+    # must have its OWN branch — else a pending-only state shows no proactive top-level signal.
+    fake = FakeSystem(effective_group_names=frozenset(),                       # not yet effective
+                      configured_group_names=frozenset(("spi", "gpio")),       # but granted
+                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    mc = svc.stack("meshtastic").main_component
+    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)             # "installed"
+    body = _client(svc).get("/stacks").get_data(as_text=True)
+    assert "depnote depnote-warn" in body and 'href="/dependencies"' in body   # proactive yellow banner
+    assert "restart pending" in body
+    assert "mandatory dependenc" not in body                                   # NOT counted mandatory-missing

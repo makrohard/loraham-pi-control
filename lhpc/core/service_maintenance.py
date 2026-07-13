@@ -628,7 +628,8 @@ class MaintenanceOpsMixin:
         (LHPC never runs system-package commands). `mandatory_missing`/`optional_missing` drive the banner
         colour (yellow if any mandatory unmet, else green if only optional). Composes existing GET-safe
         probes only (shutil.which / fs.exists / find_spec / missing_requirements / is_dir) — no subprocess."""
-        def norm(label, satisfied, mandatory, detail, install, runtime=False, note=""):
+        def norm(label, satisfied, mandatory, detail, install, runtime=False, note="",
+                 restart_pending=False):
             # NARROW action parse: ONLY `lhpc install <target>` / `lhpc build <target>` where the op is a
             # real web action and the target resolves to a known stack — anything else stays copyable.
             op = target = None
@@ -638,7 +639,7 @@ class MaintenanceOpsMixin:
                 op, target, install = parts[1], parts[2], ""
             return {"label": label, "satisfied": bool(satisfied), "mandatory": bool(mandatory),
                     "detail": detail or "", "install": install or "", "op": op, "target": target,
-                    "runtime": bool(runtime), "note": note or ""}
+                    "runtime": bool(runtime), "note": note or "", "restart_pending": bool(restart_pending)}
 
         sections: list = []
         # LHPC + web server: controller_system_deps groups carry the explicit required flag (nginx here).
@@ -660,15 +661,21 @@ class MaintenanceOpsMixin:
                     comp = comp_index.get(it.component)
                     mandatory = not (comp is not None and comp.optional)
                     deps_.append(norm(it.label, it.satisfied, mandatory, it.detail,
-                                      it.install_cmd, runtime=it.runtime))
+                                      it.install_cmd, runtime=it.runtime,
+                                      restart_pending=it.restart_pending))
             sections.append({"title": s.name, "kind": "stack", "stack": s.id, "deps": deps_})
 
+        # A restart-pending groups grant stays UNSATISFIED (start is still gated) but is NOT a mandatory
+        # dependency "missing" — it is granted and only needs a session restart. Count it separately so
+        # the page header says "restart pending" (yellow) instead of "mandatory dependency missing".
+        restart_pending = sum(1 for sec in sections for d in sec["deps"]
+                              if not d["satisfied"] and d.get("restart_pending"))
         mandatory_missing = sum(1 for sec in sections for d in sec["deps"]
-                                if not d["satisfied"] and d["mandatory"])
+                                if not d["satisfied"] and d["mandatory"] and not d.get("restart_pending"))
         optional_missing = sum(1 for sec in sections for d in sec["deps"]
-                               if not d["satisfied"] and not d["mandatory"])
+                               if not d["satisfied"] and not d["mandatory"] and not d.get("restart_pending"))
         return {"sections": sections, "mandatory_missing": mandatory_missing,
-                "optional_missing": optional_missing}
+                "optional_missing": optional_missing, "restart_pending": restart_pending}
 
     def _running_source_consumers(self, paths: set) -> list:
         """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —

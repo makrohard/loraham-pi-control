@@ -11,8 +11,12 @@
         install/build steps are buttons.</p>
       {% if overview.mandatory_missing %}
         <div class="depnote depnote-warn"><strong>{{ overview.mandatory_missing }} mandatory</strong>
-          dependenc{{ 'y' if overview.mandatory_missing == 1 else 'ies' }} missing{% if overview.optional_missing %}
+          dependenc{{ 'y' if overview.mandatory_missing == 1 else 'ies' }} missing{% if overview.restart_pending %}
+          · {{ overview.restart_pending }} restart pending{% endif %}{% if overview.optional_missing %}
           · {{ overview.optional_missing }} optional{% endif %} — resolve the mandatory ones below.</div>
+      {% elif overview.restart_pending %}
+        <div class="depnote depnote-warn">{{ overview.restart_pending }} dependency grant{{ '' if overview.restart_pending == 1 else 's' }}
+          restart pending — apply the session restart shown below.</div>
       {% elif overview.optional_missing %}
         <div class="depnote depnote-ok">{{ overview.optional_missing }} optional
           dependenc{{ 'y' if overview.optional_missing == 1 else 'ies' }} missing — nothing mandatory.</div>
@@ -32,12 +36,15 @@
             {% for d in sec.deps %}
               <li>
                 {% if d.satisfied %}<span class="badge badge-running">satisfied</span>
+                {% elif d.restart_pending %}<span class="badge badge-not-installed">restart pending</span>
                 {% elif d.mandatory %}<span class="badge badge-failed">missing</span>
                 {% else %}<span class="badge badge-not-installed">optional</span>{% endif %}
                 {{ d.label }}{% if d.detail %} <span class="muted">· {{ d.detail }}</span>{% endif %}
                 {% if not d.satisfied %}
                   {% if d.op and d.target %}
                     {{ action_btn(d.op, d.target, d.op|capitalize ~ ' ' ~ d.target) }}
+                  {% elif d.restart_pending %}
+                    <div class="muted">apply the grant:</div>{{ cmdbox('depov-' ~ si ~ '-' ~ loop.index0, d.install) }}
                   {% elif d.install %}
                     <div class="muted">{{ 'grant it:' if d.runtime else 'run it yourself:' }}</div>{{ cmdbox('depov-' ~ si ~ '-' ~ loop.index0, d.install) }}
                   {% elif d.runtime %}

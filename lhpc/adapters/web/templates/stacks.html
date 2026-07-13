@@ -15,7 +15,9 @@
   </section>
 
   {% if dep_summary.mandatory_missing %}
-    <div class="depnote depnote-warn"><strong>{{ dep_summary.mandatory_missing }} mandatory dependenc{{ 'y is' if dep_summary.mandatory_missing == 1 else 'ies are' }} missing</strong> — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to resolve.</div>
+    <div class="depnote depnote-warn"><strong>{{ dep_summary.mandatory_missing }} mandatory dependenc{{ 'y is' if dep_summary.mandatory_missing == 1 else 'ies are' }} missing</strong>{% if dep_summary.restart_pending %} · {{ dep_summary.restart_pending }} restart pending{% endif %} — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to resolve.</div>
+  {% elif dep_summary.restart_pending %}
+    <div class="depnote depnote-warn"><strong>{{ dep_summary.restart_pending }} dependency grant{{ '' if dep_summary.restart_pending == 1 else 's' }} restart pending</strong> — <a href="{{ url_for('dependencies_page') }}">open the Dependency Overview</a> to apply the session restart.</div>
   {% elif dep_summary.optional_missing %}
     <div class="depnote depnote-ok">{{ dep_summary.optional_missing }} optional dependenc{{ 'y is' if dep_summary.optional_missing == 1 else 'ies are' }} missing — see the <a href="{{ url_for('dependencies_page') }}">Dependency Overview</a>.</div>
   {% endif %}

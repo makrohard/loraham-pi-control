@@ -40,7 +40,10 @@ from .jobs import JobResult, JobState, run_job, tail_log
 
 # Surfaced when a groups grant is CONFIGURED (usermod done) but not yet EFFECTIVE in this process — the
 # fix is a restart, not another usermod. Kept here so both dependency render sites use the one wording.
-GROUP_RESTART_HINT = "granted, restart pending — reboot or: loginctl terminate-user $USER"
+# Deliberately does NOT read as "missing": the grant IS made; only the running session must restart.
+GROUP_RESTART_HINT = "granted — restart the session to apply"
+# The copyable command that applies a restart-pending grant (re-derives the session's groups).
+GROUP_RESTART_CMD = 'loginctl terminate-user "$USER"'
 # Surfaced when the operator is NOT YET a member: grant it, then re-login. State-specific so it never
 # co-appears with GROUP_RESTART_HINT (which would read as both "not granted" and "granted").
 GROUP_MISSING_HINT = "not a member — grant it, then log out/in or reboot to apply"
@@ -48,12 +51,13 @@ GROUP_MISSING_HINT = "not a member — grant it, then log out/in or reboot to ap
 
 def req_remediation(req, pending: bool) -> str:
     """One-line remediation for a (missing) Requirement — shared by the START gate and the dependency
-    render sites. A groups grant that is merely restart-PENDING shows GROUP_RESTART_HINT (re-running
-    `usermod` would NOT help); everything else shows its grant/install command."""
+    render sites. Owns the state framing so callers do NOT prefix "missing " (that would contradict a
+    granted-but-pending grant). A groups grant that is merely restart-PENDING advises a RESTART (re-running
+    `usermod` would NOT help); everything else reads "missing <label>" plus its grant/install command."""
     label = req.cmd or req.note or req.check_file or ""
     if req.groups and pending:
-        return f"{label} — {GROUP_RESTART_HINT}"
-    return f"{label} ({req.install})" if req.install else label
+        return f"{label} — {GROUP_RESTART_HINT}: {GROUP_RESTART_CMD}"
+    return f"missing {label}" + (f" ({req.install})" if req.install else "")
 
 
 @dataclass

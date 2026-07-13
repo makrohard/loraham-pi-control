@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
+from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_CMD, GROUP_RESTART_HINT
 
 NOT_EXECUTED_NOTE = "not executed by LHPC — run it yourself"
 
@@ -30,6 +30,7 @@ class DepItem:
     install_cmd: str = ""  # exact operator command ("" when none applies)
     note: str = NOT_EXECUTED_NOTE
     runtime: bool = False  # run-time capability (e.g. group membership) — "grant" not "install"
+    restart_pending: bool = False  # groups grant CONFIGURED but not yet EFFECTIVE — restart, not usermod
 
 
 def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> list:
@@ -64,7 +65,10 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
                 label=req.note or req.cmd or req.check_file,
                 satisfied=sat,
                 detail=detail,
-                install_cmd="" if pending else (req.install or ""), runtime=bool(req.groups)))
+                # restart-pending shows the copyable restart command (re-running usermod would not help);
+                # a genuinely-missing grant shows the usermod grant command.
+                install_cmd=GROUP_RESTART_CMD if pending else (req.install or ""),
+                runtime=bool(req.groups), restart_pending=pending))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source

@@ -424,6 +424,44 @@ class RealProcFs:
         return None, False
 
 
+def _read_text_or_empty(path: str) -> str:
+    """Best-effort read of a small text file; "" on any OSError (never raises)."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _parse_id_map(text: str) -> list[tuple[int, int, int]]:
+    """Parse a `/proc/<pid>/{uid,gid}_map` into `(inside, outside, count)` rows. Each valid line has
+    three integer columns; skip malformed / impossible ranges (negative starts or count <= 0)."""
+    rows: list[tuple[int, int, int]] = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            inside, outside, count = (int(parts[0]), int(parts[1]), int(parts[2]))
+        except ValueError:
+            continue
+        if inside < 0 or outside < 0 or count <= 0:
+            continue
+        rows.append((inside, outside, count))
+    return rows
+
+
+def _is_full_identity_map(rows: list[tuple[int, int, int]]) -> bool:
+    """The single unrestricted identity map (the init namespace / no restriction)."""
+    return rows == [(0, 0, 4294967295)]
+
+
+def _identity_mapped(idv: int, rows: list[tuple[int, int, int]]) -> bool:
+    """True when `idv` maps to itself within some row (inside==outside and inside <= idv < inside+count)."""
+    return any(inside == outside and inside <= idv < inside + count
+               for inside, outside, count in rows)
+
+
 class RealFileSystem:
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
@@ -451,6 +489,36 @@ class RealFileSystem:
                 pass
         return frozenset(names)
 
+    def _groups_view_squashed(self) -> bool:
+        """True ONLY for the systemd unprivileged `--user` sandbox pattern that squashes supplementary
+        groups to the overflow gid, making `os.getgroups()` non-authoritative. A hardened `--user`
+        service is wrapped in a user namespace whose gid_map maps only the primary gid and whose
+        setgroups is `deny`, so every supplementary group appears as the overflow `nogroup` gid — even
+        though the process's real (init-ns) kgids are retained and STILL grant group-owned device
+        access. Recognised by the conjunction: setgroups=deny AND the overflow gid present in
+        os.getgroups() AND that overflow gid genuinely UNmapped AND a restricted/non-full gid/uid map in
+        which THIS process's primary uid+gid are identity-mapped (so `configured_groups()` still refers
+        to the correct account). On any uncertainty return False (keep the os.getgroups() result).
+
+        `setgroups=deny` alone is necessary but NOT sufficient (it only disables setgroups(2) and is
+        inherited by child user namespaces), hence the full conjunction."""
+        try:
+            if _read_text_or_empty("/proc/self/setgroups").strip() != "deny":
+                return False
+            groups = list(os.getgroups())
+            overflow = int(_read_text_or_empty("/proc/sys/kernel/overflowgid").strip() or "65534")
+            if overflow not in groups:                        # allow-mapped groups → trust getgroups
+                return False
+            gid_map = _parse_id_map(_read_text_or_empty("/proc/self/gid_map"))
+            uid_map = _parse_id_map(_read_text_or_empty("/proc/self/uid_map"))
+            return (bool(gid_map) and bool(uid_map)
+                    and not _is_full_identity_map(gid_map)    # a restricted / non-full map …
+                    and not _identity_mapped(overflow, gid_map)   # … where overflow is genuinely UNmapped …
+                    and _identity_mapped(os.getgid(), gid_map)    # … with our primary IDs identity-mapped
+                    and _identity_mapped(os.getuid(), uid_map))   # (else configured_groups → wrong account)
+        except (OSError, TypeError, ValueError):
+            return False
+
     def effective_groups(self) -> frozenset[str]:
         """Unix-group NAMES the current PROCESS is EFFECTIVELY in — `os.getgroups()` plus the primary
         gid, i.e. exactly what a child process spawned NOW would inherit and use to open group-owned
@@ -458,7 +526,16 @@ class RealFileSystem:
         spawn actually get in?'. A group granted via `usermod -aG` AFTER this process started is NOT
         here until the process/session restarts (under systemd lingering it stays stale until reboot),
         so gating on it fails closed — start stays blocked rather than spawning a child that then dies
-        with a raw permission error. Read-only, no subprocess (safe on GET)."""
+        with a raw permission error. Read-only, no subprocess (safe on GET).
+
+        CAVEAT — user namespace: a hardened systemd `--user` service (our web console) runs in a user
+        namespace that squashes supplementary groups to the overflow `nogroup` gid, so `os.getgroups()`
+        would falsely report spi/gpio absent even though the child CAN still open the device (the kernel
+        checks the retained init-ns kgids). When that exact squash is detected (`_groups_view_squashed`)
+        we return the namespace-independent `configured_groups()` — the real membership, which matches
+        those retained kgids — instead of the squashed getgroups() view."""
+        if self._groups_view_squashed():
+            return self.configured_groups()
         return self._names_for_gids(set(os.getgroups()) | {os.getgid()})
 
     def configured_groups(self) -> frozenset[str]:

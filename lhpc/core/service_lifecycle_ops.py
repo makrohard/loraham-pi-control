@@ -552,9 +552,11 @@ class LifecycleOpsMixin:
                 # A groups grant that is merely restart-PENDING (configured but not yet effective in this
                 # process) must advise a RESTART, not re-show the already-run `usermod` (see req_remediation).
                 from .lifecycle import req_remediation
-                record(comp, stack, Outcome.BLOCKED, "missing "
-                       + "; ".join(req_remediation(r, bool(r.groups) and life.group_grant_pending(r))
-                                   for r in miss))
+                # req_remediation owns the "missing"/"granted" framing per requirement — do NOT prefix a
+                # blanket "missing " (it would contradict a granted-but-restart-pending groups grant).
+                record(comp, stack, Outcome.BLOCKED,
+                       "; ".join(req_remediation(r, bool(r.groups) and life.group_grant_pending(r))
+                                 for r in miss))
                 continue
             if self._running_conflicts(comp, cfg_band):
                 record(comp, stack, Outcome.BLOCKED, "resource conflict")

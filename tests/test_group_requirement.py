@@ -10,7 +10,7 @@ from pathlib import Path
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
-from lhpc.core.lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
+from lhpc.core.lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_CMD, GROUP_RESTART_HINT
 
 
 def _svc(tmp_path, groups=None, *, effective=None, configured=None):
@@ -85,11 +85,13 @@ def test_two_tier_group_states_gate_on_effective_hint_on_configured(tmp_path):
     assert GROUP_RESTART_HINT not in di.detail and GROUP_RESTART_HINT not in sd["what"]
 
     # (ii) CONFIGURED but not EFFECTIVE -> restart pending: START STILL BLOCKED, usermod suppressed,
-    #      both surfaces carry the restart hint (re-granting is not the fix).
+    #      both surfaces carry the restart hint (re-granting is not the fix); the overview dep flags
+    #      restart_pending and offers the copyable RESTART command (not another usermod).
     blocked, sd, di = state(set(), {"spi", "gpio"})
     assert blocked and sd["satisfied"] is False               # fail-closed: start not allowed
     assert sd["install"] == "" and GROUP_RESTART_HINT in sd["what"]
-    assert di.install_cmd == "" and di.detail == GROUP_RESTART_HINT
+    assert di.restart_pending is True and di.install_cmd == GROUP_RESTART_CMD
+    assert di.detail == GROUP_RESTART_HINT
 
     # (iii) EFFECTIVE -> satisfied: not blocked, no command.
     blocked, sd, di = state({"spi", "gpio"}, {"spi", "gpio"})
@@ -105,11 +107,12 @@ def test_req_remediation_restart_pending_vs_missing():
     g = Requirement(groups=("spi", "gpio"), install="sudo usermod -aG spi,gpio $USER",
                     note="spi + gpio group membership — needed to run meshtasticd WITHOUT root")
     m_pending = req_remediation(g, pending=True)
-    assert GROUP_RESTART_HINT in m_pending and "usermod" not in m_pending
+    assert GROUP_RESTART_HINT in m_pending and GROUP_RESTART_CMD in m_pending and "usermod" not in m_pending
     m_missing = req_remediation(g, pending=False)
-    assert "sudo usermod -aG spi,gpio $USER" in m_missing and GROUP_RESTART_HINT not in m_missing
+    assert (m_missing.startswith("missing ") and "sudo usermod -aG spi,gpio $USER" in m_missing
+            and GROUP_RESTART_HINT not in m_missing)
     c = Requirement(cmd="socat", install="sudo apt install socat")
-    assert "socat" in req_remediation(c, pending=False) and "apt install socat" in req_remediation(c, pending=False)
+    assert "missing socat" in req_remediation(c, pending=False) and "apt install socat" in req_remediation(c, pending=False)
 
 
 def test_start_gate_blocked_reason_advises_restart_when_pending(tmp_path):
@@ -140,6 +143,72 @@ def test_real_filesystem_group_methods_return_names(tmp_path):
     from lhpc.core.probes.backends import RealFileSystem
     for names in (RealFileSystem().effective_groups(), RealFileSystem().configured_groups()):
         assert isinstance(names, frozenset) and all(isinstance(n, str) for n in names)
+
+
+def test_id_map_helpers():
+    from lhpc.core.probes import backends as b
+    assert b._parse_id_map("1000 1000 1") == [(1000, 1000, 1)]
+    assert b._parse_id_map("0 0 4294967295\n1000 1000 1") == [(0, 0, 4294967295), (1000, 1000, 1)]
+    # skip malformed / negative starts / count<=0
+    assert b._parse_id_map("garbage\n1000 1000 0\n-1 0 5\n1000 -1 5\n1000 1000 1") == [(1000, 1000, 1)]
+    assert b._is_full_identity_map([(0, 0, 4294967295)]) is True
+    assert b._is_full_identity_map([(1000, 1000, 1)]) is False        # identity but NOT full-range
+    assert b._identity_mapped(1000, [(1000, 1000, 1)]) is True
+    assert b._identity_mapped(989, [(1000, 1000, 1)]) is False
+    assert b._identity_mapped(1005, [(1000, 1000, 10)]) is True       # inside the range
+    assert b._identity_mapped(1000, [(1000, 5000, 1)]) is False       # remapped, not identity
+
+
+def _squash_env(monkeypatch, *, setgroups="deny", groups=(1000, 65534, 65534), overflow="65534",
+                gid_map="1000 1000 1", uid_map="1000 1000 1", uid=1000, gid=1000):
+    """Drive `_groups_view_squashed` deterministically: inject the /proc reads + os.get* IDs. The default
+    kwargs reproduce the observed systemd unprivileged `--user` sandbox (gid_map maps only 1000,
+    setgroups=deny, supplementary groups squashed to the 65534 overflow gid)."""
+    import os as _os
+    from lhpc.core.probes import backends as b
+    files = {"/proc/self/setgroups": setgroups, "/proc/sys/kernel/overflowgid": overflow,
+             "/proc/self/gid_map": gid_map, "/proc/self/uid_map": uid_map}
+    monkeypatch.setattr(b, "_read_text_or_empty", lambda p: files.get(p, ""))
+    monkeypatch.setattr(_os, "getgroups", lambda: list(groups))
+    monkeypatch.setattr(_os, "getgid", lambda: gid)
+    monkeypatch.setattr(_os, "getuid", lambda: uid)
+
+
+def test_groups_view_squashed_truth_table(monkeypatch):
+    from lhpc.core.probes.backends import RealFileSystem
+    fs = RealFileSystem()
+    _squash_env(monkeypatch)                                    # the exact systemd --user sandbox pattern
+    assert fs._groups_view_squashed() is True
+    # each control independently defeats the trigger:
+    _squash_env(monkeypatch, setgroups="allow")                # deny is necessary
+    assert fs._groups_view_squashed() is False
+    _squash_env(monkeypatch, groups=(1000, 989, 986))          # overflow gid not present -> trust getgroups
+    assert fs._groups_view_squashed() is False
+    _squash_env(monkeypatch, gid_map="1000 1000 1\n65534 65534 1")  # overflow itself mapped -> not squashing
+    assert fs._groups_view_squashed() is False
+    _squash_env(monkeypatch, gid_map="0 0 4294967295")         # full identity map (init ns)
+    assert fs._groups_view_squashed() is False
+    _squash_env(monkeypatch, uid_map="1000 5000 1")            # non-identity uid -> wrong-account risk
+    assert fs._groups_view_squashed() is False
+    _squash_env(monkeypatch, gid_map="", uid_map="")           # unreadable maps -> no fallback
+    assert fs._groups_view_squashed() is False
+
+
+def test_effective_groups_falls_back_to_configured_when_squashed(monkeypatch):
+    # In the group-squashing user namespace os.getgroups() reports 65534 for spi/gpio, but the real
+    # membership (configured) is what the child actually uses for device access -> effective must return it.
+    import os as _os, grp as _grp, pwd as _pwd
+    from lhpc.core.probes.backends import RealFileSystem
+    names = {1000: "makro", 989: "spi", 986: "gpio", 65534: "nogroup"}
+    monkeypatch.setattr(_pwd, "getpwuid", lambda uid: type("P", (), {"pw_name": "makro"})())
+    monkeypatch.setattr(_os, "getgrouplist", lambda name, gid: [1000, 989, 986])
+    monkeypatch.setattr(_grp, "getgrgid", lambda gid: type("G", (), {"gr_name": names[gid]})())
+    fs = RealFileSystem()
+    _squash_env(monkeypatch, groups=(1000, 65534, 65534))       # squashed
+    eff = fs.effective_groups()
+    assert {"spi", "gpio"} <= eff and "nogroup" not in eff      # configured fallback, not the squashed view
+    _squash_env(monkeypatch, setgroups="allow", groups=(1000, 65534))   # NOT squashed -> os.getgroups view
+    assert "spi" not in fs.effective_groups()                   # 65534->nogroup, no spi
 
 
 def test_effective_vs_configured_split_on_stale_process_groups(monkeypatch):
