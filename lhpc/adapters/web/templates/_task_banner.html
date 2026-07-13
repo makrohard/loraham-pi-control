@@ -1,13 +1,21 @@
-{# Running-task indicator (install-all + HMAC apply). Server-rendered initial state; taskbanner.js
-   re-renders from the read-only /api/tasks. Colours: running=yellow, done=green, failed/unsafe=red.
-   The server owns visibility (60 s expiry; `unsafe` never expires) — the client only renders its list. #}
-<div class="taskbanner" id="task-banner">
+{# Running-task indicator (install-all + HMAC + build/test/install jobs). Server-rendered initial state;
+   taskbanner.js re-renders from the read-only /api/tasks. Colours: running=yellow, done=green,
+   failed/unsafe=red. The server owns visibility (done expires after 60 s; failed/unsafe STAY). A `failed`
+   banner gets a ✕ (dismiss); an `unsafe` JOB gets a Recover button; unsafe hmac/install-all keep View →. #}
+<div class="taskbanner" id="task-banner" data-csrf="{{ csrf_token() }}">
   {% for t in tasks %}
-  <div class="taskitem taskitem-{{ t.state }}" data-key="{{ t.kind }}-{{ t.run_id }}">
+  <div class="taskitem taskitem-{{ t.state }}" data-key="{{ t.kind }}-{{ t.run_id }}"
+       data-kind="{{ t.kind }}" data-run="{{ t.run_id }}" data-attempt="{{ t.attempt_id or '' }}">
     <span class="ti-label">{{ t.label }}</span>
     <span class="ti-state">{{ {'running': 'running…', 'done': 'finished', 'failed': 'failed',
                                'unsafe': 'UNSAFE — needs attention'}.get(t.state, t.state) }}</span>
+    {% if t.hint %}<span class="ti-hint">{{ t.hint }}</span>{% endif %}
     <a class="ti-view" href="{{ t.href }}">view &rarr;</a>
+    {% if t.state == 'unsafe' and t.kind == 'job' %}
+    <button type="button" class="ti-recover">Recover</button>
+    {% elif t.state == 'failed' %}
+    <button type="button" class="ti-close" title="Dismiss">&times;</button>
+    {% endif %}
   </div>
   {% endfor %}
 </div>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import cmdbox, webserver_pills %}
+{% from "_macros.html" import cmdbox, webserver_pills, banner %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
@@ -145,7 +145,7 @@
                         </form>
                       {% elif c.interactive %}
                         {% if c.blocker %}
-                          <div class="depnote depnote-warn">{{ c.blocker }}</div>
+                          {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ c.blocker }}{% endcall %}
                         {% else %}
                           <div class="muted">Interactive — run it yourself:</div>
                           {{ cmdbox('runc-' ~ c.id, c.command) }}
@@ -199,7 +199,7 @@
                       <button type="submit">&times;</button>
                     </form></p>
                   {% if s.blocker %}
-                    <p class="depnote depnote-warn">{{ s.name }} is <strong>{{ s.blocker }}</strong></p>
+                    {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
                   {% else %}
                     <p class="muted">Run it yourself in a terminal (daemon is ensured):</p>
                     {{ cmdbox('cmd-' ~ s.id, s.command) }}

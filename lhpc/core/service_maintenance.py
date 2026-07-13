@@ -432,23 +432,56 @@ class MaintenanceOpsMixin:
         except (ValueError, TypeError):
             return None
 
+    # Success/failure hints per (op, outcome); ("*", …) is the op-agnostic fallback.
+    _JOB_HINT = {
+        ("install", "done"): "Next: Build.",
+        ("build", "done"): "Next: Test.",
+        ("test", "done"): "Ready.",
+        ("build", "failed"): "Maybe try to install known-working.",
+        ("*", "incomplete"): "Ended unexpectedly — check the log.",
+        ("*", "unsafe"): "The build may still be running — inspect processes (ps).",
+    }
+
+    def _project_job(self, rec: dict, log: str):
+        """Read-only projection of one web-job attempt marker → (state, hint). `state` ∈
+        running/done/failed/unsafe (an `incomplete` child renders as `failed` with its own hint). Liveness is
+        ATTEMPT-MATCHED (`webjob_gate.is_live_attempt`) — a stale same-log job marker for a DIFFERENT attempt
+        never masks this attempt's derived unsafe. Read-only (never `active_jobs(cleanup=True)`)."""
+        from . import webjob_gate
+        op, st = rec.get("op", ""), rec.get("state")
+        if st == "done":
+            return "done", self._JOB_HINT.get((op, "done"))
+        if st == "failed":
+            return "failed", self._JOB_HINT.get((op, "failed"))
+        if st == "unsafe":
+            return "unsafe", self._JOB_HINT.get(("*", "unsafe"))
+        # starting/running: a child alive in/through its gate (this SAME attempt) is NORMAL startup.
+        live = webjob_gate.is_live_attempt(self._paths, log, rec.get("attempt_id", ""))
+        if rec.get("startup_unverified"):
+            return ("running", None) if live else ("unsafe", self._JOB_HINT.get(("*", "unsafe")))
+        return ("running", None) if live else ("failed", self._JOB_HINT.get(("*", "incomplete")))
+
     def running_tasks(self) -> list:
-        """Read-only banner feed for the managed jobs the UI supports (install-all + HMAC apply). RUNNING
-        items are always included; TERMINAL items ONLY when a VALID PERSISTED terminal timestamp exists and
-        is within the server-side expiry (never invent a completion time for a derived-interrupted state);
-        an `unsafe` item NEVER expires. `bulk_status()`/`hmac_apply_status()` are file+/proc reads only (they
-        route job-marker reads through the centralized read-only parser) — this performs NO marker mutation.
+        """STRICTLY READ-ONLY banner feed (install-all + HMAC + detached build/test/install jobs). RUNNING
+        never expires; `done` drops after the server-side expiry; `failed`/`unsafe` STAY (failed is
+        ✕-dismissible, unsafe needs Recover). Every helper is file+/proc read only — no marker mutation
+        (jobs use `active_jobs(cleanup=False)`/`log_running`/`jobresult.read_results`, all no-follow, bounded).
         Colours: running=yellow, done=green, failed/unsafe=red."""
         import time
+        from . import jobresult
         now = int(time.time())
         out = []
+        dismissed = self._task_dismissed_ids()
 
-        def _terminal(ts, states):
+        def _done_within(ts):
             epoch = self._parse_utc(ts)
-            if epoch is None:
+            if epoch is None or now - epoch >= self._TASK_BANNER_EXPIRY_S:
                 return None
-            ago = max(0, now - epoch)
-            return {"finished_ago_s": ago} if ago < self._TASK_BANNER_EXPIRY_S else None
+            return {"finished_ago_s": max(0, now - epoch)}
+
+        def _failed_extra(ts):
+            epoch = self._parse_utc(ts)
+            return {"finished_ago_s": max(0, now - epoch)} if epoch is not None else {}
 
         try:
             bst = self.bulk_status()
@@ -462,10 +495,12 @@ class MaintenanceOpsMixin:
                 out.append({**base, "state": "running"})
             elif state == "interrupted":
                 out.append({**base, "state": "unsafe"})            # blocking; no expiry
-            elif state in ("completed", "completed-with-failures"):
-                fin = _terminal(bst.get("finished_at", ""), None)
+            elif state == "completed":
+                fin = _done_within(bst.get("finished_at", ""))
                 if fin is not None:
-                    out.append({**base, "state": "done" if state == "completed" else "failed", **fin})
+                    out.append({**base, "state": "done", **fin})
+            elif state == "completed-with-failures" and rid not in dismissed:
+                out.append({**base, "state": "failed", **_failed_extra(bst.get("finished_at", ""))})
 
         try:
             hst = self.hmac_apply_status()
@@ -480,12 +515,110 @@ class MaintenanceOpsMixin:
                 out.append({**base, "state": "running"})
             elif phase == "unsafe":
                 out.append({**base, "state": "unsafe"})            # never expires until resolved
-            elif phase in ("done", "failed"):
-                fin = _terminal(hst.get("finished_at", ""), None)
+            elif phase == "done":
+                fin = _done_within(hst.get("finished_at", ""))
                 if fin is not None:
-                    out.append({**base, "state": "done" if phase == "done" else "failed", **fin})
-            # a derived `interrupted` phase has NO persisted finished_at -> excluded (never invented)
+                    out.append({**base, "state": "done", **fin})
+            elif phase == "failed" and rid not in dismissed:
+                out.append({**base, "state": "failed", **_failed_extra(hst.get("finished_at", ""))})
+
+        # ---- detached web build/test/install jobs (yellow → green/red) ----
+        try:
+            results = jobresult.read_results(self._paths)
+        except Exception:                          # noqa: BLE001
+            results = []
+        for log, rec in results:
+            target = rec.get("target", "")
+            if not (self.stack_of(target) or self.stack(target)):   # MANIFEST-aware validation
+                continue
+            state, hint = self._project_job(rec, log)
+            extra = {}
+            if state == "done":
+                fin = _done_within(rec.get("finished_at", ""))
+                if fin is None:
+                    continue                       # done aged out (banner display filter)
+                extra = fin
+            item = {"kind": "job", "run_id": log, "attempt_id": rec.get("attempt_id", ""),
+                    "label": (f"{rec.get('op', '')} {target}").strip(),
+                    "href": f"/logs/{target}?job={log}", "state": state, **extra}
+            if hint:
+                item["hint"] = hint
+            out.append(item)
         return out
+
+    # ---- banner dismiss / recover (all durable-confirmed; unsafe/running never ✕-dismissible) ----
+    def _dismissed_path(self):
+        return self._paths.under("state", "task_dismissed.json")
+
+    def _task_dismissed_ids(self) -> set:
+        import json
+        try:
+            data = json.loads(runtime_fs.read_text_regular(self._paths, self._dismissed_path(),
+                                                            max_bytes=16384))
+        except (FileNotFoundError, OSError, PathContainmentError, ValueError):
+            return set()
+        return {x for x in data if isinstance(x, str)} if isinstance(data, list) else set()
+
+    def _task_dismiss_add(self, run_id: str) -> bool:
+        import json
+        ids = [x for x in self._task_dismissed_ids() if x != run_id]
+        ids.append(run_id)
+        try:
+            runtime_fs.atomic_write(self._paths, self._dismissed_path(),
+                                    json.dumps(ids[-50:]), 0o600)
+            return True
+        except (OSError, PathContainmentError):
+            return False
+
+    def task_dismiss(self, kind: str, run_id: str, attempt_id: str = "") -> bool:
+        """Dismiss a FAILED (never unsafe/running) terminal banner. Durable; returns success only on a
+        confirmed write/unlink."""
+        from . import jobresult
+        if not run_id:
+            return False
+        if kind == "job":
+            rec = jobresult.read_one(self._paths, run_id)
+            if rec is None or rec.get("attempt_id") != attempt_id:
+                return False
+            state, _ = self._project_job(rec, run_id)      # failed (incl. derived incomplete) only
+            if state != "failed":
+                return False
+            return jobresult.remove(self._paths, run_id, attempt_id)
+        if kind == "install-all":
+            try:
+                st = self.bulk_status()
+            except Exception:                              # noqa: BLE001
+                st = None
+            if not (st and not st.get("unsafe") and st.get("state") == "completed-with-failures"):
+                return False
+            return self._task_dismiss_add(run_id)
+        if kind == "hmac":
+            try:
+                st = self.hmac_apply_status()
+            except Exception:                              # noqa: BLE001
+                st = None
+            if not (st and not st.get("unsafe") and st.get("phase") == "failed"):
+                return False
+            return self._task_dismiss_add(run_id)
+        return False
+
+    def task_recover(self, kind: str, run_id: str, attempt_id: str) -> bool:
+        """Explicit-ack recovery of an UNSAFE build/test/install job (kind=job) → non-blocking failed.
+        hmac/install-all keep their own recover flows. Durable-confirmed."""
+        from . import jobresult
+        if kind != "job" or not run_id:
+            return False
+        rec = jobresult.read_one(self._paths, run_id)
+        if rec is None or rec.get("attempt_id") != attempt_id:
+            return False
+        state, _ = self._project_job(rec, run_id)
+        if state != "unsafe":
+            return False
+        if rec.get("state") == "unsafe":
+            return jobresult.recover(self._paths, run_id, attempt_id)
+        # derived unsafe (startup_unverified + child gone) → terminalize to a non-blocking failed
+        return jobresult.terminalize(self._paths, run_id, attempt_id, "failed",
+                                     detail="recovered — startup was unverified")
 
     def dependency_overview(self) -> dict:
         """Read-only, GET-safe aggregation for the Dependency Overview page + Stacks banner: LHPC's own

@@ -1,7 +1,7 @@
 {# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
    sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill, hmac_actions %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill, hmac_actions, banner %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -37,14 +37,10 @@
           {% if g.update_checked_ago %}<span class="muted">(checked {{ g.update_checked_ago }})</span>
           {% else %}<span class="muted">— use <strong>Check for updates</strong> below</span>{% endif %}</p>
       {% elif g.has_source %}
-        <p class="depnote depnote-warn"><strong>Not installed yet:</strong> the source for
-          {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.</p>
+        {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Install') %}<strong>Not installed yet:</strong> the source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% endcall %}
       {% endif %}
       {% if g.needs_build %}
-        <p class="depnote depnote-warn"><strong>Build needed:</strong>
-          {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }}
-          installed but the compiled binary is missing (a fresh clone drops it).
-          Run <strong>Build</strong> before starting.</p>
+        {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Build') %}<strong>Build needed:</strong> {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% endcall %}
       {% endif %}
       {% if g.restart_required %}
         <div class="depnote depnote-warn">

@@ -481,7 +481,8 @@ for s in STEPS:
 
 def render_build_launcher(steps: list, runtime: str, source: str,
                           lock_paths: list | tuple = (), index_lock: str = "",
-                          txn_dir: str = "") -> str:
+                          txn_dir: str = "", result_name: str = "", attempt_id: str = "",
+                          op: str = "", target: str = "", stack: str = "") -> str:
     """A self-contained Python launcher that runs build/test steps sequentially with
     NO shell: it resolves `{pkgconfig:NAME}` via pkg-config and runs each argv with
     its env and cwd, streaming output. Returns nonzero on the first failing step.
@@ -512,7 +513,11 @@ def render_build_launcher(steps: list, runtime: str, source: str,
     from pathlib import Path as _P
     spec = {"steps": resolved, "cwd": source, "runtime_root": str(runtime),
             "lock_names": sorted(_P(p).name for p in lock_paths),
-            "index_lock_name": (_P(index_lock).name if index_lock else "")}
+            "index_lock_name": (_P(index_lock).name if index_lock else ""),
+            # Web-job attempt identity (all plain identity strings — no secrets) so the child can
+            # gate on its job marker and record a terminal green/red result. "" for non-web builds.
+            "result_name": result_name, "attempt_id": attempt_id,
+            "op": op, "target": target, "stack": stack}
     return _BUILD_RUNNER.replace("__SPEC__", repr(spec))
 
 

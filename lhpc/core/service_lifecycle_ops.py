@@ -1624,92 +1624,195 @@ class LifecycleOpsMixin:
             comp = idx[target][1]
         return self._lifecycle().logs(comp, lines, band=band)
 
+    _WEB_ADMIT_TIMEOUT_S = 3.0
+
+    def _web_admit_timeout(self) -> float:
+        import os
+        try:
+            t = float(os.environ.get("LHPC_WEB_ADMIT_TIMEOUT_S", str(self._WEB_ADMIT_TIMEOUT_S)))
+            return t if t > 0 else self._WEB_ADMIT_TIMEOUT_S
+        except (TypeError, ValueError):
+            return self._WEB_ADMIT_TIMEOUT_S
+
+    def _web_admit_handshake(self, log: str, attempt_id: str):
+        """Bounded-poll the primary attempt marker for its admission outcome. Returns
+        ("admitted", "") | ("blocked", detail) | ("pending", ""). The parent reserved THIS exact attempt
+        before spawning, so an absent/mismatched-attempt marker means it was superseded → blocked immediately.
+        Admission is decided by the persisted `admitted` flag (NOT a free-text detail prefix)."""
+        from . import jobresult
+        import time as _t
+        deadline = _t.monotonic() + self._web_admit_timeout()
+        while True:
+            rec = jobresult.read_one(self._paths, log)
+            if rec is None or rec.get("attempt_id") != attempt_id:
+                return "blocked", "job attempt was superseded"
+            st = rec.get("state")
+            if st == "running":
+                return "admitted", ""
+            if st == "unsafe":                     # orphan/untracked — blocking, needs Recover
+                return "blocked", (rec.get("detail") or "the job could not be tracked")
+            if st in ("done", "failed"):
+                # A child that reached authoritative admission (admitted=True) RAN — surface it (live log +
+                # red banner). A terminal that never admitted (lock/journal block) is truly "blocked".
+                if rec.get("admitted"):
+                    return "admitted", ""
+                return "blocked", (rec.get("detail") or "the job could not start")
+            if _t.monotonic() >= deadline:         # still `starting`
+                return "pending", ""
+            _t.sleep(0.05)
+
+    def _web_unsafe_source_block(self, src_keys) -> str:
+        """Fail-closed by source IDENTITY: refuse a new web job whose source_keys intersect any attempt that
+        PROJECTS to unsafe — persisted `unsafe` OR the derived case (startup_unverified + no live matching
+        attempt: the gate-fail / failed-orphan-write fallback). Uses the SAME read-only projection as the
+        banner (`_project_job`). "" when clear; Recover is the only unblock."""
+        from . import jobresult
+        want = set(src_keys or [])
+        if not want:
+            return ""
+        for log, rec in jobresult.read_results(self._paths):
+            keys = set(rec.get("source_keys") or [])
+            # manifest plausibility: the recorded target must still resolve to a known component/stack.
+            if not (self.stack_of(rec.get("target", "")) or self.stack(rec.get("target", ""))):
+                continue
+            if not (want & keys):
+                continue
+            state, _hint = self._project_job(rec, log)
+            if state == "unsafe":
+                return (f"blocked — a previous {rec.get('op', 'job')} on this source ended unsafe; "
+                        "Recover it first")
+        return ""
+
     def spawn_web_job(self, op: str, target: str, source: str = "pinned"):
-        """Spawn detached build/test/install job(s) for `target`; return
-        (job_log_name, error). The web redirects to a live view of the log."""
+        """Spawn detached build/test/install job(s) for `target`. Returns `(job_log_name, admission, reason)`
+        with `admission ∈ {"admitted","blocked","pending"}` — the web adapter flashes per that and NEVER
+        infers "started" from a returned log. PRIMARY-FIRST: the main job's admission is handshaked before
+        any secondary component job is spawned; a blocked primary spawns none. Each job carries an attempt
+        reservation (green/red banner) gated on parent identity tracking."""
+        from . import commands, reslock, runtime_fs, jobresult, procident
+        import sys, os, uuid, time as _time
         life = self._lifecycle()
-        # Install runs as one logged subprocess so the operator sees clone output
-        # live and when it finishes (the dash redirects to this log).
-        if op == "install":
-            import sys
-            # Reject an invalid source selector — never silently fall back to 'dev'.
-            if source not in self.SOURCE_CHOICES:
-                return None, (f"invalid source '{source}' (choose "
-                              f"{', '.join(self.SOURCE_CHOICES)})")
-            argv = [sys.executable, "-m", "lhpc", "install", target, "--yes",
-                    "--source", source]
-            ln, pid = life.spawn_job(f"install-{target}", argv, str(self._paths.runtime_root))
-            if not ln or not pid:
-                return None, f"could not start install for '{target}'"
-            err = self._track_or_terminate(life, ln, pid, target, "install")
-            if err:
-                return None, err            # spawned-but-untracked: reported, not silent
-            return ln, None
+
+        if op == "install" and source not in self.SOURCE_CHOICES:
+            return None, "blocked", (f"invalid source '{source}' (choose "
+                                     f"{', '.join(self.SOURCE_CHOICES)})")
         items, err = self._resolve(target)
         if err:
-            return None, err
-        # Build a shell-free launcher per component (resolves pkg-config + env, runs
-        # the structured steps). A stack may build several components.
-        from . import commands, reslock, runtime_fs
-        inst_index_key = self._installer()._index_key()
+            return None, "blocked", err
+        comps = [c for _, c in items]
+        src_paths = {c.source.path for c in comps if c.source}
+        src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
+
+        # ---- Part G: refuse up-front (bulk lease / undismissed-unsafe same-source / source-txn busy) ----
+        gate = self._bulk_gate()
+        if gate:
+            return None, "blocked", f"blocked — {gate}"
+        ublk = self._web_unsafe_source_block(src_keys)
+        if ublk:
+            return None, "blocked", ublk
+        pre = self._web_source_precheck(src_paths)
+        if pre:
+            return None, "blocked", f"blocked — {pre}"
+
         runtime = str(self._paths.runtime_root)
         runtime_fs.ensure_dir(self._paths, self._paths.under("state", "locks"))
-        jobs = []
-        for _, c in items:
-            if op == "build" and c.build_steps:
-                jobs.append((c, list(c.build_steps), f"build-{c.id}"))
-            elif op == "test" and c.test_argv:
-                jobs.append((c, [{"argv": list(c.test_argv)}], f"test-{c.id}"))
-        if not jobs:
-            return None, f"nothing to {op} for '{target}'"
-        s = self.stack(target)
-        main_id = s.main if s else None
-        first = main_log = None
-        errors: list[str] = []
-        post_dir = self._paths.under("state", "jobs")   # containment-checked
+        post_dir = self._paths.under("state", "jobs")
         runtime_fs.ensure_dir(self._paths, post_dir)
-        import sys, os, time as _time
-        for c, steps, name in jobs:
+        index_lock = str(reslock.lock_file_path(self._paths, self._installer()._index_key()))
+        txn_dir = str(self._paths.under("state", "source-txn"))
+
+        def _settle_track(log, aid, pid, terr) -> str:
+            """Turn a `_track_or_terminate` outcome into a terminal reservation + a TYPED code the orchestrator
+            trusts: "" tracked-ok; "orphan" (ORPHAN RISK ⇒ blocking `unsafe`); "terminated" (proven-terminated
+            ⇒ ordinary `failed`). Never inferred later from free text."""
+            if not terr:
+                return ""
+            if "ORPHAN RISK" in terr:
+                jobresult.terminalize(self._paths, log, aid, "unsafe",
+                                      detail="the job could not be identity-tracked and its stop is "
+                                             "UNPROVEN — inspect processes (ps) then Recover",
+                                      driver_ident=procident.proc_identity(pid))
+                return "orphan"
+            jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
+            return "terminated"
+
+        def _spawn_install():
+            name = f"install-{target}"
+            log, aid = name + ".log", uuid.uuid4().hex
+            if not jobresult.reserve(self._paths, log, aid, "install", target,
+                                     self.stack_of(target) or "", src_keys):
+                return None, aid, "could not record the install job (a live attempt exists)"
+            argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
+                    "--web-result", log, "--attempt-id", aid]
+            ln, pid = life.spawn_job(name, argv, runtime)
+            if not ln or not pid:
+                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                return None, aid, f"could not start install for '{target}'"
+            return log, aid, _settle_track(
+                log, aid, pid, self._track_or_terminate(life, ln, pid, target, "install", attempt_id=aid))
+
+        def _spawn_build(c, steps, name):
+            log, aid = name + ".log", uuid.uuid4().hex
             src = str(life.source_dir(c))
-            # The launcher holds the canonical SOURCE-PATH lock for its whole lifetime,
-            # so an update/uninstall of the same checkout cannot race a running job.
-            lock_paths = ([str(reslock.lock_file_path(self._paths,
-                          reslock.source_lock_key(c.source.path)))] if c.source else [])
-            # P0.3: index-to-source handoff — the launcher holds the source-transaction
-            # INDEX lock and verifies NO unresolved journal before acquiring the source
-            # lock(s), so a detached job cannot race past a retained journal.
-            index_lock = str(reslock.lock_file_path(self._paths, inst_index_key))
-            txn_dir = str(self._paths.under("state", "source-txn"))
-            # Fail-closed: a missing/empty @file secret, bad env, or unresolved token
-            # blocks the build cleanly (no silent empty value, no shell).
+            ckeys = sorted({reslock.source_lock_key(c.source.path)}) if c.source else []
+            lock_paths = ([str(reslock.lock_file_path(self._paths, ckeys[0]))] if ckeys else [])
+            if not jobresult.reserve(self._paths, log, aid, op, c.id,
+                                     self.stack_of(c.id) or "", ckeys):
+                return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
             try:
-                script = commands.render_build_launcher(steps, runtime, src, lock_paths,
-                                                        index_lock=index_lock, txn_dir=txn_dir)
+                script = commands.render_build_launcher(
+                    steps, runtime, src, lock_paths, index_lock=index_lock, txn_dir=txn_dir,
+                    result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "")
             except commands.CommandError as exc:
-                return None, f"cannot {op} '{c.id}': {exc}"
-            # Unique runtime-owned launcher name so concurrent jobs never overwrite
-            # each other's spec; written atomically THROUGH the safe runtime FS.
+                jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
+                return None, aid, f"cannot {op} '{c.id}': {exc}"
             uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
             launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
             ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
             if not ln or not pid:
-                # Never silently continue when a component job cannot spawn.
-                errors.append(f"could not start {op} for '{c.id}'")
-                continue
-            terr = self._track_or_terminate(life, ln, pid, c.id, op)
-            if terr:
-                errors.append(terr)
-                continue
-            if first is None:
-                first = ln
-            if c.id == main_id:
-                main_log = ln
+                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                return None, aid, f"could not start {op} for '{c.id}'"
+            return log, aid, _settle_track(
+                log, aid, pid, self._track_or_terminate(life, ln, pid, c.id, op, attempt_id=aid))
+
+        # ---- ordered job list (primary first) ----
+        if op == "install":
+            spawn_fns = [_spawn_install]
+        else:
+            bj = []
+            for c in comps:
+                if op == "build" and c.build_steps:
+                    bj.append((c, list(c.build_steps), f"build-{c.id}"))
+                elif op == "test" and c.test_argv:
+                    bj.append((c, [{"argv": list(c.test_argv)}], f"test-{c.id}"))
+            if not bj:
+                return None, "blocked", f"nothing to {op} for '{target}'"
+            s = self.stack(target)
+            main_id = s.main if s else None
+            pi = next((i for i, (c, _, _) in enumerate(bj) if c.id == main_id), 0)
+            ordered = [bj[pi]] + [j for i, j in enumerate(bj) if i != pi]
+            spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
+
+        # ---- primary: spawn + handshake; a blocked primary spawns NO secondaries ----
+        plog, paid, pout = spawn_fns[0]()
+        if plog is None:                        # reserve/spawn/render failed
+            self.prune_logs()
+            return None, "blocked", f"blocked — {pout}"
+        if pout == "orphan":                    # PROVEN: tracking failed, cessation UNPROVEN → blocking unsafe
+            self.prune_logs()
+            return None, "blocked", "blocked — the job could not be tracked; Recover it first"
+        if pout == "terminated":                # PROVEN: driver terminated before it ran → ordinary failed
+            self.prune_logs()
+            return None, "blocked", "blocked — the job process was terminated before it ran"
+        admission, reason = self._web_admit_handshake(plog, paid)
+        if admission == "blocked":
+            self.prune_logs()
+            return None, "blocked", (f"blocked — {reason}" if reason and not reason.startswith("blocked")
+                                     else (reason or "blocked"))
+        for fn in spawn_fns[1:]:            # admitted/pending: start the secondary component jobs
+            fn()
         self.prune_logs()
-        if errors and (main_log or first) is None:
-            return None, "; ".join(errors)             # nothing usable started
-        if errors:
-            return (main_log or first), "; ".join(errors)   # partial: surface the failures
-        return (main_log or first), None
+        return plog, admission, ""
 
     def prune_logs(self) -> int:
         """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
@@ -1717,9 +1820,24 @@ class LifecycleOpsMixin:
         and never following a symlink. Returns the number removed. Called at operation
         boundaries; there is no background cleaner."""
         from .paths import PathContainmentError
-        from . import bulk as bulk_mod
+        from . import bulk as bulk_mod, jobresult
         protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
         protected = {f"{n}.log" for n in protected} | {n for n in protected}
+        # Housekeeping: drop `done` job-result markers older than the banner expiry (failed/unsafe stay),
+        # and PROTECT the log of every undismissed failed/unsafe/incomplete-derived result so its banner's
+        # View → /logs link is never dead. Naturally bounded — result markers reuse the finite job-log
+        # names. All best-effort/read-only; a corrupt jobresults dir never breaks pruning.
+        try:
+            import time as _t
+            jobresult.prune_done(self._paths, int(_t.time()), 60)
+            live = {j.get("log") for j in self.active_jobs(cleanup=False) if j.get("log")}
+            for log, rec in jobresult.read_results(self._paths):
+                # `done` ages out; failed/unsafe (and starting/running that are no longer live → derived
+                # incomplete) keep their log while the banner is up.
+                if rec.get("state") != "done" or log in live:
+                    protected.add(log)
+        except Exception:                                # noqa: BLE001 — pruning must never fail
+            pass
         # Protect the LIVE bulk run's own component build/test logs (requirement #7): its
         # durable descriptors are this run's evidence — a mid-run prune must never remove a
         # component log the stream still owns, even if the retention budget is exceeded.
@@ -1838,12 +1956,14 @@ class LifecycleOpsMixin:
         return self._paths.runtime_root / "state" / "jobs"
 
     def _write_job_marker(self, log_name: str, pid: int, target: str, op: str,
-                          ident: dict | None = None) -> bool:
+                          ident: dict | None = None, attempt_id: str = "") -> bool:
         """Record a build/test job with a COMPLETE, PID-reuse-resistant identity. Returns
         True only when a complete identity was captured AND the marker was durably
         persisted; False means the just-spawned process is UNTRACKED and the caller must
         terminate it (no silent orphan). `ident`, when given, is the identity captured
-        immediately after spawn — used as-is (never re-read a possibly-reused pid)."""
+        immediately after spawn — used as-is (never re-read a possibly-reused pid).
+        `attempt_id` (a controller-generated hex string, "" for non-web jobs) lets a detached
+        web child prove — via `webjob_gate` — that THIS exact attempt was tracked."""
         try:
             slug = validators.path_component(log_name, field="job log")
             path = self._paths.under("state", "jobs", slug + ".job")
@@ -1855,26 +1975,30 @@ class LifecycleOpsMixin:
         # written with sentinel (-1)/blank fields; the caller then terminates the spawn.
         if not (isinstance(pid, int) and pid > 0 and procident.identity_complete(ident)):
             return False
+        aid = attempt_id if _re.fullmatch(r"[0-9a-f]{0,64}", attempt_id or "") else ""
         body = (f'launch_id = "{slug}"\npid = {pid}\n'
                 f'starttime = {int(ident["starttime"])}\n'
                 f'pgid = {int(ident["pgid"])}\nsid = {int(ident["sid"])}\n'
                 f'exec = "{ident["exec"]}"\nargv_fp = "{ident["argv_fp"]}"\n'
                 f'argv_len = {int(ident["argv_len"])}\n'
-                f'target = "{target}"\nop = "{op}"\nlog = "{slug}"\n')
+                f'target = "{target}"\nop = "{op}"\nlog = "{slug}"\n'
+                f'attempt_id = "{aid}"\n')
         try:
             runtime_fs.write_marker(self._paths, path, body)
             return True
         except (OSError, PathContainmentError, validators.ValidationError):
             return False
 
-    def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str) -> str:
+    def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str,
+                            attempt_id: str = "") -> str:
         """Persist a job marker; if it cannot be persisted, terminate the (identity-
         verified) spawned session so it never leaks as an untracked orphan. Returns ""
-        on success, else a visible error describing the outcome."""
+        on success, else a visible error describing the outcome (the literal 'ORPHAN RISK'
+        marks the unproven-cessation case)."""
         # Capture the identity IMMEDIATELY after spawn and use exactly that for both the
         # marker and any cleanup — never re-read a possibly-reused pid as the original job.
         ident = procident.proc_identity(pid)
-        if self._write_job_marker(log_name, pid, cid, op, ident=ident):
+        if self._write_job_marker(log_name, pid, cid, op, ident=ident, attempt_id=attempt_id):
             return ""
         killed = life._terminate_unobserved(pid, ident)
         if killed:
@@ -1883,10 +2007,14 @@ class LifecycleOpsMixin:
         return (f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
                 "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
 
-    def active_jobs(self) -> list[dict]:
+    def active_jobs(self, cleanup: bool = True) -> list[dict]:
         """Build/test jobs whose ORIGINAL process is still alive (identity-verified).
         A reused PID, a malformed marker, or a symlinked marker is never treated as a
         live job; proven-finished markers are cleaned through the safe API.
+
+        `cleanup=True` (op-boundary callers) clears the marker of a finished/reused job.
+        `cleanup=False` is STRICTLY READ-ONLY (no unlink) — the GET-path running-task
+        projection uses it so `/api/tasks` never mutates state.
 
         UNTRUSTED-STATE SAFE (P2): each marker is inspected non-blocking, no-follow,
         regular-only, and BYTE-BOUNDED. A FIFO/device (would block), a directory, a
@@ -1928,8 +2056,9 @@ class LifecycleOpsMixin:
                 continue                        # malformed/unsafe -> retain for diagnosis
             if procident.identity_matches(raw, pid):
                 out.append({"log": raw.get("log"), "target": raw.get("target"),
-                            "op": raw.get("op"), "stack": self.stack_of(raw.get("target", ""))})
-            else:
+                            "op": raw.get("op"), "stack": self.stack_of(raw.get("target", "")),
+                            "attempt_id": raw.get("attempt_id", "")})
+            elif cleanup:
                 # Finished/reused -> clear the marker. If it RACED into a symlink OR a
                 # DIRECTORY (IsADirectoryError) between the no-follow read and now, the
                 # safe unlink refuses/fails: retain it as evidence rather than letting this

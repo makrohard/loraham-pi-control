@@ -12,8 +12,8 @@ from lhpc.core.model import SourceSpec
 
 def test_invalid_source_selector_rejected_not_dev(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    ln, err = svc.spawn_web_job("install", "daemon", source="evil")
-    assert ln is None and err and "invalid source" in err
+    ln, admission, reason = svc.spawn_web_job("install", "daemon", source="evil")
+    assert ln is None and admission == "blocked" and "invalid source" in reason
 
 
 class _RecordingRunner:

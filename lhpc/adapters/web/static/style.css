@@ -35,9 +35,10 @@
   --badge-idle-bg: #eef1f4;  --badge-idle-border: #dbe1e8;  --badge-idle-ink: #57606a;
   --pill-bg: #eef2f7;  --pill-ink: #334455;
   --conflict-bg: #fdf0f0;  --conflict-border: #f3b9bf;  --conflict-ink: #7a1620;
-  --flash-ok-bg: #e7f6ec;  --flash-ok-border: #b7e3c4;  --flash-ok-ink: #12722f;
-  --flash-warn-bg: #fff8e1; --flash-warn-border: #ffe0a3; --flash-warn-ink: #7a5200;
-  --flash-bad-bg: #fdecea;  --flash-bad-border: #f1a9a0;  --flash-bad-ink: #a01b10;
+  /* Banner tints: deliberately NOT ultra-pale (clearly colored) while each -ink keeps >=4.5:1 contrast. */
+  --flash-ok-bg: #d6efdd;  --flash-ok-border: #a8dcb8;  --flash-ok-ink: #12722f;
+  --flash-warn-bg: #fdeec2; --flash-warn-border: #f3d081; --flash-warn-ink: #7a5200;
+  --flash-bad-bg: #fbdbd7;  --flash-bad-border: #eda69e;  --flash-bad-ink: #a01b10;
   --flash-info-bg: #eef2f7; --flash-info-border: #cdd7e3; --flash-info-ink: #33414f;
   --warnbtn-bg: #fff3cd;  --warnbtn-border: #e0b64f;  --warnbtn-ink: #7a5200;
   --code-bg: #0f1b2a;  --code-ink: #d7e3f2;
@@ -482,17 +483,22 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
             margin-bottom: .3rem; font-size: .92rem; }
 .taskitem .ti-label { font-weight: 600; }
 .taskitem .ti-state { font-variant: small-caps; }
-.taskitem .ti-view { margin-left: auto; white-space: nowrap; }
-.taskitem-running { background: var(--warn-bg, #fef7e0); border-color: var(--warn-line, #e6c760); }
-.taskitem-done    { background: var(--ok-bg, #e6f4ea);   border-color: var(--ok-line, #79c791); }
-.taskitem-failed,
-.taskitem-unsafe  { background: var(--bad-bg, #fdecea);  border-color: var(--bad-line, #e0a3a0); }
-@media (prefers-color-scheme: dark) {
-  .taskitem-running { background: #3a3220; border-color: #6b5a2a; }
-  .taskitem-done    { background: #1f3325; border-color: #2f6b45; }
-  .taskitem-failed,
-  .taskitem-unsafe  { background: #3a2422; border-color: #7a3a36; }
+.taskitem .ti-hint  { color: var(--muted); font-size: .85em; }
+.taskitem .ti-view  { margin-left: auto; white-space: nowrap; }
+/* When there is no View link, the close/recover control still pins right. */
+.taskitem .ti-recover { white-space: nowrap; }
+.taskitem .ti-view + .ti-recover, .taskitem .ti-view + .ti-close { margin-left: .2rem; }
+.taskitem .ti-recover:first-of-type, .taskitem .ti-close:first-of-type { margin-left: auto; }
+.taskitem .ti-close {
+  background: transparent; border: 0; color: inherit; cursor: pointer; font-size: 1rem;
+  line-height: 1; padding: 0 .2rem; opacity: .7;
 }
+.taskitem .ti-close:hover { opacity: 1; }
+/* Colours share the theme-aware --flash-* tokens (identical palette to .depnote/.flash), so the banner
+   matches every other status banner AND follows the in-app data-theme toggle (not just OS preference). */
+.taskitem-running, .taskitem-warn { background: var(--flash-warn-bg); border-color: var(--flash-warn-border); color: var(--flash-warn-ink); }
+.taskitem-done,    .taskitem-ok   { background: var(--flash-ok-bg);   border-color: var(--flash-ok-border);   color: var(--flash-ok-ink); }
+.taskitem-failed, .taskitem-unsafe, .taskitem-bad { background: var(--flash-bad-bg); border-color: var(--flash-bad-border); color: var(--flash-bad-ink); }
 /* Each sub-section (Settings/Monitor/Certificates) anchors a "logs" overlay on its header, laid out
    EXACTLY like the main stack rows: the .row-actions overlay is a sibling OUTSIDE the <summary> (a11y),
    positioned over the header's right edge and visible whether the section is open or collapsed. */

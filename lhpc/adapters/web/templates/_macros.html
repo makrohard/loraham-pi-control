@@ -25,6 +25,16 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# A status banner with an optional right-aligned "View →" link — shares the theme-aware task-banner style
+   so every green/yellow/red banner looks identical. `sev` in ok|warn|bad. Use for informational banners
+   whose next-action lives elsewhere (View → opens that stack's Install/Setup section on Stacks). #}
+{% macro banner(sev, href='', view='View') %}
+<div class="taskitem taskitem-{{ sev }}">
+  <span class="ti-label">{{ caller() }}</span>
+  {%- if href %}<a class="ti-view" href="{{ href }}">{{ view }} &rarr;</a>{% endif -%}
+</div>
+{% endmacro %}
+
 {# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
    address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all
    three read identically. `addr` is the reached host:port (request-scoped). #}

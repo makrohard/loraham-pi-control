@@ -314,6 +314,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--yes", action="store_true", help="Apply without confirmation")
     p_install.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
                            help="Version to clone: latest dev / latest stable / pinned")
+    # Internal (web-job only): record a green/red task-banner result under this run's job-result marker,
+    # gated on the parent's identity tracking. STRICTLY bound to install-<stack>.log + attempt id.
+    p_install.add_argument("--web-result", default="", help=argparse.SUPPRESS)
+    p_install.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
 
     p_ia = sub.add_parser("install-all",
                           help="Install/update, build and test ALL stacks in one guided "
@@ -554,17 +558,47 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "bootstrap":
         return _apply_flow(lambda apply: svc.bootstrap(apply=apply), yes=args.yes)
     if args.command == "install":
-        if args.check:
-            # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
-            # always show), then REPORT the dep gate — it never preempts the plan. Exit nonzero when
-            # the plan itself failed, else when the gate blocks (still "not installable").
-            rc = _render(svc.install(args.stack, apply=False, source=args.source))
-            blocked = _print_install_dep_gate(svc, args.stack, check=True)
-            return rc if rc != 0 else (1 if blocked else 0)
+        web = getattr(args, "web_result", "") or ""
+
+        def _do_install() -> int:                          # INTERACTIVE CLI path (keeps "Nothing to do.")
+            if args.check:
+                # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
+                # always show), then REPORT the dep gate — it never preempts the plan. Exit nonzero when
+                # the plan itself failed, else when the gate blocks (still "not installable").
+                rc = _render(svc.install(args.stack, apply=False, source=args.source))
+                blocked = _print_install_dep_gate(svc, args.stack, check=True)
+                return rc if rc != 0 else (1 if blocked else 0)
+            if _print_install_dep_gate(svc, args.stack, check=False):
+                return 1
+            return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),
+                               yes=args.yes)
+        if not web:
+            return _do_install()
+        # WEB install: gate on the parent's identity tracking + clear the startup flag, then enter the service
+        # APPLY path DIRECTLY (never `_apply_flow`, whose no-op short-circuit would skip apply): even a
+        # zero-change install must acquire the authoritative source guard and record admission (mark_running →
+        # admitted) before finishing, so a no-op reports admitted+done, never a false "blocked". One terminal
+        # result across all exits.
+        import os as _os
+        from lhpc.core import jobresult, webjob_gate
+        aid = getattr(args, "attempt_id", "") or ""
+        if web != f"install-{args.stack}.log":                 # strictly bound to install-<stack>.log
+            print("web install: result name is not bound to this target — refusing.")
+            return 3
+        if not webjob_gate.verify_tracked(svc._paths, web, "install", args.stack or "", aid, _os.getpid()):
+            print("web install: parent tracking not confirmed — refusing (no mutation).")
+            return 3
+        if not jobresult.mark_gate_passed(svc._paths, web, aid):
+            print("web install: could not clear the startup flag — refusing (no mutation).")
+            return 3
         if _print_install_dep_gate(svc, args.stack, check=False):
-            return 1
-        return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),
-                           yes=args.yes)
+            rc = 1                                         # a blocked dep-gate is a real (never-admitted) failure
+        else:
+            rc = _render(svc.install(args.stack, apply=True, source=args.source,
+                                     on_admit=lambda: jobresult.mark_running(svc._paths, web, aid)))
+        jobresult.terminalize(svc._paths, web, aid, "done" if rc == 0 else "failed",
+                              detail="" if rc == 0 else "install failed")
+        return rc
     if args.command == "install-all":
         if args.tx and args.no_tests:
             print("Refusing: --tx requires host tests (drop --no-tests).")

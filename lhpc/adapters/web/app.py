@@ -305,8 +305,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.get("/api/tasks")
     def tasks_api():  # noqa: ANN202
-        # Running-task banner feed (install-all + HMAC apply). STRICTLY read-only — no marker mutation.
+        # Running-task banner feed (install-all + HMAC + build/test/install jobs). STRICTLY read-only.
         return jsonify(tasks=service.running_tasks())
+
+    @app.post("/api/tasks/dismiss")
+    def tasks_dismiss():  # noqa: ANN202
+        # Close a FAILED (red) banner (never unsafe/running). CSRF-guarded; durable.
+        if not _csrf_ok():
+            abort(400)
+        ok = service.task_dismiss(request.form.get("kind", ""), request.form.get("run_id", ""),
+                                  request.form.get("attempt_id", ""))
+        return jsonify(ok=bool(ok)), (200 if ok else 409)
+
+    @app.post("/api/tasks/recover")
+    def tasks_recover():  # noqa: ANN202
+        # Explicit-ack recovery of an UNSAFE build/test/install job → non-blocking failed. CSRF-guarded.
+        if not _csrf_ok():
+            abort(400)
+        ok = service.task_recover(request.form.get("kind", ""), request.form.get("run_id", ""),
+                                  request.form.get("attempt_id", ""))
+        return jsonify(ok=bool(ok)), (200 if ok else 409)
 
     _SRC_LABELS = (("pinned", "Known working"), ("dev", "Development"),
                    ("stable", "Latest stable"))
@@ -1119,11 +1137,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 flash("System dependencies missing — install them first: "
                       + "; ".join(d["install"] for d in missing if d["install"]), "warn")
                 return _redirect_for(target)
-            job, err = service.spawn_web_job(op, target, source=source)
-            if err:
-                flash(err, "warn")
+            job, admission, reason = service.spawn_web_job(op, target, source=source)
+            if admission == "blocked":
+                flash(reason or f"{op} could not start.", "warn")
                 return _redirect_for(target)
-            flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
+            if admission == "pending":
+                flash(f"{op} starting — admission not yet confirmed; watch the live output below.", "warn")
+            else:                                       # admitted
+                flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
             return redirect(url_for("logs_view", target=target, job=job))
         # Ephemeral PER-BAND daemon-param values from the confirm panel(s). STRICT parse of EVERY
         # dp_* field: a malformed/duplicated field shape is a visible start failure BEFORE any

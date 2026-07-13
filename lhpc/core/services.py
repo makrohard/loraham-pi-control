@@ -267,6 +267,24 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                 if counts[k] <= 0:
                     counts.pop(k, None)
 
+    def _web_source_precheck(self, source_paths) -> str:
+        """Advisory probe for the web build/test/install admission: `""` if a detached source op could
+        start right now, else the typed 'blocked' reason. Reuses the ONE tested boundary
+        (index → recover/verify-no-journal → source locks) then releases — it NEVER spawns or mutates
+        source. The detached child re-acquires authoritatively for its lifetime; the tiny release→respawn
+        gap is closed by the admission handshake, not relied on for correctness."""
+        if not source_paths:
+            return ""
+        from . import reslock
+        try:
+            with self._source_operation_guard(sorted(source_paths), op="web-precheck"):
+                pass
+            return ""
+        except SourceTxnBlocked as exc:
+            return str(exc)
+        except reslock.ResourceBusy as exc:
+            return f"a source operation is already in progress ({getattr(exc, 'key', '')})"
+
     # ---- bulk run: status, gates, log, ack, spawn, driver (M2.1) -----------
 
     BULK_OP = "install-all"
@@ -685,7 +703,7 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
         return self._plan_result(plan, applied=True, next_apply=None)
 
     def install(self, stack_id: str | None = None, apply: bool = False,
-                source: str = "pinned", bulk_ctx=None) -> ActionResult:
+                source: str = "pinned", bulk_ctx=None, on_admit=None) -> ActionResult:
         if (_r := self._controller_refusal(stack_id)) is not None:
             return _r
         if stack_id and self.stack(stack_id) is None:
@@ -734,44 +752,55 @@ class ControllerService(WebserverOpsMixin, BulkOpsMixin, SelfUpdateOpsMixin, Mai
                                 "incompatible source resolutions for a shared checkout.",
                                 details=[f"  {c}" for c in plan_conflicts])
         mutated_paths, extra_out = [], []
-        for path, comp, resolved in groups:
-            dest = self._paths.resolve_source(path)
-            # DESCRIPTOR-PROVEN skip: only a healthy managed DIRECTORY is "already
-            # installed". Anything else (absent, symlink, regular/special file) flows
-            # into `adopt_source`, whose locked leaf checks install or refuse typed —
-            # a dangling/unknown leaf is never silently treated as installed.
-            try:
-                if source_fs.leaf_kind(self._paths, dest) == "dir":
-                    # HEALTHY SKIP: the leaf already serves this install. RE-JOIN the
-                    # targeted consumers in the ownership record's live membership —
-                    # otherwise a later sibling departure could remove a leaf this
-                    # just-installed stack relies on.
-                    from . import source_registry as _sreg
-                    state, rec, _w = _sreg.record_state(self._paths, path)
-                    targeted = {c2.id for _, c2 in install_items
-                                if c2.source and c2.source.path == path}
-                    if state == "valid" and not targeted <= set(rec.components):
-                        if _sreg.update_components(self._paths, path,
-                                                   set(rec.components) | targeted):
-                            extra_out.append(f"  [re-joined] {path}: shared checkout now "
-                                             "serves this stack again")
-                        else:
-                            extra_out.append(f"  [warn] {path}: shared-consumer record "
-                                             "could not be updated — re-run install")
-                    continue
-            except PathContainmentError:
-                pass                       # unsafe parent -> adopt_source refuses typed
-            st_of = next((st2 for st2 in self.stacks()
-                          if any(c2.id == comp.id for c2 in st2.components)), None)
-            result = self._adopt_dev_fallback(inst, st_of, comp, source, resolved,
-                                              force=False,
-                                              locked=bulk_ctx is not None)
-            if result.status == "done":
-                mutated_paths.append(path)
-            for a in plan.actions:
-                if a.target == str(dest):
-                    a.status, a.detail = result.status, result.detail
-                    a.provenance = result.provenance
+        # WEB-JOB admission (P1-4): a detached web install must record `running` (authoritative admission)
+        # only AFTER it holds its source guard, and must mutate nothing if it was superseded meanwhile.
+        # Wrap the adoption loop in the ONE source boundary and adopt in the outer-held `locked` mode (exactly
+        # as install-all does under its bulk boundary); a False `on_admit` releases the guard and installs nothing.
+        _guard_paths = sorted({c.source.path for _, c in install_items if c.source})
+        _locked_adopt = (bulk_ctx is not None) or (on_admit is not None)
+        _guard = (self._source_operation_guard(_guard_paths, op="install")
+                  if on_admit is not None else contextlib.nullcontext())
+        with _guard:
+            if on_admit is not None and not on_admit():
+                return ActionResult(False, "Install superseded before admission — nothing was changed.")
+            for path, comp, resolved in groups:
+                dest = self._paths.resolve_source(path)
+                # DESCRIPTOR-PROVEN skip: only a healthy managed DIRECTORY is "already
+                # installed". Anything else (absent, symlink, regular/special file) flows
+                # into `adopt_source`, whose locked leaf checks install or refuse typed —
+                # a dangling/unknown leaf is never silently treated as installed.
+                try:
+                    if source_fs.leaf_kind(self._paths, dest) == "dir":
+                        # HEALTHY SKIP: the leaf already serves this install. RE-JOIN the
+                        # targeted consumers in the ownership record's live membership —
+                        # otherwise a later sibling departure could remove a leaf this
+                        # just-installed stack relies on.
+                        from . import source_registry as _sreg
+                        state, rec, _w = _sreg.record_state(self._paths, path)
+                        targeted = {c2.id for _, c2 in install_items
+                                    if c2.source and c2.source.path == path}
+                        if state == "valid" and not targeted <= set(rec.components):
+                            if _sreg.update_components(self._paths, path,
+                                                       set(rec.components) | targeted):
+                                extra_out.append(f"  [re-joined] {path}: shared checkout now "
+                                                 "serves this stack again")
+                            else:
+                                extra_out.append(f"  [warn] {path}: shared-consumer record "
+                                                 "could not be updated — re-run install")
+                        continue
+                except PathContainmentError:
+                    pass                       # unsafe parent -> adopt_source refuses typed
+                st_of = next((st2 for st2 in self.stacks()
+                              if any(c2.id == comp.id for c2 in st2.components)), None)
+                result = self._adopt_dev_fallback(inst, st_of, comp, source, resolved,
+                                                  force=False,
+                                                  locked=_locked_adopt)
+                if result.status == "done":
+                    mutated_paths.append(path)
+                for a in plan.actions:
+                    if a.target == str(dest):
+                        a.status, a.detail = result.status, result.detail
+                        a.provenance = result.provenance
         # Password-auth by DEFAULT: after a successful source adoption and BEFORE the caller builds the
         # firmware, ensure the meshcom HMAC secret + param exist (idempotent — keeps an existing secret),
         # so the firmware bakes the shared secret in the same install. Covers per-stack + CLI install;

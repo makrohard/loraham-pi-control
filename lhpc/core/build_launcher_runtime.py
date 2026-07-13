@@ -78,10 +78,11 @@ def _resolve_argv(tokens: list) -> list:
     return argv
 
 
-def _run_step(argv: list, cwd: str, env: dict, timeout: float) -> int:
+def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     """Run one step in its OWN session; on timeout, terminate the whole tree via the shared
     proctree session-token helper. Output is inherited -> streamed to the job log, not held
-    in memory."""
+    in memory. Returns `(rc, unverified)` — `unverified=True` ONLY when a timeout's termination
+    was NOT proven (`Termination` not `.ok`: a build/test process may still hold the checkout)."""
     # LIVE log streaming: PYTHONUNBUFFERED un-buffers python tools (pip, PlatformIO) —
     # the dominant chunkiness source. Deliberately NO stdbuf/LD_PRELOAD wrapping: this
     # launcher also runs HOST-TEST steps, and an inherited LD_PRELOAD alters the pipe
@@ -92,7 +93,7 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float) -> int:
     p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, start_new_session=True)
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:
-        return p.wait(timeout=timeout)
+        return p.wait(timeout=timeout), False
     except subprocess.TimeoutExpired:
         result = proctree.terminate_session(token, os.getpid())
         try:
@@ -103,7 +104,7 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float) -> int:
             sys.stderr.write("WARNING: step termination %s (surviving processes possible): "
                              "%s\n" % (result.value, " ".join(argv)))
         sys.stderr.write("step timed out after %ss: %s\n" % (timeout, " ".join(argv)))
-        return 124
+        return 124, (not result.ok)
 
 
 def run(spec: dict) -> None:
@@ -126,77 +127,127 @@ def run(spec: dict) -> None:
     step_timeout = _step_timeout()
     tries = _lock_tries()
 
+    # ---- WEB-JOB attempt lifecycle (parallels the HMAC driver gate) --------------------------------
+    result_name = spec.get("result_name") or ""
+    attempt_id = spec.get("attempt_id") or ""
+    op, target = spec.get("op") or "", spec.get("target") or ""
+    web = bool(result_name)
+    if web:
+        from . import jobresult, webjob_gate
+        # 1. GATE: prove the parent identity-tracked THIS attempt BEFORE any lock/mutation. Untracked
+        #    (orphan) → exit WITHOUT mutation, leaving `startup_unverified` set → the projection derives unsafe.
+        if not webjob_gate.verify_tracked(paths, result_name, op, target, attempt_id, os.getpid()):
+            sys.stderr.write("web job: parent tracking not confirmed — refusing (no mutation)\n")
+            raise SystemExit(3)
+        # 2. Clear the startup flag; if it cannot be cleared, exit WITHOUT mutation (still derives unsafe).
+        if not jobresult.mark_gate_passed(paths, result_name, attempt_id):
+            sys.stderr.write("web job: could not clear the startup flag — refusing (no mutation)\n")
+            raise SystemExit(3)
+
     def _open(name):
         # Descriptor-safe: `open_lock` walks the parent NO-FOLLOW from the runtime root, so a
         # symlinked parent (state/, state/locks/) or lock leaf fails closed.
         return runtime_fs.open_lock(paths, paths.under("state", "locks", name))
 
-    held = []            # file objects held for the whole job lifetime
-    idx = None
+    outcome = ["failed"]         # default-failed: any SystemExit / step failure / early raise
+    detail = [""]
+
+    def _record():               # best-effort terminal, AFTER fds are released; no-op if not a web job
+        if web:
+            jobresult.terminalize(paths, result_name, attempt_id, outcome[0], detail=detail[0][:400])
+
     try:
-        # Index-to-source handoff: hold the INDEX lock, verify NO unresolved journal, THEN
-        # take the source lock(s); release the index lock only afterwards.
-        if index_name:
-            try:
-                idx = _open(index_name)
-            except (PathContainmentError, OSError) as e:
-                sys.stderr.write("source-transaction index lock open failed (unsafe path?): %s\n" % e)
-                raise SystemExit(3)
-            if not _flock_bounded(idx.fileno(), tries):
-                sys.stderr.write("source-transaction index busy — another source operation is "
-                                 "in progress\n")
-                raise SystemExit(3)
-            try:
-                entries = runtime_fs.scandir_nofollow(paths, paths.under("state", "source-txn"))
-            except PathContainmentError as e:
-                sys.stderr.write("blocked: unsafe source-transaction directory (%s)\n" % e)
-                raise SystemExit(3)
-            if any(n.endswith(".json") for n, _is_link in entries):
-                sys.stderr.write("blocked: an unresolved source-transaction journal is present "
-                                 "— resolve it before building/testing\n")
-                raise SystemExit(3)
+        held = []            # file objects held for the whole job lifetime
+        idx = None
+        try:
+            # Index-to-source handoff: hold the INDEX lock, verify NO unresolved journal, THEN
+            # take the source lock(s); release the index lock only afterwards.
+            if index_name:
+                try:
+                    idx = _open(index_name)
+                except (PathContainmentError, OSError) as e:
+                    detail[0] = "blocked: source-transaction index lock unsafe"
+                    sys.stderr.write("source-transaction index lock open failed (unsafe path?): %s\n" % e)
+                    raise SystemExit(3)
+                if not _flock_bounded(idx.fileno(), tries):
+                    detail[0] = "blocked: another source operation is in progress"
+                    sys.stderr.write("source-transaction index busy — another source operation is "
+                                     "in progress\n")
+                    raise SystemExit(3)
+                try:
+                    entries = runtime_fs.scandir_nofollow(paths, paths.under("state", "source-txn"))
+                except PathContainmentError as e:
+                    detail[0] = "blocked: unsafe source-transaction directory"
+                    sys.stderr.write("blocked: unsafe source-transaction directory (%s)\n" % e)
+                    raise SystemExit(3)
+                if any(n.endswith(".json") for n, _is_link in entries):
+                    detail[0] = "blocked: an unresolved source-transaction journal is present"
+                    sys.stderr.write("blocked: an unresolved source-transaction journal is present "
+                                     "— resolve it before building/testing\n")
+                    raise SystemExit(3)
 
-        # Hold the source-path lock(s) for the FULL job lifetime BEFORE touching the source.
-        for name in lock_names:
-            try:
-                f = _open(name)
-            except (PathContainmentError, OSError) as e:
-                sys.stderr.write("source lock open failed (%s): %s\n" % (name, e))
-                raise SystemExit(3)
-            if not _flock_bounded(f.fileno(), tries):
-                f.close()
-                sys.stderr.write("could not acquire source lock %s — another source operation "
-                                 "is in progress\n" % name)
-                raise SystemExit(3)
-            held.append(f)
-        if idx is not None:              # source lock(s) held -> handoff complete
-            fcntl.flock(idx.fileno(), fcntl.LOCK_UN)
-            idx.close()
-            idx = None
-
-        from .commands import build_env, CommandError
-        for s in steps:
-            argv = _resolve_argv(s["argv"])
-            # Resolve env (incl. @file: secrets) HERE, on-host at exec time — the secret
-            # value never touched the on-disk launcher spec. Fail-closed as at render.
-            try:
-                step_env = build_env(s.get("env_items", ()), spec["runtime_root"], cwd)
-            except CommandError as exc:
-                sys.stderr.write("build env error: %s\n" % exc)
-                raise SystemExit(1)
-            print("+ " + " ".join(argv), flush=True)
-            rc = _run_step(argv, cwd, {**os.environ, **step_env}, step_timeout)
-            if rc != 0:
-                raise SystemExit(rc)
-    finally:
-        # Release EVERY acquired fd explicitly — including partial-acquisition failure paths.
-        for f in held:
-            try:
-                f.close()
-            except OSError:
-                pass
-        if idx is not None:
-            try:
+            # Hold the source-path lock(s) for the FULL job lifetime BEFORE touching the source.
+            for name in lock_names:
+                try:
+                    f = _open(name)
+                except (PathContainmentError, OSError) as e:
+                    detail[0] = "blocked: source lock unsafe"
+                    sys.stderr.write("source lock open failed (%s): %s\n" % (name, e))
+                    raise SystemExit(3)
+                if not _flock_bounded(f.fileno(), tries):
+                    f.close()
+                    detail[0] = "blocked: another source operation holds the source lock"
+                    sys.stderr.write("could not acquire source lock %s — another source operation "
+                                     "is in progress\n" % name)
+                    raise SystemExit(3)
+                held.append(f)
+            if idx is not None:              # source lock(s) held -> handoff complete
+                fcntl.flock(idx.fileno(), fcntl.LOCK_UN)
                 idx.close()
-            except OSError:
-                pass
+                idx = None
+
+            # 4. ADMITTED: locks held. mark_running — a False return is FATAL (a newer attempt replaced
+            #    or removed our marker): run NO step; the finally releases the locks + records best-effort.
+            if web and not jobresult.mark_running(paths, result_name, attempt_id):
+                detail[0] = "attempt superseded before admission"
+                sys.stderr.write("web job: attempt superseded — refusing to run\n")
+                raise SystemExit(3)
+
+            from .commands import build_env, CommandError
+            for s in steps:
+                argv = _resolve_argv(s["argv"])
+                # Resolve env (incl. @file: secrets) HERE, on-host at exec time — the secret
+                # value never touched the on-disk launcher spec. Fail-closed as at render.
+                try:
+                    step_env = build_env(s.get("env_items", ()), spec["runtime_root"], cwd)
+                except CommandError as exc:
+                    detail[0] = "build env/pkg-config error"
+                    sys.stderr.write("build env error: %s\n" % exc)
+                    raise SystemExit(1)
+                print("+ " + " ".join(argv), flush=True)
+                rc, unverified = _run_step(argv, cwd, {**os.environ, **step_env}, step_timeout)
+                if rc != 0:
+                    if unverified:
+                        # A timed-out step whose termination was NOT proven: a build/test process may still
+                        # hold the checkout -> UNSAFE (retains the same-source block; requires Recover).
+                        outcome[0] = "unsafe"
+                        detail[0] = ("timed out; cessation UNPROVEN — a process may survive: "
+                                     + " ".join(argv))[:200]
+                    else:
+                        detail[0] = ("step failed: " + " ".join(argv))[:200]
+                    raise SystemExit(rc)
+            outcome[0] = "done"          # only after EVERY step passed
+        finally:
+            # Release EVERY acquired fd explicitly — including partial-acquisition failure paths.
+            for f in held:
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            if idx is not None:
+                try:
+                    idx.close()
+                except OSError:
+                    pass
+    finally:
+        _record()                        # terminal green/red AFTER the fds are released
