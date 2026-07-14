@@ -1791,7 +1791,7 @@ def test_auto_install_cooperative_cancel_writes_aborted(tmp_path, monkeypatch):
     svc.bootstrap(apply=True)
     monkeypatch.setattr(type(svc), "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
-    monkeypatch.setattr(sai, "_ABORT", True)
+    monkeypatch.setattr(sai._auto_install_abort, "_v", True)   # as the SIGTERM handler would (auto-reverts)
     r = svc.auto_install(apply=True, emit=lambda s: None)
     assert not r.ok and "ABORTED" in r.summary
     state, m = ai_mod.read_marker(svc._paths)

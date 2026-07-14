@@ -601,10 +601,13 @@ class WebserverOpsMixin:
 
     def webserver_apply(self) -> "ActionResult":
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
-        activate an invalid one), then reload an already-running LHPC-owned nginx master
-        (never systemctl, never start the unit), then verify + persist evidence. A missing/
-        inactive master returns a typed 'service not active / repair required' result — the
-        web process performs no start and no package install."""
+        activate an invalid one), then reload an already-running LHPC-owned nginx master, then
+        verify + persist evidence. A missing/inactive master returns a typed 'service not active /
+        repair required' result — the web process performs no start and no package install. A
+        reload cannot rebind a held listen socket, so on a BIND change (loopback <-> 0.0.0.0) whose
+        effective scope does not match the desired exposure this RESTARTS the unit (`systemctl
+        --user restart lhpc-nginx.service`) and re-verifies; it never reports a bind change that did
+        not take effect (F3)."""
         from . import webserver as _ws
         if not _ws.nginx_installed(self._system):
             return ActionResult(False, "nginx is not installed — required system dependency for "
@@ -627,7 +630,23 @@ class WebserverOpsMixin:
                                 details=[rmsg], data=ev)
         if state == "failed":
             return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
-        return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+        # F3: a reload cannot rebind a held listen socket, so a bind change (loopback <-> 0.0.0.0)
+        # can leave the OLD listener in place while reload reports success. When the effective scope
+        # does not match the desired exposure, RESTART the unit (ExecStop releases the socket,
+        # ExecStart rebinds) and re-verify — never report a bind change that did not take effect.
+        if ev["checks"].get("remote_listener_matches") == "ok":
+            return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+        rstate, rmsg2 = _ws.restart(self._system, self._paths)
+        ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+        if ev["checks"].get("remote_listener_matches") == "ok":
+            return ActionResult(True, "webserver configuration applied; nginx restarted to rebind "
+                                "the listener (a bind change needs a restart, not a reload)", data=ev)
+        scope = ev.get("effective", {}).get("listener_scope", "unknown")
+        return ActionResult(
+            False, f"configuration applied but the console listener is still '{scope}' "
+            f"(desired remote_exposed={cfg.remote_exposed}) — the bind change did not take effect; "
+            "restart the front-end manually", details=[rmsg2],
+            next_commands=["systemctl --user restart lhpc-nginx.service"], data=ev)
 
     def webserver_start_service(self) -> "ActionResult":
         """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx

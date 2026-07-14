@@ -10,7 +10,7 @@ from pathlib import Path
 
 from lhpc.core import webserver
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import CommandResult, FakeSystem
+from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
 
@@ -60,6 +60,90 @@ def test_apply_reloads_running_master(tmp_path):
     r = svc.webserver_apply()
     assert r.ok and "reloaded" in r.summary
     assert ["nginx", "-s", "reload", "-c", conf] in fake.calls
+
+
+# --- F3: a bind change (loopback <-> 0.0.0.0) needs a RESTART, not a reload ------------------
+
+class _RestartFlipsFake(FakeSystem):
+    """Effective console listener stays loopback until the nginx UNIT is restarted, then flips to
+    0.0.0.0 — models the reload-cannot-rebind-a-held-socket reality behind F3."""
+    def tcp_listeners(self):
+        restarted = ["systemctl", "--user", "restart", "lhpc-nginx.service"] in self.calls
+        ip = "0.0.0.0" if restarted else "127.0.0.1"
+        return [Listener(family="ipv4", ip=ip, port=8443, inode=1)]
+
+
+def _seed_exposed(svc):
+    from lhpc.core import config as cfgmod
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0", remote_exposed=True,
+                                 allowed_cidrs=["192.168.0.0/24"], access_mode="auth-everywhere")
+
+
+def _live_master(paths):
+    from lhpc.core import runtime_fs
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+
+
+def _apply_cmds(paths):
+    return {
+        ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
+        ("nginx", "-t", "-c", _staged(paths)): CommandResult(0, "", "successful"),
+        ("nginx", "-s", "reload", "-c", _conf(paths)): CommandResult(0, "", ""),
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(0, "", ""),
+    }
+
+
+def test_apply_bind_change_restarts_when_reload_leaves_loopback(tmp_path):
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_exposed(svc0)
+    _live_master(paths)
+    fake = _RestartFlipsFake(commands=_apply_cmds(paths))
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    # reload left the master on loopback -> apply restarts the unit and re-verifies exposed
+    assert r.ok and "restarted" in r.summary
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
+    assert r.data["effective"]["remote_listener"] is True
+
+
+def test_apply_bind_change_fails_closed_when_restart_does_not_rebind(tmp_path):
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_exposed(svc0)
+    _live_master(paths)
+    # restart returns rc0 but the listener STAYS loopback (bind never widened) -> fail closed
+    fake = FakeSystem(commands=_apply_cmds(paths),
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)])
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert not r.ok and "did not take effect" in r.summary
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
+    assert r.data["effective"]["remote_listener"] is False       # never a false OK
+
+
+def test_apply_no_restart_when_scope_already_matches(tmp_path):
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths                                          # loopback desired (default)
+    _live_master(paths)
+    fake = FakeSystem(commands=_apply_cmds(paths),
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1)])
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert r.ok and "reloaded" in r.summary
+    assert not any(c[:1] == ["systemctl"] for c in fake.calls)    # reload sufficed, no restart
+
+
+def test_restart_primitive_calls_systemctl(tmp_path):
+    paths = Paths(runtime_root=tmp_path)
+    ok = FakeSystem(commands={
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(0, "", "")})
+    assert webserver.restart(ok.system, paths)[0] == "restarted"
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in ok.calls
+    bad = FakeSystem(commands={
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(1, "", "boom")})
+    assert webserver.restart(bad.system, paths)[0] == "failed"
 
 
 def test_apply_refuses_invalid_config(tmp_path):

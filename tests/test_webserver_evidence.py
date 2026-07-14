@@ -165,6 +165,37 @@ def test_verify_records_loopback_and_absent_scopes(tmp_path):
     assert ev2["effective"]["listener_scope"] == "absent" and ev2["effective"]["remote_listener"] is False
 
 
+# --- F3: verify() must compare DESIRED exposure vs the EFFECTIVE listener --------------------
+
+def test_verify_fails_when_desired_exposed_but_listener_loopback(tmp_path):
+    # A bind change applied via `nginx -s reload` can leave the master on the old loopback socket
+    # while reload returns success. verify() must FAIL that, not report OK (the F3 remote-403 bug).
+    paths = _paths(tmp_path)
+    conf = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    sys = _sys_listen({"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 1},
+                      conf_path=conf).system                    # effective: still loopback
+    ev = webserver.verify(sys, paths, _exposed_cfg())           # desired: remote_exposed on 0.0.0.0
+    assert ev["checks"]["remote_listener_matches"] == "failed"
+    assert ev["effective"]["remote_listener"] is False
+
+
+def test_verify_remote_listener_matches_both_directions(tmp_path):
+    paths = _paths(tmp_path)
+    conf = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    def scope_check(cfg, *listeners):
+        sys = _sys_listen(*listeners, conf_path=conf).system
+        return webserver.verify(sys, paths, cfg)["checks"]["remote_listener_matches"]
+    loop = {"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 1}
+    wild = {"family": "ipv4", "ip": "0.0.0.0", "port": 8443, "inode": 2}
+    # loopback desired: loopback OR absent effective is a MATCH (no false failure)
+    assert scope_check(WebserverConfig(), loop) == "ok"
+    assert scope_check(WebserverConfig()) == "ok"               # absent
+    # loopback desired but still exposed -> residual exposure FAILS
+    assert scope_check(WebserverConfig(), wild) == "failed"
+    # exposed desired + exposed effective -> MATCH
+    assert scope_check(_exposed_cfg(), wild) == "ok"
+
+
 # --- verify() ----------------------------------------------------------------
 
 def _fake(conf_path: str, *, nginx=True, nginx_t_ok=True) -> FakeSystem:

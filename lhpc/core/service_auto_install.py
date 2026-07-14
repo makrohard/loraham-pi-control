@@ -11,28 +11,16 @@ from contextlib import contextmanager
 
 from . import runtime_fs
 from . import validators
+from .abortflag import AbortFlag
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, SourceTxnBlocked
 
-# ---- cooperative Abort (mirrors service_hmac): the detached driver installs SIGTERM/SIGINT handlers
-# that ONLY set a flag (signal-safe, no I/O); the driver polls it between stacks and threads it into
-# each build/test as `should_cancel`. The web Abort route SIGTERMs the driver pid only. ----
-_ABORT = False
-
-
-def _request_auto_install_abort(*_signal_args):
-    global _ABORT
-    _ABORT = True
-
-
-def _auto_install_abort_requested() -> bool:
-    return _ABORT
-
-
-def _reset_auto_install_abort():
-    global _ABORT
-    _ABORT = False
+# ---- cooperative Abort (shared AbortFlag): the detached driver installs SIGTERM/SIGINT handlers
+# that ONLY set a flag via `_auto_install_abort.request` (signal-safe, no I/O); the driver polls it
+# between stacks and threads it into each build/test as `should_cancel`. The web Abort route SIGTERMs
+# the driver pid only. A distinct instance from HMAC's ⇒ the two features abort independently. ----
+_auto_install_abort = AbortFlag()
 
 
 class AutoInstallOpsMixin:
@@ -420,18 +408,6 @@ class AutoInstallOpsMixin:
             seed += "\n[… stream truncated (read cap) …]\n"
         return seed
 
-    def _auto_install_reconstruct_token(self, ident):
-        """Rebuild a proctree.SessionToken from a stored sanitized session identity (mirrors
-        service_hmac._hmac_reconstruct_token); None if incomplete/malformed."""
-        from .proctree import SessionToken
-        if not isinstance(ident, dict):
-            return None
-        try:
-            return SessionToken(int(ident["pid"]), int(ident["starttime"]),
-                                int(ident["sid"]), int(ident["pgid"]))
-        except (KeyError, ValueError, TypeError):
-            return None
-
     def auto_install_ack(self, confirm_orphan: bool = False) -> ActionResult:
         """EXPLICIT recovery/acknowledgement of dead/unsafe auto-install state, SERIALIZED with
         launches: the dedicated auto-install-start lock is held from the liveness re-validation
@@ -480,7 +456,7 @@ class AutoInstallOpsMixin:
                 if st and not st.get("unsafe") and st.get("state") == "unsafe":
                     import os
                     from . import proctree
-                    token = self._auto_install_reconstruct_token(st.get("session_ident"))
+                    token = proctree.reconstruct_token(st.get("session_ident"))
                     if st.get("unsafe_scope") == "session-unverified" and token is not None:
                         if not proctree.session_ceased(token, os.getpid()):
                             return ActionResult(False, "Cannot acknowledge: the build/test session is "
@@ -1070,7 +1046,7 @@ class AutoInstallOpsMixin:
                 mutated: list = []
                 inst = self._installer()
                 for st, comps in scope:
-                    if _auto_install_abort_requested():
+                    if _auto_install_abort.requested():
                         raise _Cancelled()                   # cooperative: stop before the next stack
                     r = row[st.id]
                     bad_deps = sorted(edges.get(st.id, set()) & failed_stacks)
@@ -1175,7 +1151,7 @@ class AutoInstallOpsMixin:
                         bw()
                         b = self.build(st.id, apply=True, auto_install_ctx=ctx,
                                        on_component_log=register_log,
-                                       should_cancel=_auto_install_abort_requested)
+                                       should_cancel=_auto_install_abort.requested)
                         for line in b.details:
                             emit(line)
                         bdata = b.data or {}
@@ -1204,7 +1180,7 @@ class AutoInstallOpsMixin:
                         bw()
                         t = self.test(st.id, tx=False, apply=True, auto_install_ctx=ctx,
                                       on_component_log=register_log,   # runs `auto`, defers the rest
-                                      should_cancel=_auto_install_abort_requested)
+                                      should_cancel=_auto_install_abort.requested)
                         for line in t.details:
                             emit(line)
                         tdata = t.data or {}
@@ -1273,10 +1249,10 @@ class AutoInstallOpsMixin:
                         emit(f"==== TX REFUSED: {reason} ====")
                         bw()
                     else:
-                        if _auto_install_abort_requested():
+                        if _auto_install_abort.requested():
                             raise _Cancelled()               # poll immediately before the TX phase
                         self._auto_install_tx_phase(marker, ctx, emit, bw)
-                        if _auto_install_abort_requested():
+                        if _auto_install_abort.requested():
                             raise _Cancelled()               # Abort landed DURING TX -> aborted
                             # (daemon already stopped by the phase's finally; tx not marked passed)
                 elif tx and marker["tx_phase"]["status"] == "fail":
@@ -1410,7 +1386,7 @@ class AutoInstallOpsMixin:
                 return
             started = True
             rt = self.test("daemon", tx=True, apply=True, auto_install_ctx=ctx,
-                           should_cancel=_auto_install_abort_requested)
+                           should_cancel=_auto_install_abort.requested)
             for line in rt.details:
                 emit(line)
             if (rt.data or {}).get("cancelled"):

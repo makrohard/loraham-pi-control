@@ -687,6 +687,20 @@ def reload(system, paths: Paths) -> tuple:
     return "failed", ((res.stderr or res.stdout or "reload failed").strip().splitlines() or ["reload failed"])[-1]
 
 
+def restart(system, paths: Paths) -> tuple:
+    """Restart the LHPC-owned nginx user unit via `systemctl --user restart lhpc-nginx.service`.
+    Unlike `reload` (SIGHUP, which cannot rebind a listen socket the old worker still holds), a
+    restart runs ExecStop (`nginx -s quit`, releasing the socket) then ExecStart (a fresh bind) —
+    the ONLY way a BIND CHANGE (loopback 127.0.0.1 <-> 0.0.0.0) actually takes effect. Returns one
+    of ('restarted'|'failed', message)."""
+    r = system.runner.run(["systemctl", "--user", "restart", "lhpc-nginx.service"], 20.0)
+    if getattr(r, "not_found", False):
+        return "failed", "systemctl not found"
+    if r.returncode == 0:
+        return "restarted", "nginx restarted"
+    return "failed", ((r.stderr or r.stdout or "restart failed").strip().splitlines() or ["restart failed"])[-1]
+
+
 # --------------------------------------------------------------------------- effective evidence (M9)
 
 EVIDENCE = ("state", "webserver.json")
@@ -922,6 +936,13 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
     # HTTPS-cert presentation / mTLS behaviour / revocation enforcement still need a real client
     # handshake, so those stay null (honestly unproven without opt-in integration).
     console_scope = listener_scope(system, cfg.port)         # "exposed" | "loopback" | "absent"
+    # F3: the DESIRED remote-exposure MUST match the EFFECTIVE listener. A bind change applied via
+    # `nginx -s reload` cannot rebind a socket the old worker still holds, so the master can keep the
+    # old (loopback) listener while reload returns success — this makes that never verify as OK.
+    # Both directions fail: exposed-desired but not exposed (silent exposure failure, the F3 incident)
+    # AND loopback-desired but still exposed (residual exposure). Absent == not exposed.
+    checks["remote_listener_matches"] = (
+        "ok" if cfg.remote_exposed == (console_scope == "exposed") else "failed")
     effective = {
         "remote_listener": console_scope == "exposed",       # bound off-loopback == remotely reachable
         "listener_scope": console_scope,

@@ -25,8 +25,9 @@ def test_exclusive_guard_holds_and_save_reuses_it(tmp_path):
     with svc._config_stable(exclusive=True):
         assert svc._holds_config_exclusive()
         # A config write INSIDE the exclusive boundary uses the module-private locked path — it must
-        # succeed, NOT fail "config busy" by contending on a second descriptor.
-        r = svc.save_config_bundle("meshcom", values={"password_file": "{runtime}/config/secrets/xr_pw"})
+        # succeed, NOT fail "config busy" by contending on a second descriptor. (`port`, a plain
+        # run-param — NOT the HMAC-managed `password_file`, which generic config rejects.)
+        r = svc.save_config_bundle("meshcom", values={"port": "7100"})
         assert r.ok, r.details
     assert not svc._holds_config_exclusive()                 # cleared on exit
 

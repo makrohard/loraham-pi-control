@@ -19,6 +19,11 @@ import sys
 from lhpc.core.services import ActionResult, ControllerService
 from lhpc.version import __version__
 
+# Captured at import from the service facade (single source of truth). Held as a module constant so
+# parser help / the disable branch don't read `ControllerService.HMAC_DISABLE_CONFIRM` at call time —
+# tests monkeypatch the module-level `ControllerService` name with a bare factory lambda.
+_HMAC_DISABLE_CONFIRM = ControllerService.HMAC_DISABLE_CONFIRM
+
 _TOPICS = {
     "safety": (
         "TX safety: the controller never auto-enables TX. A freshly installed or\n"
@@ -246,6 +251,10 @@ def _cmd_config(svc, args) -> int:
     matches = [f for f in fields
                if f["name"] == args.param or f"{f['component']}.{f['name']}" == args.param]
     if not matches:
+        hint = svc.hmac_managed_param_hint(stack, args.param)
+        if hint:
+            print(f"ERR   {hint}")
+            return 1
         print(f"ERR   unknown parameter '{args.param}' for '{stack}'")
         print(f"\nNext:\n  lhpc config {stack}")
         return 1
@@ -339,6 +348,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Target stack (default: the meshcom stack)")
     p_hmac.add_argument("--yes", action="store_true",
                         help="Apply now (rebuilds the firmware + restarts the link)")
+    p_hmac.add_argument("--confirm-phrase", default="",
+                        help="Required to DISABLE (removes client authentication): "
+                             f"--confirm-phrase {_HMAC_DISABLE_CONFIRM}")
 
     # Internal: the detached HMAC-apply driver spawned by the web/CLI apply flow. Not for direct use.
     p_hd = sub.add_parser("_hmac-apply")
@@ -599,17 +611,16 @@ def main(argv: list[str] | None = None) -> int:
         return rc
     if args.command == "auto-install":
         import signal as _signal
-        from lhpc.core.service_auto_install import (_request_auto_install_abort,
-                                                    _reset_auto_install_abort)
+        from lhpc.core.service_auto_install import _auto_install_abort
 
         def _run_apply(**kw):
             # Install the cooperative-abort handlers for the apply run only (foreground CLI OR the
             # web-spawned detached driver); the flag is polled by the driver and threaded into
             # build/test. Handlers are restored afterwards so a library caller/test is unaffected.
-            _reset_auto_install_abort()
+            _auto_install_abort.reset()          # reset BEFORE install — never after (a signal
             prev = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
-            _signal.signal(_signal.SIGTERM, _request_auto_install_abort)
-            _signal.signal(_signal.SIGINT, _request_auto_install_abort)
+            _signal.signal(_signal.SIGTERM, _auto_install_abort.request)   # in between is not erased)
+            _signal.signal(_signal.SIGINT, _auto_install_abort.request)
             try:
                 return svc.auto_install(apply=True, **kw)
             finally:
@@ -657,12 +668,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"'{args.action}' rebuilds the MeshCom firmware and restarts the link "
                   "(several minutes; the link is down until it finishes).")
             if args.action == "disable":
-                print("It REMOVES client authentication.")
-            elif args.action == "renew":
+                print("It REMOVES client authentication (anyone in range can inject).")
+                print(f"Re-run to apply:  lhpc hmac disable {sid} --yes "
+                      f"--confirm-phrase {_HMAC_DISABLE_CONFIRM}")
+                return 0
+            if args.action == "renew":
                 print("It rotates the shared secret — every client must be re-provisioned.")
             print(f"Re-run to apply:  lhpc hmac {args.action} {sid} --yes")
             return 0
-        return svc.hmac_apply_cli(sid, args.action, emit=print)
+        # `disable` needs the typed phrase too; the service refuses without it (bare --yes is not enough).
+        confirm = args.confirm_phrase == _HMAC_DISABLE_CONFIRM
+        return svc.hmac_apply_cli(sid, args.action, emit=print, confirm=confirm)
     if args.command == "_hmac-apply":
         # Detached driver: stdout/stderr are captured to the run log by spawn_job, so `print`
         # streams into the live log window. Never prints the secret (the step runner redacts).
@@ -675,9 +691,10 @@ def main(argv: list[str] | None = None) -> int:
         # assignment; the runner polls it and terminates the build via its local session token, and THIS
         # driver then writes the truthful terminal marker).
         import signal
-        from lhpc.core.service_hmac import _request_hmac_abort
-        signal.signal(signal.SIGTERM, _request_hmac_abort)
-        signal.signal(signal.SIGINT, _request_hmac_abort)
+        from lhpc.core.service_hmac import _hmac_abort
+        _hmac_abort.reset()                  # reset BEFORE install — a fresh run is never pre-aborted,
+        signal.signal(signal.SIGTERM, _hmac_abort.request)   # and a signal after install isn't erased
+        signal.signal(signal.SIGINT, _hmac_abort.request)
         return svc._hmac_run_steps(args.stack, args.action, args.run_id, emit=print)
     if args.command == "help":
         if not args.topic:

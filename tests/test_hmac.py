@@ -555,6 +555,139 @@ def test_apply_start_spawns_and_records_the_run(tmp_path, monkeypatch):
     assert r.ok and svc.hmac_apply_status()["run_id"] == r.data["run_id"]
 
 
+# ---- disable requires the typed confirmation phrase (service-gated -> web + CLI) -----------------
+
+def test_hmac_disable_start_refuses_without_confirm_and_spawns_nothing(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    spawned = []
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: type("L", (), {"spawn_job": lambda *a, **k: spawned.append(1)})())
+    r = svc.hmac_apply_start("meshcom", "disable")             # no confirm
+    assert not r.ok and ControllerService.HMAC_DISABLE_CONFIRM in r.summary
+    assert spawned == []                                       # gate is BEFORE any reservation/spawn
+
+
+def test_hmac_disable_start_proceeds_with_confirm(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: type("L", (), {"spawn_job":
+                            lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
+    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    r = svc.hmac_apply_start("meshcom", "disable", confirm=True)
+    assert r.ok and svc.hmac_apply_status()["run_id"] == r.data["run_id"]
+
+
+def test_hmac_enable_and_renew_start_are_not_gated(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: type("L", (), {"spawn_job":
+                            lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
+    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    assert svc.hmac_apply_start("meshcom", "enable").ok        # confirm defaults False, still starts
+    svc.hmac_apply_recover("meshcom", svc.hmac_apply_status()["run_id"])
+    assert svc.hmac_apply_start("meshcom", "renew").ok
+
+
+def test_hmac_disable_cli_refuses_without_confirm(tmp_path):
+    svc = _svc(tmp_path)
+    lines = []
+    rc = svc.hmac_apply_cli("meshcom", "disable", emit=lines.append)   # confirm defaults False
+    assert rc == 1
+    assert any(ControllerService.HMAC_DISABLE_CONFIRM in ln for ln in lines)
+    # refused before mutating any state — HMAC still enabled/default, no terminal marker written
+    assert not (tmp_path / "state" / "hmac_apply.json").exists()
+
+
+def test_hmac_disable_cli_gate_fires_before_the_step_runner(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    ran = []
+    monkeypatch.setattr(type(svc), "_hmac_run_steps",
+                        lambda self, *a, **k: ran.append(1) or 0)
+    assert svc.hmac_apply_cli("meshcom", "disable", emit=lambda s: None) == 1 and ran == []
+    assert svc.hmac_apply_cli("meshcom", "disable", emit=lambda s: None, confirm=True) == 0 and ran == [1]
+
+
+def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
+    client, svc = _web(tmp_path)
+    tok = _csrf(client)
+    spawned = []
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: type("L", (), {"spawn_job": lambda *a, **k: spawned.append(1)})())
+    # wrong/blank phrase -> refused, nothing spawned
+    r = client.post("/stacks/meshcom/hmac/disable/apply",
+                    data={"_csrf": tok, "confirm_phrase": "nope"}, follow_redirects=True)
+    assert svc.HMAC_DISABLE_CONFIRM in r.get_data(as_text=True) and spawned == []
+    # the disable page renders the confirmation input
+    assert "confirm_phrase" in client.get("/stacks/meshcom/hmac/disable").get_data(as_text=True)
+
+
+def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch):
+    client, svc = _web(tmp_path)
+    tok = _csrf(client)
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: type("L", (), {"spawn_job":
+                            lambda self, name, argv, cwd, env=None: (name + ".log", 4242)})())
+    monkeypatch.setattr(type(svc), "_track_or_terminate", lambda self, *a, **k: "")
+    client.post("/stacks/meshcom/hmac/disable/apply",
+                data={"_csrf": tok, "confirm_phrase": svc.HMAC_DISABLE_CONFIRM}, follow_redirects=True)
+    assert svc.hmac_apply_status() and svc.hmac_apply_status()["action"] == "disable"
+
+
+# ---- password_file is HMAC-managed: generic config / start CANNOT touch it ----------------------
+
+def _resolved_pw(svc):
+    c = svc._hmac_component("meshcom")
+    return svc._resolved_param_value("meshcom", "run", c.id, "password_file")
+
+
+def test_generic_config_cannot_clear_or_replace_password_file(tmp_path):
+    svc = _svc(tmp_path)
+    svc.hmac_set_secret("meshcom", "enable")                   # managed path -> override set
+    before = _resolved_pw(svc)
+    assert before                                             # non-blank (enabled)
+    # blank submission would restore open auth -> refused, nothing changed
+    r = svc.save_config_bundle("meshcom", values={"password_file": ""})
+    assert not r.ok and any("HMAC" in d for d in r.details)
+    assert _resolved_pw(svc) == before
+    # a non-blank replacement is equally refused
+    r2 = svc.save_config_bundle("meshcom", values={"password_file": "/etc/passwd"})
+    assert not r2.ok and _resolved_pw(svc) == before
+
+
+def test_hmac_managed_path_still_writes_password_file(tmp_path):
+    svc = _svc(tmp_path)
+    assert svc.hmac_set_secret("meshcom", "enable").ok and svc.hmac_status("meshcom") is True
+    assert svc.hmac_set_secret("meshcom", "disable").ok and svc.hmac_status("meshcom") is False
+
+
+def test_password_file_absent_from_generic_config_and_start_forms(tmp_path):
+    svc = _svc(tmp_path)
+    names = {f["name"] for f in svc.config_param_fields("meshcom")}
+    assert "port" in names and "password_file" not in names          # config POST parser
+    view = svc.config_view("meshcom")
+    for comp in view["components"]:
+        assert "password_file" not in {p.name for p in comp["params"]}
+        assert "password_file" not in comp["values"]
+    assert "password_file" not in {r["name"] for r in svc.stack_start_params("meshcom")}
+    assert "password_file" not in {f["name"] for f in svc.start_param_fields("meshcom")}
+
+
+def test_ephemeral_start_override_cannot_set_password_file(tmp_path):
+    svc = _svc(tmp_path)
+    clean, err = svc._normalize_run_params("meshcom", {"password_file": ""})
+    assert clean == {} and "HMAC" in err
+    clean2, err2 = svc._normalize_run_params("meshcom", {"password_file": "/tmp/x"})
+    assert clean2 == {} and "HMAC" in err2
+
+
+def test_normal_config_save_unaffected_by_the_guard(tmp_path):
+    svc = _svc(tmp_path)
+    r = svc.save_config_bundle("meshcom", values={"port": "7100"})
+    assert r.ok
+    c = svc._hmac_component("meshcom")
+    assert svc._resolved_param_value("meshcom", "run", c.id, "port") == "7100"
+
+
 # ---- Part D + Part C web: the meshcom Install-section UI + warn/apply page ------------------------
 
 def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
@@ -604,7 +737,7 @@ def test_hmac_apply_post_requires_csrf_and_starts_the_run(tmp_path, monkeypatch)
     assert client.post("/stacks/meshcom/hmac/enable/apply").status_code == 400   # no CSRF
     calls = []
     monkeypatch.setattr(type(svc), "hmac_apply_start",
-                        lambda self, sid, action: calls.append((sid, action))
+                        lambda self, sid, action, confirm=False: calls.append((sid, action))
                         or ActionResult(True, "started", data={"run_id": _RID}))
     tok = _csrf(client)
     r = client.post("/stacks/meshcom/hmac/enable/apply", data={"_csrf": tok})
