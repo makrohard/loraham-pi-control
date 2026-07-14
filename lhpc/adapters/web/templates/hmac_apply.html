@@ -38,6 +38,12 @@
       </ul>
       <form method="post" action="{{ url_for('hmac_apply_run', sid=sid, action=action) }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        {% if action == 'disable' %}
+        <p class="depnote depnote-warn">Type <code>{{ disable_phrase }}</code> to confirm removing client
+          authentication:</p>
+        <p><input type="text" name="confirm_phrase" placeholder="type: {{ disable_phrase }}"
+                  autocomplete="off" spellcheck="false"></p>
+        {% endif %}
         <p><button type="submit" class="{{ 'warnbtn' if action != 'enable' else '' }}">
           Apply — {{ action_label }}</button>
           <a class="btnlink" href="{{ url_for('stacks_overview') }}#stackrow-{{ sid }}">Cancel</a></p>

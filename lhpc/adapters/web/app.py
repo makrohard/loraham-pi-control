@@ -376,10 +376,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The manual process-inspection checkbox must be reachable for EVERY unsafe case that needs
         # confirm_orphan: escaped-or-output, unknown/malformed scope, or a session-unverified whose
         # identity can't be reconstructed (i.e. NOT safely auto-recoverable).
+        from lhpc.core import proctree
         needs_process_confirmation = bool(
             st and not st.get("unsafe") and st.get("state") == "unsafe"
             and (st.get("unsafe_scope") != "session-unverified"
-                 or service._auto_install_reconstruct_token(st.get("session_ident")) is None))
+                 or proctree.reconstruct_token(st.get("session_ident")) is None))
         chunk = {"offset": 0, "data": ""}
         complog_seed = ""
         if st and not st.get("unsafe"):
@@ -550,6 +551,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template(
             "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
             sid=sid, action=action, action_label=label, warning=warning,
+            disable_phrase=service.HMAC_DISABLE_CONFIRM,
             st=st, active=active, log_seed=log_seed, complog_seed=complog_seed)
 
     @app.post("/stacks/<sid>/hmac/<action>/apply")
@@ -558,7 +560,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
             abort(404)
-        res = service.hmac_apply_start(sid, action)
+        # `disable` additionally requires the typed phrase; the service refuses without it (a CSRF-valid
+        # POST alone is not enough to remove client authentication).
+        confirm = request.form.get("confirm_phrase", "").strip() == service.HMAC_DISABLE_CONFIRM
+        res = service.hmac_apply_start(sid, action, confirm=confirm)
         flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 

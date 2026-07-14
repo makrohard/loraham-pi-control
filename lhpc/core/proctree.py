@@ -32,6 +32,21 @@ class SessionToken:
                    for v in (self.pid, self.starttime, self.sid, self.pgid))
 
 
+def reconstruct_token(ident) -> "SessionToken | None":
+    """Rebuild a SessionToken from a stored sanitized identity `{pid, starttime, sid, pgid}` (the
+    inverse of `jobresult._safe_ident`, for recovery/cessation proofs). Returns None when the dict is
+    absent/malformed OR any field is non-positive — an `int()` of 0/-1 is NOT a usable token
+    (`session_ceased()` rejects it), and callers must not treat it as reconstructable."""
+    if not isinstance(ident, dict):
+        return None
+    try:
+        token = SessionToken(int(ident["pid"]), int(ident["starttime"]),
+                             int(ident["sid"]), int(ident["pgid"]))
+    except (KeyError, ValueError, TypeError):
+        return None
+    return token if token.complete else None
+
+
 class Termination(Enum):
     """Typed outcome of `terminate_session`.
 
