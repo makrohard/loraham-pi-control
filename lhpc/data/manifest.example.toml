@@ -120,8 +120,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "6de866ec4ba1ef305b2ebbcbee6c34d01f12ba5a"
-    pin_tag = "v111a"
+    pin_commit = "7e20d5e831a32f81785c9d89df1b7bc7ffe7a157"
+    pin_tag = "v111a-1-g7e20d5e"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "hardening/daemon-tests"
     local_dir = "loraham-daemon-hardening"
@@ -190,8 +190,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/RadioLib"
-    pin_commit = "13b7c7cf84b191006da20f82bdb386f2efc96334"
-    pin_tag = "7.6.0+"
+    pin_commit = "6d8934836678d8894e3d556550475b37dce3e2b6"
+    pin_tag = "7.7.1-43-g6d8934836"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -1107,8 +1107,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "9076d41dfc28f9f7c4d442940806541cec722a4c"
-    pin_tag = "9076d41"
+    pin_commit = "6519d25401e1b5b680af18f7a5a02adda2e2472d"
+    pin_tag = "6519d25"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1206,8 +1206,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "9076d41dfc28f9f7c4d442940806541cec722a4c"
-    pin_tag = "9076d41"
+    pin_commit = "6519d25401e1b5b680af18f7a5a02adda2e2472d"
+    pin_tag = "6519d25"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1472,6 +1472,6 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    pin_commit = "e4228354cb77f273c54f0ebef21c5ac25272694e"
-    pin_tag = "v1.5.0-14-ge422835"
+    pin_commit = "3ad12c07beaac21210ed9b4b04c1fe8438722ecb"
+    pin_tag = "v1.5.0-16-g3ad12c0"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
