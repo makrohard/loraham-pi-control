@@ -169,12 +169,68 @@ def test_confirm_records_and_second_confirm_is_noop(tmp_path):
 def test_confirm_refuses_stopped_or_missing_candidate(tmp_path):
     svc = _svc(tmp_path)
     res = svc.confirm_known_working("chat")
-    assert not res.ok and "No healthy start" in res.summary
+    # chat is manual-only: without a registry-proven source the probe-basis path refuses
+    # (startable stacks keep the "No healthy start" refusal — covered below).
+    assert not res.ok and "registry-proven" in res.summary
     _seed_running_chat(tmp_path)                                  # candidate present, but stopped
     svc2 = _svc(tmp_path)
     res2 = svc2.confirm_known_working("chat")
     assert not res2.ok and "not running" in res2.summary
     assert known_working.load(Paths(runtime_root=tmp_path), "chat") == []   # nothing recorded
+
+
+# --- probe-basis offer/confirm for manual-only stacks (no lhpc start possible) ---------------
+
+def _seed_registry_only_chat(tmp_path, commit="a" * 40):
+    """Registry record + source dir but NO candidate — the manual-start situation: the
+    operator ran chat themselves, LHPC never recorded a start."""
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
+    assert source_registry.write_record(paths, source_registry.RegistryRecord(
+        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", "",
+        ("loraham-chat", "loraham-igate")))
+    return paths
+
+
+def test_manual_stack_offer_and_confirm_without_candidate(tmp_path):
+    paths = _seed_registry_only_chat(tmp_path)
+    svc = _bind_chat_identity(_svc(tmp_path, cmdlines={555: ["loraham_chat"]}), tmp_path)
+    offer = svc.known_working_offer("chat")
+    assert offer and offer["components"] == ["loraham-chat"] and offer["started_at"] == 0
+    res = svc.confirm_known_working("chat")
+    assert res.ok and "Recorded" in res.summary
+    comps = known_working.load(paths, "chat")
+    assert comps and "probe-verified" in comps[0]["validated"]["evidence"]
+    assert known_working.newest_commit_for(paths, "chat", "loraham-chat") == "a" * 40
+
+
+def test_manual_stack_confirm_refuses_stopped_or_unproven(tmp_path):
+    # registry-proven but NOT running -> dashboard-card refusal, nothing recorded
+    paths = _seed_registry_only_chat(tmp_path)
+    res = _svc(tmp_path).confirm_known_working("chat")
+    assert not res.ok and "dashboard card" in res.summary
+    assert known_working.load(paths, "chat") == []
+    # running but NO registry record -> registry-proven refusal, nothing recorded
+    r2 = tmp_path / "r2"
+    (r2 / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
+    svc2 = _svc(r2, cmdlines={555: ["loraham_chat"]})
+    res2 = svc2.confirm_known_working("chat")
+    assert not res2.ok and "registry-proven" in res2.summary
+    assert known_working.load(Paths(runtime_root=r2), "chat") == []
+
+
+def test_manual_stack_offer_hidden_when_stopped_or_recorded(tmp_path):
+    paths = _seed_registry_only_chat(tmp_path)
+    assert _svc(tmp_path).known_working_offer("chat") is None     # stopped -> no offer
+    svc = _bind_chat_identity(_svc(tmp_path, cmdlines={555: ["loraham_chat"]}), tmp_path)
+    assert svc.confirm_known_working("chat").ok
+    assert svc.known_working_offer("chat") is None                # recorded -> no offer
+
+
+def test_startable_stack_still_requires_candidate(tmp_path):
+    # kiss has lhpc-startable components: no candidate -> unchanged strict refusal
+    res = _svc(tmp_path, cmdlines={7: ["loraham_kiss_tnc"]}).confirm_known_working("kiss")
+    assert not res.ok and "No healthy start" in res.summary
 
 
 def test_verified_stack_stop_clears_candidate(tmp_path):

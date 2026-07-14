@@ -1,6 +1,8 @@
 # Changelog
 
 ## unreleased
+- Live-test run 2026-07-14: known-good pins refreshed to today's proven set (daemon, radiolib, meshcom-qemu/gps, meshcore-cli); docs: secrets layout, expose-runbook rebind note; test evidence in docs/live-test-2026-07-14.md
+- Known-working confirm for manual-start stacks (F4): a stack LHPC cannot start itself (chat) can now be confirmed while the probe shows it running — composition synthesized from the ownership registry, same handle-bound verification; offer stays GET-safe
 
 ## 0.1.5
 - Dependency overview + Checks

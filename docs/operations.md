@@ -49,8 +49,9 @@ named, if a running stack already holds a band it needs.
 
 Callsign, passwords, HMAC keys and private keys live only in git-ignored local
 config (`~/loraham-pi-control/config/local.toml`, `config/secrets.toml` mode
-`0600`) — never in tracked files, status output or web actions. Uninstall keeps
-local config by default.
+`0600`, and file-based secrets such as the MeshCom `xr_pw` and the web session
+key in `config/secrets/`, mode `0600`) — never in tracked files, status output
+or web actions. Uninstall keeps local config by default.
 
 ## Backup & restore
 

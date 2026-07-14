@@ -743,14 +743,50 @@ class MaintenanceOpsMixin:
         if entries:
             known_working.write_candidate(self._paths, stack_id, entries, band or "")
 
+    @staticmethod
+    def _manual_only_stack(stack) -> bool:
+        """True when LHPC cannot start ANY component of this stack (each is interactive or
+        externally supervised) — no lhpc start ⇒ no last-start candidate can ever exist, so
+        the known-working offer/confirm may rest on the live probe + ownership registry
+        instead (F4: chat could never be confirmed)."""
+        return not any(c.run_argv and not c.interactive for c in stack.components)
+
+    def _registry_candidate(self, stack) -> dict | None:
+        """A PROBE-BASIS candidate for a manual-only stack, synthesized from the ownership
+        registry (FILE READS ONLY — GET-safe; never git). Same shape as a last-start
+        candidate; `started_at` 0 states truthfully that no LHPC start produced it. Returns
+        None when any source component lacks a registry-proven commit — a partial
+        composition is never offered (coherence over coverage, like the start capture)."""
+        from . import known_working, source_registry
+        entries: dict = {}
+        for c in stack.components:
+            if c.source is None:
+                continue
+            rec = source_registry.read_record(self._paths, c.source.path)
+            if rec is None or not rec.resolved_commit:
+                return None
+            entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
+                             "remote": rec.remote, "source_rel": c.source.path,
+                             "strategy": rec.strategy}
+        if not entries:
+            return None
+        return {"hash": known_working.composition_hash(entries), "entries": entries,
+                "started_at": 0, "band": ""}
+
     def known_working_offer(self, stack_id: str, snapshot=None) -> dict | None:
         """The 'Confirm this stack as working' offer for the stack page (FILE READS ONLY —
-        no git, GET-safe). Present only when ALL hold: a last-start candidate exists; the
-        stack is currently RUNNING (per the supplied/probed snapshot); every candidate entry
-        still equals the CURRENT ownership-registry commit (the sources were not swapped since
+        no git, GET-safe). Present only when ALL hold: a last-start candidate exists (for a
+        manual-only stack: a registry-synthesized probe-basis candidate); the stack is
+        currently RUNNING (per the supplied/probed snapshot); every candidate entry still
+        equals the CURRENT ownership-registry commit (the sources were not swapped since
         that start); and the composition is not already recorded."""
         from . import known_working, source_registry
         cand = known_working.read_candidate(self._paths, stack_id)
+        if cand is None:
+            stack = self.stack(stack_id)
+            if stack is None or not self._manual_only_stack(stack):
+                return None
+            cand = self._registry_candidate(stack)
         if cand is None:
             return None
         if cand["hash"] in known_working.hashes(self._paths, stack_id):
@@ -772,7 +808,10 @@ class MaintenanceOpsMixin:
 
     def confirm_known_working(self, stack_id: str) -> ActionResult:
         """OPERATOR ACTION: record the last-start candidate composition as known-working
-        (dedupe, keep the newest three). Re-validates everything the offer validated —
+        (dedupe, keep the newest three). For a MANUAL-ONLY stack (no lhpc-startable
+        component, e.g. chat) there is never a start candidate: the composition is instead
+        synthesized from the ownership registry and accepted only while the probe shows the
+        stack RUNNING. Re-validates everything the offer validated —
         AND, under the stack's SOURCE LOCKS, re-proves every component's CURRENT ownership +
         identity (leaf kind, HEAD, origin) against its registry record: a manually changed
         tree is a typed refusal, never a fabricated record."""
@@ -781,13 +820,27 @@ class MaintenanceOpsMixin:
         if stack is None:
             return self._unknown_stack(stack_id)
         cand = known_working.read_candidate(self._paths, stack_id)
+        probe_basis = False
         if cand is None:
-            return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — "
-                                "start the stack first.")
+            if not self._manual_only_stack(stack):
+                return ActionResult(False, f"No healthy start is recorded for '{stack_id}' — "
+                                    "start the stack first.")
+            # Manual-only stack: LHPC can never record a healthy start for it. Rest the
+            # confirmation on the live probe (running NOW) + the ownership registry; the
+            # handle-bound identity revalidation below is IDENTICAL to the candidate path.
+            cand = self._registry_candidate(stack)
+            if cand is None:
+                return ActionResult(False, f"Cannot confirm '{stack_id}': its sources are "
+                                    "not registry-proven — (re)install the stack first.")
+            probe_basis = True
         offer = self.known_working_offer(stack_id)
         if offer is None:
             if cand["hash"] in known_working.hashes(self._paths, stack_id):
                 return ActionResult(True, f"'{stack_id}' is already recorded as known working.")
+            if probe_basis:
+                return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not "
+                                    "running — start it from its dashboard card, then "
+                                    "re-confirm.")
             return ActionResult(False, f"Cannot confirm '{stack_id}': the stack is not running "
                                 "or its sources changed since that start — start it again "
                                 "and re-confirm.")
@@ -844,7 +897,10 @@ class MaintenanceOpsMixin:
                 validated = {"started_at": cand.get("started_at", 0),
                              "band": cand.get("band", ""),
                              "confirmed_at": time.time(),
-                             "evidence": "healthy verified stack start + operator confirmation"}
+                             "evidence": ("probe-verified running manual-start stack + "
+                                          "operator confirmation" if probe_basis else
+                                          "healthy verified stack start + operator "
+                                          "confirmation")}
                 ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
                                                validated)
         except SourceTxnBlocked as blocked:
