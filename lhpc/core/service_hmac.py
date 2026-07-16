@@ -12,6 +12,7 @@ import secrets as _secrets
 import sys
 import uuid
 
+from .abortflag import AbortFlag
 from .paths import PathContainmentError
 from .service_base import ActionResult, SourceTxnBlocked as _SourceTxnBlocked
 
@@ -20,6 +21,11 @@ from .service_base import ActionResult, SourceTxnBlocked as _SourceTxnBlocked
 _XR_PW = ("config", "secrets", "xr_pw")
 _XR_PW_VALUE = "{runtime}/config/secrets/xr_pw"
 _HMAC_PARAM = "password_file"
+
+# Typed confirmation phrase required to DISABLE HMAC — disabling removes client authentication (anyone
+# in range can inject), so like every other security-boundary-lowering action it needs an explicit typed
+# phrase, not a bare CSRF POST / `--yes`. Gated in the SERVICE so BOTH web and CLI are covered.
+_HMAC_DISABLE_CONFIRM = "remove-auth"
 
 # --- apply-run infrastructure (modeled on the auto-install auto-install driver, scoped to one stack) ---------
 _MARKER = ("state", "hmac_apply.json")
@@ -105,25 +111,11 @@ class _StreamRedactor:
         return emit
 
 
-# Cooperative-abort flag. The detached `_hmac-apply` driver's SIGTERM/SIGINT handler does ONLY a plain
-# assignment to this module global — NO locks, filesystem, marker writes, printing, or termination (Python
-# forbids sync primitives in signal handlers). The runner POLLS it. Process-global: exactly one apply runs
-# per process (the detached driver, or a foreground CLI run).
-_ABORT = False
-
-
-def _request_hmac_abort(*_signal_args):
-    global _ABORT
-    _ABORT = True
-
-
-def _hmac_abort_requested() -> bool:
-    return _ABORT
-
-
-def _reset_hmac_abort():
-    global _ABORT
-    _ABORT = False
+# Cooperative-abort flag (shared AbortFlag). The detached `_hmac-apply` driver's SIGTERM/SIGINT handler
+# does ONLY a plain bool assignment via `_hmac_abort.request` — NO locks, filesystem, marker writes,
+# printing, or termination (Python forbids sync primitives in signal handlers). The runner POLLS it.
+# Process-global: exactly one apply runs per process (the detached driver, or a foreground CLI run).
+_hmac_abort = AbortFlag()
 
 
 def _hmac_now_utc() -> str:
@@ -134,6 +126,42 @@ def _hmac_now_utc() -> str:
 
 class HmacOpsMixin:
     """MeshCom HMAC-password state: applies?/status + an atomic, rollback-safe enable/disable/renew."""
+
+    # Exposed on the facade so adapters map a typed phrase → confirm without importing this private module.
+    HMAC_DISABLE_CONFIRM = _HMAC_DISABLE_CONFIRM
+
+    @staticmethod
+    def _is_hmac_managed_param(comp, param) -> bool:
+        """True iff (comp, param) is the HMAC-managed `password_file` run-param. Generic Config / Start
+        parameter forms must NOT expose or accept an override for it: submitting it blank would clear
+        the saved override and silently restore open auth, bypassing the disable-confirm gate. Its ONLY
+        writer is `hmac_set_secret` (the HMAC Enable/Disable/Renew + Auto-install managed path)."""
+        return (getattr(param, "name", None) == _HMAC_PARAM
+                and any(getattr(p, "name", None) == _HMAC_PARAM
+                        for p in getattr(comp, "run_params", ())))
+
+    #: The generic-config refusal directing the operator to the managed HMAC flow.
+    _HMAC_MANAGED_PARAM_MSG = (f"'{_HMAC_PARAM}' is managed by the HMAC password flow — change it with "
+                               "Enable/Disable/Renew (lhpc hmac …), not generic config or a start override.")
+
+    def hmac_managed_param_hint(self, stack_id: str, name: str) -> str:
+        """The HMAC redirect message if `name` refers to the HMAC-managed run param on `stack_id`
+        (so the CLI/adapters can point an operator who names `password_file` directly at the managed
+        flow, instead of a bare 'unknown parameter'); else ""."""
+        c = self._hmac_component(stack_id)
+        if c is not None and name.split(".")[-1] == _HMAC_PARAM \
+                and any(p.name == _HMAC_PARAM for p in c.run_params):
+            return self._HMAC_MANAGED_PARAM_MSG
+        return ""
+
+    @staticmethod
+    def _hmac_disable_needs_confirm(action: str, confirm: bool) -> str:
+        """The refusal message when a `disable` lacks the typed confirmation phrase, else "" (identical
+        text for both the web and CLI entrypoints)."""
+        if action == "disable" and not confirm:
+            return ("Disabling HMAC REMOVES client authentication (anyone in range can inject) — re-run "
+                    f"with the confirmation phrase '{_HMAC_DISABLE_CONFIRM}'.")
+        return ""
 
     def _hmac_component(self, stack_id: str):
         """The component in `stack_id` carrying the HMAC `password_file` run-param, or None."""
@@ -180,7 +208,8 @@ class HmacOpsMixin:
         old_resolved = self._resolved_param_value(stack_id, "run", c.id, _HMAC_PARAM)
         # --- 1. config change FIRST (validates + recoverable; writes nothing on failure) ---
         want = "" if action == "disable" else _XR_PW_VALUE
-        r = self.save_config_bundle(stack_id, values={_HMAC_PARAM: want})
+        r = self.save_config_bundle(stack_id, values={_HMAC_PARAM: want},
+                                    _allow_managed_params=frozenset({_HMAC_PARAM}))
         if not r.ok:
             return ActionResult(False, f"could not {action} HMAC password: {r.summary}", details=r.details)
         # --- 2. secret-file change (atomic writes: a failed write leaves the OLD file intact) ---
@@ -194,7 +223,8 @@ class HmacOpsMixin:
                 if not path.exists():
                     runtime_fs.atomic_write(self._paths, path, _secrets.token_hex(16) + "\n", 0o600)
         except Exception as exc:                             # noqa: BLE001 — roll BOTH back
-            self.save_config_bundle(stack_id, values={_HMAC_PARAM: old_resolved})
+            self.save_config_bundle(stack_id, values={_HMAC_PARAM: old_resolved},
+                                    _allow_managed_params=frozenset({_HMAC_PARAM}))
             try:
                 if old_secret is None:
                     if path.exists():
@@ -383,14 +413,18 @@ class HmacOpsMixin:
             idx, off = ch["index"], ch["offset"]
         return "".join(parts)
 
-    def hmac_apply_start(self, stack_id: str, action: str) -> ActionResult:
+    def hmac_apply_start(self, stack_id: str, action: str, confirm: bool = False) -> ActionResult:
         """Reserve + spawn the detached apply driver. Single-flight: refused while a run is live.
-        Returns the run id in data on success."""
+        Returns the run id in data on success. `disable` requires `confirm` (the typed-phrase gate),
+        enforced HERE — before any reservation/spawn — so a CSRF-only POST cannot bypass it."""
         from . import reslock
         if not self.hmac_applies(stack_id):
             return ActionResult(False, f"HMAC password does not apply to '{stack_id}'")
         if action not in ("enable", "disable", "renew"):
             return ActionResult(False, f"unknown HMAC action: {action!r}")
+        refusal = self._hmac_disable_needs_confirm(action, confirm)
+        if refusal:
+            return ActionResult(False, refusal)
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root is not bootstrapped yet.",
                                 next_commands=["lhpc bootstrap"])
@@ -490,11 +524,13 @@ class HmacOpsMixin:
                 return 1
             time.sleep(0.1)
 
-    def hmac_apply_cli(self, stack_id: str, action: str, emit) -> int:
+    def hmac_apply_cli(self, stack_id: str, action: str, emit, confirm: bool = False) -> int:
         """FOREGROUND apply for the CLI: same step runner as the detached driver, streaming to
         stdout. Participates in the SAME single-flight admission + job-identity marker as detached runs
         (so its running marker is never read as `interrupted`), installs+RESTORES cooperative SIGINT/
-        SIGTERM handlers (Ctrl-C aborts), and retires the job marker ONLY after the terminal marker."""
+        SIGTERM handlers (Ctrl-C aborts), and retires the job marker ONLY after the terminal marker.
+        `disable` requires `confirm` (the typed-phrase gate) — this foreground path does NOT route
+        through `hmac_apply_start`, so it enforces the same gate itself (bare `--yes` cannot bypass it)."""
         from . import reslock, procident, runtime_fs, validators
         import os
         import signal
@@ -504,6 +540,10 @@ class HmacOpsMixin:
             return 1
         if action not in ("enable", "disable", "renew"):
             emit(f"unknown HMAC action: {action!r}")
+            return 1
+        refusal = self._hmac_disable_needs_confirm(action, confirm)
+        if refusal:
+            emit(refusal)
             return 1
         if not self._paths.runtime_root_exists:
             emit("Runtime root is not bootstrapped yet. Run 'lhpc bootstrap' first.")
@@ -532,8 +572,9 @@ class HmacOpsMixin:
                 handlers = None
                 if threading.current_thread() is threading.main_thread():
                     handlers = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
-                    signal.signal(signal.SIGTERM, _request_hmac_abort)
-                    signal.signal(signal.SIGINT, _request_hmac_abort)
+                    _hmac_abort.reset()          # reset BEFORE install — a signal arriving after
+                    signal.signal(signal.SIGTERM, _hmac_abort.request)   # install must not be erased
+                    signal.signal(signal.SIGINT, _hmac_abort.request)
                 try:
                     return self._hmac_run_steps(stack_id, action, run_id, emit)
                 finally:
@@ -551,16 +592,6 @@ class HmacOpsMixin:
             return 1
 
     # ---- abort / recover ------------------------------------------------------------------------
-
-    def _hmac_reconstruct_token(self, ident):
-        from .proctree import SessionToken
-        if not isinstance(ident, dict):
-            return None
-        try:
-            return SessionToken(int(ident["pid"]), int(ident["starttime"]),
-                                int(ident["sid"]), int(ident["pgid"]))
-        except (KeyError, ValueError, TypeError):
-            return None
 
     def _hmac_downgrade_unsafe(self, marker: dict, note: str) -> bool:
         """Clear an UNSAFE block: rewrite the marker to a normal terminal (aborted `failed`), dropping the
@@ -623,7 +654,7 @@ class HmacOpsMixin:
             return True
         if st.get("unsafe_scope") != "session-unverified":
             return False                                   # escaped-or-output: explicit ack only
-        token = self._hmac_reconstruct_token(st.get("session_ident"))
+        token = proctree.reconstruct_token(st.get("session_ident"))
         if token is not None and proctree.session_ceased(token, os.getpid()):
             # Clear ONLY if the terminal marker is durably written — a failed rewrite keeps the block.
             return self._hmac_downgrade_unsafe(st, "auto-cleared: the build session was proven stopped.")
@@ -768,7 +799,6 @@ class HmacOpsMixin:
             return text
 
         _note_secret()                       # PRE-RUN old secret (kept even if disable removes the file)
-        _reset_hmac_abort()                  # a fresh run is never pre-aborted (process-global flag)
         _raw_emit = emit
         def emit(line):                       # scrub ALL emitted lines (log + CLI stdout)  # noqa: E306
             _raw_emit(_scrub(line))
@@ -856,7 +886,7 @@ class HmacOpsMixin:
         emit(f"==== HMAC {action} on {stack_id} ====")
 
         # 1. secret -------------------------------------------------------------------------------
-        if _hmac_abort_requested():
+        if _hmac_abort.requested():
             return _aborted("secret")
         if not _set("secret", "running"):
             return _persist_failed("secret=running")        # abort BEFORE hmac_set_secret
@@ -872,7 +902,7 @@ class HmacOpsMixin:
         emit(f"  {r.summary}")
 
         # 2. firmware rebuild (bakes the current secret) — the long, cancellable step -------------
-        if _hmac_abort_requested():
+        if _hmac_abort.requested():
             return _aborted("firmware")
         if not _set("firmware", "running"):
             return _persist_failed("firmware=running")      # abort BEFORE the build
@@ -891,7 +921,7 @@ class HmacOpsMixin:
 
         b = self.build(node.id, apply=True, on_component_log=_register,
                        log_base_override=f"hmac-apply-{run_id}",
-                       redactor=redactor, should_cancel=_hmac_abort_requested)
+                       redactor=redactor, should_cancel=_hmac_abort.requested)
         for line in b.details:
             emit(line)
         meta = b.data or {}
@@ -915,7 +945,7 @@ class HmacOpsMixin:
                     return _persist_failed(f"{key}=skipped")
                 emit(f"  {what} not running — the new firmware/secret applies on next start.")
                 continue
-            if _hmac_abort_requested():
+            if _hmac_abort.requested():
                 return _aborted(key)
             if not _set(key, "running"):
                 return _persist_failed(f"{key}=running")    # abort BEFORE the restart

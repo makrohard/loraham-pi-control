@@ -4,7 +4,6 @@ Read-only page load (proven via a mutating-method guard), mandatory/optional/run
 and green/yellow banner colouring.
 """
 
-from pathlib import Path
 
 from lhpc.adapters.web.app import create_app
 from lhpc.core.services import ControllerService

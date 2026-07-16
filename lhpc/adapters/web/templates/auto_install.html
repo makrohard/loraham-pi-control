@@ -146,13 +146,6 @@
     </header>
   {% endif %}
     <div class="body">
-      {% if running %}
-      <form method="post" action="{{ url_for('auto_install_abort_route') }}" class="inline">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <input type="hidden" name="run_id" value="{{ st.run_id }}">
-        <button type="submit" class="warnbtn">Abort</button>
-      </form>
-      {% endif %}
       {# Version is the LAST column ON PURPOSE: the live poller (auto_install.js) writes Status/Tests/
          Detail by fixed child index (1/2/3), so keeping Version at the end leaves those aligned. #}
       <table class="tasklist" id="ai-tasks">
@@ -183,6 +176,13 @@
       <p class="muted loglabel">Component build &amp; test logs
         {% if collapsed %}(historical, in execution order){% else %}(live, in execution order){% endif %}</p>
       <pre class="logbox logbox-half" id="ai-complog">{% if collapsed %}{{ complog_seed }}{% endif %}</pre>
+      {% if running %}
+      <form method="post" action="{{ url_for('auto_install_abort_route') }}" class="inline">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="run_id" value="{{ st.run_id }}">
+        <button type="submit" class="warnbtn">Abort</button>
+      </form>
+      {% endif %}
     </div>
   {% if collapsed %}</details>{% else %}</div>{% endif %}
   {% endif %}

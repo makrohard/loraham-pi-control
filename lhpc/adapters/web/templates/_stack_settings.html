@@ -7,6 +7,26 @@
 <details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id %} open data-force-open="1"{% endif %}>
   <summary>Settings</summary>
   <div class="body">
+    {% if view.radio_mode %}
+      <section class="cfgsec">
+        <h3>Hardware</h3>
+        <p class="muted">Which physical radio(s) this box has. In a single-radio mode only that band
+          is offered; the other band's controls are disabled and stacks needing the absent band are
+          blocked. <em>(Placeholder — a fuller hardware-profile selection will replace this.)</em></p>
+        <form method="post" action="{{ url_for('radio_mode_set') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <label>Radio mode
+            <select name="mode">
+              {% for m in view.radio_modes %}
+                <option value="{{ m }}"{% if m == view.radio_mode %} selected{% endif %}>
+                  {{ 'both bands (433 + 868)' if m == 'both' else m ~ ' MHz only' }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button type="submit">Save radio mode</button>
+        </form>
+      </section>
+    {% endif %}
     {% if view.bands %}
       <p><strong>Band:</strong>
         <span class="bandswitch">

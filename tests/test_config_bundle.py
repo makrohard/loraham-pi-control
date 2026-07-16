@@ -3,6 +3,7 @@ an invalid value anywhere changes NO file; a failure mid-write rolls back; a pen
 journal is recovered before the next save."""
 
 import json
+import tomllib
 
 import pytest
 
@@ -24,8 +25,9 @@ def _snapshot(tmp_path):
 
 
 def _seed(svc, tmp_path):
-    # A known-good baseline (local.toml + stacks/daemon.toml).
-    r = svc.save_config_bundle("daemon", values={"radio": "both"},
+    # A known-good baseline (local.toml + stacks/daemon.toml). `radio=868` is a non-default single
+    # band (the daemon `radio` param no longer offers `both`).
+    r = svc.save_config_bundle("daemon", values={"radio": "868"},
                                callsign="N0CALL",
                                remotes={"loraham-daemon": "", "radiolib": ""})
     assert r.ok
@@ -237,7 +239,6 @@ def _local(tmp_path):
 
 
 def test_local_root_scalars_and_types_survive_bundle_save(tmp_path):
-    import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('rootstr = "hi"\nenabled = true\nlimit = 5\nratio = 1.25\n'
@@ -251,7 +252,6 @@ def test_local_root_scalars_and_types_survive_bundle_save(tmp_path):
 
 
 def test_local_control_and_multiline_strings_round_trip(tmp_path):
-    import tomllib
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text("")
     cfgmod._write_local_tables(_svc(tmp_path)._paths, p, {"t": {"s": "a\tb\nc\r\\\"\x00é中"}})
     assert tomllib.loads(p.read_text())["t"]["s"] == "a\tb\nc\r\\\"\x00é中"
@@ -269,7 +269,6 @@ def test_local_unsupported_structures_block_and_preserve(tmp_path, bad):
 
 def test_operator_and_component_remote_use_safe_renderer(tmp_path):
     # save_operator_config / save_component_remote must preserve unrelated root scalars + types.
-    import tomllib
     paths = _svc(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('keepme = 42\nenabled = true\n')
@@ -293,7 +292,6 @@ def test_operator_save_refuses_when_local_has_unsupported(tmp_path):
 # --- Area 3: remote patch ownership (service-enforced) ---------------------------------------
 
 def test_remote_patch_rejects_foreign_component(tmp_path):
-    import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n'); before = p.read_text()
@@ -303,7 +301,6 @@ def test_remote_patch_rejects_foreign_component(tmp_path):
 
 
 def test_remote_patch_own_component_preserves_others(tmp_path):
-    import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n')
@@ -314,7 +311,6 @@ def test_remote_patch_own_component_preserves_others(tmp_path):
 
 
 def test_remote_clear_own_preserves_other_components(tmp_path):
-    import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('[remotes]\n"meshcom-bridge" = "https://c/br.git"\n"meshcore-pi" = "https://b/mc.git"\n')
@@ -326,7 +322,6 @@ def test_remote_clear_own_preserves_other_components(tmp_path):
 # --- Patch [operator]/[remotes] by owned keys; fail closed on wrong shape --------------------
 
 def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
-    import tomllib
     from lhpc.core import config as cfg
     paths = _svc(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
@@ -342,7 +337,6 @@ def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
 
 
 def test_bundle_operator_update_preserves_extra_operator_keys(tmp_path):
-    import tomllib
     svc = _svc(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('[operator]\ncallsign = "OLD"\nlegacy = "AA00"\nnote = "keep"\nflag = false\n')
@@ -380,7 +374,6 @@ def test_scalar_remotes_via_component_remote_is_controlled_failure(tmp_path):
 
 
 def test_component_remote_set_and_clear_preserve_others(tmp_path):
-    import tomllib
     from lhpc.core import config as cfg
     paths = _svc(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)

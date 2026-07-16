@@ -102,8 +102,9 @@ template already uses this layout). One-click update stops and restarts the cons
 only the manual `lhpc self-update --apply` needs it stopped first.
 
 Set your callsign once with `lhpc config operator --callsign <CALL>` (or in a stack's web
-**Settings**); until then HAM apps default to `N0CALL`. Secrets (passwords, HMAC keys) live only
-in `~/loraham-pi-control/config/secrets.toml`.
+**Settings**); until then HAM apps default to `N0CALL`. Secrets live only under
+`~/loraham-pi-control/config/`: passwords and HMAC keys in `config/secrets.toml`, file-based
+secrets (e.g. the MeshCom `xr_pw`, the web session key) in `config/secrets/`.
 
 **Manage the service** — `install.sh` runs the web console as a systemd user service (not in
 your terminal); the installer prints these at the end too:

@@ -59,7 +59,7 @@ def _leader(reaper):
 def test_owned_session_leader_is_verified_and_stopped(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     assert life.verify_owned(life.owned_records("loraham-daemon")[0])[0] is True
     res = life.stop(COMP)
     assert res.outcome.value == "stopped" and res.pid == p.pid
@@ -79,7 +79,7 @@ def test_manual_matching_process_without_record_is_not_killed(tmp_path, reaper):
 def test_stale_record_after_process_exit_is_cleaned_not_blocked(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     p.terminate(); p.wait()                                # process exits -> record is stale
     res = life.stop(COMP)
     # The original process is PROVABLY gone: its stale record is DROPPED (never signalled),
@@ -93,7 +93,7 @@ def test_stale_record_after_process_exit_is_cleaned_not_blocked(tmp_path, reaper
 def test_wrong_start_time_fails_verification(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     rec = life.owned_records("loraham-daemon")[0]
     rec["starttime"] = str(int(rec["starttime"]) + 999)    # tamper: pid reused scenario
     ok, why = life.verify_owned(rec)
@@ -105,7 +105,7 @@ def test_controller_own_group_is_never_signalled(tmp_path, reaper):
     # A child in the CONTROLLER's own session/group (no start_new_session).
     p = subprocess.Popen(["sleep", "30"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     reaper.append(p)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     rec = life.owned_records("loraham-daemon")
     # Either there is no record (record_launch may still capture it) — if captured,
     # verification must refuse it as the controller's own group / not a leader.
@@ -123,17 +123,14 @@ def test_per_band_records_are_independent(tmp_path, reaper):
     life.record_launch(STACK, COMP, b.pid, band="868")
     assert len(life.owned_records("loraham-daemon")) == 2
     assert len(life.owned_records("loraham-daemon", band="433")) == 1   # band-scoped
-    # A `both` instance matches any per-band stop request.
-    c = _leader(reaper)
-    life.record_launch(STACK, COMP, c.pid, band="both")
-    assert len(life.owned_records("loraham-daemon", band="433")) == 2   # 433 + both
+    assert len(life.owned_records("loraham-daemon", band="868")) == 1   # the other band, independent
 
 
 @pytest.mark.needs_session
 def test_record_is_restrictive_permissions(tmp_path, reaper):
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     f = life.owned_records("loraham-daemon")[0]["_path"]
     assert oct(os.stat(f).st_mode & 0o777) == "0o600"
 
@@ -150,7 +147,7 @@ def test_ceased_process_with_lingering_endpoint_retains_record(tmp_path, reaper,
                      endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),))
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, comp, p.pid, band="both")
+    life.record_launch(STACK, comp, p.pid, band="433")
     # Genuinely-persistent endpoint (survives the grace) -> patch the grace-poll decision.
     monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c: (False, ["127.0.0.1:9999"]))
     res = life.stop(comp)
@@ -181,7 +178,7 @@ def test_lingering_endpoint_that_closes_within_grace_converges_to_stopped(tmp_pa
     life = _life(tmp_path)
     monkeypatch.setattr(life, "STOP_POLL_S", 0.01)         # keep the test fast
     p = _leader(reaper)
-    life.record_launch(STACK, comp, p.pid, band="both")
+    life.record_launch(STACK, comp, p.pid, band="433")
     calls = {"n": 0}
 
     def _fake_gone(c):
@@ -205,7 +202,7 @@ def test_endpoint_grace_is_bounded(tmp_path, reaper, monkeypatch):
     monkeypatch.setattr(life, "STOP_POLL_S", 0.01)
     monkeypatch.setattr(life, "STOP_ENDPOINT_GRACE_S", 0.05)
     p = _leader(reaper)
-    life.record_launch(STACK, comp, p.pid, band="both")
+    life.record_launch(STACK, comp, p.pid, band="433")
     calls = {"n": 0}
 
     def _always_present(c):
@@ -246,8 +243,8 @@ def test_record_launch_symlink_leaf_rejected(tmp_path, reaper):
     p = _leader(reaper)
     owned = life._owned_dir(); owned.mkdir(parents=True)
     outside = tmp_path / "evil.json"; outside.write_text("{}")
-    os.symlink(outside, owned / f"loraham-daemon__both__{p.pid}.json")  # symlink leaf
-    ok = life.record_launch(STACK, COMP, p.pid, band="both")
+    os.symlink(outside, owned / f"loraham-daemon__433__{p.pid}.json")  # symlink leaf
+    ok = life.record_launch(STACK, COMP, p.pid, band="433")
     assert ok is False                              # refused -> not owned
     assert outside.read_text() == "{}"              # link target untouched
 
@@ -258,7 +255,7 @@ def test_record_launch_write_failure_returns_false(tmp_path, reaper, monkeypatch
     p = _leader(reaper)
     monkeypatch.setattr(runtime_fs, "atomic_write",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
-    assert life.record_launch(STACK, COMP, p.pid, band="both") is False
+    assert life.record_launch(STACK, COMP, p.pid, band="433") is False
     assert life.owned_records("loraham-daemon") == []   # nothing persisted
 
 
@@ -290,7 +287,7 @@ def test_incomplete_identity_blocks_ownership(tmp_path, reaper, monkeypatch):
     p = _leader(reaper)
     monkeypatch.setattr(type(life), "_proc_identity",
                         staticmethod(lambda pid: {"pid": pid, "exec": "sleep"}))  # no starttime
-    assert life.record_launch(STACK, COMP, p.pid, band="both") is False
+    assert life.record_launch(STACK, COMP, p.pid, band="433") is False
     assert life.owned_records("loraham-daemon") == []
 
 
@@ -318,7 +315,7 @@ def test_record_launch_rejects_none_identity(tmp_path, reaper, monkeypatch):
     life = _life(tmp_path)
     p = _leader(reaper)
     monkeypatch.setattr(type(life), "_proc_identity", staticmethod(lambda pid: None))
-    assert life.record_launch(STACK, COMP, p.pid, band="both") is False
+    assert life.record_launch(STACK, COMP, p.pid, band="433") is False
 
 
 def test_record_launch_rejects_empty_exec(tmp_path, reaper, monkeypatch):
@@ -326,7 +323,7 @@ def test_record_launch_rejects_empty_exec(tmp_path, reaper, monkeypatch):
     p = _leader(reaper)
     monkeypatch.setattr(type(life), "_proc_identity", staticmethod(
         lambda pid: {"starttime": 1, "pgid": pid, "sid": pid, "exec": "", "argv_fp": "ab"}))
-    assert life.record_launch(STACK, COMP, p.pid, band="both") is False
+    assert life.record_launch(STACK, COMP, p.pid, band="433") is False
 
 
 def test_proc_ceased_transient_read_failure_is_not_cessation(tmp_path, reaper, monkeypatch):
@@ -351,7 +348,7 @@ def test_empty_cmdline_argv_rejected_despite_nonempty_digest(tmp_path, reaper, m
     monkeypatch.setattr(type(life), "_proc_identity", staticmethod(lambda pid: {
         "starttime": 1, "pgid": pid, "sid": pid, "exec": "sleep",
         "argv_fp": hashlib.sha256(b"").hexdigest(), "argv_len": 0}))
-    assert life.record_launch(STACK, COMP, p.pid, band="both") is False
+    assert life.record_launch(STACK, COMP, p.pid, band="433") is False
 
 
 @pytest.mark.needs_session
@@ -363,7 +360,7 @@ def test_passed_identity_is_not_silently_resubstituted(tmp_path, reaper, monkeyp
     good = life._proc_identity(p.pid)
     assert life._identity_complete(good)
     monkeypatch.setattr(type(life), "_proc_identity", staticmethod(lambda pid: None))
-    assert life.record_launch(STACK, COMP, p.pid, band="both", ident=good) is True
+    assert life.record_launch(STACK, COMP, p.pid, band="433", ident=good) is True
 
 
 # --- P0 stop truth: transient /proc, confirmed reuse, removal failure --------
@@ -374,7 +371,7 @@ def test_transient_proc_error_during_stop_retains_record(tmp_path, reaper, monke
     import lhpc.core.lifecycle as L
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     # Make every /proc/<pid>/stat read raise a NON-ENOENT (transient) error.
     real_read = L.Path.read_text
     def flaky(self, *a, **k):
@@ -393,7 +390,7 @@ def test_confirmed_pid_reuse_proves_cessation_without_signalling(tmp_path, reape
     # (PID reused). verify_owned must refuse to signal; _original_ceased proves cessation.
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     rec = life.owned_records("loraham-daemon")[0]
     rec = dict(rec); rec["starttime"] = str(int(rec["starttime"]) + 999999)
     assert life.verify_owned(rec)[0] is False               # identity mismatch -> no signal
@@ -405,7 +402,7 @@ def test_record_removal_failure_is_typed_unverified(tmp_path, reaper, monkeypatc
     from lhpc.core.outcomes import Outcome
     life = _life(tmp_path)
     p = _leader(reaper)
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     p.terminate(); p.wait()                                  # process ceases cleanly
     monkeypatch.setattr(type(life), "_remove_record", lambda self, rec: False)
     res = life.stop(COMP)
@@ -565,7 +562,7 @@ def test_stop_drops_reused_pid_record_without_signalling(tmp_path, reaper):
     from pathlib import Path
     life = _life(tmp_path)
     p = _leader(reaper)                              # an unrelated live session leader
-    life.record_launch(STACK, COMP, p.pid, band="both")
+    life.record_launch(STACK, COMP, p.pid, band="433")
     rec_path = Path(life.owned_records("loraham-daemon")[0]["_path"])
     data = json.loads(rec_path.read_text())
     data["starttime"] = int(data["starttime"]) + 999999   # simulate pid reuse

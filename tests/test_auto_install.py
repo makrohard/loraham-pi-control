@@ -4,13 +4,13 @@ coupling, run_id-bound log access. Deterministic: FakeSystem + disposable roots 
 git repos where identity proof is exercised."""
 import pytest
 
-import json
 import os
 import subprocess
 import time
 
 from lhpc.core import auto_install as ai_mod
-from lhpc.core import known_working, source_registry
+from lhpc.core import source_registry
+from lhpc.core.install import Installer, PlanAction
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService, ActionResult
@@ -439,7 +439,6 @@ def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
     # A benign non-mutating adopt outcome (status "skipped") must NOT mark a stack FAIL.
     # Linked stacks WITH declared build/test work are truthfully BLOCKED (their required
     # work is refused by design); everything else is success — never a fail row.
-    from lhpc.core.install import Installer, PlanAction
     monkeypatch.setattr(
         Installer, "adopt_source",
         lambda self, comp, force=False, source="pinned", pinned_expected=None,
@@ -472,7 +471,6 @@ def test_linked_stack_with_work_still_blocks(tmp_path, monkeypatch):
     # The linked-blocked semantics survive for SYNTHETIC linked components (legacy
     # manifests / direct construction) even though the shipped manifest has none.
     import dataclasses
-    from lhpc.core.install import Installer, PlanAction
     _happy_ops(monkeypatch)
     real_scope = ControllerService._auto_install_scope
     def scope(self):
@@ -504,7 +502,6 @@ def _stub_frozen(monkeypatch):
 
 
 def _happy_ops(monkeypatch):
-    from lhpc.core.install import Installer, PlanAction
     _stub_frozen(monkeypatch)
     monkeypatch.setattr(
         Installer, "adopt_source",
@@ -1030,7 +1027,6 @@ def _callsign(tmp_path, call="OE1TST"):
 
 def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
     """Happy adopts; controllable daemon build/test; recorded start/stop/tx-test."""
-    from lhpc.core.install import Installer, PlanAction
     _callsign(tmp_path)
     _stub_frozen(monkeypatch)
     monkeypatch.setattr(
@@ -1274,7 +1270,6 @@ def _ls_remote_fakes(sha_by_ref):
 def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     # The plan resolves the dev branch ONCE; the fake remote then ADVANCES — every later
     # group adoption still receives the ORIGINAL frozen commit (no second lookup).
-    from lhpc.core.install import Installer, PlanAction
     _callsign(tmp_path)
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     monkeypatch.setattr(ControllerService, "build",
@@ -1547,7 +1542,6 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
     # A `pinned` auto-install plan resolves every ARTIFACT group to a non-empty exact commit and
     # passes it to adoption (artifacts never use known-working entries — the plan-time
     # default-branch HEAD is this run's immutable identity).
-    from lhpc.core.install import Installer, PlanAction
     art_sha = "e" * 40
     calls = {"n": 0}
     def resolver(self, comp, source):
@@ -1585,7 +1579,6 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
 def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
     # The artifact remote moves AFTER plan construction: every later artifact adoption
     # still receives the ORIGINAL frozen commit (no second lookup at adopt time).
-    from lhpc.core.install import Installer, PlanAction
     sha_a, sha_b = "a" * 40, "b" * 40
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: ((sha_a, "frozen"), ""))
@@ -1749,7 +1742,6 @@ def test_freeze_dev_failure_without_fallback_still_refuses(tmp_path, monkeypatch
 def test_adopt_dev_failure_falls_back_disclosed(tmp_path, monkeypatch):
     # A failed dev adoption retries ONCE at the fallback identity, with the fallback
     # disclosed in the detail; a non-dev failure is untouched.
-    from lhpc.core.install import Installer, PlanAction
     calls = []
     def adopt(self, comp, force=False, source="pinned", pinned_expected=None,
               locked=False):
@@ -1791,7 +1783,7 @@ def test_auto_install_cooperative_cancel_writes_aborted(tmp_path, monkeypatch):
     svc.bootstrap(apply=True)
     monkeypatch.setattr(type(svc), "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
-    monkeypatch.setattr(sai, "_ABORT", True)
+    monkeypatch.setattr(sai._auto_install_abort, "_v", True)   # as the SIGTERM handler would (auto-reverts)
     r = svc.auto_install(apply=True, emit=lambda s: None)
     assert not r.ok and "ABORTED" in r.summary
     state, m = ai_mod.read_marker(svc._paths)

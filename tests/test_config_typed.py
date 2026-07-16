@@ -111,7 +111,7 @@ def test_reset_config_refuses_symlinked_leaf(tmp_path):
 
 def test_reset_config_normal_then_idempotent(tmp_path):
     svc = _svc(tmp_path)
-    svc.save_config_bundle("daemon", values={"radio": "433"})
+    svc.save_config_bundle("daemon", values={"radio": "868"})   # non-default (default is 433)
     r = svc.reset_config("daemon")
     assert r.ok and "reset to defaults" in r.summary
     r2 = svc.reset_config("daemon")

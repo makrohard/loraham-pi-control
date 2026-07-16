@@ -1783,6 +1783,45 @@ def test_daemon_feed_falls_back_to_legacy_band_less_log(tmp_path):
     assert svc.daemon_feed("868") == ["[TX] frame TXOK=1"]
 
 
+def test_clear_daemon_feed_hides_prior_activity_but_shows_new(tmp_path):
+    # The RX/TX window is CLEARED at start/stop boundaries: clear_daemon_feed records the current
+    # log size as a floor, so prior [TX]/[RX] lines vanish from the feed while the underlying
+    # append-only log is untouched — and activity appended AFTER the clear shows again.
+    svc = _feed_svc(tmp_path)
+    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log.write_text("boot\n[TX868] old frame TXOK=1\n[RX868] old pkt\n")
+    assert svc.daemon_feed("868") == ["[TX868] old frame TXOK=1", "[RX868] old pkt"]
+    svc.clear_daemon_feed("868")                                 # the boundary
+    assert svc.daemon_feed("868") == []                          # window emptied
+    with log.open("a") as fh:
+        fh.write("[TX868] new frame TXOK=1\n")
+    assert svc.daemon_feed("868") == ["[TX868] new frame TXOK=1"]  # fresh activity shows
+    # The full log is intact — only the feed floor moved, not the file (logs view still sees all).
+    assert "old frame" in log.read_text()
+
+
+def test_clear_daemon_feed_floor_resets_when_log_shrinks(tmp_path):
+    # A daemon restart that truncates/replaces the log shorter than the recorded floor must not
+    # hide the whole new log — a size below the floor is treated as floor 0.
+    svc = _feed_svc(tmp_path)
+    log = tmp_path / "logs" / "start-loraham-daemon-868.log"
+    log.write_text("x" * 500 + "\n[TX868] before TXOK=1\n")
+    svc.clear_daemon_feed("868")                                 # floor at ~520 bytes
+    log.write_text("[RX868] after restart\n")                    # replaced shorter than the floor
+    assert svc.daemon_feed("868") == ["[RX868] after restart"]
+
+
+def test_clear_daemon_feed_is_band_scoped_and_ignores_bad_band(tmp_path):
+    svc = _feed_svc(tmp_path)
+    d = tmp_path / "logs"
+    (d / "start-loraham-daemon-868.log").write_text("[TX868] keep TXOK=1\n")
+    (d / "start-loraham-daemon-433.log").write_text("[TX433] keep TXOK=1\n")
+    svc.clear_daemon_feed("868")                                 # only 868 cleared
+    assert svc.daemon_feed("868") == []
+    assert svc.daemon_feed("433") == ["[TX433] keep TXOK=1"]     # other band untouched
+    svc.clear_daemon_feed("nonsense")                            # invalid band -> no-op, no crash
+
+
 def test_logs_view_band_selects_the_per_band_process_log(tmp_path):
     # `?band=` picks the instance of a band-scoped component; an absent/invalid band falls back to
     # the newest band's log (never empty just because the caller had no band to offer).

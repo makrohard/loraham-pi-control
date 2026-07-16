@@ -350,6 +350,29 @@ def test_dashboard_webservers_always_has_lhcp_console_and_hides_stopped_stacks(t
     assert all(r["kind"] == "console" for r in rows)          # no running web-UI stacks -> no stack rows
 
 
+def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_path, monkeypatch):
+    # A running but NOT-proxied web UI shows its DIRECT address (reached host + endpoint port) BEFORE
+    # "not proxied", and each name links to the respective webserver config on the Apps page.
+    from lhpc.core.services import ControllerService
+    rows = [{"kind": "console", "name": "LHCP", "port": "8770", "logs_component": None,
+             "posture": {"auth": "open", "iface": "loopback", "sec_level": "ok", "scheme": "https",
+                         "auth_level": "ok", "iface_level": "ok", "scheme_level": "ok",
+                         "run": "lhpc-web", "run_level": "ok"}},
+            {"kind": "stack", "name": "MeshCom (QEMU)", "sid": "meshcom", "enabled": False,
+             "posture": None, "port": None, "direct_port": "18083", "direct_scheme": "http",
+             "logs_component": None}]
+    monkeypatch.setattr(ControllerService, "dashboard_webservers", lambda self, **k: rows)
+    app, _ = _app(tmp_path)
+    body = app.test_client().get("/").get_data(as_text=True)
+    assert ":18083" in body and "not proxied" in body               # direct address IS shown
+    assert body.index(":18083") < body.index("not proxied")         # …BEFORE "not proxied"
+    assert 'href="/stacks?open=meshcom#stack-webserver-meshcom"' in body    # stack name -> its ws config
+    assert 'href="/stacks#webserver-row"' in body                          # console name -> console ws config
+    assert 'pill-warn"><a class="wsurl"' in body                    # http direct addr -> yellow pill wrapping a link
+    assert 'href="http://' in body                                  # direct address is a clickable http:// URL
+    assert 'wsurl" href="https://' in body                          # console address is a clickable https:// URL pill
+
+
 def test_stack_monitor_carries_the_same_exposure_warnings_as_the_console(tmp_path):
     from lhpc.core import webserver as _ws
     svc = _svc(tmp_path); svc.stack_web_configure("meshcom", mode="local", port=8444)

@@ -15,7 +15,7 @@ does is available here too.
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config)
+- [config](#config) · [radio-mode](#radio-mode)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -71,6 +71,22 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 - `--band` selects the band for band-switchable stacks.
 
 Example: `lhpc config chat call W1ABC` then `lhpc stack start chat`.
+
+### radio-mode
+Show or set the global **radio hardware mode** — which physical radio band(s) this box has.
+
+```
+lhpc radio-mode              # show the current mode + active band(s)
+lhpc radio-mode both         # dual radio (433 + 868) — the default, unchanged behavior
+lhpc radio-mode 433          # single-radio hardware: offer/serve/start ONLY 433
+lhpc radio-mode 868          # single-radio hardware: offer/serve/start ONLY 868
+```
+
+- In a single mode lhpc shows only that radio, disables the other band's config choosers, and blocks
+  stacks that need the absent band (e.g. `meshcore` needs 868) with a clear reason. A daemon already
+  running on the excluded band stays visible with a Stop control — lhpc never stops it for you.
+- Also settable in the web console under the loraham daemon stack's **Hardware** settings section.
+- Preparation for single-radio-hardware daemons; a fuller hardware-profile selection replaces it later.
 
 ---
 

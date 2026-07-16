@@ -18,7 +18,8 @@ def test_single_daemon_with_radio_run_param():
     comps = _index(load_manifest())
     d = comps["loraham-daemon"]
     radio = next(p for p in d.run_params if p.name == "radio")
-    assert radio.choices == ("both", "433", "868") and radio.default == "both"
+    # `--radio both` was removed: lhpc runs one process per band, so the daemon offers only 433/868.
+    assert radio.choices == ("433", "868") and radio.default == "433"
     assert any(p.name == "debug" and p.kind == "flag" for p in d.run_params)
     # Provides both band sockets/radios.
     provided = {r.key for r in d.resources if r.mode is ResourceMode.PROVIDER}

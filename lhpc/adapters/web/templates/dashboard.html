@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cmdbox, webserver_pills, banner %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
+{# Single-radio mode: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
+{% block body_class %}{% if radio_mode != 'both' %}dash-narrow{% endif %}{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
   {% if welcome and welcome.fresh %}
@@ -36,13 +38,34 @@
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
     {% for r in radios %}
-      <div class="card radio-col" data-radio-band="{{ r.band }}">
+      <div class="card radio-col{{ ' radio-stray' if r.stray }}" data-radio-band="{{ r.band }}">
         <header>
-          <h2>{{ r.band }} MHz</h2>
+          <h2>{{ r.band }} MHz{% if r.stray %} <span class="pill">not in radio mode</span>{% endif %}</h2>
           <span class="badge badge-{{ 'running' if r.daemon.usable else ('degraded' if r.daemon.occupied else 'stopped') }}" id="rd-badge-{{ r.band }}">
             {% if r.daemon.usable %}daemon usable (READY){% elif r.daemon.occupied %}daemon occupied ({{ r.daemon.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
         </header>
         <div class="body">
+
+          {% if r.stray %}
+            <div class="depnote depnote-warn">
+              <strong>A daemon is still running on {{ r.band }} MHz, which the current radio mode
+              ({{ radio_mode }}) excludes.</strong>
+              {% if r.shared_with %}
+                It is the <strong>same process</strong> as the {{ r.shared_with|join(', ') }} MHz
+                daemon — stopping it stops {{ r.shared_with|join(', ') }} too.
+              {% else %}
+                Stop it below (lhpc never stops it for you), or switch the radio mode back.
+              {% endif %}
+              <form method="post" action="{{ url_for('action') }}" class="act">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="op" value="stop">
+                <input type="hidden" name="target" value="daemon">
+                <input type="hidden" name="band" value="{{ r.band }}">
+                <input type="hidden" name="from" value="dash">
+                <button type="submit" class="warnbtn">Stop daemon ({{ r.band }})</button>
+              </form>
+            </div>
+          {% else %}
 
           {% if r.conflict %}
             <p class="depnote depnote-bad"><strong>Radio conflict on {{ r.band }} MHz:</strong>
@@ -229,6 +252,7 @@
               <a href="{{ url_for('logs_view', target='loraham-daemon', band=r.band) }}">daemon log</a>
             </p>
           {% endif %}
+          {% endif %}{# /r.stray else #}
         </div>
       </div>
     {% endfor %}
@@ -237,14 +261,18 @@
   {# Webserver box: LHCP console (always) + a line per RUNNING web-UI stack. Each line: name + the two
      status pills (security + running), and a right-aligned logs link. #}
   <div class="card">
-    <header><h2>Webserver</h2></header>
+    <header><h2>Webserver</h2><a class="logslink" href="{{ url_for('webserver_logs') }}">logs</a></header>
     <div class="body">
       {% for w in webservers %}
         <div class="wsline">
-          <span class="wsname">{{ w.name }}</span>
+          {% if w.kind == 'console' %}
+            <a class="wsname" href="{{ url_for('stacks_overview') ~ '#webserver-row' }}">{{ w.name }}</a>
+          {% else %}
+            <a class="wsname" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}">{{ w.name }}</a>
+          {% endif %}
           {% if w.posture %}{{ webserver_pills(w.posture, w.addr) }}
+          {% elif w.direct_addr %}<span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
           {% else %}<span class="pill">not proxied</span>{% endif %}
-          <a class="logslink wslogs" href="{{ w.logs }}" aria-label="{{ w.name }} logs">logs</a>
         </div>
       {% endfor %}
     </div>

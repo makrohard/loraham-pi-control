@@ -966,7 +966,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         band (READY), and each non-library service component RUNNING. Basis for a no-side-effect
         Start (no launch, no daemon CONF SET, no param apply). A missing band or a stopped client
         makes it False so the normal apply-once-then-start path runs."""
-        need = ["433", "868"] if radio == "both" else ([radio] if radio in ("433", "868") else [])
+        has_daemon = any(c.id == self.DAEMON_ID for _, c in order)
+        need = self._daemon_serve_bands(radio) if has_daemon else []   # served bands (never a dual value)
         for _stack, comp in order:
             if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
                 continue
@@ -992,7 +993,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             bands = {c.band for _, c in order if self.DAEMON_ID in c.depends_on and c.band}
         txs = {c.requires_daemon_tx for _, c in order
                if self.DAEMON_ID in c.depends_on and c.requires_daemon_tx}
-        radio = "both" if len(bands) != 1 else next(iter(bands))
+        # "" = "no single band requested" -> the daemon serves all ACTIVE bands (one process each);
+        # the daemon serves ONE band per process (dual radio = two processes).
+        radio = "" if len(bands) != 1 else next(iter(bands))
         tx = next(iter(txs)) if len(txs) == 1 else None
         return radio, tx
 
@@ -1011,7 +1014,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
           * STOP   — the ACTUAL running bands: a client uses its running/interactive MARKER (falling
                      back to the declared band only when there is NO runtime evidence); the daemon
                      uses PROCESS TOPOLOGY — a per-band stop also locks the other band when the SAME
-                     process serves it (a manual `--radio both`), and a whole-daemon stop locks
+                     process serves it (a legacy dual-band), and a whole-daemon stop locks
                      every band an owned/observed daemon PROCESS serves, even if that band's CONF
                      socket is unreachable / UNINITIALIZED / FAILED.
           * RESTART— the UNION of the actual STOP bands and the requested START bands."""
@@ -1029,15 +1032,17 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if band in ("433", "868"):
                     bands = {band}
                     other = "868" if band == "433" else "433"
-                    # --radio both collateral: the SAME process also serves the other band -> lock
+                    # dual-band collateral: the SAME process also serves the other band -> lock
                     # it too, regardless of that band's CONF socket state (topology, not reachability).
                     if set(self._daemon_pids_for_band(band)) & set(self._daemon_pids_for_band(other)):
                         bands.add(other)
                     return bands
                 # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
                 return self._daemon_claimed_bands()
-            r = radio or str(self.stack_config(sid).get("radio") or "both")
-            return {"433", "868"} if r == "both" else ({r} if r in ("433", "868") else set())
+            # START: clamp to the active radio mode (M-1) — never lock/serve an excluded band, never
+            # 'both'. `_daemon_serve_bands` returns the active band(s) for any non-single request.
+            r = radio or str(self.stack_config(sid).get("radio") or "")
+            return set(self._daemon_serve_bands(r))
         # Client.
         if op == "stop":
             eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)
@@ -1262,7 +1267,29 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             self._invalidate_config()
         return migrated, remaining
 
-    RADIO_BANDS = ("433", "868")
+    RADIO_BANDS = ("433", "868")   # the FULL band universe — detection/read/manage (never narrowed)
+
+    def radio_mode(self) -> str:
+        """The configured radio hardware mode: 'both' | '433' | '868' (default 'both')."""
+        return self.config().radio.mode
+
+    def active_bands(self) -> tuple:
+        """The bands the current mode OFFERS / SERVES / STARTS — a subset of RADIO_BANDS. In 'both'
+        this equals RADIO_BANDS (unchanged behavior); in a single mode it is that one band. Use this
+        for what lhpc shows/serves/starts; use RADIO_BANDS for what lhpc can still detect/manage."""
+        return self.config().radio.active_bands
+
+    def band_active(self, band: str) -> bool:
+        """True iff `band` is offered by the current radio mode (the SET/offer gate)."""
+        return band in self.active_bands()
+
+    def _daemon_serve_bands(self, radio: str = "") -> list:
+        """The explicit single band(s) a daemon start SERVES, from a requested `radio` value — ALWAYS
+        clamped to the active mode and ALWAYS explicit (lhpc runs one
+        process per band). A single active band -> [that band]; anything else (empty, a legacy dual-band value,
+        or the excluded band) -> the active band(s). radio_mode='both' therefore serves TWO processes."""
+        active = list(self.active_bands())
+        return [radio] if radio in ("433", "868") and radio in active else active
 
     # -- Start-confirm "Stack parameters" panel + CALL/node enforcement ----------
 

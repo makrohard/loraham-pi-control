@@ -1,8 +1,8 @@
 // Daemon-parameter panel: an optional client-side guard (the server always validates; there is
 // NO server-side FSK confirmation or rejection). Warn once, with OK/Cancel, before submitting when
 // ANY MODE selector is FSK — that switches the radio off LoRa and breaks every LoRa stack on the
-// band. Covers the saved-profile Save/Apply form AND the inline start-confirm form (either band
-// when --radio both). Reset buttons never warn; non-FSK values never warn.
+// band. Covers the saved-profile Save/Apply form AND the inline start-confirm form (either band in
+// radio-mode both). Reset buttons never warn; non-FSK values never warn.
 (function () {
   "use strict";
 

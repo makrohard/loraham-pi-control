@@ -405,6 +405,29 @@ def tail(paths: Paths, path: Path, lines: int = 200, max_bytes: int = 256 * 1024
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
 
 
+def tail_since(paths: Paths, path: Path, floor: int, lines: int = 200,
+               max_bytes: int = 256 * 1024) -> list[str]:
+    """Like `tail`, but only content at/after byte offset `floor`. Used to CLEAR a live feed at a
+    lifecycle boundary without truncating the underlying append-only log (which the logs view still
+    shows in full). A `floor` at/beyond the current size, or a size SMALLER than `floor` (the log was
+    rotated/replaced shorter), is treated as 0 so a shrunken log shows its whole new content rather
+    than nothing. NO-FOLLOW, descriptor-anchored; a missing/symlinked/escaping leaf returns []."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            with os.fdopen(fd, "rb") as fh:
+                size = os.fstat(fh.fileno()).st_size
+                start = floor if 0 < floor <= size else 0
+                if size - start > max_bytes:      # keep the LAST max_bytes of the post-floor span
+                    start = size - max_bytes
+                if start:
+                    fh.seek(start)
+                data = fh.read()
+    except (OSError, PathContainmentError):
+        return []
+    return data.decode("utf-8", errors="replace").splitlines()[-lines:]
+
+
 def listdir(paths: Paths, path: Path) -> list[str]:
     """List the entry NAMES of a contained runtime directory through a descriptor-anchored,
     no-follow directory fd (the dir is opened `O_DIRECTORY|O_NOFOLLOW` relative to its

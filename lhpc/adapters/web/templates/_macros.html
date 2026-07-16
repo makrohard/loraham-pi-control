@@ -38,7 +38,7 @@
 {# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
    address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all
    three read identically. `addr` is the reached host:port (request-scoped). #}
-{% macro webserver_pills(p, addr) %}<span class="pill pill-{{ p.sec_level }}">{{ p.auth }} · {{ p.iface }} · {{ addr }}</span> <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
+{% macro webserver_pills(p, addr) %}<span class="pill pill-{{ p.auth_level }}">{{ p.auth }}</span> <span class="pill pill-{{ p.iface_level }}">{{ p.iface }}</span> {% if addr %}<a class="pill pill-{{ p.scheme_level }} wsurl" href="{{ p.scheme }}://{{ addr }}">{{ p.scheme }}://{{ addr }}</a>{% else %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://</span>{% endif %} <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
 
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">

@@ -32,3 +32,4 @@ logs/
 .idea/
 .vscode/
 *.swp
+.claude/

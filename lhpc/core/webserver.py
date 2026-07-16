@@ -148,7 +148,8 @@ _AUTH_LABEL = {"no-auth": "no-auth", "local-open-remote-auth": "remote-auth",
                "auth-everywhere": "auth-everywhere"}
 
 
-def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = True) -> dict:
+def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = True,
+            scheme: str = "https") -> dict:
     """SECURITY posture for the FIRST webserver/proxy summary pill — the same meaning for the controller
     console and every per-stack proxy. The RUNNING (second) pill is context-specific and computed by the
     caller (see monitor_view / stack_web_view).
@@ -184,7 +185,22 @@ def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = Tr
         sec_level = "warn"
     else:
         sec_level = "ok"
-    return {"iface": iface, "auth": auth, "sec_level": sec_level}
+    # The summary is rendered as ONE PILL PER ITEM (auth · iface · URL · running), each coloured on its
+    # OWN dimension so a green item never masks a red neighbour:
+    #   auth_level   — authenticated -> green; unauthenticated & reachable off loopback -> red
+    #                  (unauth remote); unauthenticated but loopback-only -> green (safe, local).
+    #   iface_level  — Local/LAN (loopback or restricted CIDRs) -> green; All interfaces (0.0.0.0/0)
+    #                  or unset (off loopback, no CIDRs — not appliable) -> yellow.
+    #   scheme_level — https -> green; http on loopback -> yellow; http off loopback (remote
+    #                  cleartext) -> red.
+    auth_level = "ok" if (authed or local) else "bad"
+    iface_level = "warn" if iface in ("All interfaces", "unset") else "ok"
+    scheme_level = "ok" if scheme == "https" else ("warn" if local else "bad")
+    # `sec_level` stays the WORST across the dimensions (kept for non-pill consumers/back-compat).
+    _rank = {"ok": 0, "warn": 1, "bad": 2}
+    sec_level = max(sec_level, auth_level, iface_level, scheme_level, key=_rank.__getitem__)
+    return {"iface": iface, "auth": auth, "sec_level": sec_level, "scheme": scheme,
+            "auth_level": auth_level, "iface_level": iface_level, "scheme_level": scheme_level}
 
 
 def exposure_warnings(*, remote: bool, access_mode: str, allowed_cidrs, bind: str, port: int,
@@ -687,6 +703,20 @@ def reload(system, paths: Paths) -> tuple:
     return "failed", ((res.stderr or res.stdout or "reload failed").strip().splitlines() or ["reload failed"])[-1]
 
 
+def restart(system, paths: Paths) -> tuple:
+    """Restart the LHPC-owned nginx user unit via `systemctl --user restart lhpc-nginx.service`.
+    Unlike `reload` (SIGHUP, which cannot rebind a listen socket the old worker still holds), a
+    restart runs ExecStop (`nginx -s quit`, releasing the socket) then ExecStart (a fresh bind) —
+    the ONLY way a BIND CHANGE (loopback 127.0.0.1 <-> 0.0.0.0) actually takes effect. Returns one
+    of ('restarted'|'failed', message)."""
+    r = system.runner.run(["systemctl", "--user", "restart", "lhpc-nginx.service"], 20.0)
+    if getattr(r, "not_found", False):
+        return "failed", "systemctl not found"
+    if r.returncode == 0:
+        return "restarted", "nginx restarted"
+    return "failed", ((r.stderr or r.stdout or "restart failed").strip().splitlines() or ["restart failed"])[-1]
+
+
 # --------------------------------------------------------------------------- effective evidence (M9)
 
 EVIDENCE = ("state", "webserver.json")
@@ -832,7 +862,8 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
         "posture": {
             **posture(local=_is_loopback_bind(cfg.bind),
                       public=any(_is_public_default_route(c) for c in cfg.allowed_cidrs),
-                      access_mode=cfg.access_mode, has_cidrs=bool(cfg.allowed_cidrs)),
+                      access_mode=cfg.access_mode, has_cidrs=bool(cfg.allowed_cidrs),
+                      scheme=cfg.scheme),
             "run": "nginx" if via_nginx else "lhpc-web",
             "run_level": "ok" if via_nginx else "warn",
         },
@@ -922,6 +953,13 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
     # HTTPS-cert presentation / mTLS behaviour / revocation enforcement still need a real client
     # handshake, so those stay null (honestly unproven without opt-in integration).
     console_scope = listener_scope(system, cfg.port)         # "exposed" | "loopback" | "absent"
+    # F3: the DESIRED remote-exposure MUST match the EFFECTIVE listener. A bind change applied via
+    # `nginx -s reload` cannot rebind a socket the old worker still holds, so the master can keep the
+    # old (loopback) listener while reload returns success — this makes that never verify as OK.
+    # Both directions fail: exposed-desired but not exposed (silent exposure failure, the F3 incident)
+    # AND loopback-desired but still exposed (residual exposure). Absent == not exposed.
+    checks["remote_listener_matches"] = (
+        "ok" if cfg.remote_exposed == (console_scope == "exposed") else "failed")
     effective = {
         "remote_listener": console_scope == "exposed",       # bound off-loopback == remotely reachable
         "listener_scope": console_scope,

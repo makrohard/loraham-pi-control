@@ -47,6 +47,34 @@ def test_install_plan_is_dry_run(tmp_path, monkeypatch, capsys):
     assert "Install" in capsys.readouterr().out
 
 
+def test_hmac_disable_cli_needs_confirm_phrase(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    main(["bootstrap", "--yes"])
+    capsys.readouterr()
+    phrase = ControllerService.HMAC_DISABLE_CONFIRM
+    # dry-run (no --yes) instructs the phrase, does not apply
+    assert main(["hmac", "disable", "meshcom"]) == 0
+    assert phrase in capsys.readouterr().out
+    # --yes alone no longer disables — the service gate refuses
+    assert main(["hmac", "disable", "meshcom", "--yes"]) == 1
+    assert phrase in capsys.readouterr().out
+    # the correct phrase plumbs confirm=True into the foreground apply
+    seen = {}
+    monkeypatch.setattr(ControllerService, "hmac_apply_cli",
+                        lambda self, sid, action, emit, confirm=False: seen.update(confirm=confirm) or 0)
+    assert main(["hmac", "disable", "meshcom", "--yes", "--confirm-phrase", phrase]) == 0
+    assert seen == {"confirm": True}
+
+
+def test_cli_generic_config_cannot_set_password_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+    main(["bootstrap", "--yes"])
+    capsys.readouterr()
+    assert main(["config", "meshcom", "password_file", ""]) == 1
+    out = capsys.readouterr().out
+    assert "HMAC" in out and "Enable/Disable/Renew" in out       # directed to the managed flow
+
+
 def test_repair_and_rollback_are_not_commands(monkeypatch):
     # These verbs were removed (reinstall/update instead) -> argparse rejects them.
     import pytest

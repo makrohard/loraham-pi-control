@@ -93,7 +93,7 @@ errors into evidence. A missing runtime root reports `not-installed`, not an err
 
 ## Radios and conflicts
 
-The LoRaHAM daemon runs one instance per band (`--radio 433|868|both`), each with its
+The LoRaHAM daemon runs one instance per band (`--radio 433|868`), each with its
 own CONF socket (`/tmp/loraconf{band}.sock`), raw data socket (`/tmp/lora{band}.sock`)
 and framed socket (`/tmp/lora{band}f.sock`). Components declare resource claims (radio
 band, SPI bus, daemon socket, TCP port). Starting a stack is blocked if another running

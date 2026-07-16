@@ -384,17 +384,17 @@ def test_daemon_start_panels_per_radio_mode(tmp_path):
     assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "868"})] == ["868"]
 
 
-def test_confirm_both_renders_two_band_scoped_panels(tmp_path):
-    import os, re
-    b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
-    b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
-    c = create_app(service_factory=lambda: ControllerService(
-        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
-    body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
-                                    "p_radio": "both"}).get_data(as_text=True)
-    assert "(433 MHz)" in body and "(868 MHz)" in body                          # two panels
-    assert 'name="dp_433_CADIDLE"' in body and 'name="dp_868_CADIDLE"' in body  # band-scoped names
+def test_confirm_both_makes_two_band_scoped_panels(tmp_path):
+    # In radio-mode `both` (the default), starting the daemon serves BOTH bands as two single-band
+    # processes (`--radio both` no longer exists) -> the start-confirm has one band-scoped panel per
+    # band, each with its own rows, so a 433 value never reaches 868. (The dp_<band>_ field-name
+    # scoping in the rendered template is covered by the daemon-params panel tests above.)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    panels = svc.daemon_start_panels("daemon", {}, "")
+    assert [p["band"] for p in panels] == ["433", "868"]        # two panels, explicit single bands
+    assert all(p["is_daemon"] and p["rows"] for p in panels)   # each carries its own band-scoped rows
+    # a single-band request yields exactly one panel (no cross-band panel)
+    assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "433"}, "")] == ["433"]
 
 
 def test_per_band_ephemeral_values_do_not_cross(tmp_path):

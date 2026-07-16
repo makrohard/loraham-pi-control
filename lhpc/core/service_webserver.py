@@ -256,7 +256,8 @@ class WebserverOpsMixin:
             # yellow "local-only" (started but nginx is not proxying it), green "proxied" (started + nginx).
             "posture": {
                 **_ws.posture(local=swc.mode == "local", public=swc.mode == "public",
-                              access_mode=swc.access_mode, has_cidrs=bool(swc.allowed_cidrs)),
+                              access_mode=swc.access_mode, has_cidrs=bool(swc.allowed_cidrs),
+                              scheme=swc.scheme),
                 "run": "offline" if scope == "absent" else (
                     "local-only" if listen_scope == "absent" else "proxied"),
                 "run_level": "off" if scope == "absent" else (
@@ -273,8 +274,9 @@ class WebserverOpsMixin:
     def dashboard_webservers(self, served_via_nginx: bool | None = None) -> list[dict]:
         """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then each web-UI stack whose
         MAIN component is currently running/degraded. Structural evidence only — the adapter adds the
-        request-scoped reached address and resolves the log href. Each stack row carries `logs_component`
-        (the web-UI component's id, but ONLY when it actually writes a log) or None → link to the row."""
+        request-scoped reached address. A running-but-not-proxied stack carries `direct_port`/
+        `direct_scheme` so the box can show where it listens directly; the shared nginx log link lives
+        in the box header (all proxied UIs share the one front-end log)."""
         from .model import RunState
         up = (RunState.RUNNING, RunState.DEGRADED)
         mon = self.webserver_monitor(served_via_nginx=served_via_nginx).data or {}
@@ -291,15 +293,23 @@ class WebserverOpsMixin:
             v = self.stack_web_view(sid) or {}
             swc = v.get("cfg")
             enabled = bool(swc and swc.enabled)
-            # The web-UI component carries a client http/https endpoint; use its logs ONLY if it writes one.
-            webcomp = next((c for c in stk.components for ep in c.endpoints
-                            if getattr(ep, "client", False) and ep.scheme in ("http", "https")), None)
-            writes_log = bool(webcomp and (webcomp.log_paths
-                                           or (webcomp.run_argv and not webcomp.interactive)))
+            # The web-UI component carries a client http/https endpoint — used for the DIRECT address.
+            web_ep = None
+            for c in stk.components:
+                for ep in c.endpoints:
+                    if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                        web_ep = ep
+                        break
+                if web_ep:
+                    break
+            # DIRECT web-UI address (host:port from the client endpoint) — surfaced so a running but
+            # NOT-proxied web UI still shows where it listens (the adapter reattaches the reached host,
+            # local vs remote, exactly like the console pill).
+            direct_port = web_ep.address.rsplit(":", 1)[-1] if (web_ep and ":" in web_ep.address) else ""
             rows.append({"kind": "stack", "name": stk.name, "sid": sid, "enabled": enabled,
                          "posture": v.get("posture") if enabled else None,
                          "port": swc.port if enabled else None,
-                         "logs_component": webcomp.id if (webcomp and writes_log) else None})
+                         "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else ""})
         return rows
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
@@ -601,10 +611,13 @@ class WebserverOpsMixin:
 
     def webserver_apply(self) -> "ActionResult":
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
-        activate an invalid one), then reload an already-running LHPC-owned nginx master
-        (never systemctl, never start the unit), then verify + persist evidence. A missing/
-        inactive master returns a typed 'service not active / repair required' result — the
-        web process performs no start and no package install."""
+        activate an invalid one), then reload an already-running LHPC-owned nginx master, then
+        verify + persist evidence. A missing/inactive master returns a typed 'service not active /
+        repair required' result — the web process performs no start and no package install. A
+        reload cannot rebind a held listen socket, so on a BIND change (loopback <-> 0.0.0.0) whose
+        effective scope does not match the desired exposure this RESTARTS the unit (`systemctl
+        --user restart lhpc-nginx.service`) and re-verifies; it never reports a bind change that did
+        not take effect (F3)."""
         from . import webserver as _ws
         if not _ws.nginx_installed(self._system):
             return ActionResult(False, "nginx is not installed — required system dependency for "
@@ -627,7 +640,23 @@ class WebserverOpsMixin:
                                 details=[rmsg], data=ev)
         if state == "failed":
             return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
-        return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+        # F3: a reload cannot rebind a held listen socket, so a bind change (loopback <-> 0.0.0.0)
+        # can leave the OLD listener in place while reload reports success. When the effective scope
+        # does not match the desired exposure, RESTART the unit (ExecStop releases the socket,
+        # ExecStart rebinds) and re-verify — never report a bind change that did not take effect.
+        if ev["checks"].get("remote_listener_matches") == "ok":
+            return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+        rstate, rmsg2 = _ws.restart(self._system, self._paths)
+        ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+        if ev["checks"].get("remote_listener_matches") == "ok":
+            return ActionResult(True, "webserver configuration applied; nginx restarted to rebind "
+                                "the listener (a bind change needs a restart, not a reload)", data=ev)
+        scope = ev.get("effective", {}).get("listener_scope", "unknown")
+        return ActionResult(
+            False, f"configuration applied but the console listener is still '{scope}' "
+            f"(desired remote_exposed={cfg.remote_exposed}) — the bind change did not take effect; "
+            "restart the front-end manually", details=[rmsg2],
+            next_commands=["systemctl --user restart lhpc-nginx.service"], data=ev)
 
     def webserver_start_service(self) -> "ActionResult":
         """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx

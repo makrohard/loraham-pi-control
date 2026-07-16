@@ -88,6 +88,10 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
 .home:hover, .apps-link:hover { background: rgba(255, 255, 255, .22); }
 .apps-link { font-size: 1.2rem; white-space: nowrap; }
 .wrap { max-width: 1024px; margin: 0 auto; padding: 1.25rem; }
+/* Single-radio mode (Dashboard only): narrow the whole page — header, nav, main, footer, boxes and
+   banners — to half width, matching the single radio box (the radio grid becomes one column). */
+body.dash-narrow .wrap { max-width: 512px; }
+body.dash-narrow .radiogrid { grid-template-columns: 1fr; }
 .nav { background: #08305c; box-shadow: var(--shadow); }
 .nav .wrap { display: flex; flex-wrap: wrap; gap: .25rem .9rem; padding-top: .5rem; padding-bottom: .5rem; }
 .nav a { color: #cfe0f3; font-size: .9rem; }
@@ -158,7 +162,7 @@ tr:last-child td { border-bottom: none; }
 .wsline { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; padding: .35rem 0; border-bottom: 1px solid var(--line); }
 .wsline:last-child { border-bottom: none; }
 .wsname { font-weight: 600; min-width: 5.5rem; }
-.wslogs { margin-left: auto; }   /* right-align the logs link */
+.wsurl { text-decoration: underline; }   /* the URL pill IS the link; keep its severity colour */
 .tx-enabled { color: var(--bad); font-weight: 600; }
 .tx-disabled { color: var(--idle); }
 

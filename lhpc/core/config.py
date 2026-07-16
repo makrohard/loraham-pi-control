@@ -104,6 +104,25 @@ class OperatorConfig:
         return bool(self.callsign)
 
 
+# Which physical radio bands the box has. `both` = the classic dual-radio box (unchanged behavior).
+# `433`/`868` = single-radio hardware: lhpc offers/serves/starts ONLY that band. This is a
+# placeholder for a richer future "hardware profile" selection.
+RADIO_MODES = ("both", "433", "868")
+RADIO_DEFAULT_MODE = "both"
+
+
+@dataclass(frozen=True)
+class RadioConfig:
+    """Radio hardware mode — sourced ONLY from the runtime-local layer. Default `both` keeps the
+    existing dual-radio behavior byte-for-byte."""
+
+    mode: str = RADIO_DEFAULT_MODE
+
+    @property
+    def active_bands(self) -> tuple:
+        return ("433", "868") if self.mode == "both" else (self.mode,)
+
+
 # Webserver access modes (browser client-certificate authentication policy). There are
 # NO user accounts/roles — a client certificate is a named device credential with equal
 # full access. See the webserver plan/docs.
@@ -204,6 +223,7 @@ class Config:
 
     values: dict = field(default_factory=dict)
     operator: OperatorConfig = field(default_factory=OperatorConfig)
+    radio: RadioConfig = field(default_factory=RadioConfig)
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
@@ -466,6 +486,18 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 
     operator = OperatorConfig(callsign=_str_field("callsign"))
 
+    # [radio] hardware mode. Fail-OPEN: an absent/malformed/unknown value falls back to `both`
+    # (which only WIDENS offering and never blocks anything), with a diagnostic.
+    radio_raw = merged.get("radio", {})
+    if not isinstance(radio_raw, dict):
+        diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using both")
+        radio_raw = {}
+    radio_mode = radio_raw.get("mode", RADIO_DEFAULT_MODE)
+    if radio_mode not in RADIO_MODES:
+        diagnostics.append(f"ignored invalid radio.mode {radio_mode!r}; using {RADIO_DEFAULT_MODE}")
+        radio_mode = RADIO_DEFAULT_MODE
+    radio = RadioConfig(mode=radio_mode)
+
     remotes_raw = local.get("remotes", {})   # runtime-local only, never tracked
     if not isinstance(remotes_raw, dict):
         diagnostics.append(f"ignored non-table [remotes] (got {type(remotes_raw).__name__}); using none")
@@ -491,6 +523,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     return Config(
         values=merged,
         operator=operator,
+        radio=radio,
         webserver=webserver,
         stackweb=stackweb,
         sources=sources,
@@ -696,6 +729,16 @@ def save_operator_config(paths: Paths, callsign: str) -> Path:
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"operator": {"callsign": callsign}})
+
+
+def save_radio_mode(paths: Paths, mode: str) -> Path:
+    """Persist the radio hardware mode into the runtime-local layer (git-ignored). Validates the
+    mode BEFORE any write (fail closed); patches only `[radio].mode`."""
+    if mode not in RADIO_MODES:
+        raise ConfigError(f"invalid radio mode {mode!r} (allowed: {', '.join(RADIO_MODES)})")
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"radio": {"mode": mode}})
 
 
 def _cert_days(value, field: str) -> int:

@@ -581,7 +581,7 @@ class Lifecycle:
     # -- verified owned-launch records (B) --------------------------------
     #
     # Each launch LHPC starts is recorded by a UNIQUE launch id (not one mutable
-    # marker per component — a daemon can own independent 433/868/both instances).
+    # marker per component — a daemon can own independent 433/868 instances).
     # A stop only ever signals a process group whose FULL identity (pid, start
     # time, pgid, sid, executable, argv fingerprint) still matches the record AND
     # that is an LHPC-owned session leader and not the controller's own group.
@@ -655,7 +655,7 @@ class Lifecycle:
 
     def owned_records(self, comp_id: str, band: str | None = None,
                       role: str | None = "") -> list[dict]:
-        """Records for a component, optionally scoped to a band (a `both` instance matches any
+        """Records for a component, optionally scoped to a band (a band-less `""` record matches any
         band request). `role` selects the record class: "" = MAIN launches (default — so status and
         the ordinary stop never see auxiliary runners), "post" = detached post-start runners,
         None = every role."""
@@ -680,7 +680,7 @@ class Lifecycle:
                 continue
             if role is not None and rec.get("role", "") != role:
                 continue
-            if band is not None and rec.get("band") not in (band, "both", ""):
+            if band is not None and rec.get("band") not in (band, ""):
                 continue
             rec["_path"] = str(f)
             out.append(rec)

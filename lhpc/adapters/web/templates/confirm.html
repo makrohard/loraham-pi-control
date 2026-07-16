@@ -120,7 +120,7 @@
             {% set stack_id = target %}
             {% set dp_inline = true %}
             <hr class="sep">
-            {# One panel per band this launch touches (two for a daemon --radio both), each with
+            {# One panel per band this launch touches (two for a dual-band daemon), each with
                band-scoped input names so 433 and 868 never cross. #}
             {% for panel in daemon_panels %}
               {% set daemon_params = panel %}

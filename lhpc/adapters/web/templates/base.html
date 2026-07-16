@@ -9,7 +9,7 @@
   {# Head-blocking (no defer) so data-theme is set before first paint — avoids a flash of the wrong theme. #}
   <script src="{{ url_for('static', filename='theme.js') }}"></script>
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
   <header class="site-header">
     <div class="wrap header-wrap">
       <div class="header-top">

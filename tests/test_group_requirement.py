@@ -5,7 +5,6 @@ requirement), but is NOT part of the install gate (meshtasticd installs fine wit
 Group membership is read through the injectable System seam, so tests drive it with FakeSystem.
 """
 
-from pathlib import Path
 
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths

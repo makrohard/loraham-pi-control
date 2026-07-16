@@ -115,12 +115,12 @@ class ParamsConfigMixin:
     def _effective_daemon_band(self, target: str, band: str = "") -> str:
         """The single band the daemon-params panel/apply uses: the requested band if valid, else
         the stack's fixed band (from its band-component), else 433."""
-        if band in daemon_control.ALLOWED_BANDS:
+        active = self.active_bands()                              # served bands (radio mode)
+        if band in active:
             return band
         s = self._owner_stack(target)
-        fixed = sorted({c.band for c in (s.components if s else ()) if c.band}
-                       & set(daemon_control.ALLOWED_BANDS))
-        return fixed[0] if fixed else "433"
+        fixed = sorted({c.band for c in (s.components if s else ()) if c.band} & set(active))
+        return fixed[0] if fixed else active[0]
 
     def _daemon_param_overrides(self, stack_id: str, band: str) -> dict:
         """Persisted operator overrides for a stack's daemon params, read from the stack's
@@ -233,7 +233,7 @@ class ParamsConfigMixin:
             return []
         out: list[dict] = []
         for c in self._target_components(target):
-            for kind, p in ([("run", p) for p in c.run_params]
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
                             + [("file", p) for p in (c.config_file.params if c.config_file else ())
                                if not getattr(p, "hidden", False)]):
                 out.append({
@@ -258,7 +258,7 @@ class ParamsConfigMixin:
         groups: list[dict] = []
         for c in self._target_components(target):
             rows = []
-            for kind, p in ([("run", p) for p in c.run_params]
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
                             + [("file", p) for p in (c.config_file.params if c.config_file else ())
                                if not getattr(p, "hidden", False)]):
                 default = self._op_subst(dict(p.band_defaults).get(cfg_band or band, p.default))
@@ -647,13 +647,14 @@ class ParamsConfigMixin:
             # Each component carries its OWN field-name map (`fields`) and its OWN
             # component-scoped value map (`values`) so duplicate run/file names across components
             # never share a form field nor flatten into one value.
-            "components": [{"id": c.id, "name": c.name, "params": list(c.run_params),
+            "components": [{"id": c.id, "name": c.name, "params": rparams,
                             "fields": {p.name: self._config_field(target, "run", c.id, p.name)
-                                       for p in c.run_params},
+                                       for p in rparams},
                             "values": {p.name: self._resolved_param_value(target, "run", c.id,
                                                                           p.name, cfg_band)
-                                       for p in c.run_params}}
-                           for c in comps],
+                                       for p in rparams}}
+                           for c in comps
+                           for rparams in (self._form_run_params(c),) if rparams],
             "optional": optional,
             "sources": sources,
             # File params GROUPED by component (like run params) — each with its own fields/values.
@@ -679,10 +680,16 @@ class ParamsConfigMixin:
         # chosen by a 433/868 switch at the top. The repo/RadioLib remotes + save/
         # restore below apply to both bands.
         if s is not None and s.main == self.DAEMON_ID:
-            live_band = band if band in self.RADIO_BANDS else self.RADIO_BANDS[0]
-            view["bands"] = list(self.RADIO_BANDS)
+            from . import config as _config
+            active = self.active_bands()
+            live_band = band if band in active else active[0]
+            view["bands"] = list(active)                 # only the mode's radios are tunable
             view["band"] = live_band
             view["live_band"] = True       # band switch selects the LIVE band, not config
+            # The Hardware subsection: the radio hardware mode switch (placeholder for future
+            # hardware-profile selection).
+            view["radio_mode"] = self.radio_mode()
+            view["radio_modes"] = list(_config.RADIO_MODES)
             dv = self.daemon_view(live_band)
             # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
             # what it actually reports; the configured daemon-param value is the fallback for
@@ -711,12 +718,18 @@ class ParamsConfigMixin:
 
     def save_config_bundle(self, target: str, *, values: dict | None = None,
                            callsign: str | None = None,
-                           band: str = "", remotes: dict | None = None) -> ActionResult:
+                           band: str = "", remotes: dict | None = None,
+                           _allow_managed_params: frozenset = frozenset()) -> ActionResult:
         """Validate the WHOLE Config-page submission, then persist it as ONE
         all-or-recoverable transaction (local.toml + the per-stack config file).
         Nothing is written unless every value validates; unknown fields are
         rejected; a malformed local.toml is preserved. (P0: replaces the previous
-        per-remote sequential writes.)"""
+        per-remote sequential writes.)
+
+        `_allow_managed_params` is an INTERNAL trust token: HMAC-managed run params (e.g.
+        `password_file`) are rejected from generic submissions and may be written ONLY by the managed
+        path (`hmac_set_secret`) which lists them here — this is what keeps generic config from clearing
+        the override and silently restoring open auth."""
         owner = self._owner_stack(target)
         if owner is None:
             return self._unknown_stack(target)
@@ -759,6 +772,9 @@ class ParamsConfigMixin:
             c, p, err = self._param_ref(target, "run", key)
             if err:
                 errors.append(f"unknown config field: {key!r}" if err.startswith("unknown") else err)
+                continue
+            if self._is_hmac_managed_param(c, p) and p.name not in _allow_managed_params:
+                errors.append(self._HMAC_MANAGED_PARAM_MSG)     # never clearable via generic config
                 continue
             v = str(value)
             if v.strip() == "":
@@ -965,6 +981,23 @@ class ParamsConfigMixin:
         return ActionResult(True, "operator identity saved",
                             details=[f"  callsign = {new_call or '(unset)'}"])
 
+    def set_radio_mode(self, mode: str | None = None) -> ActionResult:
+        """Set the GLOBAL radio hardware mode (`[radio].mode` in local.toml): 'both' (dual radio),
+        '433' or '868' (single radio). No arg reports the current mode. In a single mode lhpc offers/
+        serves/starts only that band; the other band's choosers are disabled and stacks needing the
+        absent band are shown blocked."""
+        from . import config as _config
+        if mode is None:
+            return ActionResult(True, f"radio mode: {self.radio_mode()}",
+                                details=[f"  active band(s): {', '.join(self.active_bands())}"])
+        try:
+            _config.save_radio_mode(self._paths, mode)
+        except (OSError, _config.ConfigError) as exc:
+            return ActionResult(False, f"could not save radio mode: {exc}")
+        self._invalidate_config()
+        return ActionResult(True, f"radio mode set to {mode}",
+                            details=[f"  active band(s): {', '.join(self.active_bands())}"])
+
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
         path (`save_config_bundle`). `values` keys are the same canonical API keys the Config/Start
@@ -1160,6 +1193,12 @@ class ParamsConfigMixin:
                     f"set '{idf['name']}'.")
         return (True, idf["field"], "")
 
+    def _form_run_params(self, comp):
+        """The component's run params EXPOSED in generic Config / Start parameter forms. HMAC-managed
+        params (`password_file`) are excluded — they are edited ONLY through the HMAC Enable/Disable/
+        Renew flow, never generic config (a blank generic submission would silently restore open auth)."""
+        return [p for p in comp.run_params if not self._is_hmac_managed_param(comp, p)]
+
     def _stack_param_components(self, target: str):
         """Components whose run/file params make up the editable 'Stack parameters' set (never the
         daemon — its radio params are the separate daemon panel). Target-scoped: a stack target
@@ -1179,7 +1218,7 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         rows: list[dict] = []
         for c in self._stack_param_components(target):
-            for kind, p in ([("run", p) for p in c.run_params]
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
                             + [("file", p) for p in (c.config_file.params if c.config_file else ())
                                if not getattr(p, "hidden", False)]):
                 # Each (component, kind, name) carries its OWN field + API key (bare when unique,
@@ -1203,7 +1242,7 @@ class ParamsConfigMixin:
         field into its correctly-scoped API key (bare when unique, `component.name` when duplicated)."""
         out: list[dict] = []
         for c in self._target_components(target):
-            for kind, p in ([("run", p) for p in c.run_params]
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
                             + [("file", p) for p in (c.config_file.params if c.config_file else ())]):
                 out.append({
                     "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
@@ -1289,6 +1328,8 @@ class ParamsConfigMixin:
             _c, p, err = self._param_ref(target, "run", key)       # rejects unqualified duplicates
             if err:
                 return {}, f"unknown parameter {key!r}" if err.startswith("unknown") else err
+            if self._is_hmac_managed_param(_c, p):                  # no ephemeral bypass of the gate
+                return {}, self._HMAC_MANAGED_PARAM_MSG
             try:
                 clean[key] = validators.validate_param(p, val)
             except validators.ValidationError as exc:
@@ -1538,31 +1579,63 @@ class ParamsConfigMixin:
                             else f"{label} already at defaults.",
                             next_commands=[f"lhpc stack start {target}"])
 
-    def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
-        """Bounded tail of the daemon's activity, filtered to RX/TX lines. The v111a
-        multi-instance daemon logs to stdout, which LHPC captures into the per-band process
-        log `logs/start-<daemon>-<band>.log` (in-root; LHPC reads no external log files).
-
-        EXACTLY ONE source file, never a concatenation: the per-band log when it exists, else
-        the legacy band-less `start-<daemon>.log` — written by a pre-upgrade daemon that has not
-        been restarted since the rename. Reading both would double-count every match, because the
-        band-agnostic tokens ([TX], [RX], TXOK, ...) match either band's lines.
-        """
-        raws: list[str] = []
-        for name in (f"start-{self.DAEMON_ID}-{band}.log",
-                     f"start-{self.DAEMON_ID}.log"):
+    def _daemon_feed_source(self, band: str) -> Path | None:
+        """The SINGLE feed source log for a band, or None. EXACTLY ONE file, never a concatenation:
+        the per-band log `logs/start-<daemon>-<band>.log` when it exists, else the legacy band-less
+        `start-<daemon>.log` (a pre-upgrade daemon not restarted since the rename). Reading both would
+        double-count, because the band-agnostic tokens ([TX], [RX], TXOK, ...) match either band."""
+        for name in (f"start-{self.DAEMON_ID}-{band}.log", f"start-{self.DAEMON_ID}.log"):
             try:
                 p = self._paths.under("logs", name)
             except PathContainmentError:
                 continue
-            if not p.is_file():
-                continue
-            try:
-                raws = runtime_fs.tail(self._paths, p, self._FEED_SCAN_LINES,
-                                       self._FEED_SCAN_BYTES)
-            except (OSError, PathContainmentError, ValueError):
-                raws = []                        # symlinked/escaping -> no lines
-            break                                # first existing candidate wins
+            if p.is_file():
+                return p
+        return None
+
+    def _daemon_feed_floor_path(self, band: str) -> Path:
+        return self._paths.under("state", f"daemon-feed-floor-{band}")
+
+    def _read_daemon_feed_floor(self, band: str) -> int:
+        """The RX/TX window's clear FLOOR (a byte offset into the source log), or 0 when unset/
+        unreadable. Set by `clear_daemon_feed` at each start/stop boundary."""
+        try:
+            txt = runtime_fs.read_text_regular(self._paths, self._daemon_feed_floor_path(band),
+                                               max_bytes=64)
+        except (OSError, PathContainmentError, ValueError):
+            return 0
+        try:
+            return max(0, int(txt.strip()))
+        except ValueError:
+            return 0
+
+    def clear_daemon_feed(self, band: str) -> None:
+        """Clear the RX/TX activity window for a band: record the current daemon-log size as the feed
+        FLOOR so `daemon_feed` returns nothing until fresh activity is appended. Non-destructive — the
+        append-only daemon log (and its logs view) is untouched. Best-effort; a failure is swallowed so
+        it can never break a start/stop. Called at every start (daemon OR any stack) and daemon stop."""
+        if not daemon_control.is_valid_band(band):
+            return
+        p = self._daemon_feed_source(band)
+        st = runtime_fs.stat_leaf_nofollow(self._paths, p) if p is not None else None
+        size = st.st_size if st is not None else 0
+        try:
+            runtime_fs.write_marker(self._paths, self._daemon_feed_floor_path(band), str(size))
+        except (OSError, PathContainmentError):
+            pass
+
+    def daemon_feed(self, band: str, lines: int = 40) -> list[str]:
+        """Bounded tail of the daemon's activity, filtered to RX/TX lines, from the single per-band
+        source (`_daemon_feed_source`). Only content beyond the clear FLOOR is shown, so the window is
+        emptied at each start/daemon-stop boundary without touching the underlying append-only log."""
+        p = self._daemon_feed_source(band)
+        if p is None:
+            return []
+        try:
+            raws = runtime_fs.tail_since(self._paths, p, self._read_daemon_feed_floor(band),
+                                         self._FEED_SCAN_LINES, self._FEED_SCAN_BYTES)
+        except (OSError, PathContainmentError, ValueError):
+            raws = []                            # symlinked/escaping -> no lines
         out: list[str] = []
         for raw in raws:
             if any(tok in raw for tok in (f"[TX{band}]", f"[RX{band}]", "TX_RESULT",

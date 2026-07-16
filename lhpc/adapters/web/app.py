@@ -277,12 +277,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         try:
             for w in service.dashboard_webservers(served_via_nginx=served_via_nginx()):
                 if w["kind"] == "console":
-                    addr, logs = _console_addr(w.get("port", "")), url_for("webserver_logs")
+                    addr = _console_addr(w.get("port", ""))
                 else:
                     addr = f"{_url_host(request.host or '')}:{w['port']}" if w.get("enabled") else ""
-                    logs = (url_for("logs_view", target=w["logs_component"]) if w.get("logs_component")
-                            else url_for("stacks_overview") + "#stackrow-" + w["sid"])
-                webservers.append({**w, "addr": addr, "logs": logs})
+                    # Not proxied but running: show the DIRECT web-UI address on the reached host.
+                    if not w.get("enabled") and w.get("direct_port"):
+                        w = {**w, "direct_addr": f"{_url_host(request.host or '')}:{w['direct_port']}"}
+                webservers.append({**w, "addr": addr})
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
         return render_template(
@@ -296,6 +297,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             restart_required=service.restart_required_stacks(),
             welcome=service.auto_install_welcome(),
             tasks=service.running_tasks(),
+            radio_mode=service.radio_mode(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -376,10 +378,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The manual process-inspection checkbox must be reachable for EVERY unsafe case that needs
         # confirm_orphan: escaped-or-output, unknown/malformed scope, or a session-unverified whose
         # identity can't be reconstructed (i.e. NOT safely auto-recoverable).
+        from lhpc.core import proctree
         needs_process_confirmation = bool(
             st and not st.get("unsafe") and st.get("state") == "unsafe"
             and (st.get("unsafe_scope") != "session-unverified"
-                 or service._auto_install_reconstruct_token(st.get("session_ident")) is None))
+                 or proctree.reconstruct_token(st.get("session_ident")) is None))
         chunk = {"offset": 0, "data": ""}
         complog_seed = ""
         if st and not st.get("unsafe"):
@@ -550,6 +553,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template(
             "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
             sid=sid, action=action, action_label=label, warning=warning,
+            disable_phrase=service.HMAC_DISABLE_CONFIRM,
             st=st, active=active, log_seed=log_seed, complog_seed=complog_seed)
 
     @app.post("/stacks/<sid>/hmac/<action>/apply")
@@ -558,7 +562,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
             abort(404)
-        res = service.hmac_apply_start(sid, action)
+        # `disable` additionally requires the typed phrase; the service refuses without it (a CSRF-valid
+        # POST alone is not enough to remove client authentication).
+        confirm = request.form.get("confirm_phrase", "").strip() == service.HMAC_DISABLE_CONFIRM
+        res = service.hmac_apply_start(sid, action, confirm=confirm)
         flash(res.summary, "ok" if res.ok else "warn")
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 
@@ -678,6 +685,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 _upd_comp, _upd_is_main = None, False
             groups.append({
                 "stack": stack,
+                "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
                 "main": index.get(main.id) if main else None,
                 "main_status": main_status,
                 "statuses": ss.components,            # dict[comp_id -> ComponentStatus] (evidence etc.)
@@ -1298,6 +1306,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", band=band or None,
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
+
+    @app.post("/radio-mode")
+    def radio_mode_set():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        result = service.set_radio_mode(request.form.get("mode", ""))
+        flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
+                        + "#stack-settings-daemon")
 
     @app.post("/stacks/<stack_id>/daemon-params")
     def daemon_params_save(stack_id: str):  # noqa: ANN202

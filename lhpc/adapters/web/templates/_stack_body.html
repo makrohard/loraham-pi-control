@@ -42,6 +42,10 @@
       {% if g.needs_build %}
         {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Build') %}<strong>Build needed:</strong> {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% endcall %}
       {% endif %}
+      {% if g.radio_block %}
+        <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio mode</span> —
+          this stack {{ g.radio_block }}</div>
+      {% endif %}
       {% if g.restart_required %}
         <div class="depnote depnote-warn">
           {% if g.restart_required.unsafe %}

@@ -6,7 +6,7 @@ import pytest
 
 from lhpc.core.paths import Paths, PathContainmentError
 from lhpc.core.config import (ConfigError, save_operator_config, save_component_remote,
-                              save_stack_config, load_config)
+                              )
 from lhpc.core import validators
 
 

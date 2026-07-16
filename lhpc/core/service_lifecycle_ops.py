@@ -220,6 +220,23 @@ class LifecycleOpsMixin:
                     add(sid, c.id, f"radio {comp_band} MHz")
         return blockers
 
+    def radio_mode_block(self, target: str) -> str:
+        """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
+        A band-switchable stack stays available if ANY of its bands is active (uses the RAW declared
+        component bands, not the mode-narrowed `stack_bands`). This is NOT a resource conflict — the
+        remedy is to change the radio mode, not stop a holder."""
+        order = self._run_order(target)
+        if not order:
+            return ""
+        needed = {b for _, c in order
+                  for b in (([c.band] if c.band else []) + list(c.bands)) if b}
+        active = set(self.active_bands())
+        if needed and not (needed & active):
+            missing = "/".join(sorted(needed))
+            return (f"requires the {missing} MHz radio — radio mode is {self.radio_mode()}-only; "
+                    "change it in the daemon Hardware settings")
+        return ""
+
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
@@ -266,6 +283,11 @@ class LifecycleOpsMixin:
                 if _order:
                     _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
                     _radio = _r or ""
+                # Clear the RX/TX window at the start boundary (BEFORE any spawn): record the pre-start
+                # floor so the feed shows only THIS run's activity on a daemon (re)start, and clears
+                # stale activity whenever ANY stack is started while the daemon is already running.
+                for _b in self.active_bands():
+                    self.clear_daemon_feed(_b)
                 try:
                     with self._lifecycle_guard("start", target, band,
                                                stop_owners=stop_owners, radio=_radio):
@@ -327,6 +349,12 @@ class LifecycleOpsMixin:
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root not bootstrapped.",
                                 next_commands=["lhpc bootstrap"])
+        # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
+        # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
+        rm_block = self.radio_mode_block(target)
+        if rm_block:
+            return ActionResult(False, f"Cannot start '{target}': {rm_block}",
+                                next_commands=["lhpc radio-mode"])
         # THE authoritative validation of ordinary ephemeral run params — BEFORE daemon-band
         # calculation, lifecycle-lock selection, conflict/owner handling, any daemon launch, CONF
         # change, config generation, client launch or post-start. Scoped to the target (a stack's
@@ -346,7 +374,7 @@ class LifecycleOpsMixin:
         # THE authoritative boundary for ephemeral Start-confirm overrides: validate + canonicalise
         # per band BEFORE any daemon launch, CONF mutation or client launch. An invalid override is
         # a typed failure (never silently discarded in favour of a saved/default value).
-        launch_bands = ["433", "868"] if radio == "both" else ([radio] if radio in ("433", "868") else [])
+        launch_bands = self._daemon_serve_bands(radio) if radio or self._is_daemon_target(target) else []
         daemon_overrides, ov_err = self._normalize_ephemeral_overrides(
             start_sid, launch_bands, daemon_overrides)
         if ov_err:
@@ -373,7 +401,7 @@ class LifecycleOpsMixin:
             commands = []   # copyable commands the operator must run themselves
             for _, comp in order:
                 if comp.id == self.DAEMON_ID:
-                    details.append(f"  [daemon] start/ensure --radio {radio or 'both'}"
+                    details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
                                    + (f", TXMODE={tx}" if tx else ""))
                 elif comp.interactive:
                     cmd = self.manual_start_command(comp)
@@ -719,9 +747,9 @@ class LifecycleOpsMixin:
 
     def _daemon_claimed_bands(self) -> set:
         """Radio bands CLAIMED by observed daemon PROCESSES (command-line topology — the authoritative
-        ownership signal). `--radio 433` → {433}, `--radio 868` → {868}, `--radio both` (or a
-        missing/unknown mode) → conservatively {433, 868}. A CONF socket that is unreachable /
-        UNINITIALIZED / FAILED does NOT free the radio — the live process still owns it."""
+        ownership signal). `--radio 433` → {433}, `--radio 868` → {868}, any missing/unknown mode →
+        conservatively {433, 868}. A CONF socket that is unreachable / UNINITIALIZED / FAILED does NOT
+        free the radio — the live process still owns it."""
         bands = set()
         for radio in self._daemon_radio_modes():
             if radio == "433":
@@ -729,13 +757,12 @@ class LifecycleOpsMixin:
             elif radio == "868":
                 bands.add("868")
             else:
-                bands |= {"433", "868"}       # both / missing / unknown -> conservative
+                bands |= {"433", "868"}       # missing / unknown -> conservative
         return bands
 
     def _daemon_pids_for_band(self, band: str) -> list[int]:
-        """PIDs of daemon instances that serve `band` — those launched with
-        --radio <band> or --radio both. Lets a per-band Stop signal only that
-        instance, leaving the other band's daemon running."""
+        """PIDs of daemon instances that serve `band` — those launched with `--radio <band>`. Lets a
+        per-band Stop signal only that instance, leaving the other band's daemon running."""
         import posixpath
         out = []
         for pid, argv in self._system.procfs.cmdlines().items():
@@ -747,7 +774,7 @@ class LifecycleOpsMixin:
                     radio = argv[i + 1]
                 elif tok.startswith("--radio="):
                     radio = tok.split("=", 1)[1]
-            if radio in (band, "both") or radio not in ("433", "868"):
+            if radio == band or radio not in ("433", "868"):
                 out.append(pid)              # unknown mode -> conservatively serves the band
         return out
 
@@ -763,8 +790,10 @@ class LifecycleOpsMixin:
           * not serving the band   -> start a daemon instance with --radio <band>
             (works alongside an instance already serving the other band).
         """
-        # Bands this start must make ready. --radio both must ensure BOTH 433 and 868.
-        needed = ["433", "868"] if (radio or "both") == "both" else [radio]
+        # Bands this start must make ready — always explicit single band(s) clamped to the active mode
+        # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
+        # band is spawned as an explicit `--radio <band>` process below.
+        needed = self._daemon_serve_bands(radio)
         views = {b: daemon_control.read_view(self._system, b) for b in needed}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
@@ -775,6 +804,9 @@ class LifecycleOpsMixin:
         claimed_down = [b for b in needed if not views[b].reachable and b in claimed]
         absent = [b for b in needed if not views[b].reachable and b not in claimed]
         lines, ok_all = [], True
+        # Note when a single radio mode narrows an all-bands request.
+        if (radio or "") == "" and set(needed) != {"433", "868"}:
+            lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
         for b in not_ready:
             ok_all = False
             lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
@@ -933,10 +965,10 @@ class LifecycleOpsMixin:
             return {}
         # Applicable bands = the SAME source config_view uses for view.bands (never new band logic).
         if is_daemon:
-            applicable = list(self.RADIO_BANDS)                      # the daemon serves both
+            applicable = list(self.active_bands())                   # the daemon serves the active band(s)
         else:
             applicable = list(self.stack_bands(target)) or [self._effective_daemon_band(target, "")]
-        b = band if band in applicable else applicable[0]            # CLAMP: ?band= never moves a fixed band
+        b = band if band in applicable else applicable[0]            # CLAMP to a served band (radio mode)
         # "Apply live" only makes sense against a live daemon: the daemon page always, or an
         # app stack that is currently running (its daemon dependency is up).
         can_apply = is_daemon or self.stack_running(sid)
@@ -946,11 +978,11 @@ class LifecycleOpsMixin:
 
     def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "",
                             display_overrides: dict | None = None) -> list:
-        """Start-confirm panel view(s): ONE per band THIS launch will touch — two for a daemon
-        `--radio both`, one for a single-band daemon or client start. Each panel carries its own
-        band, source defaults + saved overrides, and (via the template) band-scoped input names
-        `dp_<band>_<PARAM>`, so a 433 value never reaches 868. The radio mode comes from `params`
-        (the daemon's `p_radio`), not just the URL band. `display_overrides` ({band: {PARAM: value}})
+        """Start-confirm panel view(s): ONE per band THIS launch will serve — two in radio-mode `both`
+        (the daemon runs one process per band), one for a single band or a client start. Each panel
+        carries its own band, source defaults + saved overrides, and (via the template) band-scoped
+        input names `dp_<band>_<PARAM>`, so a 433 value never reaches 868. The served band(s) come from
+        `params` (the daemon's `p_radio`) clamped to the active mode. `display_overrides` ({band: {PARAM: value}})
         are SUBMITTED-but-unsaved panel values shown on a re-render (so a failed Save & start keeps
         the operator's edits). [] for direct-SPI / unknown stacks."""
         from . import daemon_params
@@ -958,12 +990,9 @@ class LifecycleOpsMixin:
         if not (is_daemon or daemon_params.is_client(self._owner_stack_id(target))):
             return []
         radio, _tx = self._daemon_needs(self._run_order(target), params, self._config_band(target, band))
-        if radio == "both":
-            bands = ["433", "868"]
-        elif radio in ("433", "868"):
-            bands = [radio]
-        else:
-            bands = [self._effective_daemon_band(target, band)]
+        # Always explicit served band(s), clamped to the active mode (M-1) — never a `both` panel.
+        bands = self._daemon_serve_bands(radio) if (is_daemon or radio) \
+            else [self._effective_daemon_band(target, band)]
 
         sid = self._owner_stack_id(target)                   # owner-stack daemon profile + overrides
         def _rows(b):
@@ -1210,7 +1239,7 @@ class LifecycleOpsMixin:
         if target_is_daemon:
             cascade = True
         # Bands ACTUALLY being stopped — from the authoritative topology resolver (per-band daemon
-        # stop includes its --radio both collateral; separate per-band instances are unaffected).
+        # stop includes its dual-band collateral; separate per-band instances are unaffected).
         _daemon_band_stop = bool(target_is_daemon and band in ("433", "868"))
         stopped_bands = self._operation_bands(target, band, "", "stop") if _daemon_band_stop else None
         other_bands = sorted((stopped_bands or set()) - {band}) if _daemon_band_stop else []
@@ -1331,6 +1360,13 @@ class LifecycleOpsMixin:
                              else f"{daemon_sid} {b} release NOT verified — {dres.summary}")))
                 details.append(f"  [{'stopped' if dres.ok else 'unverified'} daemon] "
                                f"{daemon_sid} {b}: no other stack needs it")
+        # A verified daemon stop clears the RX/TX activity window for the band(s) it served — a
+        # per-band stop clears that band (+ its dual-band collateral), a whole-daemon stop clears
+        # every served band. (A client that releases a daemon band recurses here as a daemon stop.)
+        if target_is_daemon and own_ok:
+            for _b in ({band, *other_bands} if band in ("433", "868")
+                       else set(self.active_bands())):
+                self.clear_daemon_feed(_b)
         # ok only when every result (dependents + own + daemon release) is a verified stop.
         ok = applied_ok(results) if results else True
         summary = (f"Stop applied for '{target}'." if ok else
@@ -2172,8 +2208,9 @@ class LifecycleOpsMixin:
             for b in ([c.band] if c.band else []) + list(c.bands):
                 if b and b not in wanted:
                     wanted.append(b)
+        wanted = [b for b in wanted if self.band_active(b)]       # served bands only (radio mode)
         if not wanted:
-            wanted = list(self.RADIO_BANDS)
+            wanted = list(self.active_bands())
         # A TX test drives real RF, so it requires the radio to be READY (not merely a
         # reachable CONF socket): a FAILED/UNINITIALIZED radio must never be TX-tested.
         bands = [b for b in wanted if self.daemon_view(b).ready]
@@ -2323,12 +2360,14 @@ class LifecycleOpsMixin:
         return out
 
     def stack_bands(self, target: str) -> tuple:
-        """Bands the operator may choose for `target` (empty = single fixed band). Owner-stack
-        scoped, so a direct component target uses its stack's band choices."""
+        """Bands the operator may choose for `target` (empty = single fixed band), NARROWED to the
+        active radio mode (in 'both' this is identity). Owner-stack scoped, so a direct component
+        target uses its stack's band choices."""
         s = self._owner_stack(target)
+        active = self.active_bands()
         for c in (s.components if s else ()):
             if c.bands:
-                return c.bands
+                return tuple(b for b in c.bands if b in active)
         return ()
 
     def _config_band(self, target: str, band: str) -> str:
@@ -2414,7 +2453,8 @@ class LifecycleOpsMixin:
         booting = sorted(cid for cid in running if self._component_booting(cid))
         return ("R:" + ",".join(running) + ";D:" + ",".join(usable)
                 + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
-                + ";B:" + ",".join(booting))
+                + ";B:" + ",".join(booting)
+                + ";M:" + self.radio_mode())      # mode switch reflows the columns -> force a reload
 
     def _build_artifact(self, comp):
         """Relative path of the built binary (explicit `bin`, else the process
@@ -2543,7 +2583,7 @@ class LifecycleOpsMixin:
         occupied_bands = [b for b, v in dvs.items() if v.reachable]
         usable_bands = [b for b, v in dvs.items() if v.ready]
         out = []
-        for band in self.RADIO_BANDS:
+        for band in self.active_bands():                 # only the mode's radios get a normal column
             dv = dvs[band]
             other_served = [b for b in usable_bands if b != band]
             running, startable, interactive = [], [], []
@@ -2623,6 +2663,7 @@ class LifecycleOpsMixin:
                 (running if is_up else startable).append(entry)
             out.append({
                 "band": band,
+                "stray": False, "shared_with": [],
                 "daemon": {
                     "reachable": dv.reachable,     # CONF socket answered (daemon live)
                     # OCCUPIED: reachable — the daemon may physically hold the radio/SPI even
@@ -2657,6 +2698,38 @@ class LifecycleOpsMixin:
                              + [s["name"] for s in interactive if s.get("running")])
                             if len(running) + sum(1 for s in interactive if s.get("running")) > 1
                             else [],
+            })
+        # Strays (§6): a daemon still live on a band the current mode EXCLUDES — the likely leftover
+        # the day after a mode switch. Surface it so it stays visible + stoppable (lhpc never auto-
+        # kills). M-2: if it is the SAME process as an active band's daemon (a dual-band PID),
+        # disclose that stopping it stops the active band too.
+        active = list(self.active_bands())
+        active_pids = {b: set(self._daemon_pids_for_band(b)) for b in active}
+        for band in self.RADIO_BANDS:
+            if band in active:
+                continue
+            dv = dvs[band]
+            if not dv.reachable:
+                continue                                   # nothing live on this excluded band
+            shared_with = sorted(b for b, pids in active_pids.items()
+                                 if pids & set(self._daemon_pids_for_band(band)))
+            out.append({
+                "band": band, "stray": True, "shared_with": shared_with,
+                "daemon": {
+                    "reachable": dv.reachable, "occupied": dv.reachable, "ready": dv.ready,
+                    "usable": dv.ready, "radio_state": dv.radio_state or None,
+                    "state_label": ("usable" if dv.ready else
+                                    "occupied" if dv.reachable else "offline"),
+                    "process": daemon_proc, "process_up": daemon_up, "installed": daemon_installed,
+                    "other_served": [b for b in usable_bands if b != band], "served": usable_bands,
+                    "occupied_bands": occupied_bands, "usable_bands": usable_bands,
+                    "radio": dv.status.get("RADIO") if dv.reachable else None,
+                    "txmode": dv.status.get("TXMODE") if dv.reachable else None,
+                    "cadrssi": dv.status.get("CADRSSI") if dv.reachable else None,
+                    "cadwait": dv.status.get("CADWAIT") if dv.reachable else None,
+                    "liverssi": dv.channel.get("LIVERSSI") if dv.reachable else None,
+                },
+                "running": [], "startable": [], "interactive": [], "conflict": [],
             })
         return out
 
