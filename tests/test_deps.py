@@ -153,3 +153,62 @@ def test_stack_update_includes_radiolib_despite_optional(tmp_path):
     plan = svc.update("daemon", apply=False)
     blob = "\n".join(plan.details)
     assert "radiolib" in blob                            # build_requires target included
+
+
+def test_radiolib_built_state_is_honest(tmp_path):
+    # RadioLib compiles via build_steps and declares its .a as `bin`, so is_built must reflect whether
+    # build/libRadioLib.a actually exists (it used to be a permanent false-positive True, hiding the
+    # need to build it and letting the daemon build fail with "RADIOLIB_DIR not usable").
+    svc = _svc(tmp_path)
+    radiolib = svc.stack("daemon").component("radiolib")
+    (tmp_path / "src" / "RadioLib").mkdir(parents=True)          # checkout present, not built
+    assert not svc.is_built(radiolib)
+    assert "radiolib" in svc.unbuilt_components("daemon")        # honest "Build needed: RadioLib"
+    art = tmp_path / "src" / "RadioLib" / "build" / "libRadioLib.a"
+    art.parent.mkdir(parents=True)
+    art.write_bytes(b"")
+    assert svc.is_built(radiolib)                               # artifact present -> built
+    assert "radiolib" not in svc.unbuilt_components("daemon")
+
+
+def test_manifest_pins_radiolib_to_daemon_required_commit(tmp_path):
+    # Lock the pin so a stray manifest update can't silently regress to an incompatible RadioLib
+    # (the daemon README requires 13b7c7cf / 7.6.0-67; a newer RadioLib fails to compile the daemon).
+    radiolib = _svc(tmp_path).stack("daemon").component("radiolib")
+    assert radiolib.source.pin_commit == "13b7c7cf84b191006da20f82bdb386f2efc96334"
+
+
+def test_unbuilt_build_deps_flags_radiolib_before_daemon(tmp_path):
+    svc = _svc(tmp_path)
+    (tmp_path / "src" / "RadioLib").mkdir(parents=True)          # provider checkout present, not built
+    (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)
+    assert svc.unbuilt_build_deps("daemon") == ["radiolib"]
+    art = tmp_path / "src" / "RadioLib" / "build" / "libRadioLib.a"
+    art.parent.mkdir(parents=True)
+    art.write_bytes(b"")
+    assert svc.unbuilt_build_deps("daemon") == []               # built -> no longer a blocker
+
+
+def test_build_dependency_banner_warns_radiolib_first(tmp_path):
+    # After an update (fresh RadioLib checkout, no .a) the stack body shows an explicit "build the
+    # dependency first" warning that links to the build section — not the generic build-needed note.
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    (tmp_path / "src" / "RadioLib").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-daemon").mkdir(parents=True)
+    app = create_app(service_factory=lambda: svc)
+    app.config["SESSION_COOKIE_SECURE"] = False
+    body = app.test_client().get("/stacks?open=daemon").get_data(as_text=True)
+    assert "not built — build this dependency first" in body and "radiolib" in body
+    assert "comp=radiolib" in body and "#comp-radiolib" in body  # link opens RadioLib's own dep card
+
+
+def test_library_shows_build_dependency_pill_not_optional(tmp_path):
+    # A kind=library (RadioLib) is a BUILD dependency, not a skippable "optional" component — the
+    # stack body must present it as such.
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    app = create_app(service_factory=lambda: svc)
+    app.config["SESSION_COOKIE_SECURE"] = False
+    body = app.test_client().get("/stacks?open=daemon").get_data(as_text=True)
+    assert "build dependency" in body

@@ -7,24 +7,50 @@
 <details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id %} open data-force-open="1"{% endif %}>
   <summary>Settings</summary>
   <div class="body">
-    {% if view.radio_mode %}
+    {% if view.hw_setups %}
       <section class="cfgsec">
         <h3>Hardware</h3>
-        <p class="muted">Which physical radio(s) this box has. In a single-radio mode only that band
-          is offered; the other band's controls are disabled and stacks needing the absent band are
-          blocked. <em>(Placeholder — a fuller hardware-profile selection will replace this.)</em></p>
-        <form method="post" action="{{ url_for('radio_mode_set') }}" class="act">
+        <p class="muted">Which physical radio board(s) this box has. This fixes the served band(s) and
+          the <code>--hw</code> preset each radio launches with. Until a real setup is chosen the daemon
+          refuses to start. Use <strong>Detect</strong> to probe a candidate board (its LED lights while
+          the radio initialises).</p>
+        {% if not view.hardware_configured %}
+          <p class="depnote depnote-warn">No radio hardware configured — pick your board below to enable
+            the daemon.</p>
+        {% endif %}
+        <form method="post" action="{{ url_for('hardware_set') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <label>Radio mode
-            <select name="mode">
-              {% for m in view.radio_modes %}
-                <option value="{{ m }}"{% if m == view.radio_mode %} selected{% endif %}>
-                  {{ 'both bands (433 + 868)' if m == 'both' else m ~ ' MHz only' }}</option>
+          <label>Hardware setup
+            <select name="hardware">
+              {% for sid, label in view.hw_setups %}
+                <option value="{{ sid }}"{% if sid == view.hardware %} selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
           </label>
-          <button type="submit">Save radio mode</button>
+          <button type="submit">Save hardware</button>
         </form>
+        <form method="post" action="{{ url_for('hardware_probe') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <label>Detect
+            <select name="band">
+              <option value="433">433 MHz</option>
+              <option value="868">868 MHz</option>
+            </select>
+          </label>
+          <label>as
+            <select name="hw">
+              <option value="legacy">LoRaHAM</option>
+              <option value="uputronics-ce0">Uputronics CE0</option>
+              <option value="uputronics-ce1">Uputronics CE1</option>
+              <option value="waveshare-sx1262">Waveshare SX1262</option>
+            </select>
+          </label>
+          <button type="submit">Detect</button>
+        </form>
+        {% if hw_probe %}
+          <p class="depnote depnote-{{ 'ok' if hw_probe.present else ('warn' if hw_probe.busy else 'bad') }}">
+            {{ hw_probe.message }}{% if hw_probe.diagnostic %} — {{ hw_probe.diagnostic }}{% endif %}</p>
+        {% endif %}
       </section>
     {% endif %}
     {% if view.bands %}

@@ -35,6 +35,11 @@
       {% endfor %}
     </div>
   {% endif %}
+  {% if not hardware_configured %}
+    {% call banner('warn', url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon', 'Configure') %}
+      No radio hardware is configured — pick your board (one or two radios) before the daemon can start.
+    {% endcall %}
+  {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
     {% for r in radios %}

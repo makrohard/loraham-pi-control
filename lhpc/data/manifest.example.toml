@@ -45,9 +45,12 @@ main = "loraham-daemon"
   # process LHPC spawned, which breaks verified ownership. LHPC already detaches it
   # (start_new_session + redirected stdio), so it runs as the LHPC-owned session
   # leader and stop() can identity-verify it before signalling.
-  run = "loraham_daemon/loraham_daemon --radio {radio} {debug} --tx-mode-433 {tx_433} --tx-mode-868 {tx_868} --cad-monitor-433 {cadmon_433} --cad-monitor-868 {cadmon_868} --cad-rssi-433 {cadrssi_433} --cad-rssi-868 {cadrssi_868}"
+  # v112+ daemon: ONE radio per process. `--radio` is mandatory; `--hw` selects the board preset;
+  # the plain (NON band-suffixed) --tx-mode/--cad-monitor/--cad-rssi apply to this process's band.
+  # lhpc injects `radio`/`hw`/`txmode`/`cadmon`/`cadrssi` per band at spawn (see _ensure_daemon).
+  run = "loraham_daemon/loraham_daemon --radio {radio} {debug} --hw {hw} --tx-mode {txmode} --cad-monitor {cadmon} --cad-rssi {cadrssi}"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
-  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "{param:debug}", "--tx-mode-433", "{param:tx_433}", "--tx-mode-868", "{param:tx_868}", "--cad-monitor-433", "{param:cadmon_433}", "--cad-monitor-868", "{param:cadmon_868}", "--cad-rssi-433", "{param:cadrssi_433}", "--cad-rssi-868", "{param:cadrssi_868}"]
+  run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "{param:debug}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}"]
   run_cwd = "{source}"
   run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham" }
   # build.sh consumes the RadioLib checkout as the sibling src/RadioLib — a hard BUILD-time
@@ -75,7 +78,38 @@ main = "loraham-daemon"
     name = "debug"
     kind = "flag"
     flag = "--debug"
-    label = "Debug logging (whole daemon, both bands)"
+    label = "Debug logging (this daemon process)"
+    # Injected-only per-PROCESS values: lhpc computes each at spawn (see _ensure_daemon) — `hw` from
+    # the chosen hardware setup, and txmode/cadmon/cadrssi from THIS band's tx_<b>/cadmon_<b>/cadrssi_<b>
+    # below. They are not shown in generic forms; the defaults only keep a standalone argv preview
+    # well-formed (a blank value would orphan its literal flag).
+    [[stack.component.param]]
+    name = "hw"
+    kind = "enum"
+    choices = ["legacy", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262"]
+    # Friendly labels so the GUI never shows the raw "legacy" wire name (the value still submits).
+    choice_labels = [["legacy", "LoRaHAM"], ["uputronics-ce0", "Uputronics CE0"], ["uputronics-ce1", "Uputronics CE1"], ["waveshare-sx1262", "Waveshare SX1262"]]
+    default = "legacy"
+    label = "Hardware preset (--hw)"
+    [[stack.component.param]]
+    name = "txmode"
+    kind = "enum"
+    choices = ["managed", "direct"]
+    default = "managed"
+    label = "TX mode (this process)"
+    [[stack.component.param]]
+    name = "cadmon"
+    kind = "enum"
+    choices = ["off", "on"]
+    default = "off"
+    label = "CAD monitor (this process)"
+    [[stack.component.param]]
+    name = "cadrssi"
+    kind = "int"
+    default = "-90"
+    min = -130
+    max = 0
+    label = "CAD RSSI (this process, dBm)"
     [[stack.component.param]]
     name = "tx_433"
     kind = "enum"
@@ -187,14 +221,20 @@ main = "loraham-daemon"
   # Self-sufficient in-root build: produces build/libRadioLib.a, which the daemon's
   # build.sh consumes via RADIOLIB_DIR (all deps live and build under <root>/src).
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build", "-j", "2"] } ]
+  # The built artifact is the static lib the daemon links — declaring it as `bin` makes lhpc's
+  # `is_built` HONEST (a fresh clone has no build/, so RadioLib correctly reads "not built" and the
+  # daemon's "Build needed" banner names it; Build compiles it first via build_requires ordering).
+  bin = "build/libRadioLib.a"
   # `optional` here means "not runnable / not started with the stack" — the daemon's
   # build_requires edge makes it a hard install/update/uninstall reference.
   optional = true
 
     [stack.component.source]
     path = "src/RadioLib"
-    pin_commit = "6d8934836678d8894e3d556550475b37dce3e2b6"
-    pin_tag = "7.7.1-43-g6d8934836"
+    # Pinned to the RF-verified commit the daemon README requires (7.6.0-67); building against a
+    # newer RadioLib (e.g. 7.7.1) fails to compile the daemon.
+    pin_commit = "13b7c7cf84b191006da20f82bdb386f2efc96334"
+    pin_tag = "7.6.0-67-g13b7c7cf8"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 

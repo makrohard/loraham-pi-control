@@ -453,6 +453,24 @@ def test_start_confirm_includes_daemon_params_panel(tmp_path):
     assert ">Apply live</button>" not in body                # ...but no Apply-live on the confirm
 
 
+def test_start_confirm_shows_daemon_options_collapsed_with_friendly_hw(tmp_path):
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\n")
+    c = _real_app(tmp_path)
+    token = _csrf(c)
+    body = c.post("/action", data={"_csrf": token, "op": "start", "target": "daemon"}).get_data(as_text=True)
+    # All per-process params ARE shown, inside the collapsed "Daemon process options" header.
+    assert "Daemon process options" in body               # the collapsed <details> header
+    for lbl in ("Hardware preset (--hw)", "TX mode (this process)", "CAD monitor (this process)",
+                "CAD RSSI (this process, dBm)"):
+        assert lbl in body
+    assert 'name="p_hw"' in body and 'name="p_debug"' in body
+    # The hw select shows the FRIENDLY label; the raw "legacy" wire name is never VISIBLE (only the
+    # submitted <option value="legacy"> attribute carries it).
+    assert ">LoRaHAM<" in body and ">legacy<" not in body
+
+
 def test_start_daemon_only_on_a_band(tmp_path):
     # The dash "Start daemon (868 only)" posts op=start target=daemon p_radio=868.
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"

@@ -444,7 +444,7 @@ class MaintenanceOpsMixin:
         ("install", "done"): "Next: Build.",
         ("build", "done"): "Next: Test.",
         ("test", "done"): "Ready.",
-        ("build", "failed"): "Maybe try to install known-working.",
+        ("build", "failed"): "Build failed — open the log to see the error.",
         ("*", "incomplete"): "Ended unexpectedly — check the log.",
         ("*", "unsafe"): "The build may still be running — inspect processes (ps).",
     }

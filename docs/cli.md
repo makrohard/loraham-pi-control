@@ -15,7 +15,7 @@ does is available here too.
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [radio-mode](#radio-mode)
+- [config](#config) · [hardware](#hardware)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -72,21 +72,28 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 
 Example: `lhpc config chat call W1ABC` then `lhpc stack start chat`.
 
-### radio-mode
-Show or set the global **radio hardware mode** — which physical radio band(s) this box has.
+### hardware
+Show or set the **radio hardware setup** — which physical board(s) this box has. This fixes which
+band(s) are served and the daemon `--hw` preset each radio launches with. A fresh install is **not
+configured**, and the daemon refuses to start until a setup is chosen.
 
 ```
-lhpc radio-mode              # show the current mode + active band(s)
-lhpc radio-mode both         # dual radio (433 + 868) — the default, unchanged behavior
-lhpc radio-mode 433          # single-radio hardware: offer/serve/start ONLY 433
-lhpc radio-mode 868          # single-radio hardware: offer/serve/start ONLY 868
+lhpc hardware                # show the current setup + served band(s) + the catalog
+lhpc hardware loraham        # LoRaHAM dual-module (SX1278 + RFM95) — serves 433 + 868
+lhpc hardware uputronics     # Uputronics dual (CE0 433 + CE1 868)
+lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
+lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
+lhpc hardware waveshare-433  # Waveshare SX1262 (433)
+lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
 ```
 
-- In a single mode lhpc shows only that radio, disables the other band's config choosers, and blocks
-  stacks that need the absent band (e.g. `meshcore` needs 868) with a clear reason. A daemon already
-  running on the excluded band stays visible with a Stop control — lhpc never stops it for you.
-- Also settable in the web console under the loraham daemon stack's **Hardware** settings section.
-- Preparation for single-radio-hardware daemons; a fuller hardware-profile selection replaces it later.
+- Only **legit** board combinations are offered (illegal ones — e.g. Waveshare + Uputronics — are
+  absent from the catalog and can never be selected).
+- With a single-radio setup lhpc shows only that radio, disables the other band's choosers, and blocks
+  stacks that need the absent band (e.g. `meshcore` needs 868) with a clear reason.
+- Also settable in the web console under the loraham daemon stack's **Hardware** settings section,
+  which additionally offers a **Detect** probe (spawns the daemon briefly per candidate board and
+  reports whether the chip responds — the board's LED lights during init).
 
 ---
 

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import manifest as manifest_mod
 from .config import (
+    HW_SETUPS,
     Config,
     ConfigError,
     conditional_clear_stack_config,
@@ -1269,18 +1270,35 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     RADIO_BANDS = ("433", "868")   # the FULL band universe — detection/read/manage (never narrowed)
 
+    def hardware_setup(self) -> str:
+        """The configured radio HARDWARE setup id ('unset' | 'loraham' | 'uputronics' | …)."""
+        return self.config().radio.hardware
+
+    def hardware_configured(self) -> bool:
+        """True once the operator has picked a real hardware setup (not 'unset')."""
+        return self.config().radio.configured
+
+    def hw_preset_for_band(self, band: str) -> str:
+        """The daemon `--hw` wire preset for a served band under the current setup, or '' if the
+        setup does not serve that band / no hardware is configured."""
+        return self.config().radio.hw_preset(band)
+
+    def hw_setups(self) -> list:
+        """The hardware-setup catalog for the UI/CLI: [(id, label), …] in display order."""
+        return [(sid, label) for sid, (label, _map) in HW_SETUPS.items()]
+
     def radio_mode(self) -> str:
-        """The configured radio hardware mode: 'both' | '433' | '868' (default 'both')."""
-        return self.config().radio.mode
+        """DERIVED band-mode for the dashboard narrowing / labels: 'both' | '433' | '868' | 'unset'."""
+        return self.config().radio.radio_mode
 
     def active_bands(self) -> tuple:
-        """The bands the current mode OFFERS / SERVES / STARTS — a subset of RADIO_BANDS. In 'both'
-        this equals RADIO_BANDS (unchanged behavior); in a single mode it is that one band. Use this
-        for what lhpc shows/serves/starts; use RADIO_BANDS for what lhpc can still detect/manage."""
+        """The bands the current hardware setup OFFERS / SERVES / STARTS — a subset of RADIO_BANDS,
+        and EMPTY () when no hardware is configured. Use this for what lhpc shows/serves/starts; use
+        RADIO_BANDS for what lhpc can still detect/manage."""
         return self.config().radio.active_bands
 
     def band_active(self, band: str) -> bool:
-        """True iff `band` is offered by the current radio mode (the SET/offer gate)."""
+        """True iff `band` is served by the current hardware setup (the SET/offer gate)."""
         return band in self.active_bands()
 
     def _daemon_serve_bands(self, radio: str = "") -> list:

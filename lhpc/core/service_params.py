@@ -116,6 +116,8 @@ class ParamsConfigMixin:
         """The single band the daemon-params panel/apply uses: the requested band if valid, else
         the stack's fixed band (from its band-component), else 433."""
         active = self.active_bands()                              # served bands (radio mode)
+        if not active:
+            return ""                                             # no hardware configured -> no band
         if band in active:
             return band
         s = self._owner_stack(target)
@@ -680,31 +682,32 @@ class ParamsConfigMixin:
         # chosen by a 433/868 switch at the top. The repo/RadioLib remotes + save/
         # restore below apply to both bands.
         if s is not None and s.main == self.DAEMON_ID:
-            from . import config as _config
+            # The Hardware subsection: the real hardware-setup selector. Always shown (even when
+            # unconfigured) so a fresh box can be set up here.
+            view["hardware"] = self.hardware_setup()
+            view["hardware_configured"] = self.hardware_configured()
+            view["hw_setups"] = self.hw_setups()
             active = self.active_bands()
-            live_band = band if band in active else active[0]
-            view["bands"] = list(active)                 # only the mode's radios are tunable
-            view["band"] = live_band
-            view["live_band"] = True       # band switch selects the LIVE band, not config
-            # The Hardware subsection: the radio hardware mode switch (placeholder for future
-            # hardware-profile selection).
-            view["radio_mode"] = self.radio_mode()
-            view["radio_modes"] = list(_config.RADIO_MODES)
-            dv = self.daemon_view(live_band)
-            # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
-            # what it actually reports; the configured daemon-param value is the fallback for
-            # radio params the daemon does not echo (FREQ/SF/BW/…).
-            actual = {**dv.channel, **dv.status}
-            cfg = self._daemon_param_applies("daemon", live_band) if dv.reachable else {}
-            view["radios"] = [{"band": live_band, "reachable": dv.reachable,
-                               "error": dv.error, "status": actual, "config": cfg}]
-            # Order the live per-parameter controls the same as the daemon-params panel
-            # below (shared keys in that order; any daemon-only extras after).
-            from . import daemon_params
-            allowed = daemon_control.allowed_settings()
-            order = ([k for k in daemon_params.ALL_PARAMS if k in allowed]
-                     + [k for k in allowed if k not in daemon_params.ALL_PARAMS])
-            view["live_settings"] = {k: allowed[k] for k in order}
+            if active:                                   # only a configured setup has tunable radios
+                live_band = band if band in active else active[0]
+                view["bands"] = list(active)             # only the setup's radios are tunable
+                view["band"] = live_band
+                view["live_band"] = True       # band switch selects the LIVE band, not config
+                dv = self.daemon_view(live_band)
+                # Populate each control with the daemon's REAL current value: STATUS + CHANNEL are
+                # what it actually reports; the configured daemon-param value is the fallback for
+                # radio params the daemon does not echo (FREQ/SF/BW/…).
+                actual = {**dv.channel, **dv.status}
+                cfg = self._daemon_param_applies("daemon", live_band) if dv.reachable else {}
+                view["radios"] = [{"band": live_band, "reachable": dv.reachable,
+                                   "error": dv.error, "status": actual, "config": cfg}]
+                # Order the live per-parameter controls the same as the daemon-params panel
+                # below (shared keys in that order; any daemon-only extras after).
+                from . import daemon_params
+                allowed = daemon_control.allowed_settings()
+                order = ([k for k in daemon_params.ALL_PARAMS if k in allowed]
+                         + [k for k in allowed if k not in daemon_params.ALL_PARAMS])
+                view["live_settings"] = {k: allowed[k] for k in order}
         return view
 
     def save_config(self, target: str, values: dict,
@@ -981,22 +984,28 @@ class ParamsConfigMixin:
         return ActionResult(True, "operator identity saved",
                             details=[f"  callsign = {new_call or '(unset)'}"])
 
-    def set_radio_mode(self, mode: str | None = None) -> ActionResult:
-        """Set the GLOBAL radio hardware mode (`[radio].mode` in local.toml): 'both' (dual radio),
-        '433' or '868' (single radio). No arg reports the current mode. In a single mode lhpc offers/
-        serves/starts only that band; the other band's choosers are disabled and stacks needing the
-        absent band are shown blocked."""
+    def set_hardware_setup(self, setup_id: str | None = None) -> ActionResult:
+        """Set the radio HARDWARE setup (`[radio].hardware` in local.toml) — e.g. 'loraham',
+        'uputronics', 'waveshare-433'. No arg reports the current setup + served bands. 'unset' means
+        no hardware is configured: the daemon refuses to start until a real setup is chosen. The setup
+        fixes which band(s) are served and the daemon `--hw` preset each one launches with."""
         from . import config as _config
-        if mode is None:
-            return ActionResult(True, f"radio mode: {self.radio_mode()}",
-                                details=[f"  active band(s): {', '.join(self.active_bands())}"])
+        setups = dict(self.hw_setups())
+        if setup_id is None:
+            cur = self.hardware_setup()
+            return ActionResult(True, f"hardware setup: {cur} ({setups.get(cur, cur)})",
+                                details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}",
+                                         "  choose from: " + ", ".join(setups)])
+        if setup_id not in setups:
+            return ActionResult(False, f"unknown hardware setup {setup_id!r}",
+                                details=["  choose from: " + ", ".join(setups)])
         try:
-            _config.save_radio_mode(self._paths, mode)
+            _config.save_hardware_setup(self._paths, setup_id)
         except (OSError, _config.ConfigError) as exc:
-            return ActionResult(False, f"could not save radio mode: {exc}")
+            return ActionResult(False, f"could not save hardware setup: {exc}")
         self._invalidate_config()
-        return ActionResult(True, f"radio mode set to {mode}",
-                            details=[f"  active band(s): {', '.join(self.active_bands())}"])
+        return ActionResult(True, f"hardware setup set to {setup_id}",
+                            details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}"])
 
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle

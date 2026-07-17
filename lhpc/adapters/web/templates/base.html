@@ -34,6 +34,10 @@
     <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-update" class="update-link">Update &rarr;</a>{% endif %} · <a href="https://github.com/makrohard/loraham-pi-control">GitHub</a>
     {# GitHub on the main line (full opacity) — not the dimmed .sub — for good contrast. #}
     <div class="sub">Local operator console · {{ runtime_root|default('') }}</div>
+    {# Read-only current radio hardware setup (configured on the Apps page); links to those settings. #}
+    <div class="sub">Radio hardware:
+      <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}"
+        >{{ hardware_footer.label if hardware_footer else 'Not configured' }}</a></div>
     {# Theme toggle, pinned to the footer's right edge. Light shows the moon (→ dark); dark the sun.
        Inline SVG is CSP-safe; the click handler + icon state live in theme.js / style.css. #}
     <button type="button" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">

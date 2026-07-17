@@ -463,6 +463,8 @@ def _parse_component(raw: dict) -> Component:
             RunParam(
                 name=p["name"], kind=p.get("kind", "enum"),
                 choices=tuple(str(c) for c in p.get("choices", [])),
+                choice_labels=tuple((str(pair[0]), str(pair[1]))
+                                    for pair in p.get("choice_labels", []) if len(pair) == 2),
                 default=str(p.get("default", "")),
                 flag=p.get("flag", ""), label=p.get("label", ""),
                 min=p.get("min"), max=p.get("max"),

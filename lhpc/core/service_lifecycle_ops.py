@@ -220,6 +220,46 @@ class LifecycleOpsMixin:
                     add(sid, c.id, f"radio {comp_band} MHz")
         return blockers
 
+    def hardware_block(self, target: str) -> str:
+        """A reason string when NO radio hardware is configured and this stack needs a radio, else "".
+        Fresh installs default to 'unset' — the daemon must not start until the operator picks a board
+        in the daemon Hardware settings. The daemon itself and any band-declaring stack are gated; a
+        stack that needs no radio is not. Remedy = configure hardware, not stop a holder."""
+        if self.hardware_configured():
+            return ""
+        order = self._run_order(target)
+        if order is None:
+            return ""
+        needs_radio = self._is_daemon_target(target) or any((c.band or c.bands) for _, c in order)
+        if not needs_radio:
+            return ""
+        return ("no radio hardware configured — choose your board in the daemon Hardware settings "
+                "before starting a radio stack")
+
+    def probe_hardware(self, band: str, hw_preset: str):
+        """Bounded, safe hardware probe for the daemon Hardware page: spawn the daemon for
+        (band, hw_preset) and report present / absent (+ the daemon's chip diagnostic) / busy. Guards:
+        valid band, known preset, daemon BUILT. Reuses the real runtime lock dir so an already-running
+        daemon on the band reports BUSY, never gets its radio stolen."""
+        from . import config as _config
+        from .probes import hardware as hwprobe
+        if band not in self.RADIO_BANDS:
+            return hwprobe.ProbeResult(False, False, f"invalid band {band!r}")
+        if hw_preset not in _config.HW_PRESETS:
+            return hwprobe.ProbeResult(False, False, f"unknown hardware preset {hw_preset!r}")
+        s = self.stack("daemon")
+        comp = s.main_component if s else None
+        if comp is None or comp.source is None:
+            return hwprobe.ProbeResult(False, False, "daemon component not found")
+        if not self.is_built(comp):
+            return hwprobe.ProbeResult(False, False, "daemon not built — build it first (lhpc build daemon)")
+        life = self._lifecycle()
+        src = life.source_dir(comp)
+        binary = str(src / comp.bin) if comp.bin else str(src / "loraham_daemon" / "loraham_daemon")
+        runtime_dir = str(self._paths.runtime_root / "state" / "loraham")
+        return hwprobe.probe_radio(self._system, binary, str(src), band, hw_preset,
+                                   runtime_dir=runtime_dir, label=_config.hw_preset_label(hw_preset))
+
     def radio_mode_block(self, target: str) -> str:
         """A reason string when the active radio mode excludes EVERY band this stack can use, else "".
         A band-switchable stack stays available if ANY of its bands is active (uses the RAW declared
@@ -349,12 +389,18 @@ class LifecycleOpsMixin:
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root not bootstrapped.",
                                 next_commands=["lhpc bootstrap"])
+        # Hardware not configured: a fresh box has no radio board selected, so the daemon (and any
+        # radio stack) must refuse to start until the operator picks one. Checked BEFORE radio-mode.
+        hw_block = self.hardware_block(target)
+        if hw_block:
+            return ActionResult(False, f"Cannot start '{target}': {hw_block}",
+                                next_commands=["lhpc hardware"])
         # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
         # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
         rm_block = self.radio_mode_block(target)
         if rm_block:
             return ActionResult(False, f"Cannot start '{target}': {rm_block}",
-                                next_commands=["lhpc radio-mode"])
+                                next_commands=["lhpc hardware"])
         # THE authoritative validation of ordinary ephemeral run params — BEFORE daemon-band
         # calculation, lifecycle-lock selection, conflict/owner handling, any daemon launch, CONF
         # change, config generation, client launch or post-start. Scoped to the target (a stack's
@@ -790,6 +836,10 @@ class LifecycleOpsMixin:
           * not serving the band   -> start a daemon instance with --radio <band>
             (works alongside an instance already serving the other band).
         """
+        # Defense-in-depth: never launch the daemon with no hardware configured (the start-path gate
+        # already refuses, but a daemon-only/internal caller must fail closed here too).
+        if not self.hardware_configured():
+            return ["  [BLOCKED] daemon: no radio hardware configured (lhpc hardware)"], False
         # Bands this start must make ready — always explicit single band(s) clamped to the active mode
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
@@ -829,6 +879,12 @@ class LifecycleOpsMixin:
             for b in sorted(absent):
                 dparams = dict(self.stack_config("daemon"))
                 dparams["radio"] = b
+                # v112: one process per band with plain (non band-suffixed) flags. `--hw` comes from
+                # the hardware setup; --tx-mode/--cad-monitor/--cad-rssi carry THIS band's stored value.
+                dparams["hw"] = self.hw_preset_for_band(b)
+                dparams["txmode"] = dparams.get(f"tx_{b}", "managed")
+                dparams["cadmon"] = dparams.get(f"cadmon_{b}", "off")
+                dparams["cadrssi"] = dparams.get(f"cadrssi_{b}", "-90")
                 if params and params.get("debug"):
                     dparams["debug"] = "1"
                 res = life.start(stack, comp, dparams, band=b)
@@ -967,7 +1023,10 @@ class LifecycleOpsMixin:
         if is_daemon:
             applicable = list(self.active_bands())                   # the daemon serves the active band(s)
         else:
-            applicable = list(self.stack_bands(target)) or [self._effective_daemon_band(target, "")]
+            applicable = [b for b in (list(self.stack_bands(target))
+                                      or [self._effective_daemon_band(target, "")]) if b]
+        if not applicable:
+            return {}            # no hardware configured -> no served band -> nothing to tune
         b = band if band in applicable else applicable[0]            # CLAMP to a served band (radio mode)
         # "Apply live" only makes sense against a live daemon: the daemon page always, or an
         # app stack that is currently running (its daemon dependency is up).
@@ -1738,6 +1797,31 @@ class LifecycleOpsMixin:
         if err:
             return None, "blocked", err
         comps = [c for _, c in items]
+        # BUILD-REQUIRES ordering for DETACHED (parallel, unsequenceable) jobs: a provider like RadioLib
+        # must have its artifact built BEFORE the daemon's build.sh runs. `_resolve` returns only RUNNABLE
+        # components, so a non-runnable library provider is otherwise never built by the web job at all.
+        # Pull the owning stack's declared providers in; if any is not built yet, build the MISSING
+        # provider(s) THIS round and defer the consumer (the operator builds again once they finish) —
+        # never build a provider and its consumer in the same parallel round (the consumer would race the
+        # provider's artifact). When the providers are already built, build the consumer(s) only.
+        build_dep_note = ""
+        if op == "build":
+            provider_ids = {d for c in comps for d in (c.build_requires or ())}
+            if provider_ids:
+                sid = self.stack_of(target)
+                st_full = self.stack(sid) if sid else None
+                have = {c.id for c in comps}
+                if st_full is not None:
+                    comps = comps + [c for c in st_full.components
+                                     if c.id in provider_ids and c.build_steps and c.id not in have]
+                unbuilt_prov = [c for c in comps if c.id in provider_ids and not self.is_built(c)]
+                if unbuilt_prov:
+                    comps = unbuilt_prov
+                    names = ", ".join(c.name for c in unbuilt_prov)
+                    build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
+                                      "to build the rest once it finishes.")
+                else:
+                    comps = [c for c in comps if c.id not in provider_ids]
         src_paths = {c.source.path for c in comps if c.source}
         src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
@@ -1850,7 +1934,7 @@ class LifecycleOpsMixin:
         for fn in spawn_fns[1:]:            # admitted/pending: start the secondary component jobs
             fn()
         self.prune_logs()
-        return plog, admission, ""
+        return plog, admission, build_dep_note
 
     def prune_logs(self) -> int:
         """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
@@ -2403,6 +2487,17 @@ class LifecycleOpsMixin:
         return [c.id for c in (s.components if s else ())
                 if c.source and life.source_dir(c).exists() and not self.is_built(c)]
 
+    def unbuilt_build_deps(self, target: str) -> list[str]:
+        """The subset of `unbuilt_components` that are BUILD DEPENDENCIES — a `build_requires` provider
+        of another component in the stack (e.g. RadioLib, consumed by the daemon's build.sh). These MUST
+        be built BEFORE their consumer; the daemon build otherwise fails 'RADIOLIB_DIR not usable'."""
+        s = self.stack(target)
+        if s is None:
+            return []
+        providers = {d for c in s.components for d in (c.build_requires or ())}
+        unbuilt = set(self.unbuilt_components(target))
+        return [c.id for c in s.components if c.id in providers and c.id in unbuilt]
+
     def stack_running(self, target: str) -> bool:
         """True if the stack's main component is currently running/degraded."""
         s = self.stack(target)
@@ -2458,8 +2553,10 @@ class LifecycleOpsMixin:
 
     def _build_artifact(self, comp):
         """Relative path of the built binary (explicit `bin`, else the process
-        exec_name), or None when the component compiles nothing."""
-        if not comp.build_cmd:
+        exec_name), or None when the component compiles nothing. A component that compiles via
+        `build_steps` (e.g. the RadioLib library: no `build`/exec_name, only cmake steps) also has a
+        build — so an explicit `bin` on it (its .a) makes `is_built` honest."""
+        if not (comp.build_cmd or comp.build_steps):
             return None
         rel = comp.bin or (comp.process.exec_name if comp.process else "")
         return rel or None

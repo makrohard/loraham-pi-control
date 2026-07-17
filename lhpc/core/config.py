@@ -104,23 +104,73 @@ class OperatorConfig:
         return bool(self.callsign)
 
 
-# Which physical radio bands the box has. `both` = the classic dual-radio box (unchanged behavior).
-# `433`/`868` = single-radio hardware: lhpc offers/serves/starts ONLY that band. This is a
-# placeholder for a richer future "hardware profile" selection.
-RADIO_MODES = ("both", "433", "868")
-RADIO_DEFAULT_MODE = "both"
+# Radio HARDWARE setup: which physical board(s) the box has, and the daemon `--hw` wire preset per
+# SERVED band. `unset` (default) = NO hardware configured yet — the daemon refuses to start until the
+# operator picks a setup in the daemon Hardware settings. Illegal board combinations (Waveshare+Uputronics,
+# two Waveshare) are simply ABSENT from this catalog, so they can never be selected. The daemon's
+# `--hw legacy` is our original dual-module board, shown to the operator as "LoRaHAM".
+# Each entry: (label, {band: "--hw" wire preset}). Insertion order = UI display order.
+HW_SETUPS: dict = {
+    "unset": ("Not configured", {}),
+    "loraham": ("LoRaHAM dual-module (SX1278 + RFM95)", {"433": "legacy", "868": "legacy"}),
+    "uputronics": ("Uputronics dual (CE0 433 + CE1 868)",
+                   {"433": "uputronics-ce0", "868": "uputronics-ce1"}),
+    "uputronics-433": ("Uputronics 433 (CE0)", {"433": "uputronics-ce0"}),
+    "uputronics-868": ("Uputronics 868 (CE1)", {"868": "uputronics-ce1"}),
+    "waveshare-433": ("Waveshare SX1262 (433)", {"433": "waveshare-sx1262"}),
+    "waveshare-868": ("Waveshare SX1262 (868)", {"868": "waveshare-sx1262"}),
+}
+HW_DEFAULT = "unset"
+
+# Every daemon `--hw` wire preset the catalog can launch — used to validate a probe request.
+HW_PRESETS = frozenset(preset for _label, _map in HW_SETUPS.values() for preset in _map.values())
+
+# Friendly display name per `--hw` wire preset (never show the raw "legacy" token in the GUI).
+HW_PRESET_LABELS = {
+    "legacy": "LoRaHAM",
+    "uputronics-ce0": "Uputronics CE0",
+    "uputronics-ce1": "Uputronics CE1",
+    "waveshare-sx1262": "Waveshare SX1262",
+}
+
+
+def hw_preset_label(preset: str) -> str:
+    """Friendly name for a `--hw` wire preset (falls back to the raw value if unknown)."""
+    return HW_PRESET_LABELS.get(preset, preset)
 
 
 @dataclass(frozen=True)
 class RadioConfig:
-    """Radio hardware mode — sourced ONLY from the runtime-local layer. Default `both` keeps the
-    existing dual-radio behavior byte-for-byte."""
+    """Radio HARDWARE setup — sourced ONLY from the runtime-local layer. Default `unset` means no
+    hardware is configured; the daemon refuses to start until a setup is chosen."""
 
-    mode: str = RADIO_DEFAULT_MODE
+    hardware: str = HW_DEFAULT
+
+    @property
+    def _preset_map(self) -> dict:
+        # {band: --hw preset} for the selected setup (empty when unset/unknown).
+        return HW_SETUPS.get(self.hardware, HW_SETUPS[HW_DEFAULT])[1]
+
+    @property
+    def configured(self) -> bool:
+        return self.hardware != "unset" and bool(self._preset_map)
 
     @property
     def active_bands(self) -> tuple:
-        return ("433", "868") if self.mode == "both" else (self.mode,)
+        # SERVED bands, ascending. Empty () when unconfigured.
+        return tuple(b for b in ("433", "868") if b in self._preset_map)
+
+    def hw_preset(self, band: str) -> str:
+        # Daemon `--hw` wire preset for a served band, or "" if this setup does not serve it.
+        return self._preset_map.get(band, "")
+
+    @property
+    def radio_mode(self) -> str:
+        # DERIVED band-mode for dashboard narrowing / labels: both | 433 | 868 | unset.
+        bands = self.active_bands
+        if len(bands) == 2:
+            return "both"
+        return bands[0] if bands else "unset"
 
 
 # Webserver access modes (browser client-certificate authentication policy). There are
@@ -486,17 +536,18 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 
     operator = OperatorConfig(callsign=_str_field("callsign"))
 
-    # [radio] hardware mode. Fail-OPEN: an absent/malformed/unknown value falls back to `both`
-    # (which only WIDENS offering and never blocks anything), with a diagnostic.
+    # [radio] hardware setup. Fail-OPEN: an absent/malformed/unknown value falls back to `unset`
+    # (no hardware configured — the daemon refuses to start until the operator picks a board), with a
+    # diagnostic. Pre-release: no migration from any older `[radio].mode` key.
     radio_raw = merged.get("radio", {})
     if not isinstance(radio_raw, dict):
-        diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using both")
+        diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using unset")
         radio_raw = {}
-    radio_mode = radio_raw.get("mode", RADIO_DEFAULT_MODE)
-    if radio_mode not in RADIO_MODES:
-        diagnostics.append(f"ignored invalid radio.mode {radio_mode!r}; using {RADIO_DEFAULT_MODE}")
-        radio_mode = RADIO_DEFAULT_MODE
-    radio = RadioConfig(mode=radio_mode)
+    hardware = radio_raw.get("hardware", HW_DEFAULT)
+    if hardware not in HW_SETUPS:
+        diagnostics.append(f"ignored invalid radio.hardware {hardware!r}; using {HW_DEFAULT}")
+        hardware = HW_DEFAULT
+    radio = RadioConfig(hardware=hardware)
 
     remotes_raw = local.get("remotes", {})   # runtime-local only, never tracked
     if not isinstance(remotes_raw, dict):
@@ -731,14 +782,14 @@ def save_operator_config(paths: Paths, callsign: str) -> Path:
         return _write_local_tables(paths, path, {"operator": {"callsign": callsign}})
 
 
-def save_radio_mode(paths: Paths, mode: str) -> Path:
-    """Persist the radio hardware mode into the runtime-local layer (git-ignored). Validates the
-    mode BEFORE any write (fail closed); patches only `[radio].mode`."""
-    if mode not in RADIO_MODES:
-        raise ConfigError(f"invalid radio mode {mode!r} (allowed: {', '.join(RADIO_MODES)})")
+def save_hardware_setup(paths: Paths, setup_id: str) -> Path:
+    """Persist the radio hardware setup into the runtime-local layer (git-ignored). Validates the
+    setup id BEFORE any write (fail closed); patches only `[radio].hardware`."""
+    if setup_id not in HW_SETUPS:
+        raise ConfigError(f"invalid hardware setup {setup_id!r} (allowed: {', '.join(HW_SETUPS)})")
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
-        return _write_local_tables(paths, path, {"radio": {"mode": mode}})
+        return _write_local_tables(paths, path, {"radio": {"hardware": setup_id}})
 
 
 def _cert_days(value, field: str) -> int:

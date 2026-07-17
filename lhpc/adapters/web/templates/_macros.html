@@ -163,7 +163,8 @@
     <input type="text" name="{{ name }}" value="{{ value }}" autocomplete="off">
   {% else %}
     <select name="{{ name }}" aria-label="{{ p.label or p.name }}">
-      {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ ch }}</option>{% endfor %}
+      {% set _labels = dict(p.choice_labels) if p.choice_labels else {} %}
+      {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ _labels.get(ch, ch) }}</option>{% endfor %}
     </select>
   {% endif %}
 {% endmacro %}

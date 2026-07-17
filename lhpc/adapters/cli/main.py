@@ -399,10 +399,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("target", help="Stack/component id")
     p_logs.add_argument("--lines", type=int, default=200, help="Tail length")
 
-    p_rm = sub.add_parser("radio-mode",
-                          help="Show or set the radio hardware mode (both | 433 | 868)")
-    p_rm.add_argument("mode", nargs="?", choices=("both", "433", "868"),
-                      help="both = dual radio; 433/868 = single-radio hardware (no arg: show current)")
+    from lhpc.core.config import HW_SETUPS as _HW_SETUPS
+    p_hw = sub.add_parser("hardware",
+                          help="Show or set the radio hardware setup (which board(s) the box has)")
+    p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
+                      help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
 
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
@@ -721,8 +722,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "config":
         return _cmd_config(svc, args)
-    if args.command == "radio-mode":
-        return _render(svc.set_radio_mode(args.mode))
+    if args.command == "hardware":
+        return _render(svc.set_hardware_setup(args.setup))
     if args.command == "build":
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)
     if args.command == "logs":

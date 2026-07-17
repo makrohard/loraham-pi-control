@@ -93,12 +93,15 @@
           {% endfor %}
           {# Plain ephemeral start options not part of savable config (e.g. the daemon debug flag). #}
           {% if plain_params %}
-            <table class="paramgrid">
-              {% for p in plain_params %}
-                <tr><th>{{ p.label or p.name }}</th>
-                    <td>{{ param_input(p, params.get(p.name), 'p_' + p.name) }}</td></tr>
-              {% endfor %}
-            </table>
+            <details class="advcfg">
+              <summary>Daemon process options</summary>
+              <table class="paramgrid">
+                {% for p in plain_params %}
+                  <tr><th>{{ p.label or p.name }}</th>
+                      <td>{{ param_input(p, params.get(p.name), 'p_' + p.name) }}</td></tr>
+                {% endfor %}
+              </table>
+            </details>
           {% endif %}
           {% if optional_starts %}
             <hr class="sep">

@@ -16,6 +16,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "needs_nonroot: requires a non-root euid — a chmod-based permission fixture "
                    "does not bind for root.")
+    config.addinivalue_line(
+        "markers", "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees "
+                   "the true fresh-install default (no radio hardware configured).")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -34,6 +37,19 @@ def pytest_collection_modifyitems(config, items):
 
 from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
+
+
+@pytest.fixture(autouse=True)
+def _default_hardware(request, monkeypatch):
+    """A fresh install has NO radio hardware configured (the daemon refuses to start), but nearly every
+    test exercises a working box. So the test BASELINE defaults to the LoRaHAM dual-radio setup — i.e.
+    a `[radio]`-less runtime resolves to 'loraham' — mirroring a deployed unit. Tests about the
+    unconfigured state opt out with @pytest.mark.no_default_hardware (then the true 'unset' default
+    applies). A test that writes its own `[radio].hardware` overrides this either way."""
+    if request.node.get_closest_marker("no_default_hardware"):
+        return
+    from lhpc.core import config as _config
+    monkeypatch.setattr(_config, "HW_DEFAULT", "loraham", raising=False)
 
 
 def set_call(svc, callsign="DJ0CHE"):

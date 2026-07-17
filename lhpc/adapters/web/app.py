@@ -206,6 +206,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                    "ver_color": "grey", "commit_color": "grey",
                                    "update_available": False}}
 
+    @app.context_processor
+    def _inject_hardware():  # noqa: ANN202
+        # Read-only current radio-hardware setup for the footer, on EVERY page. Config read only.
+        try:
+            sid = service.hardware_setup()
+            return {"hardware_footer": {"id": sid, "label": dict(service.hw_setups()).get(sid, sid),
+                                        "configured": service.hardware_configured()}}
+        except Exception:
+            return {"hardware_footer": {"id": "unset", "label": "Not configured", "configured": False}}
+
     @app.after_request
     def _set_headers(response):  # noqa: ANN001
         for key, value in _SECURITY_HEADERS.items():
@@ -298,6 +308,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             welcome=service.auto_install_welcome(),
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
+            hardware_configured=service.hardware_configured(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -685,6 +696,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 _upd_comp, _upd_is_main = None, False
             groups.append({
                 "stack": stack,
+                "hardware_block": service.hardware_block(stack.id),  # "" unless no hardware configured
                 "radio_block": service.radio_mode_block(stack.id),   # "" unless the mode excludes it
                 "main": index.get(main.id) if main else None,
                 "main_status": main_status,
@@ -714,6 +726,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "system_deps": service.system_deps(stack.id),
                 "deps_report": service.deps_report(stack.id),
                 "needs_build": service.unbuilt_components(stack.id),
+                "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
                 "daemon_params": service.daemon_params_view(stack.id, band),
                 "kw_offer": service.known_working_offer(stack.id, snapshot),
                 # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
@@ -764,6 +777,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             req_host=_url_host(request.host or ""),
             ws_console_addr=_console_addr((_ws or {}).get("desired", {}).get("port", "")),
             tasks=service.running_tasks(),
+            # Transient hardware-probe result (Detect), rendered inline under the Detect button in the
+            # daemon Hardware settings — consumed once (pop) so a reload does not re-show it.
+            hw_probe=session.pop("hw_probe", None),
             confirm=None,
         )
         ctx.update(over)
@@ -937,6 +953,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         + "#stack-install-" + stack_id)
 
     # START-confirm run/file/daemon params share the daemon-flag hide set + the confirm form.
+    # Submitted as HIDDEN inputs on the start-confirm page (carry saved values, not editable rows):
+    # the band value + the per-band stored TX/CAD values (edited in the per-band daemon panels).
+    # The per-process `hw`/`txmode`/`cadmon`/`cadrssi` stay VISIBLE (collapsed under "Daemon process
+    # options"); `hw` uses friendly choice labels so the `--hw` wire name "legacy" is never shown.
     _HIDE_RUN = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
                  "cadrssi_433", "cadrssi_868"}
 
@@ -1176,6 +1196,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 return _redirect_for(target)
             if admission == "pending":
                 flash(f"{op} starting — admission not yet confirmed; watch the live output below.", "warn")
+            elif reason:                                # admitted, with a note (e.g. build-dep-first)
+                flash(reason, "warn")
             else:                                       # admitted
                 flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
             return redirect(url_for("logs_view", target=target, job=job))
@@ -1307,12 +1329,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
 
-    @app.post("/radio-mode")
-    def radio_mode_set():  # noqa: ANN202
+    @app.post("/hardware")
+    def hardware_set():  # noqa: ANN202
         if not _csrf_ok():
             abort(400)
-        result = service.set_radio_mode(request.form.get("mode", ""))
+        result = service.set_hardware_setup(request.form.get("hardware", ""))
         flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
+                        + "#stack-settings-daemon")
+
+    @app.post("/hardware/probe")
+    def hardware_probe():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        pr = service.probe_hardware(request.form.get("band", ""), request.form.get("hw", ""))
+        # Stash for INLINE rendering under the Detect button (not a top-level flash banner).
+        session["hw_probe"] = {"present": pr.present, "busy": pr.busy,
+                               "message": pr.message, "diagnostic": pr.diagnostic}
         return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
                         + "#stack-settings-daemon")
 

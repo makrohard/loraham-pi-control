@@ -158,7 +158,7 @@ def test_job_hints_per_op(tmp_path, monkeypatch):
         _job(svc, "done", op=op, finished_at=_utc(0))
         assert _only_job(svc)["hint"] == hint
     _job(svc, "failed", op="build")
-    assert _only_job(svc)["hint"] == "Maybe try to install known-working."
+    assert _only_job(svc)["hint"] == "Build failed — open the log to see the error."
 
 
 def test_hmac_failed_stays_until_dismissed(tmp_path, monkeypatch):

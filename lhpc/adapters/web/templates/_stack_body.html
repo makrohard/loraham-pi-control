@@ -39,10 +39,18 @@
       {% elif g.has_source %}
         {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Install') %}<strong>Not installed yet:</strong> the source for {{ g.stack.name }} is missing. Run <strong>Install</strong> below before starting.{% endcall %}
       {% endif %}
-      {% if g.needs_build %}
+      {% if g.needs_build_deps %}
+        {# A build DEPENDENCY (e.g. RadioLib) is not built — the link opens ITS Dependencies card
+           (Install + Build) so it can be built before the daemon (else build.sh fails "not usable"). #}
+        {% call banner('bad', url_for('stacks_overview', open=g.stack.id, comp=g.needs_build_deps[0]) ~ '#comp-' ~ g.needs_build_deps[0], 'Build') %}<strong>{{ g.needs_build_deps|join(', ') }}</strong> not built — build this dependency first.{% endcall %}
+      {% elif g.needs_build %}
         {% call banner('warn', url_for('stacks_overview', inst=g.stack.id) ~ '#stack-install-' ~ g.stack.id, 'Build') %}<strong>Build needed:</strong> {{ g.needs_build|join(', ') }} {{ 'is' if g.needs_build|length == 1 else 'are' }} installed but the compiled binary is missing (a fresh clone drops it). Run <strong>Build</strong> before starting.{% endcall %}
       {% endif %}
-      {% if g.radio_block %}
+      {% if g.hardware_block %}
+        <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio hardware</span> —
+          {{ g.hardware_block }}
+          <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}">configure &rarr;</a></div>
+      {% elif g.radio_block %}
         <div class="depnote depnote-warn"><span class="ver ver-yellow">Radio mode</span> —
           this stack {{ g.radio_block }}</div>
       {% endif %}
@@ -93,7 +101,8 @@
                 {%- if request.args.get('comp') == comp.id %} open data-force-open="1" data-force-scroll="1"{% endif %}>
                 <summary>{{ comp.id }}
                   <span class="pill">{{ comp.kind.value }}{% if comp.band %} · {{ comp.band }} MHz{% endif %}</span>
-                  {% if comp.optional %}<span class="pill">optional</span>{% endif %}
+                  {% if comp.kind.value == 'library' %}<span class="pill" title="required to BUILD this stack (build_requires); never run on its own">build dependency</span>
+                  {% elif comp.optional %}<span class="pill">optional</span>{% endif %}
                   <span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span>
                   {# Own components carry a cached freshness verdict; a CROSS-stack dependency is
                      owned by its own stack's row, so it has no entry here. #}
