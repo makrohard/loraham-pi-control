@@ -219,3 +219,30 @@ def test_audit_positional_free_text_rejects_leading_dash():
     assert validators.validate_param(P(), "value") == "value"
     with pytest.raises(validators.ValidationError):
         validators.validate_param(P(), "--output=/etc/x")
+
+
+# --- bind: no-auth service-port allow-list (IPv4 address or CIDR) --------------------------------
+
+@pytest.mark.parametrize("val,want", [
+    ("127.0.0.1", "127.0.0.1"),          # bare loopback stays bare
+    ("192.168.0.0/24", "192.168.0.0/24"),
+    ("192.168.0.5/24", "192.168.0.0/24"),  # host bits masked to the network
+    ("0.0.0.0/0", "0.0.0.0/0"),          # public parses (danger surfaced by the dashboard, not blocked)
+    ("10.0.0.5", "10.0.0.5"),            # a bare host
+])
+def test_bind_accepts_and_normalizes(val, want):
+    assert V.bind(val) == want
+
+
+@pytest.mark.parametrize("bad", ["", "::1", "::1/128", "2001:db8::/32", "junk",
+                                 "127.0.0.1; rm -rf", "10.0.0.0/33", "1.2.3.4/24/8"])
+def test_bind_rejects(bad):
+    with pytest.raises(ValidationError):
+        V.bind(bad)
+
+
+def test_bind_is_registered_as_a_named_validator():
+    p = RunParam(name="b", kind="str", validator="bind")
+    assert V.validate_param(p, "192.168.0.0/24") == "192.168.0.0/24"
+    with pytest.raises(ValidationError):
+        V.validate_param(p, "::1")

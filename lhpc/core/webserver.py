@@ -144,6 +144,28 @@ def _is_public_default_route(cidr: str) -> bool:
     return net.prefixlen == 0        # 0.0.0.0/0 (or ::/0) — the whole internet
 
 
+_LOOPBACK_NET = ipaddress.ip_network("127.0.0.0/8")
+
+
+def port_exposure(bind_value: str) -> tuple[str, str]:
+    """Classify a no-auth service-port allow-list value (a bare IPv4 or CIDR, as stored for
+    kiss `--bind` / meshcore `wifi.allow`) into a dashboard exposure ``(level, label)``:
+      * loopback (within 127.0.0.0/8)  -> ("ok",   "local")   green — not reachable off-host
+      * default route (0.0.0.0/0)      -> ("bad",  "public")  red   — anyone may connect
+      * any other reachable CIDR       -> ("warn", "LAN")     yellow
+    An empty/invalid/IPv6 value fails closed to "local" (matches the apps' own fail-closed).
+    These ports carry NO authentication, so the colour IS the exposure warning."""
+    try:
+        net = ipaddress.ip_network(str(bind_value).strip(), strict=False)
+    except (ValueError, TypeError):
+        return ("ok", "local")
+    if net.version != 4 or net.subnet_of(_LOOPBACK_NET):
+        return ("ok", "local")
+    if net.prefixlen == 0:
+        return ("bad", "public")
+    return ("warn", "LAN")
+
+
 _AUTH_LABEL = {"no-auth": "no-auth", "local-open-remote-auth": "remote-auth",
                "auth-everywhere": "auth-everywhere"}
 

@@ -259,7 +259,11 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         groups: list[dict] = []
         for c in self._target_components(target):
-            rows = []
+            # Rows keyed by settings sub-group ("" = the component's own block). A param's `group`
+            # (e.g. "Network exposure") renders as its OWN titled block, right after the component's
+            # main block — same shape as the surrounding config sections, in both the settings page
+            # and the confirm:start panel (both consume this method).
+            by_group: dict[str, list] = {}
             for kind, p in ([("run", p) for p in self._form_run_params(c)]
                             + [("file", p) for p in (c.config_file.params if c.config_file else ())
                                if not getattr(p, "hidden", False)]):
@@ -269,12 +273,17 @@ class ParamsConfigMixin:
                 key = self._param_key(target, kind, c.id, p.name)
                 is_id = bool(idf and idf["comp"] == c.id and idf["name"] == p.name
                              and idf["kind"] == kind)
-                rows.append(self._param_row(p, field, kind, value, value, default, is_id,
-                                            c.name, key, c.id))
-            if rows:
-                groups.append({"id": c.id, "name": c.name, "is_dep": c.id != main_id,
-                               "optional": bool(c.optional),
-                               "rule_before": False, "rule_after": False, "rows": rows})
+                row = self._param_row(p, field, kind, value, value, default, is_id,
+                                      c.name, key, c.id)
+                by_group.setdefault(getattr(p, "group", "") or "", []).append(row)
+            is_dep = c.id != main_id
+            common = {"is_dep": is_dep, "optional": bool(c.optional),
+                      "rule_before": False, "rule_after": False}
+            default_rows = by_group.pop("", [])
+            if default_rows:
+                groups.append({"id": c.id, "name": c.name, "rows": default_rows, **common})
+            for gname, grows in by_group.items():           # named sub-groups, stable order
+                groups.append({"id": f"{c.id}::{gname}", "name": gname, "rows": grows, **common})
         # Rule a horizontal line BEFORE the first dependency-component group and AFTER the last one,
         # so the dependency components are visually bracketed off from the stack's main component.
         dep_idx = [i for i, g in enumerate(groups) if g["is_dep"]]

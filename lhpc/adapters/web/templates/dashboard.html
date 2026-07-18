@@ -263,8 +263,9 @@
     {% endfor %}
   </div>
 
-  {# Webserver box: LHCP console (always) + a line per RUNNING web-UI stack. Each line: name + the two
-     status pills (security + running), and a right-aligned logs link. #}
+  {# Webserver box: LHCP console (always), then per RUNNING stack its web-UI line and a line per other
+     open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured
+     IP:Port·label pill (green local / yellow LAN / red public) + a per-service logs link. #}
   <div class="card">
     <header><h2>Webserver</h2><a class="logslink" href="{{ url_for('webserver_logs') }}">logs</a></header>
     <div class="body">
@@ -275,7 +276,10 @@
           {% else %}
             <a class="wsname" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}">{{ w.name }}</a>
           {% endif %}
-          {% if w.posture %}{{ webserver_pills(w.posture, w.addr) }}
+          {% if w.kind == 'port' %}
+            <span class="pill pill-{{ w.exposure.level }}" title="No authentication — the colour shows who may connect">{{ w.addr }} · {{ w.exposure.label }}</span>
+            {% if w.logs_component %}<a class="logslink" href="{{ url_for('logs_view', target=w.logs_component) }}">logs</a>{% endif %}
+          {% elif w.posture %}{{ webserver_pills(w.posture, w.addr) }}
           {% elif w.direct_addr %}<span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
           {% else %}<span class="pill">not proxied</span>{% endif %}
         </div>

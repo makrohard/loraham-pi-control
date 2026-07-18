@@ -288,6 +288,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             for w in service.dashboard_webservers(served_via_nginx=served_via_nginx()):
                 if w["kind"] == "console":
                     addr = _console_addr(w.get("port", ""))
+                elif w["kind"] == "port":
+                    # No-auth TCP service: loopback shows 127.0.0.1; when exposed, show the reached
+                    # host (the LAN IP/hostname the operator used), consistent with the console pill.
+                    host = ("127.0.0.1" if w.get("exposure", {}).get("level") == "ok"
+                            else (_url_host(request.host or "") or "0.0.0.0"))
+                    addr = f"{host}:{w['port']}"
                 else:
                     addr = f"{_url_host(request.host or '')}:{w['port']}" if w.get("enabled") else ""
                     # Not proxied but running: show the DIRECT web-UI address on the reached host.

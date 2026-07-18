@@ -115,6 +115,37 @@ def cidr(value, *, field: str = "cidr", allow_ipv6: bool = False) -> str:
     return str(net)
 
 
+def bind(value, *, field: str = "bind") -> str:
+    """A source-IP allow-list for a no-authentication service port: a bare IPv4 address
+    (treated as a single host, /32) OR an IPv4 CIDR. `127.0.0.1` (the default) keeps the
+    port on loopback; a LAN CIDR or `0.0.0.0/0` exposes it (the app derives the bind
+    address and filters connecting peers by this list). IPv4 only — the consumers
+    (loraham-kiss-tnc `--bind`, meshcore `wifi.allow`) reject IPv6, so we do too. A CIDR is
+    normalized to its network (`192.168.0.5/24` -> `192.168.0.0/24`); a bare address is
+    kept bare. `0.0.0.0/0` parses (the DANGER of a public bind is surfaced by the dashboard
+    exposure line, not blocked here)."""
+    s = str(value).strip()
+    if not s:
+        raise ValidationError(f"{field}: empty bind")
+    if len(s) > 32:
+        raise ValidationError(f"{field}: too long")
+    _reject_control(s, field)
+    # A bare IPv4 or IPv4/prefix — digits, dots and at most one '/prefix'. No metacharacters,
+    # no IPv6 (colons rejected here before ip_network ever sees them).
+    if not re.fullmatch(r"[0-9.]+(?:/[0-9]{1,2})?", s):
+        raise ValidationError(f"{field}: invalid bind {s!r} (IPv4 address or CIDR)")
+    try:
+        net = ipaddress.ip_network(s, strict=False)   # bare address -> /32, host bits masked
+    except ValueError as exc:
+        raise ValidationError(f"{field}: invalid bind {s!r}") from exc
+    if net.version != 4:
+        raise ValidationError(f"{field}: IPv4 only — got {s!r}")
+    text = str(net)
+    if "/" not in s and text.endswith("/32"):
+        text = text[: -len("/32")]                    # keep a bare address bare for the UI
+    return text
+
+
 _BANDS = ("433", "868")
 
 
@@ -230,6 +261,7 @@ _NAMED = {
     "host": host,
     "port": port,
     "cidr": cidr,
+    "bind": bind,
     "band": band,
     "node": node_name,
     "path": path_value,

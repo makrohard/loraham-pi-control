@@ -272,45 +272,70 @@ class WebserverOpsMixin:
         }
 
     def dashboard_webservers(self, served_via_nginx: bool | None = None) -> list[dict]:
-        """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then each web-UI stack whose
-        MAIN component is currently running/degraded. Structural evidence only — the adapter adds the
-        request-scoped reached address. A running-but-not-proxied stack carries `direct_port`/
-        `direct_scheme` so the box can show where it listens directly; the shared nginx log link lives
-        in the box header (all proxied UIs share the one front-end log)."""
+        """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then — for each stack whose
+        MAIN component is running/degraded — its web-UI row (http/https) followed by a row per OTHER
+        open TCP port (kiss/meshcore/meshtastic; no auth). Structural evidence only — the adapter adds
+        the request-scoped reached address. A running-but-not-proxied web UI carries `direct_port`/
+        `direct_scheme`; a `kind="port"` row carries `exposure` (level+label from its bind allow-list)
+        and `logs_component` for a per-service log link."""
         from .model import RunState
         up = (RunState.RUNNING, RunState.DEGRADED)
         mon = self.webserver_monitor(served_via_nginx=served_via_nginx).data or {}
         rows: list[dict] = [{"kind": "console", "name": "LHCP", "posture": mon.get("posture"),
                              "port": mon.get("desired", {}).get("port"), "logs_component": None}]
         by_id = {ss.stack.id: ss for ss in self.build_snapshot().stacks}
-        for sid in self.stack_web_eligible():
-            ss, stk = by_id.get(sid), self.stack(sid)
-            if ss is None or stk is None or stk.main_component is None:
+        for stk in self.stacks():
+            ss = by_id.get(stk.id)
+            if ss is None or stk.main_component is None:
                 continue
             mst = ss.components.get(stk.main_component.id)
-            if mst is None or mst.run_state not in up:      # not started -> no row (per the operator)
+            if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
-            v = self.stack_web_view(sid) or {}
-            swc = v.get("cfg")
-            enabled = bool(swc and swc.enabled)
-            # The web-UI component carries a client http/https endpoint — used for the DIRECT address.
-            web_ep = None
-            for c in stk.components:
-                for ep in c.endpoints:
-                    if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
-                        web_ep = ep
-                        break
-                if web_ep:
-                    break
-            # DIRECT web-UI address (host:port from the client endpoint) — surfaced so a running but
-            # NOT-proxied web UI still shows where it listens (the adapter reattaches the reached host,
-            # local vs remote, exactly like the console pill).
-            direct_port = web_ep.address.rsplit(":", 1)[-1] if (web_ep and ":" in web_ep.address) else ""
-            rows.append({"kind": "stack", "name": stk.name, "sid": sid, "enabled": enabled,
-                         "posture": v.get("posture") if enabled else None,
-                         "port": swc.port if enabled else None,
-                         "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else ""})
+            if self.stack_web_upstream(stk.id) is not None:
+                rows.append(self._dashboard_web_row(stk))
+            for comp in stk.components:                      # every OTHER open port (no-auth tcp)
+                for ep in comp.endpoints:
+                    if getattr(ep, "client", False) and ep.scheme not in ("http", "https"):
+                        rows.append(self._dashboard_port_row(stk, comp, ep))
         return rows
+
+    def _dashboard_web_row(self, stk) -> dict:
+        """The web-UI (http/https) box row: proxied port + posture, or the DIRECT listen address when
+        the reverse proxy is not enabled (the adapter reattaches the reached host, like the console)."""
+        v = self.stack_web_view(stk.id) or {}
+        swc = v.get("cfg")
+        enabled = bool(swc and swc.enabled)
+        web_ep = next((ep for c in stk.components for ep in c.endpoints
+                       if getattr(ep, "client", False) and ep.scheme in ("http", "https")), None)
+        direct_port = web_ep.address.rsplit(":", 1)[-1] if (web_ep and ":" in web_ep.address) else ""
+        return {"kind": "stack", "name": stk.name, "sid": stk.id, "enabled": enabled,
+                "posture": v.get("posture") if enabled else None,
+                "port": swc.port if enabled else None,
+                "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else ""}
+
+    def _dashboard_port_row(self, stk, comp, ep) -> dict:
+        """A `kind="port"` box row for a no-authentication TCP service. Exposure comes from the
+        component's bind allow-list (the `validator="bind"` param); a service with no such control
+        (meshtasticd's API always binds 0.0.0.0) is shown public. The colour IS the warning — these
+        ports have no auth. `logs_component` (set only when the service has a bind control) drives a
+        per-service log link."""
+        from .webserver import port_exposure
+        bind_val, has_bind = None, False
+        for kind, params in (("run", comp.run_params),
+                             ("file", comp.config_file.params if comp.config_file else ())):
+            for p in params:
+                if getattr(p, "validator", "") == "bind":
+                    bind_val = self._resolved_param_value(
+                        stk.id, kind, comp.id, p.name, self._config_band(stk.id, ""))
+                    has_bind = True
+                    break
+            if has_bind:
+                break
+        level, label = port_exposure(bind_val) if has_bind else ("bad", "public")
+        port = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
+        return {"kind": "port", "name": stk.name, "sid": stk.id, "port": port,
+                "exposure": {"level": level, "label": label},
+                "logs_component": comp.id if has_bind else None}
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
         """A STABLE per-stack default port: `console_port + 1 + position`, where position is the

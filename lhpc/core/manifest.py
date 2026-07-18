@@ -56,6 +56,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             band_defaults=tuple((str(k), str(v)) for k, v in p.get("band_defaults", {}).items()),
             hidden=p.get("hidden", False),
             validator=p.get("validator", ""),
+            group=p.get("group", ""),
         )
         for p in raw.get("param", [])
     )
@@ -473,6 +474,7 @@ def _parse_component(raw: dict) -> Component:
                 band_defaults=tuple((str(k), str(v))
                                     for k, v in p.get("band_defaults", {}).items()),
                 validator=p.get("validator", ""),
+                group=p.get("group", ""),
             )
             for p in raw.get("param", [])
         ),

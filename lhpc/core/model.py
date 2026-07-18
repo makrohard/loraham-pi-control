@@ -210,6 +210,8 @@ class RunParam:
     apply_mode: str = "restart"
     band_defaults: tuple = ()    # ((band, value), …) — per-band default overrides
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
+    group: str = ""              # settings sub-section title; params sharing a group render as their
+                                 # own titled block (e.g. "Network exposure") in the config panel
 
 
 def emit_param(p: "RunParam", value) -> list[str]:
@@ -253,6 +255,7 @@ class FileParam:
     band_defaults: tuple = ()    # ((band, value), …) — per-band default overrides
     hidden: bool = False         # written to the file but not shown on the Config page
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
+    group: str = ""              # settings sub-section title (see RunParam.group)
 
 
 @dataclass(frozen=True)
