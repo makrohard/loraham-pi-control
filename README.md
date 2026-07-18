@@ -15,6 +15,7 @@ and live-tunes the LoRaHAM daemon.
 - [CLI](#cli)
 - [Web console](#web-console)
 - [Deployment & self-update](#deployment--self-update)
+- [Documentation](#documentation)
 
 ## Stacks
 
@@ -59,7 +60,9 @@ managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you):
 **`https://127.0.0.1:8443/`** — your browser warns about the self-signed CA until you import it
 (see [`docs/webserver.md`](docs/webserver.md)). Without nginx, start the loopback console with
 **`lhpc web`** → `http://127.0.0.1:8770/`. To reach it from another machine, follow the
-[expose-with-mTLS runbook](docs/webserver.md#expose-to-your-lan-with-mtls--runbook).
+[expose-with-mTLS runbook](docs/webserver.md#expose-to-your-lan-with-mtls--runbook). In the
+field with no WiFi, turn the Pi into its own access point:
+[`docs/wifi-access-point.md`](docs/wifi-access-point.md).
 
 **Bring up the stacks.** Set your callsign, then install/build/test every stack in one guided run:
 
@@ -210,3 +213,9 @@ redirected into a runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.
 **Backup:** your settings, secrets and certificates all live under `~/loraham-pi-control/config/`
 (plus known-working records in `profiles/`); back them up with a single `tar` — see
 [`docs/operations.md`](docs/operations.md#backup--restore).
+
+## Documentation
+
+Full docs are in [`docs/`](docs/README.md), grouped by task — understand it, use it,
+web console & remote access, stacks, reference & policy, and project records. Start
+with the [documentation overview](docs/README.md).
