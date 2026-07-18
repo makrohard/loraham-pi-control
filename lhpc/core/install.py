@@ -874,7 +874,7 @@ class Installer:
         for f in ("selector", "resolved_commit", "remote", "strategy"):
             if not isinstance(meta.get(f), str):
                 return False
-        if meta["selector"] not in ("pinned", "dev", "stable", "legacy"):
+        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled"):
             return False
         if "had_prior" in meta and not isinstance(meta["had_prior"], bool):
             return False
@@ -1282,7 +1282,7 @@ class Installer:
             record (a ROLLED-BACK prior — restored by an in-process rollback that retained the
             journal — must never be re-registered under the new transaction's metadata; the
             prior's own older record still describes it). A v2 journal or an unprovable tree
-            writes nothing (ownership is later provable via the legacy backfill path)."""
+            writes nothing (ownership is later provable via the backfill path)."""
             if ours is not True:
                 return True                       # rolled-back / v2 -> no new record
             return self._write_registry_record(dest, meta, txn_id)
@@ -1455,7 +1455,7 @@ class Installer:
                 # Synthesize the v4 evidence (minimal valid meta + leaf idents) so even this
                 # low-level entry produces journals current recovery can act on — there is
                 # no journal generation without identity evidence anymore.
-                meta = {"selector": "legacy", "resolved_commit": "", "remote": "",
+                meta = {"selector": "backfilled", "resolved_commit": "", "remote": "",
                         "strategy": "", "components": [dest.name or "src"],
                         "had_prior": txn.leaf_kind(dest.name) != "absent"}
                 try:

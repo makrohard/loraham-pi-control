@@ -59,7 +59,7 @@ def _own(tmp_path, rel, comps=("x",)):
     """Seed an ownership record — the tree is a registered LHPC adoption."""
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "legacy", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
                                        "", tuple(comps)))
 
 
@@ -168,7 +168,7 @@ def test_uninstall_linked_source_unlinks_leaf_only(tmp_path):
     # a LEGACY (v1-style) link record without a recorded target stays NON-DESTRUCTIVE
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",)))
     import dataclasses as _dc, json as _json
     rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
@@ -181,7 +181,7 @@ def test_uninstall_linked_source_unlinks_leaf_only(tmp_path):
     # a CURRENT record with the exact link target authorizes leaf-only removal
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",),
                                        link_target=str(external)))
     res2 = _svc(tmp_path).uninstall("kiss", apply=True)
@@ -266,7 +266,7 @@ def _seed_shared(tmp_path):
     (dest / "app.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/LoRaHAM_Daemon", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/LoRaHAM_Daemon", "", "backfilled", "", _t.time(),
                                        "", "", ("loraham-chat", "loraham-igate")))
     return dest
 

@@ -33,6 +33,37 @@ def test_packaged_meshcom_host_test_is_recognized_at_component_level():
     assert testable, "meshcom must have at least one testable component"
 
 
+def test_process_exec_name_matches_run_binary():
+    """`process.exec_name` MUST identify the launched binary the way probe_process matches it:
+    basename(run_argv[0]), or — when argv[0] is a python interpreter — basename(the script token).
+    Otherwise probe_process never matches the RUNNING process, so `status` reads "stopped" for a
+    healthy component and `known-working` refuses to confirm it. (Regression: after kiss got its own
+    repo the binary was renamed loraham_kiss_tnc -> loraham-kiss-tnc, but process.exec_name kept the
+    underscores, so the running TNC showed "stopped" and could never be marked known-working.)"""
+    import posixpath
+    import re
+    py = re.compile(r"^python[0-9.]*$")
+    checked = 0
+    for st in load_manifest(default_manifest_path()):
+        for c in st.components:
+            if not (c.process and c.process.exec_name and c.run_argv):
+                continue
+            a0 = c.run_argv[0]
+            if "{" in a0:                      # placeholder argv[0] — not statically resolvable
+                continue
+            base0 = posixpath.basename(a0.lstrip("./") or a0)
+            if base0.endswith(".sh"):          # a shell WRAPPER execs a different final binary
+                continue                       # (e.g. meshcom-qemu run.sh -> qemu-system-xtensa)
+            ok = base0 == c.process.exec_name
+            if not ok and py.match(base0) and len(c.run_argv) >= 2 and "{" not in c.run_argv[1]:
+                ok = posixpath.basename(c.run_argv[1]) == c.process.exec_name
+            assert ok, (f"{c.id}: process.exec_name={c.process.exec_name!r} matches neither "
+                        f"run_argv[0] basename {base0!r} nor its python-script token — "
+                        "probe_process will never find the running process")
+            checked += 1
+    assert checked >= 3, f"invariant did not exercise enough components ({checked})"
+
+
 def _manifest(comp: dict) -> dict:
     base = {"id": "c", "name": "c", "kind": "service"}
     base.update(comp)

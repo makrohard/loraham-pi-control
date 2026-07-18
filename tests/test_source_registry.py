@@ -78,7 +78,7 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
     assert source_registry.read_record(paths, "src/app") is None        # wrong version
     rp.unlink()
     (rp.parent / "real.json").write_text(json.dumps({
-        "version": 1, "source_rel": "src/app", "remote": "", "selector": "legacy",
+        "version": 1, "source_rel": "src/app", "remote": "", "selector": "backfilled",
         "resolved_commit": "", "adopted_at": 1.0, "txn_id": "", "strategy": "",
         "components": ["app"]}))
     os.symlink("real.json", rp)
@@ -86,7 +86,7 @@ def test_malformed_and_symlinked_records_are_absent(tmp_path):
     # a record claiming a DIFFERENT source_rel than its filename identity is refused
     rp.unlink()
     rp.write_text(json.dumps({
-        "version": 1, "source_rel": "src/evil", "remote": "", "selector": "legacy",
+        "version": 1, "source_rel": "src/evil", "remote": "", "selector": "backfilled",
         "resolved_commit": "", "adopted_at": 1.0, "txn_id": "", "strategy": "",
         "components": ["app"]}))
     assert source_registry.read_record(paths, "src/app") is None
@@ -345,7 +345,7 @@ def test_backfill_accepts_matching_origin(tmp_path):
     rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
                                                   comp, dest, components=("app",))
     assert rec is not None and why == "backfilled"
-    assert rec.selector == "legacy" and rec.resolved_commit == head
+    assert rec.selector == "backfilled" and rec.resolved_commit == head
     assert _rec(inst) is not None                                       # persisted
 
 
@@ -753,7 +753,7 @@ def test_link_target_substitution_blocks_destructive_ops(tmp_path):
     dest.parent.mkdir(parents=True)
     os.symlink(str(target_a), dest)
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "legacy", "", _t.time(), "", "link", ("app",),
+        "src/app", "", "backfilled", "", _t.time(), "", "link", ("app",),
         link_target=str(target_a)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
@@ -774,7 +774,7 @@ def test_non_git_directory_is_never_destructively_authorized(tmp_path):
     dest.mkdir(parents=True)
     (dest / "replaced.txt").write_text("manually placed")
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "legacy", "", _t.time(), "", "", ("app",)))
+        "src/app", "", "backfilled", "", _t.time(), "", "", ("app",)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
     assert rec is None and "unprovable" in why

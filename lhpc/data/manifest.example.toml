@@ -235,10 +235,11 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/RadioLib"
-    # Pinned to the RF-verified commit the daemon README requires (7.6.0-67); building against a
-    # newer RadioLib (e.g. 7.7.1) fails to compile the daemon.
-    pin_commit = "13b7c7cf84b191006da20f82bdb386f2efc96334"
-    pin_tag = "7.6.0-67-g13b7c7cf8"
+    # Known-working fallback only (the default 'dev' selector installs the newest branch HEAD
+    # regardless of this pin). Verified 2026-07-18 to build the daemon cleanly (hardening checks OK)
+    # against RadioLib 7.7.1-43.
+    pin_commit = "6d8934836678d8894e3d556550475b37dce3e2b6"
+    pin_tag = "7.7.1-43-g6d8934836"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -772,7 +773,10 @@ main = "loraham-kiss-tnc"
     branch = "main"
 
     [stack.component.process]
-    exec_name = "loraham_kiss_tnc"
+    # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens) — the
+    # repo split renamed it from loraham_kiss_tnc; a stale underscore name made probe_process never
+    # match the running TNC, so status read "stopped" and known-working refused to confirm it.
+    exec_name = "loraham-kiss-tnc"
 
     [[stack.component.endpoint]]
     kind = "tcp"
@@ -1340,6 +1344,9 @@ main = "meshcore-pi"
   start_order = 1
   run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
   test = ".venv/bin/python -m pytest tests/"
+  # The build_steps create the in-tree venv; its interpreter IS the build artifact, so `is_built`
+  # honestly reads "not built" until the venv exists (exec_name is a process-match name, not a path).
+  bin = ".venv/bin/python"
   # Self-sufficient managed clone: the venv is built IN-TREE by `lhpc build`. Upstream has
   # no requirements file — deps enumerated from its README (an upstream requirements.txt
   # would make this declarative).
@@ -1467,6 +1474,8 @@ main = "meshcore-pi"
     { argv = ["python3", "-m", "venv", ".venv"] },
     { argv = [".venv/bin/pip", "install", "-r", "requirements.txt"] },
   ]
+  # In-tree venv interpreter is the build artifact (honest `is_built`).
+  bin = ".venv/bin/python"
   run_cwd = "{source}"
   run_env = { DISPLAY = "@env:DISPLAY=:0" }
   readiness = "process"
@@ -1499,6 +1508,8 @@ main = "meshcore-pi"
     { argv = ["python3", "-m", "venv", ".venv"] },
     { argv = [".venv/bin/pip", "install", "."] },
   ]
+  # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
+  bin = ".venv/bin/meshcli"
 
     [stack.component.process]
     exec_name = "meshcli"

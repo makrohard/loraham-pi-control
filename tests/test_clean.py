@@ -55,7 +55,7 @@ def _identity_cmds(tmp_path, rel, remote=_KISS_REMOTE):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "legacy", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
                                        "", tuple(comps)))
 
 
@@ -104,7 +104,7 @@ def test_clean_requires_purge_flag(tmp_path):
 
 def test_clean_refuses_while_running(tmp_path):
     _seed_kiss(tmp_path)
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     res = svc.clean("kiss", apply=True, purge=True)
     assert not res.ok and "running" in res.summary.lower()
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
@@ -165,7 +165,7 @@ def test_clean_linked_source_unlinks_leaf_only(tmp_path):
     # a LEGACY (v1-style) link record without a recorded target stays NON-DESTRUCTIVE
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",)))
     import dataclasses as _dc, json as _json
     rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
@@ -178,7 +178,7 @@ def test_clean_linked_source_unlinks_leaf_only(tmp_path):
     # a CURRENT record with the exact link target authorizes leaf-only removal
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",),
                                        link_target=str(external)))
     res = _svc(tmp_path).clean("kiss", apply=True, purge=True)

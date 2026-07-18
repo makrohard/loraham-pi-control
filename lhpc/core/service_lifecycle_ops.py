@@ -2552,14 +2552,16 @@ class LifecycleOpsMixin:
                 + ";M:" + self.radio_mode())      # mode switch reflows the columns -> force a reload
 
     def _build_artifact(self, comp):
-        """Relative path of the built binary (explicit `bin`, else the process
-        exec_name), or None when the component compiles nothing. A component that compiles via
-        `build_steps` (e.g. the RadioLib library: no `build`/exec_name, only cmake steps) also has a
-        build — so an explicit `bin` on it (its .a) makes `is_built` honest."""
+        """Relative path of the built artifact (the explicit `bin`), or None when the component
+        compiles nothing OR declares no build output to check. A component that compiles via
+        `build_steps` (e.g. the RadioLib library, or a venv-based Python node) declares its real
+        output via `bin` (the .a, or `.venv/bin/python`) so `is_built` is honest. `exec_name` is a
+        process-match NAME, never a build-output PATH, so it is NOT used here — using it made venv
+        components (exec_name="python") check a non-existent `<src>/python` and read "not built"
+        forever."""
         if not (comp.build_cmd or comp.build_steps):
             return None
-        rel = comp.bin or (comp.process.exec_name if comp.process else "")
-        return rel or None
+        return comp.bin or None
 
     def is_built(self, comp) -> bool:
         """True if the component needs no build, or its built artifact is present.

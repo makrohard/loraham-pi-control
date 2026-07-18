@@ -229,7 +229,7 @@ def test_manual_stack_offer_hidden_when_stopped_or_recorded(tmp_path):
 
 def test_startable_stack_still_requires_candidate(tmp_path):
     # kiss has lhpc-startable components: no candidate -> unchanged strict refusal
-    res = _svc(tmp_path, cmdlines={7: ["loraham_kiss_tnc"]}).confirm_known_working("kiss")
+    res = _svc(tmp_path, cmdlines={7: ["loraham-kiss-tnc"]}).confirm_known_working("kiss")
     assert not res.ok and "No healthy start" in res.summary
 
 

@@ -66,7 +66,7 @@ def test_post_requires_csrf(tmp_path):
 
 
 def test_post_refused_while_component_running(tmp_path, monkeypatch):
-    c, svc = _client(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
+    c, svc = _client(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     called = []
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (called.append(1), (None, "x"))[1])

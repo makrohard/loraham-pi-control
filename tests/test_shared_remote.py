@@ -101,7 +101,7 @@ def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
     dest.mkdir(parents=True)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", time.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", time.time(),
                                        "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     res = _svc(tmp_path).uninstall("kiss", apply=True)
     assert not res.ok

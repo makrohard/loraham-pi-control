@@ -4,7 +4,7 @@ One JSON record per managed source path under `state/source-registry/`, written 
 source-activation transaction (install.py): the journal carries the record data (v3 payload), the
 record is persisted after the activation rename and BEFORE the journal is cleared, and recovery
 re-completes the write from the journal — so an activated source always has an ownership record,
-and a source without one is either a pre-registry (legacy) adoption that must pass origin-URL
+and a source without one is either a pre-registry (backfilled) adoption that must pass origin-URL
 verification (`verify_or_backfill`) or is NOT LHPC's to update/uninstall.
 
 Records are strictly-validated, descriptor-safe reads (`runtime_fs.read_text_regular`): a
@@ -24,7 +24,7 @@ from . import runtime_fs, validators
 from .paths import Paths, PathContainmentError
 
 REGISTRY_VERSION = 2
-_SELECTORS = ("pinned", "dev", "stable", "legacy")
+_SELECTORS = ("pinned", "dev", "stable", "backfilled")
 _STRATEGIES = ("", "adopt", "copy", "link")
 
 
@@ -32,7 +32,7 @@ _STRATEGIES = ("", "adopt", "copy", "link")
 class RegistryRecord:
     source_rel: str            # runtime-relative managed source path (e.g. "src/RadioLib")
     remote: str                # the remote URL actually used ("" for pure local adoptions)
-    selector: str              # pinned | dev | stable | legacy (backfilled pre-registry adoption)
+    selector: str              # pinned | dev | stable | backfilled (pre-registry adoption)
     resolved_commit: str       # exact commit adopted ("" when the tree is not a git checkout)
     adopted_at: float
     txn_id: str                # source-transaction id ("" for backfilled records)
@@ -99,7 +99,7 @@ def record_state(paths: Paths, source_rel: str) -> tuple:
       * ("unsafe", None, reason)   — PRESENT but malformed, symlinked, a directory, special,
                                      inaccessible, mismatched, or otherwise unreadable.
 
-    Only "absent" may permit legacy backfill; every "unsafe" state must BLOCK destructive
+    Only "absent" may permit backfill; every "unsafe" state must BLOCK destructive
     operations and confirmation with zero mutation (the leaf is retained as evidence)."""
     rp = record_path(paths, source_rel)
     try:
@@ -161,7 +161,7 @@ def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
     """Ownership proof for a destructive operation on `dest`. Returns `(record, reason)`:
 
       * registry SAFELY VALID    -> (record, "registered");
-      * registry SAFELY ABSENT   -> legacy origin-verified backfill, HANDLE-BOUND: every
+      * registry SAFELY ABSENT   -> origin-verified backfill, HANDLE-BOUND: every
         Git/origin inspection runs against the captured leaf's fd-pinned path, and the SAME
         handle is re-proven immediately before the record is persisted — a substituted path
         leaf is never inspected, authorized, or registered;
@@ -210,7 +210,7 @@ def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
             if (spec.strategy or "") != "link":
                 return None, ("unexpected symlink at a non-linked source destination — "
                               "not an LHPC adoption; refusing")
-            rec = RegistryRecord(rel, expected, "legacy", "", time.time(), "",
+            rec = RegistryRecord(rel, expected, "backfilled", "", time.time(), "",
                                  "link", comps, link_target=handle.target)
             got, err = _persist(rec)
             return (got, "backfilled-link") if err is None else (None, err)
@@ -230,7 +230,7 @@ def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
         if _norm_remote(actual) != _norm_remote(expected):
             return None, (f"origin remote {actual!r} does not match the configured remote "
                           f"{expected!r} — not an LHPC-adopted tree")
-        rec = RegistryRecord(rel, expected, "legacy", _head(system, pinned), time.time(), "",
+        rec = RegistryRecord(rel, expected, "backfilled", _head(system, pinned), time.time(), "",
                              spec.strategy or "", comps)
         got, err = _persist(rec)
         return (got, "backfilled") if err is None else (None, err)
@@ -250,7 +250,7 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
 
       * registry PRESENT-BUT-UNSAFE -> BLOCK (never treated as absent);
       * `link`: the leaf must be a symlink whose EXACT readlink equals the recorded
-        `link_target`; a legacy (v1) link record without a recorded target is
+        `link_target`; a v1 link record without a recorded target is
         NON-DESTRUCTIVE until re-adopted/re-confirmed;
       * managed directory: at least ONE positive proof must succeed — HEAD equals the
         recorded resolved commit, or the actual origin matches the recorded/effective
@@ -285,7 +285,7 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
             return None, (f"identity drift: recorded a LINKED source but the leaf is "
                           f"{kind} — refusing")
         if rec.version < 2 or not rec.link_target:
-            return None, ("legacy link record without a recorded link target — "
+            return None, ("v1 link record without a recorded link target — "
                           "non-destructive until re-adopted (re-run install/adopt)")
         if handle is not None:
             actual_target = handle.target

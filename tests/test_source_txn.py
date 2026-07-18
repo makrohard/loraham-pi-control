@@ -47,7 +47,7 @@ def _journal(inst, dest, prev, staging, state, version=5):
         "txn_id": inst._txn_id(cand_rel)}
     if version in (4, 5):
         ct = version == 5
-        payload["meta"] = {"selector": "legacy", "resolved_commit": "", "remote": "",
+        payload["meta"] = {"selector": "backfilled", "resolved_commit": "", "remote": "",
                            "strategy": "", "components": [dest.name]}
         payload["idents"] = {"candidate": _ident_of(staging, ctime=ct),
                              "prev": _ident_of(prev, ctime=ct)}
@@ -891,7 +891,7 @@ def _register_tree(inst, dest, comp, remote=""):
                           capture_output=True, text=True, env=env).stdout.strip()
     rel = str(dest.relative_to(inst.paths.runtime_root))
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        rel, remote, "legacy", head, _t.time(), "", "", (comp.id,)))
+        rel, remote, "backfilled", head, _t.time(), "", "", (comp.id,)))
     return head
 
 def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch):
@@ -1361,7 +1361,7 @@ def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
         "version": 5, "state": "prior-archived", "source_rel": rel(dest),
         "prev_rel": rel(prev), "candidate_rel": rel(staging),
         "txn_id": inst._txn_id(rel(staging)),
-        "meta": {"selector": "legacy", "resolved_commit": "", "remote": "",
+        "meta": {"selector": "backfilled", "resolved_commit": "", "remote": "",
                  "strategy": "", "components": ["app"]},
         "idents": {"candidate": None, "prev": forged}}))
     msgs = inst.recover_source_activations()

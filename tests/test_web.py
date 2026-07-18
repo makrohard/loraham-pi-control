@@ -1649,7 +1649,7 @@ def _seed_clean_target(tmp_path):
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", _t.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
 
 
@@ -1938,7 +1938,7 @@ def test_dash_signature_flips_when_booting_clears(tmp_path, monkeypatch):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     from lhpc.core.paths import Paths
-    svc = ControllerService(system=FakeSystem(cmdlines_data={555: ["loraham_kiss_tnc"]}).system,
+    svc = ControllerService(system=FakeSystem(cmdlines_data={555: ["loraham-kiss-tnc"]}).system,
                             paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "_component_booting",
                         lambda self, cid: cid == "loraham-kiss-tnc")

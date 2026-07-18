@@ -180,7 +180,7 @@ def test_marker_write_failure_stops_run(tmp_path, monkeypatch):
 
 @pytest.mark.needs_session
 def test_running_component_refuses_with_zero_marker(tmp_path):
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     r = svc.auto_install(apply=True, emit=lambda s: None)
     assert not r.ok and "never stops anything" in r.summary
     assert svc.auto_install_status() is None                             # no marker, no lease
@@ -308,7 +308,7 @@ def test_reconcile_absent_installs_unowned_blocks_orphan_blocks(tmp_path):
     import shutil
     shutil.rmtree(dest)                                          # orphaned record
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "legacy", "", time.time(), "", "",
+        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "", "",
         ("loraham-kiss-tnc",)))
     action, why = svc._reconcile_group("src/loraham-kiss-tnc", comp)
     assert action == "blocked" and "orphaned" in why.lower()
@@ -321,7 +321,7 @@ def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     head = _make_repo(dest, remote=remote)
     paths = Paths(runtime_root=tmp_path)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", remote, "legacy", head, time.time(), "", "",
+        "src/loraham-kiss-tnc", remote, "backfilled", head, time.time(), "", "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=paths)
     comp = next(c for s in svc.stacks() if s.id == "kiss"
@@ -662,7 +662,7 @@ def test_spawn_failure_with_stuck_reservation_is_recovery_blocked(tmp_path, monk
 
 def test_driver_refusal_releases_claimed_reservation(tmp_path):
     # A pre-boundary refusal (running component) must not strand the claimed slot.
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     r = svc.auto_install(apply=True, emit=lambda s: None)
     assert not r.ok
     assert ai_mod.read_reservation(svc._paths)[0] == "absent"
@@ -949,7 +949,7 @@ def test_claim_refuses_wrong_phase_and_foreign_identity(tmp_path):
 def test_reservation_clear_failure_on_early_refusal_is_typed(tmp_path, monkeypatch):
     # Pre-boundary running refusal + reservation clear failure: the result is a TYPED
     # incomplete (never only the original refusal), and status stays safe-side.
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_kiss_tnc"]})
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     monkeypatch.setattr(ai_mod, "clear_reservation", lambda paths: False)
     r = svc.auto_install(apply=True, emit=lambda s: None)
     assert not r.ok

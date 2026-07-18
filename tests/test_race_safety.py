@@ -169,7 +169,7 @@ def _svc_env(tmp_path):
     (dest / "code.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "legacy", "", time.time(),
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", time.time(),
                                        "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     from lhpc.core.probes.backends import CommandResult
@@ -559,7 +559,7 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "legacy", head, time.time(), "", "",
+                                       "backfilled", head, time.time(), "", "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
     rec_before = source_registry.read_record(svc._paths, "src/loraham-kiss-tnc")
@@ -593,7 +593,7 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "legacy", head, time.time(), "", "",
+                                       "backfilled", head, time.time(), "", "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 

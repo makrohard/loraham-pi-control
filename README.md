@@ -65,11 +65,13 @@ managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you):
 
 ```bash
 lhpc config operator --callsign W1ABC     # your callsign (inherited by all licensed stacks)
+lhpc hardware loraham                      # select your radio hardware — REQUIRED, else the daemon refuses
+                                           #   to start (see `lhpc hardware` for uputronics-ce0/ce1, waveshare-sx1262)
 lhpc auto-install                          # install + build + test all stacks (adds --source, --no-tests, --tx)
 ```
 
-You can do the same from the web console's **Stacks** page. Then start what you need
-(`lhpc stack start <stack>`, or the Start button).
+You can do the same from the web console's **Stacks** page (and pick the hardware in a stack's
+**Settings**). Then start what you need (`lhpc stack start <stack>`, or the Start button).
 
 <details><summary>Or do it by hand</summary>
 
@@ -89,6 +91,7 @@ python3 -m venv ~/loraham-pi-control/venv/lhpc
 # 4. Adopt + build + test all stacks (add venv/lhpc/bin to PATH, or use the full path)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
 lhpc config operator --callsign W1ABC   # your callsign
+lhpc hardware loraham                    # REQUIRED: pick your radio hardware (daemon refuses otherwise)
 lhpc auto-install                        # guided install + build + test of every stack
 lhpc web                                # http://127.0.0.1:8770/  (loopback console)
 ```

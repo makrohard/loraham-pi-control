@@ -21,7 +21,7 @@ def _svc(tmp_path, cmdlines=None):
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord(f"src/{rel}", "", "legacy", "", time.time(), "",
+        source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
                                        "", tuple(comps)))
 
 
@@ -169,6 +169,26 @@ def test_radiolib_built_state_is_honest(tmp_path):
     art.write_bytes(b"")
     assert svc.is_built(radiolib)                               # artifact present -> built
     assert "radiolib" not in svc.unbuilt_components("daemon")
+
+
+def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
+    # REGRESSION: meshcore-pi compiles an in-tree venv via build_steps; its exec_name is "python"
+    # (a process-match NAME). _build_artifact must key on `bin` (.venv/bin/python), NOT exec_name —
+    # else is_built checked a non-existent <src>/python and the stack read "not built" forever, so
+    # `lhpc stack start meshcore` was blocked even right after a successful build.
+    svc = _svc(tmp_path)
+    mc = svc.stack("meshcore").component("meshcore-pi")
+    src = tmp_path / "src" / "meshcore-pi"
+    src.mkdir(parents=True)                                      # checkout present, venv not built
+    assert not svc.is_built(mc)                                  # honest: no venv yet
+    assert "meshcore-pi" in svc.unbuilt_components("meshcore")
+    (src / "python").write_bytes(b"")                           # a bogus <src>/python must NOT count
+    assert not svc.is_built(mc)                                  # exec_name is ignored (the fix)
+    venv_py = src / ".venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_bytes(b"")
+    assert svc.is_built(mc)                                      # venv interpreter present -> built
+    assert "meshcore-pi" not in svc.unbuilt_components("meshcore")
 
 
 def test_unbuilt_build_deps_flags_radiolib_before_daemon(tmp_path):

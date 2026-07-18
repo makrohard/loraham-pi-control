@@ -669,7 +669,7 @@ def test_independent_433_868_daemons_non_conflicting(tmp_path):
 
 def test_perband_daemon_stop_blocks_unknown_band_dependent(tmp_path):
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={20: ["loraham_daemon", "--radio", "both"], 300: ["loraham_kiss_tnc"]},
+        cmdlines_data={20: ["loraham_daemon", "--radio", "both"], 300: ["loraham-kiss-tnc"]},
         unix_replies={"/tmp/loraconf433.sock": _RDYP1, "/tmp/loraconf868.sock": _RDYP1}).system,
         paths=Paths(runtime_root=tmp_path))
     # kiss running, band-switchable, NO marker -> per-band stop is blocked, stops nothing
