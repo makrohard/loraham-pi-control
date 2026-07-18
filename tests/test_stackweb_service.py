@@ -160,7 +160,7 @@ def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path):
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     import re
-    body = create_app(lambda: svc).test_client().get("/stacks").get_data(as_text=True)
+    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
     i = body.index('id="stack-webserver-meshcom"')
     panel = body[i:body.index("</details>", i)]
     m = re.search(r'<input name="port"[^>]*>', panel)
@@ -319,7 +319,7 @@ def test_stacks_panel_shows_running_state(tmp_path):
     app, svc = _app(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 18083, "inode": 1},
                                {"family": "ipv4", "ip": "0.0.0.0", "port": 8444, "inode": 2}])
     svc.stack_web_configure("meshcom", mode="local", port=8444)
-    body = app.test_client().get("/stacks").get_data(as_text=True)
+    body = app.test_client().get("/stacks?open=meshcom").get_data(as_text=True)   # webserver panel is deferred
     assert 'id="stack-webserver-meshcom"' in body
     assert ">proxied</span>" in body
 
@@ -348,6 +348,18 @@ def test_dashboard_webservers_always_has_lhcp_console_and_hides_stopped_stacks(t
     assert rows and rows[0]["kind"] == "console" and rows[0]["name"] == "LHCP"
     assert rows[0]["posture"] and rows[0]["posture"]["run"] in ("nginx", "lhpc-web")
     assert all(r["kind"] == "console" for r in rows)          # no running web-UI stacks -> no stack rows
+
+
+def test_dashboard_port_row_excludes_non_network_serial_pty(tmp_path):
+    # KISS has TWO client endpoints: the TCP interface (127.0.0.1:8001, scheme "kiss") and the optional
+    # socat PTY (address "state/loraham_kiss", scheme "serial" — a local device path, not a network port).
+    # The network-exposure box must advertise ONLY the TCP interface: one line for KISS, not two.
+    fake = FakeSystem(cmdlines_data={42: ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example"]},
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    kiss = [r for r in svc.dashboard_webservers() if r.get("sid") == "kiss" and r["kind"] == "port"]
+    assert len(kiss) == 1                                      # one interface, not two
+    assert kiss[0]["port"] == "8001"                           # the TCP port, NOT "state/loraham_kiss"
 
 
 def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_path, monkeypatch):
@@ -428,7 +440,7 @@ def test_route_maps_the_typed_phrase_like_webserver_configure(tmp_path):
 
 def test_panel_renders_with_the_bypass_warning(tmp_path):
     app, _ = _app(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
-    body = app.test_client().get("/stacks").get_data(as_text=True)
+    body = app.test_client().get("/stacks?open=meshtastic").get_data(as_text=True)   # panel is in the deferred body
     assert 'id="stack-webserver-meshtastic"' in body
     assert "listening on all interfaces" in body and "depnote-bad" in body
     assert "bypassing this proxy" in body

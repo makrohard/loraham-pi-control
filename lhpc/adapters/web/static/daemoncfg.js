@@ -1,18 +1,24 @@
-// Daemon config page: "Get STATUS" / "Get STATS" buttons issue a live read of the
-// daemon's config socket (via the read-only /api/daemon endpoint) and show the raw
-// key=value lines. Display only; no settings are changed here. Each output box has an
-// X to close it again.
+// Daemon config panel (in the daemon stack body): live read-only views of the daemon over the
+// /api/daemon endpoints — "Get STATUS/STATS" (one-shot), "View Socket" (rolling 22-line poll) and
+// "TX-Viewer" (RX/TX feed). Display only (textContent, never innerHTML); no settings are changed.
+// init(root) re-runs on lhpc:bodyloaded so a lazily-loaded daemon body gets wired too.
 (function () {
   "use strict";
-  var btns = document.querySelectorAll(".livebtn");
-  if (!btns.length) return;
+
+  var SOCKET_LINES = 22, SOCKET_POLL_MS = 1000, TX_POLL_MS = 3000;
 
   function render(obj) {
     if (!obj || !Object.keys(obj).length) return "(no data)";
     return Object.keys(obj).map(function (k) { return k + "=" + obj[k]; }).join("\n");
   }
+  function two(n) { return (n < 10 ? "0" : "") + n; }
+  function stamp() {
+    var d = new Date();
+    return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+  }
 
-  btns.forEach(function (b) {
+  // "Get STATUS" / "Get STATS": one-shot read of the daemon's config socket.
+  function wireLive(b) {
     b.addEventListener("click", function () {
       var band = b.getAttribute("data-band");
       var kind = b.getAttribute("data-kind");
@@ -30,30 +36,17 @@
         })
         .catch(function () { body.textContent = "request failed"; });
     });
-  });
-
-  document.querySelectorAll(".liveclose").forEach(function (x) {
+  }
+  function wireLiveClose(x) {
     x.addEventListener("click", function () {
       var wrap = document.getElementById("liveout-" + x.getAttribute("data-band"));
       if (wrap) wrap.hidden = true;
     });
-  });
-})();
-
-// "View Socket": a live, rolling 22-line window streamed from the daemon CONF socket. Clicking
-// starts polling the READ-ONLY /api/daemon/<band>/socket endpoint (one bounded, server-sanitised
-// status line per poll); the X closes the window AND stops the polling (disconnects). Display only:
-// textContent (never innerHTML), a fixed 22-line ring buffer, one poller per band, cleared on close.
-(function () {
-  "use strict";
-  var LINES = 22, POLL_MS = 1000;
-  function two(n) { return (n < 10 ? "0" : "") + n; }
-  function stamp() {
-    var d = new Date();
-    return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
   }
 
-  document.querySelectorAll(".socketbtn").forEach(function (b) {
+  // "View Socket": a live, rolling 22-line window streamed from the daemon CONF socket. The X closes
+  // the window AND stops the polling. textContent only; one poller per band; cleared on close.
+  function wireSocket(b) {
     b.addEventListener("click", function () {
       var band = b.getAttribute("data-band");
       var wrap = document.getElementById("socketout-" + band);
@@ -64,8 +57,8 @@
       body.textContent = "connecting to config socket (" + band + " MHz)…";
       function push(text) {
         buf.push("[" + stamp() + "] " + text);
-        if (buf.length > LINES) buf = buf.slice(-LINES);  // rolling 22-line window
-        body.textContent = buf.join("\n");                // textContent -> no HTML injection
+        if (buf.length > SOCKET_LINES) buf = buf.slice(-SOCKET_LINES);   // rolling window
+        body.textContent = buf.join("\n");                              // textContent -> no HTML injection
       }
       function poll() {
         fetch("/api/daemon/" + encodeURIComponent(band) + "/socket", { cache: "no-store" })
@@ -76,11 +69,10 @@
           .catch(function () { push("(request failed)"); });
       }
       poll();
-      wrap.dataset.timer = String(setInterval(poll, POLL_MS));
+      wrap.dataset.timer = String(setInterval(poll, SOCKET_POLL_MS));
     });
-  });
-
-  document.querySelectorAll(".socketclose").forEach(function (x) {
+  }
+  function wireSocketClose(x) {
     x.addEventListener("click", function () {
       var wrap = document.getElementById("socketout-" + x.getAttribute("data-band"));
       if (!wrap) return;
@@ -90,16 +82,10 @@
       }
       wrap.hidden = true;
     });
-  });
-})();
+  }
 
-// "TX-Viewer": the SAME read-only RX/TX activity feed as the dashboard (/api/daemon/<band> feed),
-// shown here in a closable, fixed 22-line-tall window. Display only (textContent, no mutation);
-// one poller per band, cleared on the X close.
-(function () {
-  "use strict";
-  var POLL_MS = 3000;
-  document.querySelectorAll(".txbtn").forEach(function (b) {
+  // "TX-Viewer": the SAME read-only RX/TX feed as the dashboard, in a closable 22-line window.
+  function wireTx(b) {
     b.addEventListener("click", function () {
       var band = b.getAttribute("data-band");
       var wrap = document.getElementById("txout-" + band);
@@ -118,16 +104,28 @@
           .catch(function () { /* transient; retry next tick */ });
       }
       poll();
-      wrap.dataset.timer = String(setInterval(poll, POLL_MS));
+      wrap.dataset.timer = String(setInterval(poll, TX_POLL_MS));
     });
-  });
-
-  document.querySelectorAll(".txclose").forEach(function (x) {
+  }
+  function wireTxClose(x) {
     x.addEventListener("click", function () {
       var wrap = document.getElementById("txout-" + x.getAttribute("data-band"));
       if (!wrap) return;
       if (wrap.dataset.timer) { clearInterval(Number(wrap.dataset.timer)); delete wrap.dataset.timer; }
       wrap.hidden = true;
     });
-  });
+  }
+
+  function init(root) {
+    var scope = root || document;
+    scope.querySelectorAll(".livebtn").forEach(wireLive);
+    scope.querySelectorAll(".liveclose").forEach(wireLiveClose);
+    scope.querySelectorAll(".socketbtn").forEach(wireSocket);
+    scope.querySelectorAll(".socketclose").forEach(wireSocketClose);
+    scope.querySelectorAll(".txbtn").forEach(wireTx);
+    scope.querySelectorAll(".txclose").forEach(wireTxClose);
+  }
+
+  init();
+  document.addEventListener("lhpc:bodyloaded", function (e) { init((e.detail || {}).root); });
 })();

@@ -131,7 +131,8 @@ def test_stacks_page_shows_copyable_usermod_only_when_missing(tmp_path):
     def body(groups):
         svc = _svc(tmp_path, groups)
         app = create_app(lambda: svc); app.config["SESSION_COOKIE_SECURE"] = False
-        return app.test_client().get("/stacks").get_data(as_text=True)
+        # The group-membership dependency renders in the stack's (deferred) body — fetch it inline.
+        return app.test_client().get("/stacks?open=meshtastic").get_data(as_text=True)
     missing = body(set())
     assert "sudo usermod -aG spi,gpio $USER" in missing and "spi + gpio group membership" in missing
     satisfied = body({"spi", "gpio"})

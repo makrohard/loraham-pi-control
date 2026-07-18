@@ -451,11 +451,23 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # ---- the single probing path (used by CLI and web) -------------------
 
-    def build_snapshot(self) -> Snapshot:
-        """Fresh, bounded, read-only assessment of every stack. No caching. The
-        confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions
-        (file reads only): a component is confirmed-working when its clean source HEAD appears
-        in a stored composition of its stack."""
+    def build_snapshot(self, *, fresh: bool = False) -> Snapshot:
+        """Bounded, read-only assessment of every stack. Memoized WITHIN a single request/operation
+        only: a page render calls this ~15× (one per stack helper) — recomputing all of it each time
+        re-scans /proc and re-runs git for every source (seconds). The cache is dropped on EVERY web
+        request (`invalidate_snapshot` from a before_request hook) and by every state-mutating op, so
+        it is NEVER reused across a mutation or an HTTP request — status is always current, never stuck.
+
+        `fresh=True` FORCES a recompute (and refreshes the cache) — used by the authoritative
+        running-rechecks that run UNDER the operation locks, where a stale read would let a
+        concurrently-started stack be uninstalled/cleaned. Never memoize those.
+
+        The confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions (file
+        reads only): a component is confirmed-working when its clean source HEAD appears in a stored
+        composition of its stack."""
+        cached = getattr(self, "_snapshot_cache", None)
+        if cached is not None and not fresh:
+            return cached
         from . import known_working
         confirmed: dict = {}
         for s in self.stacks():
@@ -464,7 +476,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid, entry in comp["entries"].items():
                     if entry.get("commit"):
                         confirmed.setdefault(cid, set()).add(entry["commit"])
-        return StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
+        snap = StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
+        self._snapshot_cache = snap
+        return snap
+
+    def invalidate_snapshot(self) -> None:
+        """Drop the memoized snapshot so the next `build_snapshot()` recomputes from scratch. Called
+        once per HTTP request (web before_request) and by every state-mutating op (start/stop/install/
+        build/uninstall/update/clean/apply), so a snapshot is never served after state could change."""
+        self._snapshot_cache = None
 
     # ---- read-only operations --------------------------------------------
 

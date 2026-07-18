@@ -1,9 +1,10 @@
 // Stacks page open/close + scroll behaviour.
 //
 // Model: DEFAULT EVERYTHING CLOSED, at most ONE relevant section open at a time.
-//  - The server renders every <details> closed except the ones a ?param targets (data-force-open,
-//    plus data-force-scroll for ?inst) and active-job rows. This script NEVER closes anything — it
-//    only opens the single relevant target, so "close all others" is free.
+//  - The server renders every <details> closed except: the ones a ?param targets (data-force-open,
+//    plus data-force-scroll for ?inst), active-job rows, and the top-level rows remembered in the
+//    `lhpc_open` cookie (reopened + body inline at first paint, so restore is CLS-safe). This script
+//    NEVER closes anything — it only opens the single relevant target, so "close all others" is free.
 //  - A LINK to a section (its #anchor, or a ?cfg/?dp/?inst param) → open only that section (+ the
 //    parents needed to reach it) and JUMP to it.
 //  - An ACTION button (a form POST that redirects back) → reopen exactly the section the button sat
@@ -17,7 +18,6 @@
   if (!document.querySelector(".stacklist")) { return; }   // only the stacks page (incl. its re-renders)
 
   var AKEY = "lhpc:stacks:act";        // one-shot: { k: pathKey, y: scrollY } of the acted section
-  var OKEY = "lhpc:stacks:open";       // durable per-tab: keyFor() of every open <details>, for reload restore
 
   function keyFor(el) {
     var parts = [];
@@ -42,27 +42,22 @@
     }
   }
 
-  // Durable open/close memory so a reload restores exactly what was open. keyFor() paths survive the
-  // server's re-render of the same structure.
+  // Reload memory for the OPEN TOP-LEVEL row(s): mirror them to the `lhpc_open` cookie so the NEXT server
+  // render opens them AND renders their body inline — present at first paint, so a restored-open row
+  // causes NO layout shift (CLS). Nested sub-panels are intentionally NOT restored across reloads (they
+  // start closed); that keeps restore shift-free with no extra machinery. Closed rows stay lazy.
   function allDetails() {
     return Array.prototype.slice.call(document.querySelectorAll(".stacklist details"));
   }
   function saveOpenSet() {
     try {
-      var keys = [];
-      allDetails().forEach(function (d) { if (d.open) { keys.push(keyFor(d)); } });
-      sessionStorage.setItem(OKEY, JSON.stringify(keys));
+      var top = [];
+      allDetails().forEach(function (d) {
+        // Top-level rows only (.stackrow: a stack "stackrow-<sid>" or the "controller-row").
+        if (d.open && d.classList.contains("stackrow") && d.id) { top.push(d.id.replace(/^stackrow-/, "")); }
+      });
+      document.cookie = "lhpc_open=" + encodeURIComponent(top.join(",")) + ";path=/;samesite=strict";
     } catch (e) { /* private mode */ }
-  }
-  function restoreOpenSet() {
-    var keys = null;
-    try { keys = JSON.parse(sessionStorage.getItem(OKEY) || "null"); } catch (e) { keys = null; }
-    if (!keys || !keys.length) { return false; }
-    var set = {};
-    keys.forEach(function (k) { set[k] = true; });
-    var opened = false;
-    allDetails().forEach(function (d) { if (set[keyFor(d)]) { d.open = true; opened = true; } });
-    return opened;
   }
 
   // A sub-panel (has a <details> ancestor) vs a top-level row (#stackrow-*, #controller-row).
@@ -185,12 +180,10 @@
   var actionReturn = !!(act && (flash || forcedTarget || hashDetails));
   var target = (actEl && actionReturn) ? actEl : (forcedTarget || hashDetails);
 
-  // Precedence that preserves the single-main-row model:
-  //  - An EXPLICIT target (action-return / link / hash) WINS and replaces the saved set — open only its
-  //    chain, so a link to another row can never leave two main rows open. The toggle-save above then
-  //    re-persists exactly that chain.
-  //  - Only a plain reload (no explicit target) restores the saved open set.
-  if (!target) { restoreOpenSet(); }
+  // Precedence that preserves the single-main-row model: an EXPLICIT target (action-return / link / hash)
+  // WINS — open only its chain, so a link to another row can never leave two main rows open. A plain
+  // reload has no target here; its open TOP-LEVEL row is already reopened SERVER-SIDE (the lhpc_open
+  // cookie → rendered open+inline at first paint), so there is nothing left to restore in JS.
   if (target) { openWithAncestors(target); }
 
   // --- scroll (after the open relayout changes page height) --------------------------------------

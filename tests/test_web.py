@@ -74,7 +74,7 @@ def test_dashboard_ok_and_headers(tmp_path):
 
 
 def test_stack_detail_ok(tmp_path):
-    resp = _client(tmp_path).get("/stacks")
+    resp = _client(tmp_path).get("/stacks?open=kiss")   # DIRECT lives in a stack body (now lazy-loaded)
     assert resp.status_code == 200
     assert b"DIRECT" in resp.data  # the corrected 433 DIRECT requirement is shown
 
@@ -178,7 +178,7 @@ def test_config_page_route_gone_content_on_stack(tmp_path):
     c = _client(tmp_path)
     assert c.get("/config").status_code == 404                         # config hub page gone
     assert c.get("/stacks/igate/config").status_code == 405            # GET config page gone (POST save remains)
-    body = c.get("/stacks").get_data(as_text=True)               # content now on the stack page
+    body = c.get("/stacks?open=igate").get_data(as_text=True)     # content now on the stack page (lazy body)
     assert 'id="stack-settings-igate"' in body and ">Settings<" in body
 
 
@@ -203,9 +203,10 @@ def test_inst_query_forces_and_scrolls_to_install_panel(tmp_path):
     panel = doc.by_id("stack-install-igate")
     assert panel.has_attr("open") and panel["data-force-open"] == "1" and panel["data-force-scroll"] == "1"
     assert doc.by_id("stackrow-igate")["data-force-open"] == "1"          # the row is forced too
-    # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to.
-    daemon = doc.by_id("stack-install-daemon")
-    assert not daemon.has_attr("data-force-scroll") and not daemon.has_attr("data-force-open")
+    # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to. A non-targeted
+    # (closed) stack's body is lazy-loaded, so its Install panel is absent from this response —
+    # which is a fortiori not forced/scrolled.
+    assert doc.by_id("stack-install-daemon") is None
     assert body.count('data-force-scroll="1"') == 1
 
 
@@ -217,8 +218,14 @@ def test_inst_non_matching_value_forces_nothing(tmp_path):
 
 def test_install_panel_ids_unique(tmp_path):
     import re
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    ids = re.findall(r'id="(stack-install-[a-z0-9-]+)"', body)
+    c = _client(tmp_path)
+    # Bodies are lazy-loaded, so no Install panel is inlined on the overview; collect the ids
+    # across every stack's body partial and prove each is unique.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ids = []
+    for s in svc.stacks():
+        body = c.get(f"/stacks/{s.id}/body").get_data(as_text=True)
+        ids += re.findall(r'id="(stack-install-[a-z0-9-]+)"', body)
     assert ids and len(ids) == len(set(ids))
 
 
@@ -273,7 +280,7 @@ def test_updating_page_is_static_no_script():
 def test_radiolib_dependency_has_source_and_build_actions(tmp_path):
     # RadioLib (git source + build_steps, no test) must expose Source (Install/Update) and Build in
     # its Dependencies row — the actions that actually work on a component target.
-    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # radiolib is a daemon dep (lazy body)
     assert "<summary>radiolib" in body
     start = body.index("<summary>radiolib")
     block = body[start:body.index("<summary>Info", start)]        # radiolib's actbar, before its Info
@@ -296,7 +303,7 @@ def test_radiolib_actions_use_working_dispatch_ops(tmp_path):
 
 def test_stack_rows_fold_in_detail_sections(tmp_path):
     # The former /stacks/<id> detail page is now collapsible sections under each stack row.
-    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # lazy body forced inline
     for s in (">Install</summary>", ">Info</summary>", ">Settings</summary>",
               ">System dependencies</summary>", ">Dependencies</summary>"):
         assert s in body, s
@@ -334,7 +341,7 @@ def _daemon_client(tmp_path, guard=False):
 
 def test_daemon_config_page_has_live_settings(tmp_path):
     # Live daemon settings now live on the daemon's config page (Monitor page deleted).
-    body = _daemon_client(tmp_path).get("/stacks").get_data(as_text=True)
+    body = _daemon_client(tmp_path).get("/stacks?cfg=daemon").get_data(as_text=True)   # open daemon Settings (lazy body)
     assert "Live radio settings" in body and 'name="_csrf"' in body
     assert 'name="value"' in body and "<select" in body   # enum -> dropdown (attrs may vary)
     assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
@@ -395,14 +402,14 @@ def test_multi_band_config_stored_per_band(tmp_path):
     token = _csrf(c)     # kiss stays multi-band
     c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
                                         "c_tx_freq": "869.525"})
-    assert "869.525" in c.get("/stacks?band=868").get_data(as_text=True)
-    assert "433.900" in c.get("/stacks?band=433").get_data(as_text=True)  # 433 untouched
+    assert "869.525" in c.get("/stacks?band=868&open=kiss").get_data(as_text=True)   # kiss body lazy-loaded
+    assert "433.900" in c.get("/stacks?band=433&open=kiss").get_data(as_text=True)  # 433 untouched
 
 
 
 def test_actions_grouped_and_install_state_aware(tmp_path):
     # fresh runtime: sources missing -> not installed -> Install shown, Build hidden
-    body = _real_app(tmp_path).get("/stacks").get_data(as_text=True)
+    body = _real_app(tmp_path).get("/stacks?open=daemon").get_data(as_text=True)   # actions live in the lazy body
     assert "grouplabel" in body and ">Install<" in body
     # Nothing installed -> stack_actions renders no Setup group (its stack-level Build/Test live there).
     assert 'grouplabel">Setup<' not in body
@@ -706,7 +713,8 @@ def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path):
     # daemon serving BOTH + meshtastic on 868 IS a real conflict on 868 -> shown.
     c = _conflict_app(tmp_path, {100: ["loraham_daemon", "--radio", "both"], 200: ["meshtasticd"]},
                       {"/tmp/loraconf433.sock": _RDY_A5, "/tmp/loraconf868.sock": _RDY_A5}, "868")
-    body = c.get("/stacks").get_data(as_text=True)
+    # The OBSERVED conflict row lives in the stack's (deferred) Info panel — fetch it inline via ?open.
+    body = c.get("/stacks?open=daemon").get_data(as_text=True)
     # A real 868 conflict is shown as an OBSERVED conflict row naming the 868 radio resource.
     assert "OBSERVED" in body and 'class="conflict"' in body and "loraham.radio.868" in body
 
@@ -997,7 +1005,7 @@ def test_stack_confirm_panel_distinct_collision_fields(tmp_path):               
                             paths=Paths(runtime_root=tmp_path))
     assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
                                                      "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
-    tok = _csrf(c)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "ostack2"}).get_data(as_text=True)
     # distinct, component-qualified field names — never a shared bare field
     assert 'name="p_tgt__rp"' in body and 'name="p_dep__rp"' in body
@@ -1017,7 +1025,7 @@ def test_stack_save_and_start_scoped_per_component(tmp_path, monkeypatch):      
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
-    tok = _csrf(c)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "ostack2", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
                                 "p_tgt__rp": "RP-T", "p_dep__rp": "RP-D", "p_uniq": "U-FLAT",
@@ -1042,7 +1050,7 @@ def test_config_page_distinct_collision_fields_and_values(tmp_path):
                             paths=Paths(runtime_root=tmp_path))
     assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
                                                      "file_tgt.fp": "FP-T", "file_dep.fp": "FP-D"}).ok
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=ostack2").get_data(as_text=True)   # Settings fields live in the lazy body
     assert 'name="c_tgt__rp"' in body and 'name="c_dep__rp"' in body        # distinct run fields
     assert 'name="f_tgt__fp"' in body and 'name="f_dep__fp"' in body        # distinct file fields
     assert 'name="c_rp"' not in body and 'name="f_fp"' not in body          # no shared bare field
@@ -1054,7 +1062,7 @@ def test_config_page_distinct_collision_fields_and_values(tmp_path):
 def test_config_page_post_persists_scoped_and_reloads(tmp_path):
     from lhpc.core import config as cfgmod
     m, c = _collide_app(tmp_path)
-    tok = _csrf(c)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     r = c.post("/stacks/ostack2/config",
                data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                      "c_uniq": "U-FLAT", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
@@ -1063,14 +1071,14 @@ def test_config_page_post_persists_scoped_and_reloads(tmp_path):
     assert cfg["__r__tgt__rp"] == "RP-T" and cfg["__r__dep__rp"] == "RP-D"    # scoped run keys
     assert cfg["__f__tgt__fp"] == "FP-T" and cfg["__f__dep__fp"] == "FP-D"    # scoped file keys
     assert cfg["uniq"] == "U-FLAT" and "__r__tgt__uniq" not in cfg            # unique stays flat
-    body = c.get("/stacks").get_data(as_text=True)             # reloads correctly
+    body = c.get("/stacks?open=ostack2").get_data(as_text=True)   # reloads correctly (lazy body)
     assert 'value="RP-T"' in body and 'value="RP-D"' in body
 
 
 def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     m, c = _collide_app(tmp_path)
-    tok = _csrf(c)
+    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
     c.post("/stacks/ostack2/config",
            data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                  "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
@@ -1115,8 +1123,14 @@ def test_daemon_socket_line_sanitises_and_bounds(tmp_path):
 
 def test_settings_apps_ids_unique(tmp_path):                                 # (3)
     import re
-    apps = _client(tmp_path).get("/stacks").get_data(as_text=True)
-    ids = re.findall(r'id="(stack-settings-[a-z0-9-]+)"', apps)
+    c = _client(tmp_path)
+    # Bodies are lazy-loaded; collect each stack's Settings id from its body partial.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ids, apps = [], ""
+    for s in svc.stacks():
+        body = c.get(f"/stacks/{s.id}/body").get_data(as_text=True)
+        apps += body
+        ids += re.findall(r'id="(stack-settings-[a-z0-9-]+)"', body)
     assert len(ids) >= 2 and len(ids) == len(set(ids))        # one unique id per stack
     assert 'id="stack-settings"' not in apps                  # never the bare detail id here
 
@@ -1125,8 +1139,10 @@ def test_settings_cfg_query_opens(tmp_path):                                 # (
     c = _client(tmp_path)
     assert parse(c.get("/stacks?cfg=igate").get_data(as_text=True)) \
         .by_id("stack-settings-igate").has_attr("open")                 # ?cfg=<id> forces it open
-    assert not parse(c.get("/stacks").get_data(as_text=True)) \
-        .by_id("stack-settings-igate").has_attr("open")                 # collapsed by default
+    # By default the row is closed, so its body (and this Settings panel) is lazy-loaded, i.e. absent —
+    # never auto-open.
+    assert parse(c.get("/stacks").get_data(as_text=True)) \
+        .by_id("stack-settings-igate") is None
 
 
 def test_settings_embedded_post_persists(tmp_path):                          # (5)
@@ -1317,11 +1333,13 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path):
 def test_stacks_default_closed_install_and_webserver_not_auto_open(tmp_path):
     # "install and webserver section shall not auto-open anymore": a plain GET force-opens nothing.
     import re
-    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    c = _client(tmp_path)
+    body = c.get("/stacks").get_data(as_text=True)
     assert "data-force-open" not in body and "data-force-scroll" not in body
-    # every Install panel collapsed (id immediately followed by '>', no ' open')
-    assert re.search(r'id="stack-install-[a-z0-9-]+"', body)          # they render…
-    assert not re.search(r'id="stack-install-[a-z0-9-]+"[^>]*\sopen', body)   # …but closed
+    # A lazily-fetched body renders its Install panel collapsed (id immediately followed by '>', no ' open').
+    bod = c.get("/stacks/daemon/body").get_data(as_text=True)
+    assert re.search(r'id="stack-install-daemon"', bod)                       # it renders…
+    assert not re.search(r'id="stack-install-daemon"[^>]*\sopen', bod)        # …but closed
     assert 'id="webserver-row">' in body and 'id="webserver-row" open' not in body
 
 
@@ -1573,7 +1591,7 @@ def _kw_bound_app(tmp_path, commit="a" * 40, cmdlines=None):
 def test_confirm_working_button_renders_when_offer_valid(tmp_path):
     _seed_kw_offer(tmp_path)
     c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=chat").get_data(as_text=True)   # confirm-working offer lives in the lazy body
     assert "Confirm this stack as working" in body
     assert "known-working/confirm" in body
 
@@ -1619,7 +1637,7 @@ def _flag_restart(tmp_path, sid="chat"):
 def test_restart_required_chip_on_stack_page_and_dashboard(tmp_path):
     _flag_restart(tmp_path)
     c = _real_app(tmp_path, cmdlines={555: ["loraham_chat"]})
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=chat").get_data(as_text=True)   # restart chip + action live in the lazy body
     assert "Restart required" in body and "Restart now" in body
     dash = c.get("/").get_data(as_text=True)
     assert "Restart required" in dash and "Restart chat now" in dash
@@ -1889,7 +1907,7 @@ def test_confirm_start_optional_component_checkboxes(tmp_path, monkeypatch):
 
 
 def test_settings_page_rules_line_before_optional_component(tmp_path):
-    # /stacks/meshcom?cfg=1: the MeshCom GPS relay settings group is separated by a rule.
+    # /stacks?cfg=meshcom: the MeshCom GPS relay settings group is separated by a rule.
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     from lhpc.core.paths import Paths
@@ -1898,7 +1916,7 @@ def test_settings_page_rules_line_before_optional_component(tmp_path):
     groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
     assert groups["MeshCom GPS relay"]["rule_before"] is True
     body = create_app(service_factory=lambda: svc).test_client() \
-        .get("/stacks?cfg=1").data.decode()
+        .get("/stacks?cfg=meshcom").data.decode()   # open meshcom Settings (lazy body)
     i_gps = body.find("MeshCom GPS relay")
     assert any(0 < i_gps - n < 600
                for n in range(len(body))

@@ -52,10 +52,13 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
 
 
 def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
+    c = _app(tmp_path)
+    # Panels live in the (lazy) stack bodies — fetch each row force-opened.
+    mc = c.get("/stacks?open=meshcom").get_data(as_text=True)
+    dm = c.get("/stacks?open=daemon").get_data(as_text=True)
     disabled = 'disabled title="Available only while the stack is running"'
-    assert disabled in _row(body, "meshcom")       # app, not running
-    assert disabled not in _row(body, "daemon")    # daemon: always on
+    assert disabled in _row(mc, "meshcom")         # app, not running
+    assert disabled not in _row(dm, "daemon")      # daemon: always on
 
 
 def test_apply_live_rejected_server_side_when_not_running(tmp_path):
@@ -65,14 +68,16 @@ def test_apply_live_rejected_server_side_when_not_running(tmp_path):
 
 
 def test_meshtastic_has_no_daemon_panel(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
+    body = _app(tmp_path).get("/stacks?open=meshtastic").get_data(as_text=True)   # force its lazy body inline
     assert "Daemon radio parameters" not in _row(body, "meshtastic")   # direct-SPI: no daemon panel
 
 
 def test_daemon_panel_follows_upper_band_switch(tmp_path):
     c = _app(tmp_path)
-    assert "(433 MHz)" in c.get("/stacks").get_data(as_text=True)          # default
-    assert "(868 MHz)" in c.get("/stacks?band=868").get_data(as_text=True)  # switched
+    # The per-component band badge (Dependencies list) carries each stack's configured band. A 433
+    # stack shows (433 MHz), an 868 stack shows (868 MHz); both now live in their lazy stack bodies.
+    assert "(433 MHz)" in c.get("/stacks?open=meshcom").get_data(as_text=True)          # 433-band stack
+    assert "(868 MHz)" in c.get("/stacks?open=meshcore&band=868").get_data(as_text=True)  # 868-band stack
 
 
 def test_apply_live_saves_then_reports(tmp_path):
@@ -82,7 +87,7 @@ def test_apply_live_saves_then_reports(tmp_path):
     r = c.post("/stacks/meshcom/daemon-params/apply",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "33"})
     assert r.status_code in (302, 303)
-    assert 'value="33"' in c.get("/stacks").get_data(as_text=True)  # saved
+    assert 'value="33"' in c.get("/stacks?open=meshcom").get_data(as_text=True)  # saved (lazy body)
 
 
 def test_save_then_reset_daemon_params(tmp_path):
@@ -91,10 +96,10 @@ def test_save_then_reset_daemon_params(tmp_path):
     r = c.post("/stacks/meshcom/daemon-params",
                data={"_csrf": tok, "band": "433", "dp_CADIDLE": "40", "dp_CADWAIT": ""})
     assert r.status_code in (302, 303)
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=meshcom").get_data(as_text=True)
     assert 'value="40"' in body                              # override persisted + shown
     c.post("/stacks/meshcom/daemon-params/reset", data={"_csrf": tok, "band": "433"})
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=meshcom").get_data(as_text=True)
     assert 'value="28"' in body and 'value="40"' not in body  # back to default
 
 
@@ -109,21 +114,25 @@ def test_panel_stays_open_after_save(tmp_path):
     assert "open=meshcom" in loc and "dp=meshcom" in loc and loc.endswith("#stack-daemon-params-meshcom")
     assert parse(c.get(loc).get_data(as_text=True)) \
         .by_id("stack-daemon-params-meshcom").has_attr("open")               # forced open on return
-    assert not parse(c.get("/stacks").get_data(as_text=True)) \
-        .by_id("stack-daemon-params-meshcom").has_attr("open")               # collapsed by default
+    # By default meshcom's row is closed, so its body (and this panel) is lazy-loaded → absent,
+    # i.e. never auto-open.
+    assert parse(c.get("/stacks").get_data(as_text=True)) \
+        .by_id("stack-daemon-params-meshcom") is None
 
 
 def test_dp_target_specific_opens_only_matching_panel(tmp_path):
     doc = parse(_app(tmp_path).get("/stacks?open=meshcom&dp=meshcom").get_data(as_text=True))
-    # ONLY meshcom's daemon panel is forced open; the daemon stack's own panel stays collapsed.
+    # ONLY meshcom's daemon panel is forced open; the daemon stack's row is closed, so its whole
+    # body (and its own daemon panel) is lazy-loaded → absent, and thus certainly not forced open.
     assert doc.by_id("stack-daemon-params-meshcom").has_attr("open")
-    assert not doc.by_id("stack-daemon-params-daemon").has_attr("open")
+    assert doc.by_id("stack-daemon-params-daemon") is None
 
 
 def test_dp1_no_longer_opens_every_daemon_panel(tmp_path):
     # Regression: the old ?dp=1 opened EVERY daemon-params panel globally. `dp` must now match a
-    # stack id, so a non-matching value opens NONE.
-    doc = parse(_app(tmp_path).get("/stacks?dp=1").get_data(as_text=True))
+    # stack id, so a non-matching value opens NONE. We force meshcom's body inline (so a daemon panel
+    # is actually rendered) — dp=1 must still not force it open.
+    doc = parse(_app(tmp_path).get("/stacks?open=meshcom&dp=1").get_data(as_text=True))
     panels = doc.find("details", **{"class": "advcfg dparams"})
     assert panels                                            # panels present...
     assert not any(p.has_attr("open") for p in panels)       # ...but none forced open by dp=1
@@ -134,7 +143,7 @@ def test_save_rejects_out_of_range(tmp_path):
     tok = _csrf(c)
     c.post("/stacks/meshcom/daemon-params",
            data={"_csrf": tok, "band": "433", "dp_CADIDLE": "99999", "dp_CADWAIT": ""})
-    body = c.get("/stacks").get_data(as_text=True)
+    body = c.get("/stacks?open=meshcom").get_data(as_text=True)   # meshcom panel force-opened (lazy body)
     assert 'value="99999"' not in body                       # rejected, not stored
 
 
@@ -502,9 +511,10 @@ def test_meshtastic_direct_spi_has_no_daemon_params_view(tmp_path):
 
 
 def test_daemon_params_band_chooser_rendered(tmp_path):
-    body = _app(tmp_path).get("/stacks").get_data(as_text=True)
+    c = _app(tmp_path)
 
     def dp_seg(sid):
+        body = c.get(f"/stacks?open={sid}").get_data(as_text=True)   # panel is in the lazy body
         i = body.index('id="stack-daemon-params-' + sid + '"')
         return body[i:i + 1500]
 

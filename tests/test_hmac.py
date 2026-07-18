@@ -692,7 +692,7 @@ def test_normal_config_save_unaffected_by_the_guard(tmp_path):
 
 def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
     client, _ = _web(tmp_path)
-    body = client.get("/stacks").get_data(as_text=True)
+    body = client.get("/stacks?open=meshcom").get_data(as_text=True)   # HMAC row is in meshcom's deferred body
     assert "HMAC Password" in body                              # the action row
     assert "HMAC Password disabled" in body                     # first-position yellow flag (default off)
     # the three actions link to the warn/apply page (GET), not a POST /action op

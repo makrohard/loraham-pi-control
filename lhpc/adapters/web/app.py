@@ -223,6 +223,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return response
 
     @app.before_request
+    def _fresh_snapshot():  # noqa: ANN202
+        # The status snapshot is memoized WITHIN a request (a page render assesses it ~15×). Drop it
+        # at the start of EVERY request so no request ever serves state from a previous one — freshness
+        # is guaranteed; the memo only coalesces the repeated reads inside this one render.
+        service.invalidate_snapshot()
+
+    @app.before_request
     def _trusted_host():  # noqa: ANN202
         """Explicit trusted-host policy — ENFORCED only in productive HTTPS mode (Secure cookies), so
         the interactive loopback-TCP console and the test client (plain http) are unaffected. The real
@@ -749,12 +756,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
-    def _render_stacks(**over):
-        # The Apps page — also the home of the controller's embedded Update UI. `st`/`jobs`
-        # are CACHED (status envelope + local job list); `confirm`/`result`/`apply_data` are
-        # only set when the update apply flow renders back here. All controller data is
-        # cached-only — no live git/network/identity on a GET.
-        groups, snapshot = _stack_groups(request.args.get("band", ""))
+    def _stacks_context(band="", *, hw_probe=None):
+        """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
+        by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
+        with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
+        it inline; the lazy partial passes None — the transient belongs to the whole-page render)."""
+        groups, snapshot = _stack_groups(band)
+        # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
+        # stacks_state.js). Rendering them already-open with their body inline — like a ?open= row —
+        # means a restored-open row is present at FIRST PAINT, so re-opening it never shifts the page
+        # (CLS). One general mechanism: any top-level row id (a stack sid, or "controller-row").
+        from urllib.parse import unquote as _unquote
+        restored_open = {s for s in _unquote(request.cookies.get("lhpc_open", "")).split(",") if s}
         # Controller-owned Webserver component, rendered INLINE in the controller row. Cached
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
@@ -771,25 +784,36 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             ws_mon=_ws, ws_certs=(_ws or {}).get("pki", {}).get("clients", []),
             ws_modes=list(_WS_MODES), ws_loopback=peer_is_loopback(),
             st=service.self_update_status(), jobs=service.active_jobs(),
-            # One-click integration status (GET-safe file reads): gates the "Update now" button
-            # and drives recovery/guidance in _update.html.
             updater=service.updater_integration(),
-            # Banner summary (green if only optional missing, yellow if a mandatory one is) linking to
-            # the Dependency Overview. GET-safe (presence probes only).
             dep_summary=service.dependency_overview(),
-            # Reached authority for the webserver-pill addresses: the console's full host:port (nginx
-            # forwards a portless $host, so reattach the console port behind nginx) + host-only for proxies
-            # (they append their own port).
             req_host=_url_host(request.host or ""),
             ws_console_addr=_console_addr((_ws or {}).get("desired", {}).get("port", "")),
             tasks=service.running_tasks(),
-            # Transient hardware-probe result (Detect), rendered inline under the Detect button in the
-            # daemon Hardware settings — consumed once (pop) so a reload does not re-show it.
-            hw_probe=session.pop("hw_probe", None),
+            restored_open=restored_open,
+            hw_probe=hw_probe,
             confirm=None,
         )
+        return ctx, groups, snapshot
+
+    def _render_stacks(**over):
+        # The Apps page — also the home of the controller's embedded Update UI. All controller data is
+        # cached-only — no live git/network/identity on a GET. hw_probe is popped (consumed once).
+        ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
+                                                  hw_probe=session.pop("hw_probe", None))
         ctx.update(over)
         return render_template("stacks.html", **ctx)
+
+    @app.get("/stacks/<sid>/body")
+    def stack_body(sid: str):  # noqa: ANN202
+        # Lazy per-stack body: the Apps page renders only OPEN stacks' bodies inline; a closed stack's
+        # body (its settings/source/config forms) is fetched here when the operator expands it. Same
+        # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
+        # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
+        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""))
+        g = next((x for x in groups if x["stack"].id == sid), None)
+        if g is None:
+            abort(404)
+        return render_template("_stack_body.html", g=g, **ctx)
 
     @app.get("/stacks")
     def stacks_overview():  # noqa: ANN202

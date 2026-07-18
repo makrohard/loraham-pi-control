@@ -41,7 +41,7 @@
       {# Collapsed on a first load: only the forced self-update confirm flow opens it (an available
          update is signalled by the 'update available' pill, not by auto-expanding the row). #}
       <div class="stackrow-wrap">
-      <details class="stackrow" id="controller-row"{% if confirm %} open{% endif %}>
+      <details class="stackrow" id="controller-row"{% if confirm or 'controller-row' in restored_open %} open{% endif %}>
         <summary>
           <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
           {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
@@ -118,11 +118,23 @@
       </div>
       {% endif %}
       {% for g in groups %}
-        {% set _forced = g.jobs or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
+        {# `restored_open` (from the lhpc_open cookie) makes a remembered-open row render inline+open at
+           first paint, so re-opening it on reload causes no layout shift — same effect as a ?open= row. #}
+        {% set _forced = g.jobs or g.stack.id in restored_open or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
         <div class="stackrow-wrap">
           <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
             <summary>{{ stack_summary(g) }}</summary>
-            {% include "_stack_body.html" %}
+            {# The body (settings/source/config forms) is heavy. Render it inline only when the row is
+               already open (a link/flow forced it); otherwise defer it to a fetch on first expand
+               (stacklazy.js). No-JS / fetch failure falls back to the ?open= link, which renders it
+               server-side — so the settings are always reachable. #}
+            {% if _forced %}
+              {% include "_stack_body.html" %}
+            {% else %}
+              <div class="lazy-body" data-body-url="{{ url_for('stack_body', sid=g.stack.id) }}{% if request.args.get('band') %}?band={{ request.args.get('band') }}{% endif %}">
+                <noscript><p class="muted"><a href="{{ url_for('stacks_overview', open=g.stack.id) }}#stackrow-{{ g.stack.id }}">Open {{ g.stack.name }}</a></p></noscript>
+              </div>
+            {% endif %}
           </details>
           {# Action links OUTSIDE the summary (a11y) but overlaid on the row (see .row-actions). #}
           {{ stack_row_actions(g) }}
@@ -147,6 +159,8 @@
   </div>
 {% endblock %}
 {% block scripts %}
+  {# Lazy-load each stack's settings body on first expand (keeps the initial DOM small). #}
+  <script src="{{ url_for('static', filename='stacklazy.js') }}" defer></script>
   {# Preserve the tree's open/close + scroll across form-POST actions (external per CSP). #}
   <script src="{{ url_for('static', filename='stacks_state.js') }}" defer></script>
   <script src="{{ url_for('static', filename='taskbanner.js') }}" defer></script>

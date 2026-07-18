@@ -4,8 +4,9 @@
   "use strict";
 
   // "Reset to defaults": set every stack param back to its manifest default (data-default). Never
-  // touches saved config — it just changes what this start submits.
-  document.querySelectorAll(".sp-reset").forEach(function (btn) {
+  // touches saved config — it just changes what this start submits. Present in every stack body, so
+  // init(root) re-runs on lhpc:bodyloaded to wire lazily-loaded bodies too.
+  function wireReset(btn) {
     btn.addEventListener("click", function () {
       var panel = btn.closest(".stackparams");
       if (!panel) return;
@@ -18,9 +19,15 @@
         }
       });
     });
-  });
+  }
+  function initResets(root) {
+    (root || document).querySelectorAll(".sp-reset").forEach(wireReset);
+  }
+  initResets();
+  document.addEventListener("lhpc:bodyloaded", function (e) { initResets((e.detail || {}).root); });
 
-  // The confirm form is the one carrying the _params marker.
+  // --- The rest is the start-confirm page only (the _params marker form) — a full page render, never
+  // lazy-loaded, so it wires once and bails on the /stacks overview. ---
   var marker = document.querySelector('input[name="_params"]');
   var form = marker ? marker.form : null;
   if (!form) return;

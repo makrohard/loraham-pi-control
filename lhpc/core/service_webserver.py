@@ -295,7 +295,11 @@ class WebserverOpsMixin:
                 rows.append(self._dashboard_web_row(stk))
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
-                    if getattr(ep, "client", False) and ep.scheme not in ("http", "https"):
+                    # Network ports only (host:port). Skip non-network client endpoints like the KISS
+                    # socat PTY (scheme="serial", a local device path e.g. "state/loraham_kiss") — it is
+                    # a filesystem device, not an interface to advertise in the network-exposure box.
+                    if (getattr(ep, "client", False) and ep.scheme not in ("http", "https")
+                            and ":" in ep.address):
                         rows.append(self._dashboard_port_row(stk, comp, ep))
         return rows
 

@@ -32,8 +32,6 @@
        source is a separate GitHub link. #}
     <a href="{{ url_for('dashboard') }}" title="Dashboard (home)">LoRaHAM Pi Control</a>
     <span class="ver ver-{{ selfupdate.ver_color|default('grey') }}">v{{ selfupdate.version|default(version|default('')) }}</span>{% if selfupdate.head_short %} <span class="ver ver-{{ selfupdate.commit_color|default('grey') }}" title="local commit {{ selfupdate.head_short }}{% if selfupdate.dirty %} (dirty){% endif %}">@{{ selfupdate.head_short }}</span>{% endif %}{% if selfupdate.update_available %} · <a href="{{ url_for('stacks_overview') }}#controller-update" class="update-link">Update &rarr;</a>{% endif %} · <a href="https://github.com/makrohard/loraham-pi-control">GitHub</a>
-    {# GitHub on the main line (full opacity) — not the dimmed .sub — for good contrast. #}
-    <div class="sub">Local operator console · {{ runtime_root|default('') }}</div>
     {# Read-only current radio hardware setup (configured on the Apps page); links to those settings. #}
     <div class="sub">Radio hardware:
       <a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon') ~ '#stack-settings-daemon' }}"

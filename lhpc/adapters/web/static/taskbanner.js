@@ -55,8 +55,10 @@
       row.querySelector(".ti-label").textContent = t.label || "";
       row.querySelector(".ti-state").textContent = LABELS[t.state] || t.state || "";
       var hint = row.querySelector(".ti-hint");
-      hint.textContent = t.hint || "";
-      hint.style.display = t.hint ? "" : "none";
+      if (hint) {                                   // defensive: a server row may omit it
+        hint.textContent = t.hint || "";
+        hint.style.display = t.hint ? "" : "none";
+      }
       row.querySelector(".ti-view").setAttribute("href", t.href || "#");
 
       // ✕ (dismiss) for failed; Recover for an unsafe JOB. Rebuild the trailing control on state change.

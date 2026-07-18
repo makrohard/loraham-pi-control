@@ -1325,7 +1325,7 @@ class AutoInstallOpsMixin:
                             next_commands=["lhpc status --versions"])
 
     def _auto_install_running_components(self, scope) -> list:
-        snap = self.build_snapshot()
+        snap = self.build_snapshot(fresh=True)             # safety running-check: never a cached read
         up = (RunState.RUNNING, RunState.DEGRADED)
         ids = {c.id for st, _ in scope for c in st.components}
         return sorted(cid for ss in snap.stacks for cid, cst in ss.components.items()

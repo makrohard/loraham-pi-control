@@ -691,12 +691,14 @@ class MaintenanceOpsMixin:
     def _running_source_consumers(self, paths: set) -> list:
         """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —
         a source swap under a running process breaks it (deleted inodes / half-read files), so
-        mutation of these paths is refused until the operator stops them."""
+        mutation of these paths is refused until the operator stops them. Always assesses FRESH:
+        it gates a destructive source swap (update), so a cached read must never hide a process
+        that started since the plan preview."""
         consumers = self._source_consumers()
         affected = set()
         for p in paths:
             affected |= consumers.get(p, set())
-        snap = self.build_snapshot()
+        snap = self.build_snapshot(fresh=True)
         up = (RunState.RUNNING, RunState.DEGRADED)
         return sorted(cid for ss in snap.stacks for cid, st in ss.components.items()
                       if cid in affected and st.run_state in up)
@@ -1251,7 +1253,7 @@ class MaintenanceOpsMixin:
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
                 # slipped in after the preflight refuses with ZERO mutation (no source,
                 # config, log, marker, known-working, or registry change).
-                snap = self.build_snapshot()
+                snap = self.build_snapshot(fresh=True)     # UNDER locks: never a cached read
                 running = sorted(cid for ss in snap.stacks
                                  for cid, st in ss.components.items()
                                  if cid in target_ids and st.run_state in up)
@@ -1408,7 +1410,7 @@ class MaintenanceOpsMixin:
                     # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
                     # slipped in after the preflight refuses with ZERO mutation — no
                     # source, config, log, marker, known-working, or registry cleanup.
-                    snap = self.build_snapshot()
+                    snap = self.build_snapshot(fresh=True)   # UNDER locks: never a cached read
                     running = sorted(cid for ss in snap.stacks
                                      for cid, st in ss.components.items()
                                      if cid in comp_ids and st.run_state in up)

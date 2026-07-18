@@ -423,7 +423,7 @@ def test_reset_restores_https_from_a_valid_http_console(tmp_path):
 def test_webserver_panel_is_the_last_sub_section_and_styled_like_the_others(tmp_path):
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
-    body = create_app(lambda: svc).test_client().get("/stacks").get_data(as_text=True)
+    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
     i = body.index('id="stackrow-meshcom"')
     row = body[i:body.index('id="stackrow-', i + 1)] if body.find(
         'id="stackrow-', i + 1) != -1 else body[i:]
