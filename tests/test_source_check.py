@@ -15,7 +15,7 @@ from lhpc.core.probes.backends import CommandResult as CR, FakeSystem
 from lhpc.core.services import ControllerService
 
 DAEMON_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
-DAEMON_BRANCH = "hardening/daemon-tests"
+DAEMON_BRANCH = "main"
 RADIOLIB_REMOTE = "https://github.com/jgromes/RadioLib"
 
 A = "a" * 40

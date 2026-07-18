@@ -316,7 +316,7 @@ def test_reconcile_absent_installs_unowned_blocks_orphan_blocks(tmp_path):
 
 def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     from lhpc.core.probes import RealSystem
-    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     head = _make_repo(dest, remote=remote)
     paths = Paths(runtime_root=tmp_path)

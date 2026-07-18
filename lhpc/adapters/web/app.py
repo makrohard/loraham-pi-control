@@ -956,7 +956,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     # Submitted as HIDDEN inputs on the start-confirm page (carry saved values, not editable rows):
     # the band value + the per-band stored TX/CAD values (edited in the per-band daemon panels).
     # The per-process `hw`/`txmode`/`cadmon`/`cadrssi` stay VISIBLE (collapsed under "Daemon process
-    # options"); `hw` uses friendly choice labels so the `--hw` wire name "legacy" is never shown.
+    # options"); `hw` uses friendly choice labels so the `--hw` wire name "loraham" is never shown.
     _HIDE_RUN = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
                  "cadrssi_433", "cadrssi_868"}
 

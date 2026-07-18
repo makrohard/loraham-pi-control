@@ -195,7 +195,7 @@ class RunParam:
     kind: str = "enum"           # "enum" | "flag" | "int" | "str"
     choices: tuple[str, ...] = ()
     # Optional friendly DISPLAY labels for enum choices: ((value, label), …). The value still submits;
-    # only the shown text changes (e.g. hw "legacy" -> "LoRaHAM"). Missing entries fall back to the value.
+    # only the shown text changes (e.g. hw "loraham" -> "LoRaHAM"). Missing entries fall back to the value.
     choice_labels: tuple = ()
     default: str = ""
     flag: str = ""               # for kind="flag", the text to inject when enabled

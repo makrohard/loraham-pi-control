@@ -181,7 +181,7 @@ def _svc_env(tmp_path):
                 and os.path.realpath(argv[2]) == dest_real
                 and argv[3:] == ["config", "--get", "remote.origin.url"]):
             return CommandResult(
-                0, "https://github.com/makrohard/LoRaHAM_Daemon.git\n", "")
+                0, "https://github.com/makrohard/loraham-kiss-tnc.git\n", "")
         return real_run(argv, timeout, *a, **k)
     svc._system.runner.run = run
     return svc, dest
@@ -553,12 +553,12 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     _make_repo(dest)
     _git(dest, "remote", "add", "origin",
-         "https://github.com/makrohard/LoRaHAM_Daemon.git")
+         "https://github.com/makrohard/loraham-kiss-tnc.git")
     head = _git(dest, "rev-parse", "HEAD")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
-                                       "https://github.com/makrohard/LoRaHAM_Daemon.git",
+                                       "https://github.com/makrohard/loraham-kiss-tnc.git",
                                        "legacy", head, time.time(), "", "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
@@ -587,12 +587,12 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     _make_repo(dest)
     _git(dest, "remote", "add", "origin",
-         "https://github.com/makrohard/LoRaHAM_Daemon.git")
+         "https://github.com/makrohard/loraham-kiss-tnc.git")
     head = _git(dest, "rev-parse", "HEAD")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
-                                       "https://github.com/makrohard/LoRaHAM_Daemon.git",
+                                       "https://github.com/makrohard/loraham-kiss-tnc.git",
                                        "legacy", head, time.time(), "", "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))

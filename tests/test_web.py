@@ -1562,7 +1562,7 @@ def _kw_bound_app(tmp_path, commit="a" * 40, cmdlines=None):
                 and _os.path.realpath(argv[2]) == dest_real):
             if argv[3:] == ["config", "--get", "remote.origin.url"]:
                 return CommandResult(
-                    0, "https://github.com/LoRaHAM/LoRaHAM_Daemon.git\n", "")
+                    0, "https://github.com/makrohard/LoRaHAM_Daemon.git\n", "")
             if argv[3:] == ["rev-parse", "HEAD"]:
                 return CommandResult(0, commit + "\n", "")
         return real_run(argv, timeout, *a, **k)
@@ -1694,7 +1694,7 @@ def test_clean_confirm_text_match_purges(tmp_path):
     _seed_clean_target(tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     _bind_web_identity(svc, tmp_path / "src" / "loraham-kiss-tnc",
-                       "https://github.com/makrohard/LoRaHAM_Daemon.git")
+                       "https://github.com/makrohard/loraham-kiss-tnc.git")
     c = create_app(service_factory=lambda: svc).test_client()
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "clean", "target": "kiss",

@@ -52,7 +52,10 @@ main = "loraham-daemon"
   # Structured (shell-free) execution — preferred over `run`/`pre` above.
   run_argv = ["loraham_daemon/loraham_daemon", "--radio", "{param:radio}", "{param:debug}", "--hw", "{param:hw}", "--tx-mode", "{param:txmode}", "--cad-monitor", "{param:cadmon}", "--cad-rssi", "{param:cadrssi}"]
   run_cwd = "{source}"
-  run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham" }
+  # v112 sockets default to /run/loraham (systemd, tmpfiles-provisioned). lhpc runs the daemon DIRECT
+  # as a user, so point its sockets at /tmp — the daemon has no /tmp fallback of its own, and all
+  # clients prefer /run/loraham then fall back to /tmp. LORAHAM_RUNTIME_DIR keeps the locks in-root.
+  run_env = { LORAHAM_RUNTIME_DIR = "{runtime}/state/loraham", LORAHAM_SOCKET_DIR = "/tmp" }
   # build.sh consumes the RadioLib checkout as the sibling src/RadioLib — a hard BUILD-time
   # dependency (not "optional"): update includes it, uninstall refuses to remove it while
   # the daemon source is installed. RADIOLIB_DIR pins the build to the MANAGED in-root
@@ -86,10 +89,11 @@ main = "loraham-daemon"
     [[stack.component.param]]
     name = "hw"
     kind = "enum"
-    choices = ["legacy", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262"]
-    # Friendly labels so the GUI never shows the raw "legacy" wire name (the value still submits).
-    choice_labels = [["legacy", "LoRaHAM"], ["uputronics-ce0", "Uputronics CE0"], ["uputronics-ce1", "Uputronics CE1"], ["waveshare-sx1262", "Waveshare SX1262"]]
-    default = "legacy"
+    choices = ["loraham", "uputronics-ce0", "uputronics-ce1", "waveshare-sx1262"]
+    # Friendly labels for the GUI (the wire value still submits). `loraham` is the daemon's renamed
+    # dual-module preset (was `legacy`, now removed by the daemon).
+    choice_labels = [["loraham", "LoRaHAM"], ["uputronics-ce0", "Uputronics CE0"], ["uputronics-ce1", "Uputronics CE1"], ["waveshare-sx1262", "Waveshare SX1262"]]
+    default = "loraham"
     label = "Hardware preset (--hw)"
     [[stack.component.param]]
     name = "txmode"
@@ -157,10 +161,10 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "7e20d5e831a32f81785c9d89df1b7bc7ffe7a157"
-    pin_tag = "v111a-1-g7e20d5e"
+    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
+    pin_tag = "v112"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
-    branch = "hardening/daemon-tests"
+    branch = "main"
     local_dir = "loraham-daemon-hardening"
 
     [stack.component.process]
@@ -276,7 +280,10 @@ operator_box = false   # callsign lives in the app's own config file (CALL)
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
+    pin_tag = "v112"
+    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    branch = "main"
     local_dir = "LoRaHAM_Daemon"
     # Single-file artifact source: every selector (Known working / Development /
     # Latest stable) resolves to the same declared artifact (default-branch HEAD).
@@ -348,7 +355,10 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    remote = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
+    pin_tag = "v112"
+    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+    branch = "main"
     local_dir = "LoRaHAM_Daemon"
     # Single-file artifact source: every selector (Known working / Development /
     # Latest stable) resolves to the same declared artifact (default-branch HEAD).
@@ -516,7 +526,10 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    remote = "https://github.com/LoRaHAM/LoRaHAM_Voice.git"
+    pin_commit = "d6028ff8e5b7491204678dcb14355e787952fa5c"
+    pin_tag = "d6028ff"
+    remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
+    branch = "main"
     local_dir = "LoRaHAM_Voice"
     artifact = true
 
@@ -673,10 +686,16 @@ main = "loraham-kiss-tnc"
   depends_on = ["loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
-  build = "loraham_kiss_tnc/build.sh"
-  run = "loraham_kiss_tnc/loraham_kiss_tnc --config loraham_kiss_tnc/loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose}"
-  bin = "loraham_kiss_tnc/loraham_kiss_tnc"
-  test = "loraham_kiss_tnc/run_tests.sh"
+  # loraham-kiss-tnc is now its OWN repo (flat layout): build.sh + the binary live at the checkout
+  # root, and the binary is named after the checkout dir (src/loraham-kiss-tnc -> "loraham-kiss-tnc").
+  # Explicit run_argv/build_steps + run_cwd so the root binary/script resolve cwd-relative.
+  build = "bash build.sh"
+  build_steps = [ { argv = ["bash", "build.sh"] } ]
+  run = "./loraham-kiss-tnc --config loraham_kiss_tnc.conf.example {kiss_port} {kiss_host} {rx_freq} {tx_freq} {data_socket} {conf_socket} {rx_only} {verbose}"
+  run_argv = ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example", "{param:kiss_port}", "{param:kiss_host}", "{param:rx_freq}", "{param:tx_freq}", "{param:data_socket}", "{param:conf_socket}", "{param:rx_only}", "{param:verbose}"]
+  run_cwd = "{source}"
+  bin = "loraham-kiss-tnc"
+  test = "bash run_tests.sh"
 
     # CLI overrides of the .conf file (all start-time). Band 868 uses its own
     # per-band config: set 868 frequencies + the lora868f/loraconf868 sockets there.
@@ -747,10 +766,10 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "fdaf5f0bd31c767ace112706c74987651d770d83"
-    pin_tag = "v0.4.0"
-    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
-    branch = "feature/loraham-kiss-tnc"
+    pin_commit = "90875a4b74329fc51b5f2703890d77be3881fd84"
+    pin_tag = "v0.4.0-2-g90875a4"
+    remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
+    branch = "main"
 
     [stack.component.process]
     exec_name = "loraham_kiss_tnc"
@@ -789,10 +808,10 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "fdaf5f0bd31c767ace112706c74987651d770d83"
-    pin_tag = "v0.4.0"
-    remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
-    branch = "feature/loraham-kiss-tnc"
+    pin_commit = "90875a4b74329fc51b5f2703890d77be3881fd84"
+    pin_tag = "v0.4.0-2-g90875a4"
+    remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
+    branch = "main"
 
     [stack.component.process]
     exec_name = "socat"
@@ -1092,8 +1111,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "fe85c7900f7c095b2e28011ce5fec6125f5fe02a"
-    pin_tag = "fe85c79"
+    pin_commit = "e0ab0776c97f2c995f2155a57ce350a59a5bfff9"
+    pin_tag = "e0ab077"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
@@ -1400,8 +1419,8 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-pi"
-    pin_commit = "ec31446ede4528dece45bd6f8254bc7a01478f62"
-    pin_tag = "ec31446"
+    pin_commit = "573d43711ad5449f67617efae18790461cfe224e"
+    pin_tag = "573d437"
     remote = "https://github.com/makrohard/meshcore-pi.git"
     branch = "loraham-daemon-interface"
 

@@ -96,12 +96,25 @@ class InvalidBand(ValueError):
     """Raised when a band is not one the daemon serves (never build a path from it)."""
 
 
+def _prefer_run_socket(run: str, tmp: str) -> str:
+    """The daemon serves its sockets under /run/loraham (systemd) or /tmp (direct/user start via
+    LORAHAM_SOCKET_DIR). Prefer /run/loraham when the socket EXISTS there, else the /tmp fallback —
+    mirrors the daemon's clients (lorachat/igate) so lhpc connects to whichever the running daemon
+    actually created. A local stat only; no network/subprocess."""
+    import os
+    import stat as _stat
+    try:
+        return run if _stat.S_ISSOCK(os.stat(run).st_mode) else tmp
+    except OSError:
+        return tmp
+
+
 def conf_socket(band: str) -> str:
-    """The daemon CONF socket path for a VALIDATED band. Refuses any band that is not
-    433/868 so a direct caller can never construct `/tmp/loraconf<arbitrary>.sock`."""
+    """The daemon CONF socket path for a VALIDATED band. Refuses any band that is not 433/868 so a
+    direct caller can never construct `loraconf<arbitrary>.sock`. Resolves /run/loraham → /tmp."""
     if not is_valid_band(band):
         raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(ALLOWED_BANDS)})")
-    return f"/tmp/loraconf{band}.sock"
+    return _prefer_run_socket(f"/run/loraham/loraconf{band}.sock", f"/tmp/loraconf{band}.sock")
 
 
 # The daemon's frequency validation is `parse_float_exact() && f > 0` and it delegates

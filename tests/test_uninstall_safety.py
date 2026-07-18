@@ -25,7 +25,7 @@ def _identity_cmds(tmp_path, rel, remote):
             CommandResult(0, remote + "\n", "")}
 
 
-_KISS_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+_KISS_REMOTE = "https://github.com/makrohard/loraham-kiss-tnc.git"
 
 
 def _bind_identity(svc, dest, remote, head=""):
@@ -277,7 +277,7 @@ def _members(tmp_path):
     return tuple(rec.components) if rec else None
 
 
-_APPS_REMOTE = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+_APPS_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
 
 
 def _shared_svc(tmp_path):

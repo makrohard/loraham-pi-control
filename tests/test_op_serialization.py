@@ -13,7 +13,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
-_KISS_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+_KISS_REMOTE = "https://github.com/makrohard/loraham-kiss-tnc.git"
 
 
 def _svc(tmp_path, cmdlines=None):

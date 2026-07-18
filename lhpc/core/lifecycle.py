@@ -1035,12 +1035,23 @@ class Lifecycle:
 
     # -- daemon readiness + bounded TX test --------------------------------
 
-    # The daemon's per-band sockets (daemon_protocol.h): raw data + CONF/status.
+    # The daemon's per-band sockets (daemon_protocol.h): raw data + CONF/status. Served under
+    # /run/loraham (systemd) or /tmp (direct/user start, LORAHAM_SOCKET_DIR) — prefer /run/loraham
+    # when the socket exists there, else the /tmp fallback (mirrors the daemon's clients).
+    @staticmethod
+    def _prefer_run_socket(run: str, tmp: str) -> str:
+        import os
+        import stat as _stat
+        try:
+            return run if _stat.S_ISSOCK(os.stat(run).st_mode) else tmp
+        except OSError:
+            return tmp
+
     def raw_socket(self, band: str) -> str:
-        return f"/tmp/lora{band}.sock"
+        return self._prefer_run_socket(f"/run/loraham/lora{band}.sock", f"/tmp/lora{band}.sock")
 
     def conf_socket(self, band: str) -> str:
-        return f"/tmp/loraconf{band}.sock"
+        return self._prefer_run_socket(f"/run/loraham/loraconf{band}.sock", f"/tmp/loraconf{band}.sock")
 
     def _stats_txok(self, band: str) -> int | None:
         """Read the daemon's TXOK counter through the ONE bounded CONF parser

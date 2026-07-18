@@ -108,11 +108,12 @@ class OperatorConfig:
 # SERVED band. `unset` (default) = NO hardware configured yet — the daemon refuses to start until the
 # operator picks a setup in the daemon Hardware settings. Illegal board combinations (Waveshare+Uputronics,
 # two Waveshare) are simply ABSENT from this catalog, so they can never be selected. The daemon's
-# `--hw legacy` is our original dual-module board, shown to the operator as "LoRaHAM".
+# `--hw loraham` is our original LoRaHAM_Pi dual-module board (renamed from `legacy`, which the daemon
+# removed entirely — a stored `legacy` now fails the daemon's usage check, hence the migration below).
 # Each entry: (label, {band: "--hw" wire preset}). Insertion order = UI display order.
 HW_SETUPS: dict = {
     "unset": ("Not configured", {}),
-    "loraham": ("LoRaHAM dual-module (SX1278 + RFM95)", {"433": "legacy", "868": "legacy"}),
+    "loraham": ("LoRaHAM dual-module (SX1278 + RFM95)", {"433": "loraham", "868": "loraham"}),
     "uputronics": ("Uputronics dual (CE0 433 + CE1 868)",
                    {"433": "uputronics-ce0", "868": "uputronics-ce1"}),
     "uputronics-433": ("Uputronics 433 (CE0)", {"433": "uputronics-ce0"}),
@@ -125,9 +126,9 @@ HW_DEFAULT = "unset"
 # Every daemon `--hw` wire preset the catalog can launch — used to validate a probe request.
 HW_PRESETS = frozenset(preset for _label, _map in HW_SETUPS.values() for preset in _map.values())
 
-# Friendly display name per `--hw` wire preset (never show the raw "legacy" token in the GUI).
+# Friendly display name per `--hw` wire preset (the raw preset name is never shown in the GUI).
 HW_PRESET_LABELS = {
-    "legacy": "LoRaHAM",
+    "loraham": "LoRaHAM",
     "uputronics-ce0": "Uputronics CE0",
     "uputronics-ce1": "Uputronics CE1",
     "waveshare-sx1262": "Waveshare SX1262",
@@ -544,6 +545,12 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using unset")
         radio_raw = {}
     hardware = radio_raw.get("hardware", HW_DEFAULT)
+    # MIGRATION: the daemon renamed the dual-module `--hw` preset `legacy` -> `loraham` and removed
+    # `legacy` entirely (it now fails the daemon usage check). A stored `legacy` -> the `loraham` setup
+    # so existing installs keep working instead of refusing to start.
+    if hardware == "legacy":
+        diagnostics.append("migrated radio.hardware 'legacy' -> 'loraham' (daemon renamed the --hw preset)")
+        hardware = "loraham"
     if hardware not in HW_SETUPS:
         diagnostics.append(f"ignored invalid radio.hardware {hardware!r}; using {HW_DEFAULT}")
         hardware = HW_DEFAULT

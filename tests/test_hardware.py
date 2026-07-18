@@ -58,7 +58,7 @@ def test_config_default_is_unconfigured(tmp_path):
 
 
 @pytest.mark.parametrize("setup,bands,presets", [
-    ("loraham", ("433", "868"), {"433": "legacy", "868": "legacy"}),
+    ("loraham", ("433", "868"), {"433": "loraham", "868": "loraham"}),
     ("uputronics", ("433", "868"), {"433": "uputronics-ce0", "868": "uputronics-ce1"}),
     ("uputronics-433", ("433",), {"433": "uputronics-ce0"}),
     ("uputronics-868", ("868",), {"868": "uputronics-ce1"}),
@@ -85,6 +85,19 @@ def test_config_bad_value_is_diagnostic_and_falls_open_to_unset(tmp_path):
     assert any("radio.hardware" in d for d in c.diagnostics)
 
 
+def test_migrates_legacy_hw_preset_to_loraham(tmp_path):
+    # The daemon renamed --hw `legacy` -> `loraham` and removed `legacy` (it now fails the daemon
+    # usage check). A stored [radio].hardware="legacy" must migrate to the `loraham` setup so an
+    # existing install keeps working instead of reading as unconfigured / launching --hw legacy.
+    p = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "local.toml").write_text('[radio]\nhardware = "legacy"\n')
+    c = config.load_config(p)
+    assert c.radio.hardware == "loraham"
+    assert c.radio.hw_preset("433") == "loraham" and c.radio.hw_preset("868") == "loraham"
+    assert any("legacy" in d and "loraham" in d for d in c.diagnostics)
+
+
 def test_save_rejects_invalid_setup(tmp_path):
     with pytest.raises(config.ConfigError):
         config.save_hardware_setup(Paths(runtime_root=tmp_path), "nope")
@@ -107,10 +120,10 @@ def test_daemon_argv_is_v112_shape_no_suffixed_flags(tmp_path):
     svc = _svc(tmp_path)
     comp = svc.stack("daemon").component("loraham-daemon")
     op = svc.config().operator
-    params = {"radio": "433", "hw": "legacy", "txmode": "direct", "cadmon": "on", "cadrssi": "-95"}
+    params = {"radio": "433", "hw": "loraham", "txmode": "direct", "cadmon": "on", "cadrssi": "-95"}
     argv = commands.expand_argv(comp.run_argv, comp, params, op, "/rt", "/src", "433")
     assert argv[argv.index("--radio") + 1] == "433"
-    assert argv[argv.index("--hw") + 1] == "legacy"
+    assert argv[argv.index("--hw") + 1] == "loraham"
     assert argv[argv.index("--tx-mode") + 1] == "direct"
     assert argv[argv.index("--cad-monitor") + 1] == "on"
     assert argv[argv.index("--cad-rssi") + 1] == "-95"
@@ -236,11 +249,14 @@ def test_probe_present_when_daemon_stays_up(tmp_path):
     # SUCCESS: the daemon never exits, so the bounded runner times out (and terminated it) -> present.
     runner = _Runner(CommandResult(returncode=124, stdout="[Daemon] active radios: 433\n",
                                    stderr="", timed_out=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "legacy", runtime_dir="/rt")
+    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
     assert pr.present and not pr.busy
     argv, _cwd, env = runner.calls[0]
-    assert argv == ["/bin/daemon", "--radio", "433", "--hw", "legacy", "--debug"]
+    assert argv == ["/bin/daemon", "--radio", "433", "--hw", "loraham", "--debug"]
     assert env["LORAHAM_RUNTIME_DIR"] == "/rt"
+    # v112 defaults sockets to /run/loraham (not created on a direct spawn); without a socket dir the
+    # probe daemon dies at socket-open before begin() and every probe reads 'not detected'.
+    assert env["LORAHAM_SOCKET_DIR"] == "/tmp"
 
 
 def test_probe_absent_captures_chip_diagnostic(tmp_path):
@@ -256,23 +272,23 @@ def test_probe_absent_captures_chip_diagnostic(tmp_path):
 def test_probe_busy_when_band_already_served(tmp_path):
     runner = _Runner(CommandResult(returncode=3, stdout="", stderr="instance lock busy\n",
                                    timed_out=False))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "legacy", runtime_dir="/rt")
+    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
     assert pr.busy and not pr.present
 
 
 def test_probe_binary_missing(tmp_path):
     runner = _Runner(CommandResult(returncode=127, stdout="", stderr="", not_found=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "legacy", runtime_dir="/rt")
+    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham", runtime_dir="/rt")
     assert not pr.present and "not found" in pr.message
 
 
 def test_service_probe_guards(tmp_path):
     svc = _svc(tmp_path)
-    assert isinstance(svc.probe_hardware("999", "legacy"), ProbeResult)
-    assert "invalid band" in svc.probe_hardware("999", "legacy").message
+    assert isinstance(svc.probe_hardware("999", "loraham"), ProbeResult)
+    assert "invalid band" in svc.probe_hardware("999", "loraham").message
     assert "unknown hardware preset" in svc.probe_hardware("433", "bogus").message
     # A known request with the daemon not built stops before any spawn.
-    assert "not built" in svc.probe_hardware("433", "legacy").message
+    assert "not built" in svc.probe_hardware("433", "loraham").message
 
 
 # ---- M5: dashboard states -----------------------------------------------------------------------
@@ -325,14 +341,14 @@ def test_footer_unconfigured_says_not_configured(tmp_path):
 
 
 def test_hw_preset_label_is_friendly_never_legacy():
-    assert config.hw_preset_label("legacy") == "LoRaHAM"
+    assert config.hw_preset_label("loraham") == "LoRaHAM"
     assert config.hw_preset_label("waveshare-sx1262") == "Waveshare SX1262"
     assert config.hw_preset_label("uputronics-ce0") == "Uputronics CE0"
 
 
 def test_probe_message_uses_friendly_label_not_wire_name(tmp_path):
     runner = _Runner(CommandResult(returncode=124, stdout="active radios\n", stderr="", timed_out=True))
-    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "legacy",
+    pr = probe_radio(_Sys(runner), "/bin/daemon", "/src", "433", "loraham",
                      runtime_dir="/rt", label="LoRaHAM")
     assert pr.present and "LoRaHAM" in pr.message and "legacy" not in pr.message
 
@@ -349,7 +365,7 @@ def test_probe_result_renders_inline_and_is_consumed_once(tmp_path):
     c.get("/stacks")
     with c.session_transaction() as s:
         tok = s["_csrf"]
-    r = c.post("/hardware/probe", data={"_csrf": tok, "band": "433", "hw": "legacy"})
+    r = c.post("/hardware/probe", data={"_csrf": tok, "band": "433", "hw": "loraham"})
     assert r.status_code == 302                                  # PRG: redirect, result in session
     body = c.get("/stacks?open=daemon&cfg=daemon").get_data(as_text=True)
     assert "not built" in body                                  # inline result shown (daemon unbuilt)

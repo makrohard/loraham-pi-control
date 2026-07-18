@@ -19,7 +19,7 @@ def _svc(tmp_path, cmdlines=None, commands=None):
                              paths=Paths(runtime_root=tmp_path))
 
 
-_KISS_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+_KISS_REMOTE = "https://github.com/makrohard/loraham-kiss-tnc.git"
 
 
 def _bind_identity(svc, dest, remote, head=""):

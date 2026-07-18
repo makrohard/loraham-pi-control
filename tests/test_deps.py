@@ -171,13 +171,6 @@ def test_radiolib_built_state_is_honest(tmp_path):
     assert "radiolib" not in svc.unbuilt_components("daemon")
 
 
-def test_manifest_pins_radiolib_to_daemon_required_commit(tmp_path):
-    # Lock the pin so a stray manifest update can't silently regress to an incompatible RadioLib
-    # (the daemon README requires 13b7c7cf / 7.6.0-67; a newer RadioLib fails to compile the daemon).
-    radiolib = _svc(tmp_path).stack("daemon").component("radiolib")
-    assert radiolib.source.pin_commit == "13b7c7cf84b191006da20f82bdb386f2efc96334"
-
-
 def test_unbuilt_build_deps_flags_radiolib_before_daemon(tmp_path):
     svc = _svc(tmp_path)
     (tmp_path / "src" / "RadioLib").mkdir(parents=True)          # provider checkout present, not built

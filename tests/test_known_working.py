@@ -93,7 +93,7 @@ def _svc(tmp_path, cmdlines=None, commands=None):
                              paths=Paths(runtime_root=tmp_path))
 
 
-_CHAT_REMOTE = "https://github.com/LoRaHAM/LoRaHAM_Daemon.git"
+_CHAT_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
 
 
 def _bind_chat_identity(svc, tmp_path, commit="a" * 40, remote=None):

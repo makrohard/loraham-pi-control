@@ -47,17 +47,24 @@ def _first_marker_line(text: str, markers) -> str:
 
 
 def probe_radio(system: System, binary: str, cwd: str, band: str, hw_preset: str, *,
-                runtime_dir: str, timeout: float = 4.0, label: str = "") -> ProbeResult:
+                runtime_dir: str, timeout: float = 4.0, label: str = "",
+                socket_dir: str = "/tmp") -> ProbeResult:
     """Bounded hardware probe: spawn the daemon for (band, hw_preset) and observe whether the radio
     comes up. On SUCCESS the daemon runs PAST init (it never exits), so the bounded runner TIMES OUT
     and terminates it — the board's LED lights during init as visual confirmation. On failure the
     daemon exits fast with a chip diagnostic. It NEVER clobbers a real daemon: pointing at the same
     runtime lock dir makes an already-served band exit BUSY (code 3) instead of stealing the radio.
-    `label` is the friendly board name used in messages (defaults to the raw preset)."""
+    `label` is the friendly board name used in messages (defaults to the raw preset).
+
+    `socket_dir` must match the daemon's direct-start socket dir (LORAHAM_SOCKET_DIR = /tmp in the
+    manifest run_env): the v112 daemon defaults sockets to /run/loraham and does NOT create the dir,
+    so without this the probe daemon fails at socket-open BEFORE begin() and every probe reads as
+    'not detected'. Socket-open is past the instance lock, so a real daemon still trips BUSY first."""
     name = label or hw_preset
     argv = [binary, "--radio", band, "--hw", hw_preset, "--debug"]
     res = system.runner.run(argv, timeout=timeout, cwd=cwd,
-                            env={"LORAHAM_RUNTIME_DIR": runtime_dir})
+                            env={"LORAHAM_RUNTIME_DIR": runtime_dir,
+                                 "LORAHAM_SOCKET_DIR": socket_dir})
     if res.not_found:
         return ProbeResult(False, False, "daemon binary not found — build the daemon first")
     text = (res.stdout or "") + "\n" + (res.stderr or "")
