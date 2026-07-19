@@ -2763,7 +2763,18 @@ class LifecycleOpsMixin:
         present but the build incomplete (e.g. a venv whose interpreter exists but whose pip installs
         never finished) — correctly reads NOT built."""
         if comp.build_marker and (comp.build_cmd or comp.build_steps):
-            return (self._lifecycle().source_dir(comp) / comp.build_marker).exists()
+            from . import runtime_fs
+            from .lifecycle import BUILD_MARKER_TEXT, _BUILD_MARKER_MAX
+            marker = self._lifecycle().source_dir(comp) / comp.build_marker
+            try:
+                # Descriptor-anchored O_NOFOLLOW regular-file read: a symlink, directory, FIFO/device,
+                # oversize/malformed content, or an unsafe/escaping parent all read as NOT built (never
+                # a traceback / web 500). Only a regular file whose ENTIRE content is the exact marker
+                # text counts as built.
+                return runtime_fs.read_text_regular(self._paths, marker,
+                                                    max_bytes=_BUILD_MARKER_MAX) == BUILD_MARKER_TEXT
+            except (FileNotFoundError, OSError, PathContainmentError):
+                return False
         rel = self._build_artifact(comp)
         if rel is None:
             return True

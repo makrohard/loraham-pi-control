@@ -38,6 +38,11 @@ from .probes import System
 from .probes.process import probe_process
 from .jobs import JobResult, JobState, run_job, tail_log
 
+# The ONE exact content a completion marker may hold; `is_built()` accepts nothing else. A build stamps
+# it only after EVERY step succeeds, and a rebuild invalidates it (fail-closed) before the first step.
+BUILD_MARKER_TEXT = "lhpc build complete\n"
+_BUILD_MARKER_MAX = 64                         # bounded marker read — anything larger is malformed
+
 # Surfaced when a groups grant is CONFIGURED (usermod done) but not yet EFFECTIVE in this process — the
 # fix is a restart, not another usermod. Kept here so both dependency render sites use the one wording.
 # Deliberately does NOT read as "missing": the grant IS made; only the running session must restart.
@@ -251,6 +256,25 @@ class Lifecycle:
                                 # A known-slow component (e.g. a venv + many pip installs) overrides it
                                 # with a manifest `build_timeout`.
 
+    def _invalidate_build_marker(self, marker: Path) -> str | None:
+        """Remove a stale completion marker FAIL-CLOSED before a rebuild. Returns None on success (a
+        MISSING marker is the only ignored condition — it is already "not built"), else an error string.
+        A present marker must be a SAFE REGULAR FILE we can remove; a symlink, directory, FIFO/device,
+        oversize/malformed content, a permission failure, or a containment/escape error all fail closed
+        (the caller turns this into a typed build failure BEFORE any step runs). Uses the descriptor-
+        anchored O_NOFOLLOW runtime-fs primitives — no check-then-act, no symlink follow."""
+        try:
+            runtime_fs.read_text_regular(self.paths, marker, max_bytes=_BUILD_MARKER_MAX)
+        except FileNotFoundError:
+            return None                          # absent (or absent parent) -> nothing to invalidate
+        except (OSError, PathContainmentError) as exc:
+            return f"stale build marker is not a safe regular file ({exc})"
+        try:
+            runtime_fs.unlink(self.paths, marker)   # safe no-follow removal of the regular file
+        except (OSError, PathContainmentError) as exc:
+            return f"could not remove the stale build marker ({exc})"
+        return None
+
     def build(self, comp: Component, timeout: float | None = None,
               log_base: str | None = None, redactor=None, should_cancel=None,
               on_log_open=None) -> JobResult:
@@ -273,14 +297,16 @@ class Lifecycle:
                              "writes into a linked source)"])
         eff_timeout = timeout if timeout is not None else (comp.build_timeout or self.BUILD_TIMEOUT_S)
         src, runtime = str(self.source_dir(comp)), str(self.paths.runtime_root)
-        # A re-build must NEVER inherit a prior run's completion marker: clear it up front so an
-        # interrupted rebuild leaves the component reading "not built" until it fully succeeds again.
+        # A re-build must NEVER inherit a prior run's completion marker: invalidate it up front, FAIL
+        # CLOSED. A surviving marker (permission error, unsafe symlink/dir/FIFO, containment error) would
+        # falsely read "built"; refuse the build TYPED BEFORE executing any step or touching artifacts.
         marker = (self.source_dir(comp) / comp.build_marker) if comp.build_marker else None
         if marker is not None:
-            try:
-                marker.unlink()
-            except OSError:
-                pass
+            err = self._invalidate_build_marker(marker)
+            if err is not None:
+                return JobResult(name=base, state=JobState.FAILED, returncode=1, log_path="",
+                                 tail=[f"BLOCKED: {err} — refusing to build (a surviving marker would "
+                                       "falsely read 'built')"])
         steps = comp.build_steps
         last: JobResult | None = None
         for i, step in enumerate(steps):
@@ -303,7 +329,7 @@ class Lifecycle:
         # so is_built never reads "built" off an unstamped tree).
         if marker is not None:
             try:
-                runtime_fs.atomic_write(self.paths, marker, "lhpc build complete\n", 0o644)
+                runtime_fs.atomic_write(self.paths, marker, BUILD_MARKER_TEXT, 0o644)
             except (OSError, PathContainmentError) as exc:
                 return JobResult(name=base, state=JobState.FAILED, returncode=1,
                                  log_path=last.log_path,

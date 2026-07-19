@@ -61,3 +61,12 @@ runner is injectable, so signature behavior is covered with a faked runner.
 A per-component remote override (`[remotes]` in `local.toml`) is validated to a safe remote
 URL before any Git use, and a non-string/malformed remote is dropped at config load — it can
 never silently weaken the selected pin/signature policy or reach Git.
+
+## Release process — managed-source pin bumps
+
+Managed-source pin bumps are the **last** step, performed only **after** the final source-repository
+batch has been pushed and its commit verified reachable from the advertised branch. **Never amend or
+force-push a published commit referenced by a manifest pin** — doing so orphans the pinned SHA and
+breaks fresh installs at checkout. The `pin-validation` CI job (and `tests/test_pin_consistency.py`
+against a local sibling checkout) hard-fail on an orphaned or predating pin; both meshcom-qemu-raspi
+consumers must reference one identical full 40-hex SHA.

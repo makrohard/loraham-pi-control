@@ -190,7 +190,7 @@ def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     venv_py.write_bytes(b"")
     assert not svc.is_built(mc)                                  # interpreter alone is NOT enough (marker gates)
     assert "meshcore-pi" in svc.unbuilt_components("meshcore")
-    (src / mc.build_marker).write_text("ok\n")                   # completion marker -> fully built
+    (src / mc.build_marker).write_text("lhpc build complete\n")                   # completion marker -> fully built
     assert svc.is_built(mc)
     assert "meshcore-pi" not in svc.unbuilt_components("meshcore")
 

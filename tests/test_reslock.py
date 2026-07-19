@@ -48,7 +48,9 @@ def test_dead_holder_lock_is_free(tmp_path):
     # A separate process holds the lock, then DIES -> the flock is auto-released by the
     # kernel, so a new acquisition succeeds (stale-lock recovery is intrinsic).
     p = Paths(runtime_root=tmp_path)
-    proc = mp.Process(target=_hold, args=(tmp_path, "radio.868", 30))
+    # spawn (not fork): forking a multi-threaded pytest process raises a Py3.13 DeprecationWarning
+    # (fork-in-threaded -> possible child deadlock). spawn re-execs a clean interpreter — no warning.
+    proc = mp.get_context("spawn").Process(target=_hold, args=(tmp_path, "radio.868", 30))
     proc.start()
     try:
         for _ in range(100):

@@ -112,7 +112,7 @@ def test_rebuild_removes_stale_marker_before_running(tmp_path, monkeypatch):
     comp = _meshcore(svc)
     src = svc._lifecycle().source_dir(comp)
     (src / ".venv").mkdir(parents=True, exist_ok=True)
-    (src / comp.build_marker).write_text("stale\n")
+    (src / comp.build_marker).write_text("lhpc build complete\n")
     assert svc.is_built(comp)
 
     monkeypatch.setattr(lifecycle_mod, "run_job",
@@ -177,7 +177,7 @@ def test_meshcom_marker_is_colocated_with_flash_and_gates_is_built(tmp_path):
     (fd / "flash.bin").write_text("stale firmware\n")           # artifact present...
     assert not svc.is_built(comp)                               # ...but no marker -> NOT built
     # Removing/cleaning the firmware dir takes the marker with it (co-located): still not built.
-    (svc._lifecycle().source_dir(comp) / comp.build_marker).write_text("ok\n")
+    (svc._lifecycle().source_dir(comp) / comp.build_marker).write_text("lhpc build complete\n")
     assert svc.is_built(comp)
     import shutil
     shutil.rmtree(fd)                                           # clean the firmware artifact + its marker
@@ -207,10 +207,118 @@ def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
     fd = _flash_dir(svc, comp); fd.mkdir(parents=True, exist_ok=True)
     (fd / "flash.bin").write_text("stale firmware\n")
     marker = svc._lifecycle().source_dir(comp) / comp.build_marker
-    marker.write_text("stale\n")                                # a prior build's marker
+    marker.write_text("lhpc build complete\n")                                # a prior build's marker
     assert svc.is_built(comp)
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.FAILED,
                                                        returncode=1, log_path="", tail=["boom"]))
     res = svc._lifecycle().build(comp)
     assert not res.ok and not marker.exists() and not svc.is_built(comp)   # stale flash != built
+
+
+# --- Item 2: strict marker semantics (is_built regular-file+content; fail-closed invalidation) ----
+
+import os as _os
+import lhpc.core.runtime_fs as _rfs
+
+
+def _mk(svc, comp):
+    m = svc._lifecycle().source_dir(comp) / comp.build_marker
+    m.parent.mkdir(parents=True, exist_ok=True)
+    return m
+
+
+def _counting_run_job(counter):
+    def _rj(runner, **kw):
+        counter["n"] += 1
+        return JobResult(name="b", state=JobState.SUCCEEDED, returncode=0, log_path="", tail=[])
+    return _rj
+
+
+def test_is_built_missing_marker_is_not_built(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc)
+    svc._lifecycle().source_dir(comp).mkdir(parents=True, exist_ok=True)
+    assert not svc.is_built(comp)
+
+
+def test_is_built_requires_exact_regular_marker_content(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    m.write_text("lhpc build complete\n"); assert svc.is_built(comp)           # exact -> built
+    m.write_text("lhpc build complete");   assert not svc.is_built(comp)       # missing newline
+    m.write_text("wrong\n");                assert not svc.is_built(comp)       # wrong content
+    m.write_text("");                        assert not svc.is_built(comp)      # empty
+
+
+def test_is_built_rejects_oversize_marker(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    m.write_text("lhpc build complete\n" + "x" * 200)
+    assert not svc.is_built(comp)
+
+
+def test_is_built_rejects_directory_marker(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    m.mkdir()
+    assert not svc.is_built(comp)
+
+
+def test_is_built_rejects_fifo_marker(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    _os.mkfifo(m)
+    assert not svc.is_built(comp)
+
+
+def test_is_built_rejects_symlink_marker_even_to_valid_file(tmp_path):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    real = m.parent / "real-marker"; real.write_text("lhpc build complete\n")
+    m.symlink_to(real)                                       # symlink -> a VALID regular file
+    assert not svc.is_built(comp)                            # ...still NOT built (non-regular leaf)
+
+
+def test_build_fails_closed_when_marker_is_symlink_and_runs_no_step(tmp_path, monkeypatch):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    real = m.parent / "real-marker"; real.write_text("lhpc build complete\n"); m.symlink_to(real)
+    ran = {"n": 0}
+    monkeypatch.setattr(lifecycle_mod, "run_job", _counting_run_job(ran))
+    res = svc._lifecycle().build(comp)
+    assert not res.ok and ran["n"] == 0                     # typed failure, ZERO steps executed
+    assert "marker" in " ".join(res.tail).lower()
+    assert m.is_symlink() and real.exists()                 # unsafe marker never followed/removed
+
+
+def test_build_fails_closed_when_marker_is_directory_and_runs_no_step(tmp_path, monkeypatch):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp); m.mkdir()
+    ran = {"n": 0}
+    monkeypatch.setattr(lifecycle_mod, "run_job", _counting_run_job(ran))
+    res = svc._lifecycle().build(comp)
+    assert not res.ok and ran["n"] == 0 and "marker" in " ".join(res.tail).lower()
+
+
+def test_build_fails_closed_on_marker_permission_error_and_runs_no_step(tmp_path, monkeypatch):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    m.write_text("lhpc build complete\n")
+    def _boom(*a, **k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(_rfs, "unlink", _boom)              # invalidation removal fails
+    ran = {"n": 0}
+    monkeypatch.setattr(lifecycle_mod, "run_job", _counting_run_job(ran))
+    res = svc._lifecycle().build(comp)
+    assert not res.ok and ran["n"] == 0                     # typed failure BEFORE any step
+    assert "marker" in " ".join(res.tail).lower()
+
+
+def test_is_built_never_raises_on_any_bad_marker(tmp_path):
+    # Web-safety: a bad marker of ANY kind reads as not-built, never a traceback / 500.
+    svc = _svc(tmp_path); comp = _meshcore(svc)
+    for make in (lambda m: m.mkdir(),
+                 lambda m: _os.mkfifo(m),
+                 lambda m: m.symlink_to(m.parent / "nope"),
+                 lambda m: m.write_text("x" * 5000)):
+        m = svc._lifecycle().source_dir(comp) / comp.build_marker
+        if m.exists() or m.is_symlink():
+            if m.is_dir() and not m.is_symlink():
+                import shutil; shutil.rmtree(m)
+            else:
+                m.unlink()
+        m.parent.mkdir(parents=True, exist_ok=True)
+        make(m)
+        assert svc.is_built(comp) is False                  # bounded bool, no exception

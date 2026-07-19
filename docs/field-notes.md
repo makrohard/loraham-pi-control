@@ -65,14 +65,29 @@ needs neither pipx nor a `~/.espressif` download:
   parameter (and keeps `--qemu > PATH > IDF_TOOLS_PATH` fallbacks for standalone dev). aarch64 is
   correct for **both** a Zero 2 W and a Pi 5.
 
-**Offline QEMU.** Provide the pinned tarball locally and set **`LHPC_QEMU_TARBALL=/path/to/…tar.xz`**
-(hash-verified identically — a wrong file is refused):
+**Offline QEMU.** Provide the pinned tarball locally and set **`LHPC_QEMU_TARBALL=/absolute/path/…tar.xz`**
+— it is the ONE allowlisted `LHPC_*` override forwarded through lhpc's sanitized command environment, so
+a detached/web build honors it too (no other `LHPC_*` variables are forwarded). The path must be
+**absolute** and **readable by the operator / web-service user**, and the file is subject to the **same
+pinned SHA-256 verification** — a wrong file is refused.
 
-- *CLI build:* `LHPC_QEMU_TARBALL=/path/to/qemu-...tar.xz lhpc build meshcom` (or export it first).
-- *Managed web-service build:* the variable is the ONE allowlisted `LHPC_*` override forwarded through
-  lhpc's sanitized command environment, so a detached/web build honors it too. Set it in the web
-  service's environment (e.g. a systemd `Environment=LHPC_QEMU_TARBALL=…` drop-in) before building.
-  No other `LHPC_*` variables are forwarded.
+- *CLI build:* a one-command assignment is enough —
+  `LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz lhpc build meshcom` (or `export` it first).
+- *Managed web-service build:* set it as a **temporary user-manager environment**, restart the service,
+  build, then remove it — do **NOT** add a systemd drop-in (see the warning below):
+
+  ```bash
+  systemctl --user set-environment "LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz"
+  systemctl --user restart lhpc-web.service
+  # ... run the web/detached build ...
+  systemctl --user unset-environment LHPC_QEMU_TARBALL     # cleanup is required
+  systemctl --user restart lhpc-web.service
+  ```
+
+  > **Do not** add a permanent systemd `Environment=` drop-in for this variable. lhpc's canonical-unit
+  > integrity contract classifies ANY drop-in as an override, and integration repair then refuses to
+  > proceed. Permanent drop-ins are intentionally unsupported; the temporary user-manager environment
+  > above is the supported offline path for the web service.
 
 Because both tools are now provisioned by `lhpc build`, they no longer appear in `bootstrap-deps.sh`
 — only `libslirp0`, plus the download/extract utilities (`wget`, `xz-utils`) and the OBS repo's
