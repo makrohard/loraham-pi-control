@@ -13,7 +13,6 @@ from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.model import (
     Component,
     ComponentKind,
-    EndpointSpec,
     ProcessSpec,
     Requirement,
 )

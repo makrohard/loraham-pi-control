@@ -4,7 +4,6 @@ confirmations, and productive-only trusted-host enforcement."""
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from lhpc.adapters.web.app import create_app
 from lhpc.core import pki, runtime_fs, webserver

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from lhpc.core import config as cfgmod
-from lhpc.core.config import ConfigError, StackWebConfig, load_config, save_stackweb_config
+from lhpc.core.config import ConfigError, load_config, save_stackweb_config
 from lhpc.core.paths import Paths
 
 

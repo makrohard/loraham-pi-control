@@ -32,6 +32,19 @@ def test_forced_open_row_renders_its_body_inline(tmp_path):
     assert 'class="lazy-body"' in body                    # …the other rows stay deferred
 
 
+def test_partial_body_scopes_per_stack_build_to_one_row(tmp_path):
+    """The lazy-body partial builds the heavy per-stack detail for ONLY the requested stack (the
+    holistic snapshot is still computed once). Guards against a per-expand full-page recompute — the
+    biggest server-CPU cost of the lazy design if left unscoped."""
+    c, svc = _client(tmp_path)
+    assert len(svc.stacks()) > 1                       # there ARE other stacks it could waste work on
+    calls = []
+    orig = svc.deps_report
+    svc.deps_report = lambda *a, **k: (calls.append(a[0] if a else None), orig(*a, **k))[1]
+    c.get("/stacks/kiss/body")
+    assert calls == ["kiss"], f"partial must build only the requested stack's detail, got {calls}"
+
+
 def test_partial_body_route_renders_every_stack(tmp_path):
     c, svc = _client(tmp_path)
     for sid in [s.id for s in svc.stacks()]:

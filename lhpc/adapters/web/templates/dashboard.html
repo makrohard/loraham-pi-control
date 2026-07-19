@@ -278,6 +278,7 @@
           {% endif %}
           {% if w.kind == 'port' %}
             <span class="pill pill-{{ w.exposure.level }}" title="No authentication — the colour shows who may connect">{{ w.addr }} · {{ w.exposure.label }}</span>
+            {% if w.restart_required %}<span class="pill pill-warn" title="The saved allow-list is not applied yet — the running service keeps its launch-time value until restarted">restart pending</span>{% endif %}
             {% if w.logs_component %}<a class="logslink" href="{{ url_for('logs_view', target=w.logs_component) }}">logs</a>{% endif %}
           {% elif w.posture %}{{ webserver_pills(w.posture, w.addr) }}
           {% elif w.direct_addr %}<span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>

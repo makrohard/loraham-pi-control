@@ -650,12 +650,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} d ago"
 
-    def _stack_groups(band=""):
+    def _stack_groups(band="", only_sid=None):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
         and stack-scoped conflicts — all read-only, GET-safe. `band` is threaded (as the detail page
-        did) into the band-aware views."""
+        did) into the band-aware views. `only_sid` limits the heavy per-stack build to ONE row (the
+        lazy-body partial) — the holistic snapshot/conflicts are still computed, but the ~14 per-stack
+        service calls run for just that stack instead of all of them."""
         snapshot = service.build_snapshot()  # fresh, read-only evidence each load
         rollup = rollup_states(snapshot)
         stack_deps = stack_dependencies([ss.stack for ss in snapshot.stacks])
@@ -672,6 +674,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
         groups = []
         for ss in snapshot.stacks:
+            if only_sid is not None and ss.stack.id != only_sid:
+                continue                              # lazy-body partial: build only the requested row
             stack = ss.stack
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
@@ -756,12 +760,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
-    def _stacks_context(band="", *, hw_probe=None):
+    def _stacks_context(band="", *, hw_probe=None, only_sid=None):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
         with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
-        it inline; the lazy partial passes None — the transient belongs to the whole-page render)."""
-        groups, snapshot = _stack_groups(band)
+        it inline; the lazy partial passes None — the transient belongs to the whole-page render).
+        `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
+        groups, snapshot = _stack_groups(band, only_sid)
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
         # stacks_state.js). Rendering them already-open with their body inline — like a ?open= row —
         # means a restored-open row is present at FIRST PAINT, so re-opening it never shifts the page
@@ -809,7 +814,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # body (its settings/source/config forms) is fetched here when the operator expands it. Same
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
-        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""))
+        # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
+        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""), only_sid=sid)
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
             abort(404)

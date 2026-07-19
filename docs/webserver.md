@@ -25,6 +25,7 @@ interactive mode only; use it or the CLI to bootstrap before nginx is up.)
 - [Access modes](#access-modes)
 - [Remote exposure](#remote-exposure-opt-in)
 - [Expose to your LAN with mTLS — runbook](#expose-to-your-lan-with-mtls--runbook)
+- [Remote access to the web console](#remote-access-to-the-web-console)
 - [Certificates and the two-CA PKI](#certificates-and-the-two-ca-pki)
   - [Install the client certificate in a browser](#install-the-client-certificate-in-a-browser)
   - [Bundle transfer safety](#bundle-transfer-safety)
@@ -132,6 +133,38 @@ web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` wi
 To turn it back off: `lhpc webserver disable-remote && lhpc webserver apply` (then `verify`).
 IPv6 remote exposure is not supported in this release (see above). Command details:
 [`docs/cli.md`](cli.md#webserver).
+
+## Remote access to the web console
+
+**Recommended — authenticated (mTLS).** Before exposing the console beyond loopback, issue a
+client certificate for each device, download its `.p12` bundle and install it on the accessing
+device, then expose with an authenticated access mode (`local-open-remote-auth` or
+`auth-everywhere`). Issue and export with `lhpc webserver cert issue <label>` and
+`lhpc webserver cert export <label> <file.p12>`, then import it as in [Install the client
+certificate in a browser](#install-the-client-certificate-in-a-browser); the full flow is the
+[LAN mTLS runbook](#expose-to-your-lan-with-mtls--runbook) above. Only a device holding a valid,
+non-revoked certificate can then reach the console.
+
+**Public, no client authentication (test rig / LAN only).** Field-verified bring-up for an open
+console anyone can reach — no certificate needed to connect:
+
+```bash
+sudo apt install -y nginx
+systemctl --user enable lhpc-nginx.service
+lhpc webserver init
+lhpc webserver start-service
+lhpc webserver expose --cidr 0.0.0.0/0 --access-mode no-auth --confirm-phrase enable-remote-danger
+lhpc webserver apply
+lhpc webserver verify
+```
+
+The result is `https://<host-ip>:8443/` served with a **self-signed** certificate (your browser
+warns about it — expected), reachable by **anyone who can route to the host**, with **no client
+authentication**. Use it only on a trusted test rig or LAN. The elevated confirm phrase
+`enable-remote-danger` is required because a public `0.0.0.0/0` CIDR and the `no-auth` access mode
+are **both** elevated cases (plain `enable-remote` is refused here). To close it again and bind
+back to loopback: `lhpc webserver disable-remote && lhpc webserver apply` (then
+`lhpc webserver verify`).
 
 ## Certificates and the two-CA PKI
 

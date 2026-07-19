@@ -700,7 +700,6 @@ def test_healthy_start_stop_owners_stops_no_owner(tmp_path, monkeypatch):
 
 def test_default_restart_locks_only_running_band(tmp_path):
     svc = _svc(tmp_path); svc._set_running_band("kiss", "868")
-    keys = [k for k in svc._lifecycle_lock_keys("restart", "kiss", band="") if "radio" in k]
     # emulate restart()'s pre-guard band resolution:
     rband = svc._effective_band("kiss", "")
     keys2 = [k for k in svc._lifecycle_lock_keys("restart", "kiss", band=rband) if "radio" in k]

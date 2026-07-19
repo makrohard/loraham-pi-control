@@ -69,17 +69,29 @@
     el.value = value;
   }
 
-  // Minimal 3-choice modal (Save+start / Start without saving / Cancel).
+  // Minimal 3-choice modal (Save+start / Start without saving / Cancel). DOM-built from static
+  // strings only — keeps the repo's "textContent, never innerHTML" invariant grep-clean.
   var modal = document.createElement("div");
   modal.className = "modal-back";
-  modal.innerHTML =
-    '<div class="modal-box" role="dialog" aria-modal="true">' +
-    '<p>You changed parameters. Save them to your config before starting?</p>' +
-    '<div class="modal-btns">' +
-    '<button type="button" class="act" data-choice="yes">Save &amp; start</button>' +
-    '<button type="button" class="act" data-choice="no">Start without saving</button>' +
-    '<button type="button" class="act" data-choice="cancel">Cancel</button>' +
-    '</div></div>';
+  var box = document.createElement("div");
+  box.className = "modal-box";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  var msg = document.createElement("p");
+  msg.textContent = "You changed parameters. Save them to your config before starting?";
+  box.appendChild(msg);
+  var btns = document.createElement("div");
+  btns.className = "modal-btns";
+  [["yes", "Save & start"], ["no", "Start without saving"], ["cancel", "Cancel"]]
+    .forEach(function (c) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "act";
+      b.setAttribute("data-choice", c[0]);
+      b.textContent = c[1];
+      btns.appendChild(b);
+    });
+  box.appendChild(btns);
+  modal.appendChild(box);
   document.body.appendChild(modal);
 
   var pendingSubmitter = null;

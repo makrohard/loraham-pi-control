@@ -4,7 +4,6 @@ section (as before). Freshness is faked at the cached-verdict seam so no real gi
 
 import re
 import time
-from pathlib import Path
 
 import pytest
 

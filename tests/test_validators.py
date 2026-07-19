@@ -235,7 +235,11 @@ def test_bind_accepts_and_normalizes(val, want):
 
 
 @pytest.mark.parametrize("bad", ["", "::1", "::1/128", "2001:db8::/32", "junk",
-                                 "127.0.0.1; rm -rf", "10.0.0.0/33", "1.2.3.4/24/8"])
+                                 "127.0.0.1; rm -rf", "10.0.0.0/33", "1.2.3.4/24/8",
+                                 # bare 0.0.0.0 is ambiguous (bind idiom means "everyone",
+                                 # allow-list /32 matches nobody) -> refused with guidance;
+                                 # the honest spellings 0.0.0.0/0 and 127.0.0.1 stay accepted.
+                                 "0.0.0.0", "0.0.0.0/32"])
 def test_bind_rejects(bad):
     with pytest.raises(ValidationError):
         V.bind(bad)

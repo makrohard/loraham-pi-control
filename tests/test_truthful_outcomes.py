@@ -216,7 +216,6 @@ def test_raw_launch_ok_does_not_decide_top_level_success(tmp_path):
     # The raw launch "succeeds" (fake spawn returns a pid), but readiness=endpoint has
     # no endpoint -> the TYPED result is UNVERIFIED and ActionResult.ok is False.
     # i.e. StartLaunch.ok never overrides the typed CompResult authority.
-    from lhpc.core.lifecycle import Lifecycle
     (tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
     (tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
     svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")

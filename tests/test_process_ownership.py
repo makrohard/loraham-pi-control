@@ -3,7 +3,6 @@ start time, pgid, sid, executable, argv fingerprint) still matches an ownership
 record AND that is an LHPC-owned session leader, not the controller's own group.
 Uses controlled real subprocesses."""
 
-import json
 import os
 import signal
 import subprocess

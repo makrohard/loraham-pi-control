@@ -32,7 +32,6 @@ def test_timeout_kills_process_group_promptly():
 def test_timeout_terminates_child_tree():
     # A parent that spawns a grandchild sleep in the SAME session; on timeout the whole
     # group is killed, so the grandchild does not outlive the run.
-    import subprocess
     prog = ("import subprocess, time, sys;"
             "p = subprocess.Popen(['sleep', '30']);"
             "sys.stdout.write(str(p.pid) + '\\n'); sys.stdout.flush();"

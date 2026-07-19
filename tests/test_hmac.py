@@ -909,7 +909,6 @@ def test_foreground_cli_tracks_job_marker_as_running(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_hmac_run_steps", spy)
     assert svc.hmac_apply_cli("meshcom", "enable", emit=lambda s: None) == 0
     assert seen["running"] is True                                    # tracked live during the run
-    import os
     assert not (tmp_path / "state" / "jobs" / f"hmac-apply-{_RID[:0]}").exists() or True  # retired (best-effort)
 
 

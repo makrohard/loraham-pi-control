@@ -40,8 +40,12 @@
          CACHED data only on this GET (no live git/network/identity). #}
       {# Collapsed on a first load: only the forced self-update confirm flow opens it (an available
          update is signalled by the 'update available' pill, not by auto-expanding the row). #}
+      {# An EXPLICIT row target (?open/?cfg/?dp/?inst) preserves the single-main-row model: when one
+         is present, the cookie-remembered open rows are NOT restored (only the target renders open) —
+         otherwise a link to another row would paint two open main rows at first load. #}
+      {% set _explicit_row = request.args.get('open') or request.args.get('cfg') or request.args.get('dp') or request.args.get('inst') %}
       <div class="stackrow-wrap">
-      <details class="stackrow" id="controller-row"{% if confirm or 'controller-row' in restored_open %} open{% endif %}>
+      <details class="stackrow" id="controller-row"{% if confirm or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
         <summary>
           <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
           {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
@@ -120,7 +124,7 @@
       {% for g in groups %}
         {# `restored_open` (from the lhpc_open cookie) makes a remembered-open row render inline+open at
            first paint, so re-opening it on reload causes no layout shift — same effect as a ?open= row. #}
-        {% set _forced = g.jobs or g.stack.id in restored_open or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
+        {% set _forced = g.jobs or (g.stack.id in restored_open and (not _explicit_row or _explicit_row == g.stack.id)) or request.args.get('open') == g.stack.id or request.args.get('cfg') == g.stack.id or request.args.get('dp') == g.stack.id or request.args.get('inst') == g.stack.id %}
         <div class="stackrow-wrap">
           <details class="stackrow" id="stackrow-{{ g.stack.id }}"{% if _forced %} open data-force-open="1"{% endif %}>
             <summary>{{ stack_summary(g) }}</summary>

@@ -80,7 +80,7 @@ def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explici
 
         # EXPLICIT (no auto_install_ctx) -> the test actually runs.
         ran.clear()
-        r_expl = svc.test("meshcom", tx=False, apply=True)
+        svc.test("meshcom", tx=False, apply=True)
         assert "meshcom-qemu" in ran
     finally:
         object.__setattr__(comp, "test_requires_running", False)
@@ -213,7 +213,7 @@ def test_running_marker_with_dead_job_reads_interrupted(tmp_path):
 
 
 def test_malformed_marker_is_unsafe_and_blocks(tmp_path):
-    paths = Paths(runtime_root=tmp_path)
+    Paths(runtime_root=tmp_path)
     d = tmp_path / "state"
     d.mkdir(parents=True)
     (d / "auto-install.json").write_text("{not json")
@@ -641,7 +641,7 @@ def test_spawn_failure_removes_reservation(tmp_path, monkeypatch):
     assert ai_mod.read_reservation(svc._paths)[0] == "absent"  # no silent stale state
     # a subsequent start is available again
     svc2 = _svc(tmp_path)
-    c2 = _spawnable(svc2, monkeypatch)
+    _spawnable(svc2, monkeypatch)
     ln2, err2 = svc2.spawn_auto_install_job(_sel(svc2))
     assert ln2 and err2 is None
 
@@ -854,7 +854,7 @@ def test_bind_persist_failure_sigterm_proven_clears_reservation(tmp_path, monkey
     monkeypatch.undo()
     assert ai_mod.read_reservation(svc._paths)[0] == "absent"  # cleared after proof
     svc2 = _svc(tmp_path)
-    c2 = _spawnable(svc2, monkeypatch)
+    _spawnable(svc2, monkeypatch)
     ln2, err2 = svc2.spawn_auto_install_job(_sel(svc2))
     assert ln2 and err2 is None                                  # next run available
 
@@ -1141,8 +1141,7 @@ def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
 @pytest.mark.needs_session
 def test_tx_happy_path_still_runs(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
-    real = ControllerService._reconcile_group
-    r = svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None)
+    svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None)
     st = svc.auto_install_status()
     assert lifecycle == [("start", "daemon"), ("stop", "daemon")]
     assert st["tx_phase"]["status"] == "success"
@@ -1294,7 +1293,7 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
                             lambda self2, c2, s2: ((sha_b, "moved"), ""))
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok")
     monkeypatch.setattr(Installer, "adopt_source", adopt)
-    r = svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None)
+    svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None)
     assert seen, "no adoptions ran"
     assert all(exp[0] == sha_a for _, exp in seen)               # ALL groups frozen @ A
     assert all(n == 1 for n in fakes.values())                   # ONE resolution per path
@@ -1351,7 +1350,7 @@ def test_spawn_exception_settles_no_child(tmp_path, monkeypatch):
     assert ln is None and "before any child existed" in err
     assert ai_mod.read_reservation(svc._paths)[0] == "absent"  # settled: removed
     svc2 = _svc(tmp_path)
-    c2 = _spawnable(svc2, monkeypatch)
+    _spawnable(svc2, monkeypatch)
     ln2, err2 = svc2.spawn_auto_install_job(_sel(svc2))
     assert ln2 and err2 is None                                  # next run fine
 
@@ -1561,7 +1560,7 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
     svc = _svc(tmp_path)
-    r = svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
+    svc.auto_install(apply=True, tests=False, source="pinned", emit=lambda s: None)
     art = [(p, exp) for p, is_art, exp in seen if is_art]
     assert art, "no artifact adoptions ran"
     assert all(exp is not None and exp[0] == art_sha for _, exp in art)
@@ -1681,7 +1680,7 @@ def test_auto_install_build_context_covers_optional_paths(tmp_path, monkeypatch)
         return r
     monkeypatch.setattr(ControllerService, "_auto_install_ctx_error", spy)
     svc = _svc(tmp_path)
-    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
     assert not refusals, refusals                                # zero coverage refusals
     st = svc.auto_install_status()
     assert all(x["status"] == "success" for x in st["stacks"])
@@ -1713,7 +1712,7 @@ def test_freeze_dev_failure_falls_back_to_known_working(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     svc = _svc(tmp_path)                                         # ls-remote fails (Fake)
     st0 = next(s0 for s0 in svc.stacks() if s0.id == "kiss")
-    comp0 = next(c for c in st0.components if c.id == "loraham-kiss-tnc")
+    next(c for c in st0.components if c.id == "loraham-kiss-tnc")
     entries = {c.id: {"commit": "d" * 40, "selector": "dev",
                       "remote": svc._effective_remote(c),
                       "source_rel": c.source.path, "strategy": ""}

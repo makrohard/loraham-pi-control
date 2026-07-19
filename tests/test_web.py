@@ -604,7 +604,7 @@ def test_start_note_is_html_escaped(tmp_path):
         system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)))
     with app.test_request_context():
         from flask import render_template
-        out = render_template("base.html", version="t")  # no flashes -> just proves render
+        render_template("base.html", version="t")  # no flashes -> just proves render
     # the flash loop uses {{ msg }} (autoescaped), never |safe
     base = Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web" / "templates" / "base.html"
     src = base.read_text()
@@ -882,9 +882,9 @@ def test_save_and_start_success_persists_and_starts_once(tmp_path, monkeypatch):
     c = _install_igate(tmp_path)
     starts = _spy_starts(monkeypatch)
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
-                                "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-7", "band": ""})
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                            "_save": "all", "_save_then_start": "1", "_params": "1",
+                            "p_call": "DJ0CHE-7", "band": ""})
     assert starts == ["igate"]                               # started exactly once, after saving
     cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
     assert cfg["call"] == "DJ0CHE-7"                         # persisted before starting
@@ -895,8 +895,8 @@ def test_start_without_saving_is_ephemeral(tmp_path, monkeypatch):
     c = _install_igate(tmp_path)
     starts = _spy_starts(monkeypatch)
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
-                                "_params": "1", "p_call": "DJ0CHE-8", "band": ""})   # no _save
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
+                            "_params": "1", "p_call": "DJ0CHE-8", "band": ""})   # no _save
     assert starts == ["igate"]                               # started
     cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
     assert cfg["call"] != "DJ0CHE-8"                         # ephemeral: NOT persisted

@@ -18,6 +18,7 @@ import contextlib
 from contextlib import contextmanager
 from pathlib import Path
 
+from .snapshot_memo import invalidates_snapshot
 from . import manifest as manifest_mod
 from .config import (
     HW_SETUPS,
@@ -454,13 +455,16 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def build_snapshot(self, *, fresh: bool = False) -> Snapshot:
         """Bounded, read-only assessment of every stack. Memoized WITHIN a single request/operation
         only: a page render calls this ~15× (one per stack helper) — recomputing all of it each time
-        re-scans /proc and re-runs git for every source (seconds). The cache is dropped on EVERY web
-        request (`invalidate_snapshot` from a before_request hook) and by every state-mutating op, so
-        it is NEVER reused across a mutation or an HTTP request — status is always current, never stuck.
+        re-scans /proc and re-runs git for every source (seconds). The cache is dropped at the START of
+        every web request (`invalidate_snapshot` from a before_request hook) AND by every PUBLIC mutating
+        service entry (`@invalidates_snapshot`, snapshot_memo.py — on entry AND exit, incl. refusal
+        paths), so it is NEVER reused across a mutation or an HTTP request: a nested public `stop()`
+        inside `start()` re-invalidates on exit, so the outer op's post-mutation read recomputes.
 
         `fresh=True` FORCES a recompute (and refreshes the cache) — used by the authoritative
-        running-rechecks that run UNDER the operation locks, where a stale read would let a
-        concurrently-started stack be uninstalled/cleaned. Never memoize those.
+        running-rechecks that run UNDER the operation locks, to bypass a snapshot this same op cached
+        before it acquired its lock (a concurrent op could have changed state in between). Never
+        memoize those.
 
         The confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions (file
         reads only): a component is confirmed-working when its clean source HEAD appears in a stored
@@ -481,9 +485,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         return snap
 
     def invalidate_snapshot(self) -> None:
-        """Drop the memoized snapshot so the next `build_snapshot()` recomputes from scratch. Called
-        once per HTTP request (web before_request) and by every state-mutating op (start/stop/install/
-        build/uninstall/update/clean/apply), so a snapshot is never served after state could change."""
+        """Drop the memoized snapshot so the next `build_snapshot()` recomputes from scratch. Called once
+        per HTTP request (web before_request) and on entry+exit of every PUBLIC mutating service entry
+        (`@invalidates_snapshot`, snapshot_memo.py), so a snapshot is never served after state could
+        change. Under-lock authoritative rechecks additionally use `build_snapshot(fresh=True)` to bypass
+        a snapshot this same op cached before it acquired its lock."""
         self._snapshot_cache = None
 
     # ---- read-only operations --------------------------------------------
@@ -732,6 +738,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         plan = inst.apply_bootstrap(plan)
         return self._plan_result(plan, applied=True, next_apply=None)
 
+    @invalidates_snapshot
     def install(self, stack_id: str | None = None, apply: bool = False,
                 source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
         if (_r := self._controller_refusal(stack_id)) is not None:

@@ -669,13 +669,12 @@ def _mk_unsafe_registry(paths, rel, shape):
 def test_unsafe_registry_states_block_everything(tmp_path):
     # Every PRESENT-but-unsafe registry state blocks update/adopt-over-existing, and the
     # tri-state reader reports it distinctly ("unsafe", never "absent").
-    import pytest
     shapes = ["malformed", "symlinked", "dangling", "directory", "special"]
     if os.geteuid() != 0:
         shapes.append("inaccessible")
     for shape in shapes:
         root = tmp_path / shape
-        head = _make_repo(root / "rt" / "local" / "app")
+        _make_repo(root / "rt" / "local" / "app")
         comp = _comp()
         inst = _inst(root, comp)
         assert inst.adopt_source(comp, source="dev").status == "done"    # genuine install
@@ -812,3 +811,28 @@ def test_dirty_carveout_is_exact_leaf_only(tmp_path):
     assert rep and any(p == 'we"ird\nname.txt' for p in rep.untracked)
     weird.unlink()
     assert not inst.dirty_report(dest, "src/app")                    # clean again
+
+
+def test_pre_015_legacy_selector_reads_as_backfilled(tmp_path):
+    # Releases <= 0.1.4 wrote pre-registry adoptions with selector "legacy" (renamed to
+    # "backfilled" in 0.1.5). Upgrading must keep those records VALID — an "unsafe" read here
+    # blocks update/uninstall/clean on the source with no operator-visible cause. The value is
+    # normalized in memory only (reads never rewrite the file); a later record rewrite
+    # (update_components) persists the new name.
+    paths = Paths(runtime_root=tmp_path)
+    rel = "src/app"
+    rp = source_registry.record_path(paths, rel)
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({
+        "version": 1, "source_rel": rel, "remote": "https://example.invalid/app.git",
+        "selector": "legacy", "resolved_commit": "", "adopted_at": 1700000000.0,
+        "txn_id": "", "strategy": "adopt", "components": ["app"],
+    }))
+    state, rec, reason = source_registry.record_state(paths, rel)
+    assert state == "valid", reason
+    assert rec.selector == "backfilled"
+    on_disk = json.loads(rp.read_text())
+    assert on_disk["selector"] == "legacy"          # read paths never mutate the record
+    # A rewrite through the normal membership path persists the normalized selector.
+    assert source_registry.update_components(paths, rel, ["app", "other"])
+    assert json.loads(rp.read_text())["selector"] == "backfilled"

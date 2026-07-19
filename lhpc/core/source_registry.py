@@ -25,6 +25,12 @@ from .paths import Paths, PathContainmentError
 
 REGISTRY_VERSION = 2
 _SELECTORS = ("pinned", "dev", "stable", "backfilled")
+# READ compatibility: releases <= 0.1.4 wrote pre-registry adoptions with selector "legacy"
+# (renamed to "backfilled"). Stored records are UNTRUSTED persistent state we must keep
+# readable across upgrades — accept the historical value on read and normalize it to
+# "backfilled" in the in-memory record, so any later record rewrite persists the new name.
+# Writers use _SELECTORS only; "legacy" is never written again.
+_SELECTORS_READ = _SELECTORS + ("legacy",)
 _STRATEGIES = ("", "adopt", "copy", "link")
 
 
@@ -66,7 +72,7 @@ def _valid(d: object, source_rel: str) -> bool:
             return False
     if d["source_rel"] != source_rel:                       # record must describe ITS path
         return False
-    if d["selector"] not in _SELECTORS or d["strategy"] not in _STRATEGIES:
+    if d["selector"] not in _SELECTORS_READ or d["strategy"] not in _STRATEGIES:
         return False
     if not isinstance(d.get("adopted_at"), (int, float)) or isinstance(d.get("adopted_at"), bool):
         return False
@@ -118,7 +124,10 @@ def record_state(paths: Paths, source_rel: str) -> tuple:
         return "unsafe", None, (f"ownership record for {source_rel!r} fails strict "
                                 "validation — resolve it manually")
     rec = RegistryRecord(
-        source_rel=d["source_rel"], remote=d["remote"], selector=d["selector"],
+        source_rel=d["source_rel"], remote=d["remote"],
+        # pre-0.1.5 "legacy" reads as "backfilled" (see _SELECTORS_READ) — normalized in memory
+        # only; a rewrite (update_components) persists the new name, reads never mutate the file.
+        selector=("backfilled" if d["selector"] == "legacy" else d["selector"]),
         resolved_commit=d["resolved_commit"], adopted_at=float(d["adopted_at"]),
         txn_id=d["txn_id"], strategy=d["strategy"], components=tuple(d["components"]),
         link_target=d.get("link_target", ""), version=int(d.get("version", 1)))

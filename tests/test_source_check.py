@@ -7,8 +7,6 @@ Guards the two rules that make the indicator trustworthy:
 
 from __future__ import annotations
 
-import subprocess
-
 from lhpc.core import stackupdates as su
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult as CR, FakeSystem

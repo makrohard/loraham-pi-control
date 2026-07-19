@@ -8,7 +8,7 @@ import os
 import pytest
 
 from lhpc.core import build_launcher_runtime as blr
-from lhpc.core import commands, reslock
+from lhpc.core import commands
 from lhpc.core.paths import Paths
 
 

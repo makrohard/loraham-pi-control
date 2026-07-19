@@ -1,8 +1,6 @@
 """P1 — config writes are atomic + locked with restrictive permissions; malformed
 local config is a diagnostic, not a crash."""
 
-import os
-
 import pytest
 
 from lhpc.core.config import (load_config, save_operator_config, save_stack_config,

@@ -1,7 +1,6 @@
 """Regressions for the round-1 hardening audit findings not covered elsewhere."""
 import pytest
 import os
-import time
 
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -63,7 +62,7 @@ def test_audit_verified_stop_reports_candidate_clear_failure(tmp_path, monkeypat
     monkeypatch.setattr(known_working, "clear_candidate_checked",
                         lambda paths, sid: (False, "marker is a symlink"))
     # drive the verified-stop candidate-clear branch directly
-    res = svc._finish_stop_result("kiss", [], [], apply=True) if hasattr(
+    svc._finish_stop_result("kiss", [], [], apply=True) if hasattr(
         svc, "_finish_stop_result") else None
     # fall back: assert the reporting variant is what the stop path uses
     import inspect
@@ -134,7 +133,6 @@ def test_active_jobs_stale_cleanup_swapped_to_dir_safe(tmp_path, monkeypatch):
     # P2 #3: a stale marker that races into a directory/symlink right before cleanup must
     # not raise, must not be deleted, and must not break active_jobs()/prune_logs().
     from lhpc.core import runtime_fs
-    from lhpc.core.paths import PathContainmentError
     svc = _svc(tmp_path)
     (tmp_path / "logs").mkdir()
     jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)

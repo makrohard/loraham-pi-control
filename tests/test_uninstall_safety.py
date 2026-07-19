@@ -170,7 +170,7 @@ def test_uninstall_linked_source_unlinks_leaf_only(tmp_path):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",)))
-    import dataclasses as _dc, json as _json
+    import json as _json
     rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
     legacy = _json.loads(rp.read_text()); legacy["version"] = 1; legacy.pop("link_target")
     rp.write_text(_json.dumps(legacy))
@@ -341,7 +341,7 @@ def test_install_skip_rejoins_shared_membership(tmp_path):
     svc = _shared_svc(tmp_path)
     assert svc.uninstall("chat", apply=True).ok
     assert _members(tmp_path) == ("loraham-igate",)
-    ri = svc.install("chat", apply=True)
+    svc.install("chat", apply=True)
     assert set(_members(tmp_path)) == {"loraham-chat", "loraham-igate"}   # re-joined
     r2 = svc.uninstall("igate", apply=True)
     assert r2.ok and dest.exists()                               # kept for chat again
@@ -354,7 +354,7 @@ def test_recordless_leaf_keeps_manifest_fallback(tmp_path):
     dest = tmp_path / "src" / "LoRaHAM_Daemon"
     dest.mkdir(parents=True)
     svc = _svc(tmp_path)
-    r = svc.uninstall("igate", apply=True)
+    svc.uninstall("igate", apply=True)
     assert dest.exists()                                         # kept (manifest fallback)
     r2 = svc.uninstall("chat", apply=True)
     assert dest.exists()                                         # manifest fallback: kept

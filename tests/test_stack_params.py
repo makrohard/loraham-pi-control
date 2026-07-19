@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
 
 from lhpc.core.config import save_operator_config
 from lhpc.core.paths import Paths
@@ -598,7 +597,7 @@ def _run_scoped_start(svc, target, monkeypatch, **kw):
 
 def test_direct_start_generates_only_started_components_scoped(tmp_path, monkeypatch):
     svc = _scope_svc(tmp_path)
-    res = _run_scoped_start(svc, "tgt", monkeypatch, file_overrides={"tval": "TXX"})
+    _run_scoped_start(svc, "tgt", monkeypatch, file_overrides={"tval": "TXX"})
     files = tmp_path / "config" / "files"
     assert (files / "tgt.conf").exists()                          # target config generated
     assert (files / "dep.conf").exists()                          # dependency config generated
@@ -894,7 +893,6 @@ def test_unique_name_stack_stays_bare_no_regression(tmp_path):                  
 # --- permanent Config page: component-aware (collision fixture) ------------------------------
 
 def test_config_view_identity_and_values_per_component(tmp_path):
-    from lhpc.core import config as cfgmod
     svc = _id_collide_svc(tmp_path)
     svc.save_config_bundle("ids", values={"tgt.call": "N0CALL", "dep.call": "DJ0CHE-1"})
     cv = svc.config_view("ids")

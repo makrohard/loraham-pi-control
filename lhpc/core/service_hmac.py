@@ -12,6 +12,7 @@ import secrets as _secrets
 import sys
 import uuid
 
+from .snapshot_memo import invalidates_snapshot
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
 from .service_base import ActionResult, SourceTxnBlocked as _SourceTxnBlocked
@@ -189,6 +190,7 @@ class HmacOpsMixin:
     def _xr_pw_path(self):
         return self._paths.runtime_root.joinpath(*_XR_PW)
 
+    @invalidates_snapshot
     def hmac_set_secret(self, stack_id: str, action: str) -> ActionResult:
         """ONE atomic/rollback-safe state change (config override + secret file). On ANY failure the visible
         HMAC state is EXACTLY as before. Does NOT apply (rebuild/restart) — that is the driver's job. Never
@@ -413,6 +415,7 @@ class HmacOpsMixin:
             idx, off = ch["index"], ch["offset"]
         return "".join(parts)
 
+    @invalidates_snapshot
     def hmac_apply_start(self, stack_id: str, action: str, confirm: bool = False) -> ActionResult:
         """Reserve + spawn the detached apply driver. Single-flight: refused while a run is live.
         Returns the run id in data on success. `disable` requires `confirm` (the typed-phrase gate),

@@ -8,6 +8,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .snapshot_memo import invalidates_snapshot
 from . import daemon_control
 from . import runtime_fs
 from . import validators
@@ -719,6 +720,7 @@ class ParamsConfigMixin:
                 view["live_settings"] = {k: allowed[k] for k in order}
         return view
 
+    @invalidates_snapshot
     def save_config(self, target: str, values: dict,
                     callsign: str | None = None,
                     band: str = "") -> ActionResult:
@@ -728,6 +730,7 @@ class ParamsConfigMixin:
         return self.save_config_bundle(target, values=values, callsign=callsign,
                                        band=band)
 
+    @invalidates_snapshot
     def save_config_bundle(self, target: str, *, values: dict | None = None,
                            callsign: str | None = None,
                            band: str = "", remotes: dict | None = None,

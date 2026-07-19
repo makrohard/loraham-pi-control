@@ -3,7 +3,6 @@ index -> ALL source-path locks -> FRESH runtime recheck -> plan/mutation -> cand
 retirement, with zero mutation on a post-lock refusal. Races are injected deterministically
 through the `_op_seam` hook using separate service instances over one runtime root."""
 
-import json
 import threading
 import time
 

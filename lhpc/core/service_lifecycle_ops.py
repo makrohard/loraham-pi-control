@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .snapshot_memo import invalidates_snapshot
 from . import daemon_control
 from . import procident
 from . import resources as resources_mod
@@ -277,6 +278,7 @@ class LifecycleOpsMixin:
                     "change it in the daemon Hardware settings")
         return ""
 
+    @invalidates_snapshot
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
@@ -529,6 +531,8 @@ class LifecycleOpsMixin:
                     details=prelude,
                     next_commands=[f"lhpc status {o}" for o in unstopped])
             time.sleep(1.0)  # let sockets/locks release
+            # (The nested public `self.stop()` above is @invalidates_snapshot — its exit drops the memo,
+            # so the build_snapshot() below and the launch-loop recheck already recompute fresh.)
         else:
             prelude = []
 
@@ -1100,6 +1104,7 @@ class LifecycleOpsMixin:
         self._invalidate_config()
         return ActionResult(True, f"saved daemon params for {target} ({band})")
 
+    @invalidates_snapshot
     def apply_daemon_params(self, target: str, band: str = "") -> ActionResult:
         """Apply this stack's effective daemon params to the RUNNING daemon now (the Apply button).
 
@@ -1251,6 +1256,7 @@ class LifecycleOpsMixin:
                 release.append(b)
         return daemon_sid, release
 
+    @invalidates_snapshot
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "", release_daemon: bool = True, auto_install_ctx=None) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
@@ -1452,6 +1458,7 @@ class LifecycleOpsMixin:
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
+    @invalidates_snapshot
     def restart(self, target: str, apply: bool = False, params: dict | None = None,
                 stop_owners: bool = False, band: str = "",
                 file_overrides: dict | None = None) -> ActionResult:
@@ -1580,6 +1587,7 @@ class LifecycleOpsMixin:
                             results=tuple(stopped.results) + tuple(res.results),
                             next_commands=res.next_commands)
 
+    @invalidates_snapshot
     def build(self, target: str, apply: bool = False, auto_install_ctx=None,
               on_component_log=None, log_base_override: str = "",
               redactor=None, should_cancel=None) -> ActionResult:
@@ -2207,6 +2215,7 @@ class LifecycleOpsMixin:
         return ActionResult(True, f"Logs for '{target}' (bounded tail).", details=details,
                             next_commands=[f"lhpc status {target}"])
 
+    @invalidates_snapshot
     def test(self, target: str, tx: bool = False,
              apply: bool = False, auto_install_ctx=None, on_component_log=None,
              should_cancel=None) -> ActionResult:

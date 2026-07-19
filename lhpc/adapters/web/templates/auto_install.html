@@ -82,7 +82,7 @@
             <td><select id="ai-all-version" aria-label="Version for all stacks">
               {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
             </select></td>
-            <td><input type="checkbox" id="ai-all-tests" checked></td>
+            <td><input type="checkbox" id="ai-all-tests"></td>
             <td><input type="checkbox" id="ai-all-tx"></td></tr>
           {% for r in rows %}
           <tr data-stack="{{ r.id }}" data-deps='{{ r.deps|tojson }}'>
@@ -92,7 +92,7 @@
             <td><select class="ai-version" name="version:{{ r.id }}" aria-label="Version for {{ r.name }}">
               {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
             </select></td>
-            <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if r.testable %} checked{% else %} disabled{% endif %}></td>
+            <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if not r.testable %} disabled{% endif %}></td>
             <td><input type="checkbox" class="ai-tx" name="tx:{{ r.id }}" value="yes"{% if not r.tx_capable %} disabled{% endif %}></td>
           </tr>
           {% endfor %}

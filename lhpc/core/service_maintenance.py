@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .snapshot_memo import invalidates_snapshot
 from . import runtime_fs
 from .model import RunState
 from .paths import PathContainmentError
@@ -920,6 +921,7 @@ class MaintenanceOpsMixin:
                             details=[f"  {cid}: {e['commit'][:12]} ({e['selector'] or '?'})"
                                      for cid, e in sorted(cand["entries"].items())])
 
+    @invalidates_snapshot
     def update(self, target: str = "", apply: bool = False,
                source: str = "pinned", auto_install_ctx=None) -> ActionResult:
         """Refresh the managed source(s) from GitHub (version per `source`:
@@ -1192,6 +1194,7 @@ class MaintenanceOpsMixin:
                 ok = False
         return ok
 
+    @invalidates_snapshot
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target
         component is running; never removes a source still referenced by another
@@ -1310,6 +1313,7 @@ class MaintenanceOpsMixin:
                             f"'{target or 'all'}' (config preserved).",
                             details=out, next_commands=["lhpc status"])
 
+    @invalidates_snapshot
     def clean(self, target: str, apply: bool = False, purge: bool = False) -> ActionResult:
         """DESTRUCTIVE per-stack purge ("Clean all"): removes every LHPC-OWNED trace of the
         stack — sources (still ownership-verified + shared-refcounted; DIRTY allowed here,

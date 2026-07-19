@@ -2,8 +2,6 @@
 (never a traceback), while HTTP errors keep their status and EXPECTED unsafe runtime-root
 states stay typed (no 500). debug/reloader are off."""
 
-from pathlib import Path
-
 from lhpc.adapters.web.app import create_app
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem

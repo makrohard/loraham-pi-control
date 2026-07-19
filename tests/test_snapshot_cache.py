@@ -55,3 +55,25 @@ def test_fresh_bypasses_cache_and_refreshes_it(tmp_path):
     b = svc.build_snapshot(fresh=True)
     assert b is not a                                # fresh forced a recompute
     assert svc.build_snapshot() is b                 # and refreshed the cache for later readers
+
+
+def test_mutating_ops_drop_the_memo(tmp_path):
+    # A public mutating entry must never let a later read serve a pre-mutation snapshot, even in
+    # the same process (CLI sequences, an outer op reading after an inner public stop). Entry+exit
+    # invalidation also covers refusal paths, so this holds regardless of the op's outcome.
+    svc = _svc(tmp_path)
+    a = svc.build_snapshot()
+    svc.stop("kiss", apply=False)                    # traverses the decorated public entry
+    assert svc.build_snapshot() is not a
+
+
+def test_nested_public_stop_refreshes_the_outer_readers(tmp_path):
+    # The owner-stop window inside start(): after an inner public stop returns, the outer op's next
+    # build_snapshot() must recompute (the inner exit-invalidation is what restores the guarantee).
+    svc = _svc(tmp_path)
+    a = svc.build_snapshot()
+    try:
+        svc.stop("kiss", apply=True)                 # outcome irrelevant; finally invalidates
+    except Exception:                                # noqa: BLE001 — harness has no processes
+        pass
+    assert svc.build_snapshot() is not a

@@ -179,3 +179,24 @@ def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
     joined = "\n".join(lines)
     assert "==== meshtastic: BLOCKED (missing mandatory system deps" in joined
     assert "==== meshtastic: sources ====" not in joined      # never reached the source phase
+
+
+def test_radiolib_build_deps_warn_on_a_fresh_image(tmp_path):
+    # Field-verified (Trixie lite): cmake, the lgpio dev header, and the C++ toolchain are absent and the
+    # RadioLib/daemon build fails on them. They are build-only deps of the OPTIONAL radiolib component, so
+    # the daemon's install gate WARNS (never blocks source install) with the exact operator commands —
+    # closing the "pre-check stayed green" gap.
+    gate = _svc(tmp_path).install_dep_gate("daemon")           # bare FakeSystem -> the build deps absent
+    warn = {d["install"] for d in gate["warn"]}
+    assert "sudo apt install -y cmake" in warn
+    assert "sudo apt install -y liblgpio-dev" in warn
+    assert "sudo apt install -y build-essential" in warn
+    assert all(not d["mandatory"] for d in gate["warn"])       # build deps of an optional comp -> warn
+
+
+def test_meshcom_declares_the_qemu_libslirp_dependency(tmp_path):
+    # meshcom's Espressif qemu-system-xtensa aborts with "libslirp.so.0 missing" without libslirp0
+    # (run.sh names the exact fix). Declared so the dep pre-check surfaces it instead of a fresh image
+    # failing at runtime; on the non-optional QEMU node it blocks install (like meshtasticd/spidev).
+    gate = _svc(tmp_path).install_dep_gate("meshcom")
+    assert any(d["install"] == "sudo apt install -y libslirp0" for d in gate["block"]), gate["block"]

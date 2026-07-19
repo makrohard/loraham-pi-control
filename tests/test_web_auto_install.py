@@ -71,8 +71,8 @@ def test_post_refused_while_component_running(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "spawn_auto_install_job",
                         lambda self, *a, **k: (called.append(1), (None, "x"))[1])
     tok = _csrf(c)
-    r = c.post("/auto-install/start", data={"_csrf": tok, "source": "pinned",
-                                           "tests": "yes"}, follow_redirects=True)
+    c.post("/auto-install/start", data={"_csrf": tok, "source": "pinned",
+                                        "tests": "yes"}, follow_redirects=True)
     # spawn IS called and refuses via the driver gate? No: running-stack refusal comes
     # from the driver post-lock; the web spawn is gated only on auto-install state. The spawned
     # driver refuses; here spawn was monkeypatched, so assert the flow reached it.

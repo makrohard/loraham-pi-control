@@ -140,6 +140,13 @@ def bind(value, *, field: str = "bind") -> str:
         raise ValidationError(f"{field}: invalid bind {s!r}") from exc
     if net.version != 4:
         raise ValidationError(f"{field}: IPv4 only — got {s!r}")
+    # Bare `0.0.0.0` (and the equivalent `/32`) is ambiguous: the common bind idiom MEANS
+    # "everyone", but as an allow-list it is a /32 matching NO real peer — and the exposure
+    # pill would show a misleading yellow "LAN". Refuse with the two honest spellings instead
+    # of silently promoting a fail-closed value to a fully open one.
+    if str(net) == "0.0.0.0/32":
+        raise ValidationError(f"{field}: bare 0.0.0.0 is ambiguous — use 0.0.0.0/0 to allow "
+                              "everyone, or 127.0.0.1 for this Pi only")
     text = str(net)
     if "/" not in s and text.endswith("/32"):
         text = text[: -len("/32")]                    # keep a bare address bare for the UI

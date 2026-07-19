@@ -4,8 +4,6 @@ recovery never touches an untrusted (escaping) journal target."""
 
 import json
 
-from pathlib import Path
-
 from lhpc.core.install import Installer
 from lhpc.core.config import Config
 from lhpc.core.paths import Paths
@@ -618,7 +616,7 @@ def test_retained_journal_blocks_every_source_op(tmp_path):
 def test_source_guard_holds_index_during_handoff(tmp_path):
     # While the index lock is held externally, the guard cannot even check -> ResourceBusy
     # (no window where a clean op proceeds past a concurrently-created journal).
-    from lhpc.core.services import ControllerService, SourceTxnBlocked
+    from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core import reslock
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))

@@ -4,7 +4,6 @@ config, markers, known-working history, logs (never an active job's), and regist
 records. Never follows symlinks; local.toml/secrets/other stacks untouched."""
 
 import json
-import os
 import time
 
 from lhpc.core import known_working, source_registry
@@ -167,7 +166,7 @@ def test_clean_linked_source_unlinks_leaf_only(tmp_path):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
                                        "", "link", ("loraham-kiss-tnc",)))
-    import dataclasses as _dc, json as _json
+    import json as _json
     rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
     legacy = _json.loads(rp.read_text()); legacy["version"] = 1; legacy.pop("link_target")
     rp.write_text(_json.dumps(legacy))
@@ -196,7 +195,6 @@ def test_clean_component_target_refused(tmp_path):
 def test_clean_refuses_identity_drift(tmp_path):
     # A registered tree whose HEAD moved to a different clean commit: even Clean refuses
     # (dirty is the escape hatch; a DIFFERENT tree is not LHPC's to purge).
-    from lhpc.core.probes.backends import CommandResult
     _seed_kiss(tmp_path)
     # re-register with an exact commit, then fake a DIFFERENT actual HEAD
     _own2 = source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",

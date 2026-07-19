@@ -22,10 +22,10 @@ and live-tunes the LoRaHAM daemon.
 | Stack | Band(s) | What it is |
 |---|---|---|
 | `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets. The foundation the app stacks use. |
-| `chat` | 433 | APRS/chat TUI (interactive — run in a terminal). |
-| `igate` | 433 | APRS iGate. |
-| `voice` | 433 / 868 | LoRa voice (GUI). |
-| `kiss` | 433 / 868 | KISS TNC over TCP (port 8001). |
+| `chat` | 433 | APRS/chat TUI, local only or via ssh. |
+| `igate` | 433 | APRS iGate local only or via ssh. |
+| `voice` | 433 / 868 | LoRa voice GUI local only. |
+| `kiss` | 433 / 868 | KISS TNC over TCP (port 8001) Allows to connect APRS-Clients like xastir or yaac. |
 | `meshtastic` | 433 / 868 | Meshtastic (rootless `meshtasticd`; web 9443, API 4403). Uses the radio directly. |
 | `meshcom` | 433 | MeshCom firmware in QEMU, bridged to the daemon (web 18083, bridge 7000). |
 | `meshcore` | 868 | MeshCore Pi node (TCP 5000); optional CLI + node GUI. |
@@ -41,6 +41,41 @@ Requires Python 3.11+. A deployment is **self-hosted**: the runtime root
 `src/loraham-pi-control` (just like the stacks it manages), with the venv OUTSIDE the
 checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are one tree.
 
+### System dependencies
+
+LHPC never installs system packages itself — it shows the exact copyable command for each
+missing one (per-stack **System dependencies** view + the **Checks** page). On a fresh Raspberry
+Pi OS (Trixie or Bookworm) you can prepare everything up front — install only what the stacks
+you'll actually run need:
+
+```bash
+# --- LHPC itself (git + Python 3.11+ venv + pip) ---
+sudo apt install -y git python3 python3-venv python3-pip
+
+# --- lhpc production webserver (HTTPS/mTLS console; skip for loopback-only use) ---
+sudo apt install -y nginx
+
+# --- stack build/runtime deps (chat, voice, kiss, daemon/RadioLib) ---
+sudo apt install -y \
+  libncurses-dev \
+  libcodec2-dev libgtk-3-dev libasound2-dev \
+  socat \
+  cmake liblgpio-dev build-essential
+
+# --- meshtasticd (Meshtastic OBS repo — not in Debian repos; use Debian_12 for Bookworm) ---
+echo 'deb http://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/network:Meshtastic:beta.list
+curl -fsSL https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg > /dev/null
+sudo apt update
+sudo apt install -y meshtasticd
+
+# --- SPI + group membership, then reboot ---
+# NOTE: spi0-0cs gives ONLY /dev/spidev0.0 (no hardware chip-selects) — meshtasticd-style soft-CS.
+# For a dual Uputronics needing hardware CE0+CE1, use the dtparam line WITHOUT the overlay.
+printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt
+sudo usermod -aG spi,gpio "$USER"
+sudo reboot
+```
+
 **One-command install** — `install.sh` does the whole fresh install from the canonical
 repository (branch `main`): clone → venv → editable install → `bootstrap` → symlink `lhpc`
 into `~/.local/bin` → enable the web-console systemd service → verify the controller passes
@@ -48,8 +83,7 @@ its identity check. It is **initial install only** — refuses an existing check
 destructive git; **update later with `lhpc self-update`**.
 
 ```bash
-sudo apt install -y git python3 python3-venv python3-pip   # LHPC prerequisites (git + Python 3.11+ venv + pip)
-sudo apt install -y nginx                                  # optional — only for the HTTPS console (skip for loopback-only use)
+# system dependencies first (see above); then:
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
 #   or, from a checkout:  ./install.sh
 #   options:  --target <dir>   --no-service (skip the web service)   --no-path (skip the CLI symlink)
@@ -59,8 +93,9 @@ curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/i
 managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you): browse to
 **`https://127.0.0.1:8443/`** — your browser warns about the self-signed CA until you import it
 (see [`docs/webserver.md`](docs/webserver.md)). Without nginx, start the loopback console with
-**`lhpc web`** → `http://127.0.0.1:8770/`. To reach it from another machine, follow the
-[expose-with-mTLS runbook](docs/webserver.md#expose-to-your-lan-with-mtls--runbook). In the
+**`lhpc web`** → `http://127.0.0.1:8770/`. To reach it from another machine, see
+[Remote access to the web console](docs/webserver.md#remote-access-to-the-web-console)
+(recommended authenticated mTLS, or public no-auth for a test rig). In the
 field with no WiFi, turn the Pi into its own access point:
 [`docs/wifi-access-point.md`](docs/wifi-access-point.md).
 

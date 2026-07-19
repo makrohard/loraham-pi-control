@@ -220,7 +220,7 @@ def test_manual_stack_confirm_refuses_stopped_or_unproven(tmp_path):
 
 
 def test_manual_stack_offer_hidden_when_stopped_or_recorded(tmp_path):
-    paths = _seed_registry_only_chat(tmp_path)
+    _seed_registry_only_chat(tmp_path)
     assert _svc(tmp_path).known_working_offer("chat") is None     # stopped -> no offer
     svc = _bind_chat_identity(_svc(tmp_path, cmdlines={555: ["loraham_chat"]}), tmp_path)
     assert svc.confirm_known_working("chat").ok
@@ -276,9 +276,9 @@ def test_pinned_selector_resolves_composition_commit(tmp_path):
                          {"app": {"commit": first, "selector": "dev", "remote": "",
                                   "source_rel": "src/app", "strategy": ""}},
                          {"confirmed_at": 1.0})
-    inst = Installer(paths, stacks,
-                     Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "nope")}}),
-                     RealSystem())
+    Installer(paths, stacks,
+              Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "nope")}}),
+              RealSystem())
     # local fallback tree is at HEAD (2nd commit) != composition commit -> pinned FAILS closed
     inst2 = Installer(paths, stacks,
                       Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}}),
@@ -501,7 +501,7 @@ def test_update_plan_is_frozen_against_concurrent_confirmation(tmp_path, monkeyp
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
     svc = _svc(tmp_path)
-    res = svc.update("daemon", apply=True, source="pinned")
+    svc.update("daemon", apply=True, source="pinned")
     assert len(seen) == 2
     commits = {cid: exp[0] for cid, exp in seen}
     assert commits["loraham-daemon"] == "1" * 40          # ORIGINAL plan, not 8…
@@ -552,7 +552,7 @@ def test_update_adopts_shared_group_once(tmp_path, monkeypatch):
         return PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="(fake)")
     monkeypatch.setattr(Installer, "adopt_source", fake_adopt)
     svc = _svc(tmp_path)
-    res = svc.update("kiss", apply=True, source="dev")
+    svc.update("kiss", apply=True, source="dev")
     assert calls.count("src/loraham-kiss-tnc") == 1
 
 
@@ -599,7 +599,7 @@ def test_candidate_clear_failure_is_truthful_incomplete(tmp_path, monkeypatch):
     # a fully successful source operation with a stale eligible candidate left behind.
     import os as _os
     from lhpc.core.install import Installer, PlanAction
-    paths = Paths(runtime_root=tmp_path)
+    Paths(runtime_root=tmp_path)
     d = tmp_path / "state" / "last-start"
     d.mkdir(parents=True)
     (d / "real.json").write_text("{}")

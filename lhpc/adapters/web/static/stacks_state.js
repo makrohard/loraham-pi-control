@@ -56,7 +56,9 @@
         // Top-level rows only (.stackrow: a stack "stackrow-<sid>" or the "controller-row").
         if (d.open && d.classList.contains("stackrow") && d.id) { top.push(d.id.replace(/^stackrow-/, "")); }
       });
-      document.cookie = "lhpc_open=" + encodeURIComponent(top.join(",")) + ";path=/;samesite=strict";
+      // Secure only under HTTPS — a bare-http loopback console must still be able to set it.
+      document.cookie = "lhpc_open=" + encodeURIComponent(top.join(",")) + ";path=/;samesite=strict"
+                        + (location.protocol === "https:" ? ";secure" : "");
     } catch (e) { /* private mode */ }
   }
 
@@ -111,8 +113,8 @@
   // Settings / Webserver, and the controller's Update / System deps / Webserver), the level below it (e.g.
   // the Webserver panel's Settings / Monitor / Certificates), and any deeper. Only sibling `.advcfg` are
   // closed, so opening a child never collapses its own ancestors.
-  function attachSubAccordion() {
-    document.querySelectorAll(".stackrow-body .advcfg").forEach(function (sub) {
+  function attachSubAccordion(root) {
+    (root || document).querySelectorAll(".stackrow-body .advcfg").forEach(function (sub) {
       sub.addEventListener("toggle", function () {
         if (!sub.open) { return; }                 // react to USER OPEN only
         if (programmaticOpen) { return; }           // scripted open (restore/hashchange) — leave it be
@@ -196,6 +198,13 @@
     // accordion and collapse a server-forced row. Binding after they have drained makes that
     // impossible — the listeners do not exist while those toggles fire.
     setTimeout(function () { attachAccordion(); attachSubAccordion(); }, 0);
+  });
+
+  // A lazily-fetched stack body (stacklazy.js) injects its sub-panels AFTER the load-path binding above,
+  // so bind their single-open accordion when the body arrives — scoped to the new row, wired exactly once
+  // (stacklazy dispatches lhpc:bodyloaded only after a successful one-time fetch).
+  document.addEventListener("lhpc:bodyloaded", function (e) {
+    attachSubAccordion((e.detail || {}).root);
   });
 
   // --- same-page hash navigation (e.g. the global footer "Update →" clicked while on /stacks) ------

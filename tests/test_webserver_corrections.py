@@ -4,7 +4,6 @@ persisted init SANs, transactional revocation, CLI confirmations."""
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from lhpc.adapters.cli.main import main
 from lhpc.adapters.web.app import create_app

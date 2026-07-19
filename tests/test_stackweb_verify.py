@@ -9,8 +9,6 @@ Two truthfulness bugs this pins:
 
 from __future__ import annotations
 
-import pytest
-
 from lhpc.core import config as cfgmod
 from lhpc.core import webserver
 from lhpc.core.config import StackWebConfig, WebserverConfig
@@ -65,7 +63,7 @@ def test_verify_surfaces_the_stack_proxies_as_evidence(tmp_path):
 
 def test_verify_reports_a_stack_config_problem_as_a_config_failure(tmp_path):
     # A proxy whose policy is invalid makes the DESIRED config invalid; verify must say so.
-    p = Paths(runtime_root=tmp_path)
+    Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     # Hand-write a remote proxy with no CIDR (the writer would refuse; the parser keeps it).
     (tmp_path / "config" / "local.toml").write_text(

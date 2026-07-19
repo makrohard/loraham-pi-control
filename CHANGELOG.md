@@ -3,6 +3,11 @@
 ## unreleased
 - Live-test run 2026-07-14: known-good pins refreshed to today's proven set (daemon, radiolib, meshcom-qemu/gps, meshcore-cli); docs: secrets layout, expose-runbook rebind note; test evidence in docs/live-test-2026-07-14.md
 - Known-working confirm for manual-start stacks (F4): a stack LHPC cannot start itself (chat) can now be confirmed while the probe shows it running — composition synthesized from the ownership registry, same handle-bound verification; offer stays GET-safe
+- Snapshot memo invalidated on every public mutating service entry (entry+exit via @invalidates_snapshot) — closes the stale-read window in owner-stop starts and same-process CLI sequences (audit A-1)
+- Registry read-compat: pre-0.1.5 "legacy" ownership records read as "backfilled" (normalized on rewrite; journal recovery accepts them too) — upgrading no longer blocks update/uninstall on backfilled sources (audit A-2)
+- Bind validator refuses bare 0.0.0.0 with guidance (use 0.0.0.0/0 or 127.0.0.1); dashboard port rows show a "restart pending" pill when the saved allow-list is not applied to the running service yet (audit A-3)
+- Stacks page: lazily-loaded bodies get the sub-panel accordion wired (lhpc:bodyloaded); an explicit ?open/?cfg/?dp/?inst target suppresses cookie-restored rows so only one main row opens (audit A-4)
+- stackparams.js modal built via DOM construction — the "never innerHTML" invariant is grep-clean again (audit A-5, style only)
 
 ## 0.1.5
 - Dependency overview + Checks

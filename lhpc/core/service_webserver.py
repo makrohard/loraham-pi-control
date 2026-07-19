@@ -337,8 +337,13 @@ class WebserverOpsMixin:
                 break
         level, label = port_exposure(bind_val) if has_bind else ("bad", "public")
         port = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
+        # The exposure pill reflects the SAVED bind allow-list; the RUNNING process keeps its
+        # launch-time value until restarted. Surface the durable restart-required marker next to
+        # the pill so a saved-but-not-applied bind change is never displayed as already effective
+        # (tri-state read: an unsafe marker also reads truthy -> shown as pending, fail-closed).
         return {"kind": "port", "name": stk.name, "sid": stk.id, "port": port,
                 "exposure": {"level": level, "label": label},
+                "restart_required": bool(self.restart_required(stk.id)) if has_bind else False,
                 "logs_component": comp.id if has_bind else None}
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:

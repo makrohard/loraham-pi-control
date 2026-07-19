@@ -104,8 +104,10 @@ class SelfUpdateOpsMixin:
                  # NOT installable by command: if systemctl/loginctl are absent this host is not systemd,
                  # and `apt install systemd` is not the fix. Explain instead of offering nonsense advice.
                  "install": "",
-                 "note": "managed-service mode is unavailable on this host — the console runs fine "
-                         "without it (loopback/manual start); no package can add systemd here.",
+                 "note": "managed-service mode is unavailable here — provide systemd (boot the OS with "
+                         "systemd / enable the `systemctl --user` session), or run without it: `lhpc web` "
+                         "in the foreground now, then `lhpc self-update --repair-integration` once systemd "
+                         "is available. No package can add systemd (`apt install systemd` is not the fix).",
                  "purpose": "the managed --user service + boot linger (only for managed-service mode)"},
             ]},
             {"title": "Install-time", "deps": [

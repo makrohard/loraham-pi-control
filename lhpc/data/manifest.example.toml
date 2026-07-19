@@ -35,7 +35,7 @@ main = "loraham-daemon"
 
   [[stack.component]]
   id = "loraham-daemon"
-  name = "LoRaHAM Daemon 111a"
+  name = "LoRaHAM Daemon"
   kind = "service"
   purpose = "Device driver for the LoRa radios; provides raw/framed/CONF sockets per band."
   tx_capable = true
@@ -232,6 +232,19 @@ main = "loraham-daemon"
   # `optional` here means "not runnable / not started with the stack" — the daemon's
   # build_requires edge makes it a hard install/update/uninstall reference.
   optional = true
+
+    [[stack.component.require]]
+    check_file = "/usr/bin/cmake"
+    install = "sudo apt install -y cmake"
+    note = "cmake (needed to build RadioLib)"
+    [[stack.component.require]]
+    check_file = "/usr/include/lgpio.h"
+    install = "sudo apt install -y liblgpio-dev"
+    note = "lgpio development headers (RadioLib Raspberry Pi HAL)"
+    [[stack.component.require]]
+    check_file = "/usr/bin/g++"
+    install = "sudo apt install -y build-essential"
+    note = "C++ toolchain (g++ + make, via build-essential) — RadioLib's cmake build and the daemon's build.sh (g++, std=c++20) both need it; absent on a minimal Trixie lite image"
 
     [stack.component.source]
     path = "src/RadioLib"
@@ -776,8 +789,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "350454768c2bfaaf3d719c6085d9d38144ee48bb"
-    pin_tag = "v0.4.0-3-g3504547"
+    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
+    pin_tag = "v0.5.0"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -821,8 +834,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "350454768c2bfaaf3d719c6085d9d38144ee48bb"
-    pin_tag = "v0.4.0-3-g3504547"
+    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
+    pin_tag = "v0.5.0"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -909,12 +922,17 @@ main = "meshtastic"
 
     [[stack.component.require]]
     check_file = "/usr/bin/meshtasticd"
-    install = "sudo apt install -y meshtasticd"
-    note = "meshtasticd binary (Meshtastic apt repository)"
+    install = '''
+. /etc/os-release
+echo "deb http://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_${VERSION_ID}/ /" | sudo tee /etc/apt/sources.list.d/network:Meshtastic:beta.list
+curl -fsSL "https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_${VERSION_ID}/Release.key" | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg > /dev/null
+sudo apt update
+sudo apt install -y meshtasticd'''
+    note = "meshtasticd is NOT in the Debian/RPiOS repos — the command adds Meshtastic's OBS apt repo + signing key (auto-selecting Debian_13 for Trixie / Debian_12 for Bookworm via os-release), then installs."
     [[stack.component.require]]
     check_file = "/dev/spidev0.0"
-    install = "Enable SPI: add 'dtparam=spi=on' and 'dtoverlay=spi0-0cs' to /boot/firmware/config.txt, then reboot"
-    note = "SPI device (RF95 on SPI0)"
+    install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
+    note = "SPI device (RF95 on SPI0). REBOOT after enabling. The spi0-0cs overlay exposes ONLY /dev/spidev0.0 (zero hardware chip-selects — correct for meshtasticd's software CS). A setup needing hardware CE0+CE1 (e.g. dual Uputronics) must instead use plain 'dtparam=spi=on' WITHOUT the overlay."
     [[stack.component.require]]
     groups = ["spi", "gpio"]
     install = "sudo usermod -aG spi,gpio $USER"
@@ -1200,6 +1218,12 @@ main = "meshcom-qemu"
   tx_capable = true
   depends_on = ["meshcom-bridge", "meshcom-gps-relay"]
   start_order = 3
+
+    [[stack.component.require]]
+    check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
+    install = "sudo apt install -y libslirp0"
+    note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. Path is arm64/aarch64 (this project's target)."
+
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
   start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."

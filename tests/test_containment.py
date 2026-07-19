@@ -3,7 +3,6 @@ has no external link sources, no /tmp artifacts of its own, and no {runtime}/.. 
 the local-adoption fallback is off by default and must be in-root when configured."""
 
 import tomllib
-from pathlib import Path
 
 import pytest
 

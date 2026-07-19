@@ -130,7 +130,7 @@ def test_configure_validates(tmp_path):
 
 def _capture_certs(monkeypatch):
     """Record every issue_server_cert(**kwargs) instead of doing real crypto."""
-    from lhpc.core import pki as _pki, services as _services
+    from lhpc.core import pki as _pki
     calls = []
     monkeypatch.setattr(_pki, "issue_server_cert",
                         lambda paths, **kw: calls.append(kw) or {"ok": True})

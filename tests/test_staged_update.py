@@ -1,8 +1,6 @@
 """P0.4 — updates stage into a candidate dir and activate atomically; a failed
 acquisition never destroys the active source; dirty/linked trees are not overwritten."""
 
-import os
-
 from lhpc.core.install import Installer
 from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
 from lhpc.core.config import Config

@@ -1,8 +1,6 @@
 """Structured command execution: argv token boundaries, no shell on the migrated
 run path, and the shell-to-exec ownership-race fix (controlled real subprocesses)."""
 
-import os
-import signal
 import subprocess
 
 import pytest

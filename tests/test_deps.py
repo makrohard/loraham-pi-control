@@ -225,3 +225,36 @@ def test_library_shows_build_dependency_pill_not_optional(tmp_path):
     app.config["SESSION_COOKIE_SECURE"] = False
     body = app.test_client().get("/stacks?open=daemon").get_data(as_text=True)
     assert "build dependency" in body
+
+
+def test_meshtasticd_and_spi_copyboxes_are_executable(tmp_path):
+    # Field-verified (Trixie lite): meshtasticd is in NO distro repo, so the copybox must add the
+    # Meshtastic OBS apt repo + signing key before installing (the bare `apt install -y meshtasticd`
+    # fails); the SPI box must be a runnable command, not prose. Requires absent under the bare FakeSystem.
+    svc = _svc(tmp_path)
+    deps = svc.system_deps("meshtastic")
+    mesh = next(d for d in deps if "meshtasticd" in d["what"])
+    assert "download.opensuse.org" in mesh["install"]          # adds the OBS repo…
+    assert mesh["install"].rstrip().endswith("apt install -y meshtasticd")   # …then installs
+    spi = next(d for d in deps if d["what"].startswith("SPI device"))
+    assert spi["install"].startswith("printf")                 # a command, not prose
+    assert "/boot/firmware/config.txt" in spi["install"] and "Enable SPI" not in spi["install"]
+
+
+def test_no_dependency_surface_ever_advises_apt_install_systemd(tmp_path):
+    # systemd is not installable by package: `apt install systemd` is nonsense on a non-systemd host.
+    # No dependency surface may emit it, and the systemd controller-dep must name the real fallback.
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    sysd = next(d for grp in svc.controller_system_deps() for d in grp["deps"]
+                if "systemd" in d["what"].lower())
+    assert sysd["install"] == ""                               # never a copybox
+    assert "lhpc web" in sysd["note"] and "self-update --repair-integration" in sysd["note"]
+    # Every copybox INSTALL command across all dep surfaces — none may install systemd (a NOTE may
+    # still mention "apt install systemd is not the fix"; that is guidance, not a command).
+    installs = [d["install"] for grp in svc.controller_system_deps() for d in grp["deps"]]
+    installs += [d.get("install", "") for sec in svc.dependency_overview()["sections"] for d in sec["deps"]]
+    for s in svc.stacks():
+        installs += [d["install"] for d in svc.system_deps(s.id)]
+        installs += [d["install"] for lst in svc.install_dep_gate(s.id).values() for d in lst]
+    offenders = [c for c in installs if "systemd" in (c or "")]
+    assert not offenders, offenders

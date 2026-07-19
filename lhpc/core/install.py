@@ -874,7 +874,9 @@ class Installer:
         for f in ("selector", "resolved_commit", "remote", "strategy"):
             if not isinstance(meta.get(f), str):
                 return False
-        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled"):
+        # "legacy" accepted on READ: a journal written by an interrupted <=0.1.4 transaction must
+        # stay recoverable after the selector rename (source_registry normalizes it on read).
+        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled", "legacy"):
             return False
         if "had_prior" in meta and not isinstance(meta["had_prior"], bool):
             return False

@@ -1238,7 +1238,6 @@ def test_check_blocks_on_unsafe_journal_without_fetch(tmp_path, monkeypatch, kin
 def test_startup_freshness_check_under_corrupt_journal_makes_no_fetch(tmp_path, monkeypatch):
     # The startup thread calls ControllerService().self_update_check(); under a corrupt journal it must
     # block with no competing fetch or cache write (and never raise).
-    from lhpc.core import config as cfgmod
     _o, work, up = _repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")
     _upstream_commit(up)
@@ -1474,7 +1473,6 @@ def test_bad_anchor_blocks_apply_and_check_without_mutation(tmp_path, monkeypatc
 # --- Defect 1: a no-candidate update writes no anchor/journal; defensive write rejection -----------
 
 def test_no_candidate_update_leaves_no_invalid_journal(tmp_path, monkeypatch):
-    from lhpc.core import config as cfgmod
     _o, work, up = _repos(tmp_path)
     svc, man, rt = _svc_rf(tmp_path, work, monkeypatch, ropt="OLD")      # work + origin at A
     (up / "manifest.toml").write_text(_rf_manifest("NEW"))               # upstream advances to B

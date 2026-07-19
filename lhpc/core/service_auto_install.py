@@ -9,6 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 
+from .snapshot_memo import invalidates_snapshot
 from . import runtime_fs
 from . import validators
 from .abortflag import AbortFlag
@@ -408,6 +409,7 @@ class AutoInstallOpsMixin:
             seed += "\n[… stream truncated (read cap) …]\n"
         return seed
 
+    @invalidates_snapshot
     def auto_install_ack(self, confirm_orphan: bool = False) -> ActionResult:
         """EXPLICIT recovery/acknowledgement of dead/unsafe auto-install state, SERIALIZED with
         launches: the dedicated auto-install-start lock is held from the liveness re-validation
@@ -490,6 +492,7 @@ class AutoInstallOpsMixin:
                             details=[f"  marker: {d1}", f"  lease: {d2}",
                                      f"  reservation: {d3}"])
 
+    @invalidates_snapshot
     def auto_install_abort(self, run_id: str) -> ActionResult:
         """REQUEST-ONLY abort (mirrors hmac_apply_abort): validate the EXACT live run + the driver's
         reservation identity, then SIGTERM the driver pid ONLY (never killpg). Writes no marker — the
@@ -789,6 +792,7 @@ class AutoInstallOpsMixin:
                        "tests": bool(v["tests"]), "tx": bool(v["tx"])}
                  for sid, v in stacks.items()}, "")
 
+    @invalidates_snapshot
     def auto_install(self, source: str = "pinned", tests: bool = True, tx: bool = False,
                     run_id: str = "", apply: bool = False, emit=print,
                     selection=None, load_plan: bool = False) -> ActionResult:

@@ -122,7 +122,7 @@ def _life(rt, spawn=None):
 def test_run_job_symlinked_logs_parent_is_typed_failed_no_run(tmp_path):
     from lhpc.core import jobs
     from lhpc.core.jobs import JobState
-    from lhpc.core.probes.backends import FakeSystem, CommandResult
+    from lhpc.core.probes.backends import CommandResult
     rt = tmp_path / "rt"; rt.mkdir()
     outside = tmp_path / "outside"; outside.mkdir()
     os.symlink(outside, rt / "logs")                 # logs/ -> outside the root

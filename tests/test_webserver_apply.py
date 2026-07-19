@@ -6,7 +6,6 @@ stack/component machinery."""
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from lhpc.core import webserver
 from lhpc.core.paths import Paths
@@ -171,7 +170,6 @@ def test_apply_refuses_when_nginx_not_installed(tmp_path):
 
 
 def test_monitor_lists_nginx_as_system_dependency(tmp_path):
-    from lhpc.core import webserver
     svc0 = _svc(tmp_path)
     svc0.webserver_init(dns_sans=["pi.local"])
     # before verify -> status unknown; nginx declared as a system dep with its install command

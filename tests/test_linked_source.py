@@ -5,7 +5,7 @@ import os
 
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.config import Config, OperatorConfig
-from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
+from lhpc.core.model import Component, ComponentKind, SourceSpec
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from conftest import set_call
@@ -70,7 +70,7 @@ def test_generated_config_not_written_into_linked_source(tmp_path):
     link = tmp_path / comp.source.path
     link.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(external, link)
-    written = svc.write_config_files(target)
+    svc.write_config_files(target)
     # nothing generated inside the external tree
     assert not any(p for p in external.rglob("*") if p.is_file())
 

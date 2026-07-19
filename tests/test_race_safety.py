@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from lhpc.core import known_working, source_fs, source_registry
+from lhpc.core import source_fs, source_registry
 from lhpc.core.config import Config
 from lhpc.core.install import Installer
 from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
@@ -490,7 +490,7 @@ def test_update_dirty_after_archive_restores_prior(tmp_path, monkeypatch):
     # dirty check, once it is already archived at `.prev`: the post-archive rescan through
     # the captured handle catches it — no promotion, prior restored no-clobber at its
     # original path, the new file survives, registry/journal state stays consistent.
-    head1 = _make_repo(tmp_path / "rt" / "local" / "app")
+    _make_repo(tmp_path / "rt" / "local" / "app")
     comp = _comp()
     inst = _inst(tmp_path, comp)
     assert inst.adopt_source(comp, source="dev").status == "done"
@@ -548,7 +548,6 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
     # the post-detach rescan catches it — the source is restored no-clobber at its original
     # path, the new file survives, the registry record and config stay untouched, and the
     # result is a truthful incomplete (never success).
-    import subprocess
     from lhpc.core.probes import RealSystem
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     _make_repo(dest)
@@ -582,7 +581,6 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
 def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypatch):
     # Same window, but the original path is REOCCUPIED before the restore: the quarantine
     # evidence is preserved, the injected leaf untouched, the record retained — recovery.
-    import subprocess
     from lhpc.core.probes import RealSystem
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     _make_repo(dest)
