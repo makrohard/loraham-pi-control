@@ -144,6 +144,24 @@ class LifecycleOpsMixin:
             time.sleep(self.ENDPOINT_VERIFY_POLL_S)
             waited += self.ENDPOINT_VERIFY_POLL_S
 
+    def _conflicting_service_hint(self, comp) -> str:
+        """When a component declares an `absent_file` requirement (a must-not-run systemd unit) yet a
+        start still reached readiness-failure, the unit can be ACTIVE without being ENABLED — its
+        wants-symlink is absent, so `missing_requirements` let start proceed, but the running root
+        service still holds the shared radio. Probe `systemctl is-active` for the derived unit and, if
+        up, name it as the likely cause with the copyable disable command. Bounded; returns "" when
+        nothing conflicting is active (or systemctl is unavailable), so it only ever ADDS signal."""
+        for req in comp.requires:
+            if not req.absent_file:
+                continue
+            unit = req.absent_file.rstrip("/").rsplit("/", 1)[-1]   # .../meshtasticd.service -> unit name
+            res = self._system.runner.run(["systemctl", "is-active", "--quiet", unit], timeout=3.0)
+            if res.returncode == 0 and not res.not_found and not res.timed_out:
+                cmd = f" ({req.install})" if req.install else ""
+                return (f"; likely cause: the {unit} system service is ACTIVE — "
+                        f"{req.note or 'disable it'}{cmd}")
+        return ""
+
     def run_blockers(self, target: str, band: str = "", radio: str = "") -> list[dict]:
         """REAL resource conflicts only: exclusive/provider resources this run would
         use that a RUNNING component of another stack is *actually* using. Radio
@@ -687,7 +705,9 @@ class LifecycleOpsMixin:
                 if not ready_ok:
                     cleanup = life.stop(comp, band=cfg_band)
                     record(comp, stack, Outcome.UNVERIFIED,
-                           f"ready endpoint(s) never came up ({'; '.join(ev)}); cleanup: "
+                           f"ready endpoint(s) never came up ({'; '.join(ev)})"
+                           + self._conflicting_service_hint(comp)
+                           + "; cleanup: "
                            + ("stopped" if cleanup.outcome == Outcome.STOPPED
                               else "cessation NOT verified — ownership retained"))
                     continue
@@ -2575,7 +2595,14 @@ class LifecycleOpsMixin:
     def is_built(self, comp) -> bool:
         """True if the component needs no build, or its built artifact is present.
         The artifact path may carry run-param placeholders (e.g. {env} for the
-        firmware build dir), substituted from the stack's saved config."""
+        firmware build dir), substituted from the stack's saved config.
+
+        A `build_marker` (written by build() ONLY after the last step succeeds) takes precedence over
+        `bin`: it is the authoritative completion signal, so a build killed mid-way — leaving `bin`
+        present but the build incomplete (e.g. a venv whose interpreter exists but whose pip installs
+        never finished) — correctly reads NOT built."""
+        if comp.build_marker and (comp.build_cmd or comp.build_steps):
+            return (self._lifecycle().source_dir(comp) / comp.build_marker).exists()
         rel = self._build_artifact(comp)
         if rel is None:
             return True

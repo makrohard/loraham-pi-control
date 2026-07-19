@@ -453,10 +453,14 @@ def _parse_component(raw: dict) -> Component:
         readiness=raw.get("readiness", ""),
         readiness_timeout=float(raw.get("readiness_timeout", 0.0) or 0.0),
         bin=raw.get("bin", ""),
+        build_timeout=float(raw.get("build_timeout", 0.0) or 0.0),
+        test_timeout=float(raw.get("test_timeout", 0.0) or 0.0),
+        build_marker=raw.get("build_marker", ""),
         requires=tuple(
             Requirement(cmd=r.get("cmd", ""), install=r.get("install", ""),
                         check_file=r.get("check_file", ""), note=r.get("note", ""),
-                        groups=tuple(r.get("groups", [])))
+                        groups=tuple(r.get("groups", [])),
+                        absent_file=r.get("absent_file", ""))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),

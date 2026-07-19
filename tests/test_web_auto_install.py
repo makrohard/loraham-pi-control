@@ -54,6 +54,10 @@ def test_form_defaults_and_install_mode(tmp_path):
     assert "Install and Build all Stacks" in body
     assert 'name="install:daemon" value="yes" checked' in body   # per-stack install default ON
     assert 'id="ai-all-install"' in body and 'id="ai-all-version"' in body  # the "All" master row
+    # Tests + TX default OFF (opt-in): neither the master nor a per-stack tests/tx box is pre-checked.
+    assert '<input type="checkbox" id="ai-all-tests">' in body    # master Tests unchecked
+    assert 'class="ai-tests" name="tests:daemon" value="yes"' in body
+    assert 'name="tests:daemon" value="yes" checked' not in body  # per-stack Tests unchecked
     assert 'class="ai-tx" name="tx:meshcom" value="yes" disabled' in body   # TX disabled off daemon
     assert "several minutes" in body
     assert "Known working" in body and "Development" in body and "Latest stable" in body

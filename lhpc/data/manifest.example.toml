@@ -937,6 +937,14 @@ sudo apt install -y meshtasticd'''
     groups = ["spi", "gpio"]
     install = "sudo usermod -aG spi,gpio $USER"
     note = "spi + gpio group membership — needed to run meshtasticd WITHOUT root"
+    [[stack.component.require]]
+    # MUST-NOT-RUN: the apt package enables a ROOT meshtasticd.service that seizes the SPI radio, so this
+    # rootless stack can never own it. Its enabled wants-symlink must be ABSENT; present => START is
+    # blocked with the disable command. (A service that is active but NOT enabled has no symlink and is
+    # surfaced at run time instead — see _conflicting_service_hint.)
+    absent_file = "/etc/systemd/system/multi-user.target.wants/meshtasticd.service"
+    install = "sudo systemctl disable --now meshtasticd"
+    note = "the packaged root meshtasticd.service must be disabled — it grabs the SPI radio and blocks this rootless stack"
 
     # meshtasticd YAML config generated from the LoRaHAM base, per band (the Lora
     # pins differ between the 433 and 868 boards). Written to the runtime root so no
@@ -1105,6 +1113,11 @@ main = "meshcom-qemu"
   # lost — same gotcha as meshcom-qemu's test).
   test = "ctest --test-dir build --output-on-failure"
 
+    [[stack.component.require]]
+    check_file = "/usr/include/openssl/ssl.h"
+    install = "sudo apt install -y libssl-dev"
+    note = "OpenSSL development headers (meshcom build)"
+
     # Bridge CLI (start-time). RF params are NOT CLI — they arrive from the firmware
     # over the XR protocol. The port must match the firmware's EXTERNAL_RADIO_PORT.
     [[stack.component.param]]
@@ -1218,12 +1231,6 @@ main = "meshcom-qemu"
   tx_capable = true
   depends_on = ["meshcom-bridge", "meshcom-gps-relay"]
   start_order = 3
-
-    [[stack.component.require]]
-    check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
-    install = "sudo apt install -y libslirp0"
-    note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. Path is arm64/aarch64 (this project's target)."
-
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
   start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
@@ -1276,6 +1283,34 @@ main = "meshcom-qemu"
     # wedged in the bootloader (guest reset is not survivable in qemu-xtensa) — live finding.
     { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
+
+    [[stack.component.require]]
+    check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
+    install = "sudo apt install -y libslirp0"
+    note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. arm64/aarch64 path (this project's target)."
+    [[stack.component.require]]
+    # Satisfied when qemu-system-xtensa is on PATH OR at the ~/.espressif path — mirroring run.sh's
+    # own resolution (--qemu > PATH > ~/.espressif). The PATH probe is the reliable fallback if the
+    # ~/.espressif file check misbehaves (e.g. HOME differs in the service context).
+    cmd = "qemu-system-xtensa"
+    check_file = "~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    install = '''
+mkdir -p ~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606
+cd ~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606
+wget https://github.com/espressif/qemu/releases/download/esp-develop-9.0.0-20240606/qemu-xtensa-softmmu-esp_develop_9.0.0_20240606-aarch64-linux-gnu.tar.xz
+tar -xJf qemu-xtensa-softmmu-esp_develop_9.0.0_20240606-aarch64-linux-gnu.tar.xz'''
+    note = "Espressif qemu-system-xtensa (aarch64 prebuilt, soft-pinned esp_develop_9.0.0_20240606) — NOT installed by setup.sh/build.sh; run.sh resolves --qemu > PATH > this ~/.espressif path. Satisfied once qemu-system-xtensa is on PATH OR at that path."
+    [[stack.component.require]]
+    # PlatformIO CLI — scripts/prepare-openeth.sh + build.sh invoke `pio`. pipx installs it into
+    # ~/.local/bin, which lhpc's build steps DO see: the runner PATH includes ~/.local/bin (see
+    # _FIXED_ENV in probes/backends.py) so a pipx install is found under the web service too, not only
+    # in the operator's shell.
+    cmd = "pio"
+    install = '''
+sudo apt install -y pipx
+pipx install platformio
+pipx ensurepath'''
+    note = "PlatformIO CLI (meshcom firmware build; pipx puts it in ~/.local/bin — open a new shell after ensurepath)"
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
     # operator callsign. Applied via the net-console after boot (see post_start).
@@ -1364,9 +1399,10 @@ main = "meshcore-pi"
   id = "meshcore-pi"
   readiness = "endpoint"
   # A Python node that imports its stack (LoRaRF/scapy/crypto) before opening TCP 5000 can
-  # take well over the 6 s global default to become ready — give it a longer window so start
-  # verifies instead of tearing it down. Tune down if your Pi is faster.
-  readiness_timeout = 45.0
+  # take well over the 6 s global default to become ready — scapy's import alone can approach
+  # 45 s on 512 MB / A53-class hardware, so give it a generous window so start verifies instead
+  # of tearing it down. Tune down if your Pi is faster.
+  readiness_timeout = 120.0
   name = "MeshCore Pi (868)"
   kind = "service"
   band = "868"
@@ -1377,9 +1413,16 @@ main = "meshcore-pi"
   start_order = 1
   run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
   test = ".venv/bin/python -m pytest tests/"
-  # The build_steps create the in-tree venv; its interpreter IS the build artifact, so `is_built`
-  # honestly reads "not built" until the venv exists (exec_name is a process-match name, not a path).
+  # The build_steps create the in-tree venv, THEN pip-install its deps. The venv interpreter appears
+  # after the FIRST step, so `bin` alone would read "built" the moment the (still-dep-less) venv exists
+  # — a build killed mid-pip would then start and die with ModuleNotFoundError. `build_marker` fixes
+  # that: it is written ONLY after the LAST step succeeds and is what `is_built` gates on.
   bin = ".venv/bin/python"
+  build_marker = ".venv/.lhpc-build-complete"
+  # venv + pip-install of 7 packages (scapy, LoRaRF, pycryptodome, ...) overran the 600 s default on a
+  # Pi Zero 2W and was silently TERM-killed mid-pip; give the build room, and its pytest suite too.
+  build_timeout = 1800.0
+  test_timeout = 900.0
   # Self-sufficient managed clone: the venv is built IN-TREE by `lhpc build`. Upstream has
   # no requirements file — deps enumerated from its README (an upstream requirements.txt
   # would make this declarative).

@@ -134,6 +134,12 @@ class Requirement:
     ALL listed unix groups (e.g. spi/gpio for rootless device access). It is surfaced in the stack's
     system-dependencies view and enforced at START, but is NOT part of the install gate (the binary
     installs fine without the group). `install` then holds the copyable grant command.
+
+    `absent_file` is an INVERSE run-time requirement: satisfied only when that file does NOT exist — used
+    to name a conflicting systemd wants-symlink (e.g. an apt-packaged root service that would grab the
+    shared radio). Present => unsatisfied => START is blocked, with `install` holding the copyable command
+    that clears it (e.g. `sudo systemctl disable --now meshtasticd`). Like `groups`, it is a run-time
+    capability: surfaced in the system-dependencies view and enforced at START, never in the install gate.
     """
 
     cmd: str = ""
@@ -141,6 +147,7 @@ class Requirement:
     check_file: str = ""        # e.g. "/usr/include/ncurses.h" (a header to test for)
     note: str = ""
     groups: tuple[str, ...] = ()   # required unix-group membership (run-time capability)
+    absent_file: str = ""       # a file (e.g. a systemd wants-symlink) that must NOT exist (run-time)
 
 
 @dataclass(frozen=True)
@@ -345,6 +352,14 @@ class Component:
                                           # (0 = use the service default); raise it for a
                                           # slow-booting app (e.g. a Python node opening a port)
     bin: str = ""                # built binary path (relative to source) for the 'is built' check
+    build_timeout: float = 0.0   # per-component build timeout in seconds (0 = the service default);
+                                 # raise it for a slow build on modest hardware (e.g. a venv + pip
+                                 # install of many packages on a Pi Zero 2W)
+    test_timeout: float = 0.0    # per-component host-test timeout in seconds (0 = the service default)
+    build_marker: str = ""       # relative path of a completion marker written ONLY after the LAST
+                                 # build step succeeds; when set, `is_built` gates on IT (not `bin`),
+                                 # so a build killed mid-way (e.g. a half-populated venv whose
+                                 # interpreter already exists) can never read "built"
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters

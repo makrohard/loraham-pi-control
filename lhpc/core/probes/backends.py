@@ -142,8 +142,25 @@ def _decode_hex_ip(ip_hex: str) -> str:
 # forwarded so that, under the hardened web-service sandbox (ProtectHome=read-only), build/test
 # tools write their caches into the runtime-owned location the unit points them at — never into
 # ~/.platformio, ~/.espressif or ~/.cache. See deploy/lhpc-web.service.
+def _runner_path() -> str:
+    """PATH for every runner subprocess. Starts from lhpc's own PATH, then ensures ~/.local/bin is
+    on it (appended, so system tools still win). Under the systemd --user web service the inherited
+    PATH omits ~/.local/bin, so pipx-installed CLIs (e.g. PlatformIO's `pio`, needed by the meshcom
+    firmware build) would be findable in the operator's login shell yet NOT under lhpc — the same
+    environment-mismatch that bit the qemu ~/.espressif lookup. Appending it here fixes it for BOTH
+    the direct runner and the detached build launcher (which inherits this env), deployment-independent
+    of whether the unit sets PATH. ProtectHome=read-only still permits execute from ~/.local/bin."""
+    base = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    local_bin = os.path.join(home, ".local", "bin") if home and home != "~" else ""
+    parts = base.split(os.pathsep)
+    if local_bin and local_bin not in parts:
+        parts.append(local_bin)
+    return os.pathsep.join(parts)
+
+
 _FIXED_ENV = {
-    "PATH": os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
+    "PATH": _runner_path(),
     "LANG": "C",
     "LC_ALL": "C",
 }

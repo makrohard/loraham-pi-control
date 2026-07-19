@@ -57,6 +57,11 @@ def req_remediation(req, pending: bool) -> str:
     label = req.cmd or req.note or req.check_file or ""
     if req.groups and pending:
         return f"{label} — {GROUP_RESTART_HINT}: {GROUP_RESTART_CMD}"
+    if req.absent_file:
+        # INVERSE requirement: the problem is that a conflicting service is PRESENT, so never say
+        # "missing" — state the conflict and the copyable command that clears it.
+        return (req.note or "a conflicting service is enabled/active") \
+            + (f" ({req.install})" if req.install else "")
     return f"missing {label}" + (f" ({req.install})" if req.install else "")
 
 
@@ -184,15 +189,26 @@ class Lifecycle:
                 if not set(req.groups) <= self.system.fs.effective_groups():
                     missing.append(req)
                 continue
-            if req.check_file:
-                if not self.system.fs.exists(req.check_file):
+            if req.absent_file:
+                # INVERSE run-time requirement: the named file (a systemd wants-symlink of a conflicting
+                # root service) must NOT exist. Present => the service is enabled and will seize the shared
+                # radio => unsatisfied, so START is blocked (fail-closed). expanduser for symmetry.
+                if self.system.fs.exists(os.path.expanduser(req.absent_file)):
                     missing.append(req)
                 continue
-            if req.cmd:
-                # Structured PATH probe — no shell. (req.cmd is a manifest-owned
-                # command name, never a user value.)
-                if shutil.which(req.cmd) is None:
+            if req.check_file or req.cmd:
+                # Satisfied if EITHER resolves: the binary is on PATH (`cmd`), OR the file exists
+                # (`check_file`, expanduser'd for a per-user tool path like the Espressif qemu under
+                # ~/.espressif). This mirrors a tool whose launcher resolves PATH > a fixed path (e.g.
+                # meshcom run.sh: --qemu > PATH > ~/.espressif), so a copy on PATH counts even when the
+                # fixed path is absent (and vice-versa). A require with only one of the two keys behaves
+                # exactly as before. expanduser is best-effort: a wrong/unset HOME just falls back to the
+                # PATH probe, so a PATH install is always a reliable escape hatch.
+                on_path = bool(req.cmd) and shutil.which(req.cmd) is not None
+                at_file = bool(req.check_file) and self.system.fs.exists(os.path.expanduser(req.check_file))
+                if not (on_path or at_file):
                     missing.append(req)
+                continue
         return missing
 
     def group_grant_pending(self, req) -> bool:
@@ -224,21 +240,39 @@ class Lifecycle:
 
     # -- build / start / stop / logs --------------------------------------
 
-    def build(self, comp: Component, timeout: float = 600.0,
+    BUILD_TIMEOUT_S = 900.0     # default per-STEP build timeout; hardware-realistic for a modest Pi.
+                                # A known-slow component (e.g. a venv + many pip installs) overrides it
+                                # with a manifest `build_timeout`.
+
+    def build(self, comp: Component, timeout: float | None = None,
               log_base: str | None = None, redactor=None, should_cancel=None) -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
         `log_base` overrides the default `build-<comp.id>` job/log name — the auto-install driver
         passes a RUN-SPECIFIC base so a run's build log can never collide with a prior
-        run's. Multi-step components append `-<i>` to whichever base is used."""
+        run's. Multi-step components append `-<i>` to whichever base is used.
+
+        Timeout precedence: explicit `timeout` arg > the component's manifest `build_timeout` >
+        `BUILD_TIMEOUT_S`. A component that declares a `build_marker` gets it REMOVED before the first
+        step and WRITTEN only after the LAST step succeeds, so a build killed mid-way (e.g. a
+        half-populated venv) can never read "built" — the marker is `is_built`'s gate."""
         base = log_base or f"build-{comp.id}"
         if self.is_linked_source(comp):       # never build INTO an external linked tree
             return JobResult(name=base, state=JobState.FAILED, returncode=1,
                              log_path="", tail=["BLOCKED: source is a linked external "
                              "tree — build it yourself in that checkout (lhpc never "
                              "writes into a linked source)"])
+        eff_timeout = timeout if timeout is not None else (comp.build_timeout or self.BUILD_TIMEOUT_S)
         src, runtime = str(self.source_dir(comp)), str(self.paths.runtime_root)
+        # A re-build must NEVER inherit a prior run's completion marker: clear it up front so an
+        # interrupted rebuild leaves the component reading "not built" until it fully succeeds again.
+        marker = (self.source_dir(comp) / comp.build_marker) if comp.build_marker else None
+        if marker is not None:
+            try:
+                marker.unlink()
+            except OSError:
+                pass
         steps = comp.build_steps
         last: JobResult | None = None
         for i, step in enumerate(steps):
@@ -250,13 +284,24 @@ class Lifecycle:
                                  returncode=1, log_path="", tail=[str(exc)])
             name = base + (f"-{i}" if len(steps) > 1 else "")
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
-                           env=(env or None), logs_dir=self.logs_dir(), timeout=timeout,
+                           env=(env or None), logs_dir=self.logs_dir(), timeout=eff_timeout,
                            redactor=redactor, should_cancel=should_cancel)
             if not last.ok:
                 return last
         if last is None:        # nothing to build
             return JobResult(name=base, state=JobState.SUCCEEDED,
                              returncode=0, log_path="", tail=["(no build steps)"])
+        # ALL steps succeeded -> stamp the completion marker (fail the build if it can't be written,
+        # so is_built never reads "built" off an unstamped tree).
+        if marker is not None:
+            try:
+                runtime_fs.atomic_write(self.paths, marker, "lhpc build complete\n", 0o644)
+            except (OSError, PathContainmentError) as exc:
+                return JobResult(name=base, state=JobState.FAILED, returncode=1,
+                                 log_path=last.log_path,
+                                 tail=(list(last.tail) if last.tail else [])
+                                 + [f"build succeeded but the completion marker could not be "
+                                    f"written ({exc}) — treating as NOT built"])
         return last
 
 
@@ -1010,14 +1055,19 @@ class Lifecycle:
             return None, None
         return log.name, pid
 
-    def host_test(self, comp: Component, timeout: float = 300.0,
+    TEST_TIMEOUT_S = 600.0      # default host-test timeout; hardware-realistic for a modest Pi. A
+                                # known-slow suite overrides it with a manifest `test_timeout`.
+
+    def host_test(self, comp: Component, timeout: float | None = None,
                   log_base: str | None = None, should_cancel=None) -> JobResult | None:
         # `log_base` (auto-install driver) overrides the default `test-<comp.id>` job/log name
         # with a RUN-SPECIFIC one, so a run's test log never collides with a prior run's.
         # `should_cancel` (auto-install Abort) is polled while the test runs — like build().
+        # Timeout precedence mirrors build(): explicit arg > manifest `test_timeout` > TEST_TIMEOUT_S.
         base = log_base or f"test-{comp.id}"
         if not comp.test_argv:
             return None
+        eff_timeout = timeout if timeout is not None else (comp.test_timeout or self.TEST_TIMEOUT_S)
         if self.is_linked_source(comp):       # never run tests INTO an external linked tree
             return JobResult(name=base, state=JobState.FAILED, returncode=1,
                              log_path="", tail=["BLOCKED: source is a linked external "
@@ -1030,7 +1080,7 @@ class Lifecycle:
             return JobResult(name=base, state=JobState.FAILED,
                              returncode=1, log_path="", tail=[str(exc)])
         return run_job(self.system.runner, name=base, argv=argv, paths=self.paths,
-                       cwd=src, logs_dir=self.logs_dir(), timeout=timeout,
+                       cwd=src, logs_dir=self.logs_dir(), timeout=eff_timeout,
                        should_cancel=should_cancel)
 
     # -- daemon readiness + bounded TX test --------------------------------

@@ -251,11 +251,19 @@ def test_clean_requires_purge_and_yes(monkeypatch, capsys):
     assert calls["apply"] is True and calls["purge"] is True
 
 
-def test_auto_install_verb_tx_requires_tests(capsys):
-    from lhpc.adapters.cli.main import main
-    rc = main(["auto-install", "--tx", "--no-tests", "--yes"])
-    assert rc == 2
-    assert "requires host tests" in capsys.readouterr().out
+def test_auto_install_verb_tx_implies_tests(monkeypatch):
+    # Host tests are OFF by default; --tx implies --tests (a TX test runs the host test first), so
+    # `--tx` alone plumbs tests=True (no separate flag, and never the old tx-without-tests refusal).
+    from lhpc.adapters.cli import main as cli_main
+    from lhpc.core.services import ActionResult, ControllerService
+    seen = []
+    def fake(self, source="pinned", tests=True, tx=False, run_id="", apply=False,
+             emit=print, selection=None, load_plan=False):
+        seen.append((tests, tx)); return ActionResult(True, "plan", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "auto_install", fake)
+    cli_main.main(["auto-install", "--tx", "--yes"])
+    assert seen and all(t for t, _ in seen)            # --tx forced host tests on
+    assert seen[-1][1] is True                          # …and tx on
 
 
 def test_auto_install_verb_plumbs_flags(monkeypatch, tmp_path, capsys):
@@ -273,9 +281,9 @@ def test_auto_install_verb_plumbs_flags(monkeypatch, tmp_path, capsys):
     assert seen[0][3:] == ("a" * 32, True, True)                 # run_id, apply, load_plan
     # DIRECT CLI (no --run-id): dry-run then apply, global flags plumbed, no plan load
     seen.clear()
-    rc = cli_main.main(["auto-install", "--yes", "--source", "stable", "--no-tests"])
+    rc = cli_main.main(["auto-install", "--yes", "--source", "stable"])   # tests OFF by default now
     assert rc == 0
-    assert seen[0] == ("stable", False, False, "", False, False)  # dry-run first
+    assert seen[0] == ("stable", False, False, "", False, False)  # dry-run first (tests off)
     assert seen[1] == ("stable", False, False, "", True, False)   # then apply
 
 

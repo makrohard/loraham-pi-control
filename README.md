@@ -62,6 +62,9 @@ sudo apt install -y \
   socat \
   cmake liblgpio-dev build-essential
 
+# --- meshcom (bridge OpenSSL build + QEMU user-mode networking) ---
+sudo apt install -y libssl-dev libslirp0
+
 # --- meshtasticd (Meshtastic OBS repo — not in Debian repos; use Debian_12 for Bookworm) ---
 echo 'deb http://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/network:Meshtastic:beta.list
 curl -fsSL https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg > /dev/null

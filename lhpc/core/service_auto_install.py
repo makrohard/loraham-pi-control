@@ -806,7 +806,7 @@ class AutoInstallOpsMixin:
             return ActionResult(False, f"Unknown source choice {source!r}.")
         if tx and not tests:
             return ActionResult(False, "Refusing: the TX test requires host tests to be "
-                                "enabled (--tx without --no-tests).")
+                                "enabled (the CLI's --tx implies --tests).")
         if run_id and not ai_mod.RUN_ID_RE.match(run_id):
             return ActionResult(False, "Refusing: invalid --run-id (32 lowercase hex).")
         scope = self._auto_install_scope()

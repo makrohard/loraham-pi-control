@@ -117,6 +117,18 @@ def run_job(
                 return JobResult(name=name, state=JobState.FAILED, returncode=126,
                                  log_path=str(log_path),
                                  tail=[f"job output could not be persisted: {exc}"])
+        # A timed-out job was KILLED mid-run, so its log otherwise just ENDS with no error line —
+        # indistinguishable from a clean finish. Write an explicit terminal marker to the log AND
+        # fold it into the tail, so the operator sees WHY it stopped (and never trusts a partial build).
+        if getattr(result, "timed_out", False):
+            marker = f"[TIMED OUT after {timeout:.0f}s — job was KILLED; result is INCOMPLETE]"
+            try:
+                log_fh.write("\n" + marker + "\n")
+                log_fh.flush()
+                os.fsync(log_fh.fileno())
+            except OSError:
+                pass
+            output = (output + "\n" + marker) if output else marker
     finally:
         try:
             log_fh.close()

@@ -40,14 +40,19 @@ def test_missing_requirements_flags_group_only_when_not_in_all_groups(tmp_path):
 
 def test_system_deps_shows_group_capability_with_grant_command(tmp_path):
     svc = _svc(tmp_path, set())
-    grp = [d for d in svc.system_deps("meshtastic") if d["runtime"]]
+    # meshtastic has TWO runtime capabilities (the spi/gpio group grant AND the must-not-run system
+    # meshtasticd.service); select the GROUP one by its grant command.
+    grp = [d for d in svc.system_deps("meshtastic")
+           if d["runtime"] and d["install"] == "sudo usermod -aG spi,gpio $USER"]
     assert len(grp) == 1
     d = grp[0]
     assert d["satisfied"] is False and d["install"] == "sudo usermod -aG spi,gpio $USER"
     assert "spi + gpio group membership" in d["what"]
     # satisfied once in both groups
     svc2 = _svc(tmp_path, {"spi", "gpio"})
-    assert [d for d in svc2.system_deps("meshtastic") if d["runtime"]][0]["satisfied"] is True
+    grp2 = [d for d in svc2.system_deps("meshtastic")
+            if d["runtime"] and d["install"] == "sudo usermod -aG spi,gpio $USER"]
+    assert grp2[0]["satisfied"] is True
 
 
 def test_group_capability_is_excluded_from_the_install_gate(tmp_path):

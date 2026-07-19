@@ -333,10 +333,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ia.add_argument("--yes", action="store_true", help="Apply without confirmation")
     p_ia.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
                       help="Version to clone (default: dev — latest development)")
-    p_ia.add_argument("--no-tests", action="store_true", help="Skip host tests")
+    p_ia.add_argument("--tests", action="store_true",
+                      help="Run host tests (OFF by default, matching the web Auto-install page)")
     p_ia.add_argument("--tx", action="store_true",
                       help="After the run, start the daemon TEMPORARILY and transmit ONE "
-                           "bounded test frame per ready band (REAL RF — dummy loads!)")
+                           "bounded test frame per ready band (REAL RF — dummy loads!); implies --tests")
     p_ia.add_argument("--run-id", default="", help=argparse.SUPPRESS)
 
     p_hmac = sub.add_parser("hmac",
@@ -637,24 +638,22 @@ def main(argv: list[str] | None = None) -> int:
         # file (claim-first); NEVER a fall-back to the global flags. This branch runs unattended.
         if args.run_id:
             return _render(_run_apply(run_id=args.run_id, load_plan=True))
-        if args.tx and args.no_tests:
-            print("Refusing: --tx requires host tests (drop --no-tests).")
-            return 2
+        tests = args.tests or args.tx          # tests OFF by default; --tx implies host tests
         # DIRECT CLI (no plan file): the global flags build a uniform per-stack selection inside
         # the driver (tx only on the TX-capable stack).
-        plan = svc.auto_install(source=args.source, tests=not args.no_tests, tx=args.tx,
+        plan = svc.auto_install(source=args.source, tests=tests, tx=args.tx,
                                apply=False)
         rc = _render(plan)
         if not plan.ok or plan.data.get("changes", 0) == 0:
             return rc
         if not args.yes and not _confirm(
                 "\nRun the full install/build"
-                + ("" if args.no_tests else "/test")
+                + ("/test" if tests else "")
                 + (" + TX test (REAL RF — dummy loads!)" if args.tx else "")
                 + " sequence for ALL stacks? [y/N] "):
             print("Aborted.")
             return 0
-        return _render(_run_apply(source=args.source, tests=not args.no_tests, tx=args.tx))
+        return _render(_run_apply(source=args.source, tests=tests, tx=args.tx))
     if args.command == "hmac":
         sid = args.stack or svc.hmac_default_stack()
         if not sid or not svc.hmac_applies(sid):

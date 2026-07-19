@@ -173,9 +173,10 @@ def test_radiolib_built_state_is_honest(tmp_path):
 
 def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     # REGRESSION: meshcore-pi compiles an in-tree venv via build_steps; its exec_name is "python"
-    # (a process-match NAME). _build_artifact must key on `bin` (.venv/bin/python), NOT exec_name —
-    # else is_built checked a non-existent <src>/python and the stack read "not built" forever, so
-    # `lhpc stack start meshcore` was blocked even right after a successful build.
+    # (a process-match NAME), so is_built must NOT key on a bogus <src>/python. It now gates on the
+    # `build_marker` (written ONLY after the LAST build step succeeds), NOT the venv interpreter —
+    # because the interpreter exists after step 1 (python -m venv), long before the pip installs
+    # finish, so a build killed mid-pip would otherwise read "built" and die at start.
     svc = _svc(tmp_path)
     mc = svc.stack("meshcore").component("meshcore-pi")
     src = tmp_path / "src" / "meshcore-pi"
@@ -183,11 +184,14 @@ def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     assert not svc.is_built(mc)                                  # honest: no venv yet
     assert "meshcore-pi" in svc.unbuilt_components("meshcore")
     (src / "python").write_bytes(b"")                           # a bogus <src>/python must NOT count
-    assert not svc.is_built(mc)                                  # exec_name is ignored (the fix)
+    assert not svc.is_built(mc)                                  # exec_name is ignored
     venv_py = src / ".venv" / "bin" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_bytes(b"")
-    assert svc.is_built(mc)                                      # venv interpreter present -> built
+    assert not svc.is_built(mc)                                  # interpreter alone is NOT enough (marker gates)
+    assert "meshcore-pi" in svc.unbuilt_components("meshcore")
+    (src / mc.build_marker).write_text("ok\n")                   # completion marker -> fully built
+    assert svc.is_built(mc)
     assert "meshcore-pi" not in svc.unbuilt_components("meshcore")
 
 

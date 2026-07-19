@@ -587,7 +587,7 @@ class ParamsConfigMixin:
         for c in (s.components if s else ()):
             missing = life.missing_requirements(c)
             for req in c.requires:
-                key = req.install or req.cmd or req.check_file
+                key = req.install or req.cmd or req.check_file or req.absent_file
                 if not key:
                     continue
                 if key in by_key:
@@ -600,13 +600,15 @@ class ParamsConfigMixin:
                 # (configured but not yet effective) suppresses the usermod command — re-granting is not
                 # the fix; "not a member" keeps it. (Still runtime=True, so never in the install gate.)
                 pending = (not sat) and bool(req.groups) and life.group_grant_pending(req)
-                what = req.note or req.cmd or req.check_file
+                what = req.note or req.cmd or req.check_file or req.absent_file
                 if req.groups and not sat:
                     what = f"{what} — {GROUP_RESTART_HINT if pending else GROUP_MISSING_HINT}"
                 entry = {"what": what,
                          "install": "" if pending else req.install,
                          "satisfied": sat,
-                         "runtime": bool(req.groups),   # run-time capability (not install-gated)
+                         # run-time capabilities (group membership AND a must-not-run service) gate start,
+                         # not install -> excluded from the install gate, still surfaced here.
+                         "runtime": bool(req.groups or req.absent_file),
                          "mandatory": not c.optional}
                 by_key[key] = entry
                 out.append(entry)

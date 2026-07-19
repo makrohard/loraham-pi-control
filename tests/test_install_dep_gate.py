@@ -194,9 +194,59 @@ def test_radiolib_build_deps_warn_on_a_fresh_image(tmp_path):
     assert all(not d["mandatory"] for d in gate["warn"])       # build deps of an optional comp -> warn
 
 
-def test_meshcom_declares_the_qemu_libslirp_dependency(tmp_path):
-    # meshcom's Espressif qemu-system-xtensa aborts with "libslirp.so.0 missing" without libslirp0
-    # (run.sh names the exact fix). Declared so the dep pre-check surfaces it instead of a fresh image
-    # failing at runtime; on the non-optional QEMU node it blocks install (like meshtasticd/spidev).
-    gate = _svc(tmp_path).install_dep_gate("meshcom")
-    assert any(d["install"] == "sudo apt install -y libslirp0" for d in gate["block"]), gate["block"]
+def test_meshcom_declares_its_build_and_qemu_system_deps(tmp_path):
+    # Three system deps a fresh Trixie lite lacks, all undeclared before: the bridge's OpenSSL build
+    # header (find_package(OpenSSL) -> libssl-dev), the qemu-xtensa networking lib (libslirp0), and the
+    # Espressif qemu binary itself (prebuilt tarball under ~/.espressif). Declared so the pre-check
+    # surfaces all three with copyable commands instead of a fresh image failing at build/run.
+    installs = [d["install"] for d in _svc(tmp_path).install_dep_gate("meshcom")["block"]]
+    assert "sudo apt install -y libssl-dev" in installs, installs
+    assert "sudo apt install -y libslirp0" in installs, installs
+    assert any("espressif/qemu/releases" in i for i in installs), installs   # the qemu tarball copybox
+    # A ~-relative check_file is expanduser'd: with the qemu binary at the Espressif path, satisfied.
+    import os
+    qpath = os.path.expanduser(
+        "~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa")
+    svc2 = ControllerService(system=FakeSystem(paths={qpath}).system, paths=Paths(runtime_root=tmp_path))
+    got = [d["install"] for d in svc2.install_dep_gate("meshcom")["block"]]
+    assert not any("espressif/qemu/releases" in i for i in got), got   # present -> no longer blocking
+
+
+def test_qemu_requirement_satisfied_by_path_or_file(tmp_path, monkeypatch):
+    # run.sh resolves --qemu > PATH > ~/.espressif, so the qemu require carries BOTH `cmd` and
+    # `check_file` and is satisfied if EITHER resolves. This makes a PATH install a reliable fallback
+    # when the ~/.espressif file check misbehaves (e.g. a service running with a different HOME).
+    real = shutil.which
+    def which_qemu(present):
+        monkeypatch.setattr(shutil, "which",
+                            lambda n, *a, **k: "/usr/local/bin/qemu-system-xtensa"
+                            if (n == "qemu-system-xtensa" and present) else
+                            (None if n == "qemu-system-xtensa" else real(n, *a, **k)))
+
+    def qemu_blocking(svc):
+        return any("espressif/qemu/releases" in (d["install"] or "")
+                   for d in svc.install_dep_gate("meshcom")["block"])
+
+    # Neither on PATH nor at the file -> blocks.
+    which_qemu(False)
+    assert qemu_blocking(_svc(tmp_path))
+    # On PATH (file absent) -> satisfied, no longer blocking.
+    which_qemu(True)
+    assert not qemu_blocking(_svc(tmp_path))
+
+
+def test_meshcom_declares_platformio_pio(tmp_path, monkeypatch):
+    # scripts/prepare-openeth.sh aborts without the PlatformIO CLI (`pio`); declared so the pre-check
+    # surfaces the pipx install command. `pio` is a PATH `cmd`, so drive it via shutil.which.
+    real = shutil.which
+    monkeypatch.setattr(shutil, "which",
+                        lambda n, *a, **k: None if n == "pio" else real(n, *a, **k))
+    block = _svc(tmp_path).install_dep_gate("meshcom")["block"]
+    pio = next((d for d in block if (d["what"] or "").strip() == "pio"
+                or "platformio" in (d["install"] or "").lower()), None)
+    assert pio and "pipx install platformio" in pio["install"]
+    # Present on PATH -> satisfied, no longer blocking.
+    monkeypatch.setattr(shutil, "which",
+                        lambda n, *a, **k: "/home/op/.local/bin/pio" if n == "pio" else real(n, *a, **k))
+    assert not any("platformio" in (d["install"] or "").lower()
+                   for d in _svc(tmp_path).install_dep_gate("meshcom")["block"])

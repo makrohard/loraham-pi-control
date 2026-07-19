@@ -55,20 +55,22 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
             # the grant command.
             pending = (not sat) and bool(req.groups) and lifecycle.group_grant_pending(req)
             if sat:
-                detail = "present"
+                detail = "not active" if req.absent_file else "present"
             elif req.groups:                       # state-specific, never both at once
                 detail = GROUP_RESTART_HINT if pending else GROUP_MISSING_HINT
+            elif req.absent_file:                  # inverse: the conflicting service is PRESENT
+                detail = req.note or "a conflicting service is enabled/active — disable it"
             else:
                 detail = f"missing: {req.check_file or req.cmd}"
             out.append(DepItem(
                 kind="system", component=c.id,
-                label=req.note or req.cmd or req.check_file,
+                label=req.note or req.cmd or req.check_file or req.absent_file,
                 satisfied=sat,
                 detail=detail,
                 # restart-pending shows the copyable restart command (re-running usermod would not help);
                 # a genuinely-missing grant shows the usermod grant command.
                 install_cmd=GROUP_RESTART_CMD if pending else (req.install or ""),
-                runtime=bool(req.groups), restart_pending=pending))
+                runtime=bool(req.groups or req.absent_file), restart_pending=pending))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source
