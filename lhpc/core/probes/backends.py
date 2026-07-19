@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import socket
 import stat
+import struct
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -570,6 +571,34 @@ class RealFileSystem:
         return self._names_for_gids(gids)
 
 
+def _authenticate_tmp_peer(sock: "socket.socket", path: str) -> None:
+    """Authenticate the peer of a COMPATIBILITY `/tmp` socket via SO_PEERCRED before trusting a reply
+    or sending any command/status/config/RF payload. The pinned daemon documents its `/tmp` socket
+    names as world-writable-directory paths vulnerable to local squatting: a foreign local user could
+    bind the name first and impersonate the daemon. So, immediately after connect() and before any
+    send, require the /tmp peer's UID to equal the controller's effective UID.
+
+    Fail CLOSED: a foreign UID, incomplete credentials, or a platform without SO_PEERCRED all raise
+    OSError (a squatter may still DoS by owning the name, but can never impersonate the daemon or
+    receive our payloads). Protected `/run/loraham` sockets legitimately run as a dedicated daemon UID
+    and keep their directory/group security model — they are EXEMPT (only `/tmp` is checked)."""
+    real = os.path.realpath(path)
+    if real != "/tmp" and not real.startswith("/tmp/"):
+        return                                       # /run/loraham etc.: dir/group secured, not /tmp
+    peercred = getattr(socket, "SO_PEERCRED", None)
+    if peercred is None:                             # non-Linux: a /tmp peer cannot be authenticated
+        raise OSError(f"cannot authenticate /tmp socket peer on this platform: {path}")
+    try:
+        raw = sock.getsockopt(socket.SOL_SOCKET, peercred, struct.calcsize("iII"))
+        pid, uid, gid = struct.unpack("iII", raw)    # struct ucred { pid_t; uid_t; gid_t }
+    except (OSError, struct.error) as exc:
+        raise OSError(f"/tmp socket peer credentials unavailable ({path}): {exc}") from exc
+    euid = os.geteuid()
+    if uid != euid:
+        raise OSError(f"/tmp socket peer uid {uid} != controller euid {euid} ({path}) — refusing "
+                      "(possible local socket squatting)")
+
+
 class RealUnixClient:
     def request(
         self, path: str, payload: bytes, timeout: float, max_bytes: int
@@ -582,6 +611,7 @@ class RealUnixClient:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             sock.connect(path)
+            _authenticate_tmp_peer(sock, path)      # /tmp squat defence — BEFORE any send/recv
             sock.sendall(payload)
             chunks: list[bytes] = []
             total = 0
@@ -601,6 +631,7 @@ class RealUnixClient:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             sock.connect(path)
+            _authenticate_tmp_peer(sock, path)      # /tmp squat defence — BEFORE the fire-and-forget send
             sock.sendall(payload)
 
 

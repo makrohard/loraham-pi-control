@@ -14,6 +14,7 @@ TX safety is enforced by the lifecycle layer before a TX-capable job is built.
 from __future__ import annotations
 
 import os
+import stat
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -174,15 +175,19 @@ def tail_log(log_path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> l
     manifest — LHPC reads no external logs); runtime-owned logs
     tail through `runtime_fs.tail` (containment-checked)."""
     try:
-        fd = os.open(str(log_path), os.O_RDONLY | os.O_NOFOLLOW)
+        # O_NONBLOCK so a FIFO leaf can't block the open; fstat then gates it to a REGULAR file.
+        fd = os.open(str(log_path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return []
     try:
         with os.fdopen(fd, "rb") as fh:
-            size = os.fstat(fh.fileno()).st_size
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return []
+            size = st.st_size
             if size > max_bytes:
                 fh.seek(size - max_bytes)
-            data = fh.read()
+            data = fh.read(max_bytes)          # bounded even if the file grew after fstat
     except OSError:
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]

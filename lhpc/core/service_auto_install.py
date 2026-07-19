@@ -15,7 +15,9 @@ from . import validators
 from .abortflag import AbortFlag
 from .model import RunState
 from .paths import PathContainmentError
-from .service_base import ActionResult, SourceTxnBlocked
+import contextlib
+
+from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 
 # ---- cooperative Abort (shared AbortFlag): the detached driver installs SIGTERM/SIGINT handlers
 # that ONLY set a flag via `_auto_install_abort.request` (signal-safe, no I/O); the driver polls it
@@ -547,7 +549,10 @@ class AutoInstallOpsMixin:
         # (no-clobber, run_id-bound) -> spawn -> job claim, all under the dedicated
         # auto-install-start lock. A second concurrent POST/CLI start is refused typed BEFORE spawn.
         try:
-            with reslock.operation_lock(self._paths, "auto-install-start", "auto-install", ""):
+            # LOCK ORDER #1: task admission BEFORE the auto-install-start gate, plan/reservation and
+            # spawn — a self-update/uninstall in progress refuses the spawn with ZERO reservation.
+            with self._admission_guard("auto-install-spawn"), \
+                 reslock.operation_lock(self._paths, "auto-install-start", "auto-install", ""):
                 gate = self._auto_install_gate()
                 if gate:
                     return None, gate
@@ -661,6 +666,8 @@ class AutoInstallOpsMixin:
                         pid, child_ident,
                         f"auto-install start failed ({exc}) and child cessation is unproven "
                         f"(pid {pid})")
+        except AdmissionRefused as _adm:
+            return None, _adm.reason
         except reslock.ResourceBusy:
             return None, "a auto-install start is already in progress"
 
@@ -849,8 +856,22 @@ class AutoInstallOpsMixin:
             # BEFORE any reservation/lease/marker/source/log/job mutation.
             return self._auto_install_bootstrap_refusal()
         run_id = run_id or uuid.uuid4().hex
+        # Lock order #1: hold task admission across the claim AND the applied driver run (released in
+        # the finally below), so a self-update/uninstall cannot begin between the claim and the run.
+        from . import reslock
+        _adm_stack = contextlib.ExitStack()
+        try:
+            self._admit(_adm_stack, "auto-install", "")
+        except AdmissionRefused as _adm:
+            _adm_stack.close()
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy:
+            _adm_stack.close()
+            return ActionResult(False, "A task is starting right now (admission contended) — retry the "
+                                "auto-install.", data={"contended": True})
         claim_err = self._auto_install_claim(run_id)
         if claim_err:
+            _adm_stack.close()
             return ActionResult(False, claim_err if claim_err.startswith("Refusing")
                                 else f"Refusing to start the auto-install run: {claim_err}")
         self._lock_state.auto_install_cleanup_failed = ""
@@ -885,6 +906,7 @@ class AutoInstallOpsMixin:
                     else:
                         res = self._auto_install_claimed(run_scope, sel, run_id, emit)
         finally:
+            _adm_stack.close()          # release task admission (held across claim + driver)
             # Clear OUR plan (run_id-matched) BEFORE releasing the reservation, so a stale driver can
             # never delete a subsequent run's plan.
             ai_mod.clear_plan(self._paths, run_id)

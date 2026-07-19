@@ -1509,12 +1509,14 @@ def test_self_update_trigger_blocked_by_active_job(tmp_path, monkeypatch):
     monkeypatch.setenv("INVOCATION_ID", "x")           # simulate the managed web unit
     monkeypatch.setattr(ControllerService, "updater_integration",
                         lambda self: {"status": "ok", "request": "absent"})
-    monkeypatch.setattr(ControllerService, "active_jobs", lambda self: [{"op": "build", "target": "x"}])
+    # The centralized blocker scan calls active_jobs(include_unsafe=True) -> accept the kwarg.
+    monkeypatch.setattr(ControllerService, "active_jobs",
+                        lambda self, *a, **k: [{"op": "build", "target": "x"}])
     monkeypatch.setattr(ControllerService, "self_update_local_dirty", lambda self: False)
     c = _real_app(tmp_path)
     tok = _csrf(c, "/stacks")
     body = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
-    assert "still running" in body                     # blocked; no request written, no waiting page
+    assert "job is running" in body or "blocked" in body.lower()   # blocked; no request, no waiting page
     assert "reconnects" not in body
 
 

@@ -52,3 +52,14 @@ packages = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# An unhandled exception in a test's thread is a HARD failure, never a swallowed warning (a leaked/racy
+# test thread must be fixed, not tolerated). Complements the session-wide propagator in tests/conftest.py.
+filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules place a few imports AFTER module-level setup ON PURPOSE — load-order that avoids an
+# import cycle (services.py aggregates the service_* mixins; status.py imports probes after its
+# NOT_APPLICABLE sentinel). This is deliberate architecture, not style debt: moving them to the top
+# risks a circular import at load time. Everything else in lhpc/ stays clean under default rules.
+"lhpc/core/services.py" = ["E402"]
+"lhpc/core/status.py" = ["E402"]

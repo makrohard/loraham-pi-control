@@ -46,7 +46,7 @@ _GPIO_DEV = "/dev/gpiochip0"
 _UNSET = object()                # sentinel: "not yet resolved" (distinct from None)
 
 
-from .service_base import (ActionResult, ConfigWrite, SourceTxnBlocked, _StopRun,
+from .service_base import (ActionResult, AdmissionRefused, ConfigWrite, SourceTxnBlocked, _StopRun,
                            _canon_git_url, _proc_ceased, _proc_start_time)
 
 # Public import surface (the adapters + tests import these names FROM lhpc.core.services). Listing
@@ -113,6 +113,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # Per-thread re-entrancy for the SHARED configuration-stability guard held across an applied
         # start/restart (see `_config_stable`).
         self._cfg_stable_state = threading.local()
+        # The snapshot memo is REQUEST/THREAD-local: one shared ControllerService is hit by concurrent
+        # Waitress worker threads, so a process-wide cache would let one thread serve another thread's
+        # pre-mutation snapshot (or have its invalidation clobbered). Each thread memoizes/invalidates
+        # its own snapshot; `fresh=True` still bypasses.
+        self._snapshot_state = threading.local()
 
     @contextmanager
     def _config_stable(self, exclusive: bool = False):
@@ -248,6 +253,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         bumped: list = []
         try:
             with contextlib.ExitStack() as src_stack:
+                # Lock order #1: task admission, held across the whole source mutation (build/test/
+                # install/update/uninstall/clean). Reentrant, so a source op nested inside an admitted
+                # auto-install reuses the held lock.
+                self._admit(src_stack, op, "")
                 if missing:
                     # Index held across recovery + the source-lock handoff, then released.
                     with reslock.operation_lock(self._paths, inst._index_key(), op, ""):
@@ -469,7 +478,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         The confirmed-working map comes from the OPERATOR-CONFIRMED known-working compositions (file
         reads only): a component is confirmed-working when its clean source HEAD appears in a stored
         composition of its stack."""
-        cached = getattr(self, "_snapshot_cache", None)
+        cached = getattr(self._snapshot_state, "cache", None)
         if cached is not None and not fresh:
             return cached
         from . import known_working
@@ -481,7 +490,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     if entry.get("commit"):
                         confirmed.setdefault(cid, set()).add(entry["commit"])
         snap = StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
-        self._snapshot_cache = snap
+        self._snapshot_state.cache = snap
         return snap
 
     def invalidate_snapshot(self) -> None:
@@ -489,8 +498,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         per HTTP request (web before_request) and on entry+exit of every PUBLIC mutating service entry
         (`@invalidates_snapshot`, snapshot_memo.py), so a snapshot is never served after state could
         change. Under-lock authoritative rechecks additionally use `build_snapshot(fresh=True)` to bypass
-        a snapshot this same op cached before it acquired its lock."""
-        self._snapshot_cache = None
+        a snapshot this same op cached before it acquired its lock. Thread-local (see `__init__`)."""
+        self._snapshot_state.cache = None
 
     # ---- read-only operations --------------------------------------------
 
@@ -795,9 +804,23 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         # as auto-install does under its auto-install boundary); a False `on_admit` releases the guard and installs nothing.
         _guard_paths = sorted({c.source.path for _, c in install_items if c.source})
         _locked_adopt = (auto_install_ctx is not None) or (on_admit is not None)
+        # Lock order #1: hold task admission across the whole adoption. The web-job (`on_admit`) path's
+        # source guard already acquires it reentrantly; the direct path acquires it here and releases it
+        # when the `with` below exits.
+        from . import reslock
+        _adm_stack = contextlib.ExitStack()
+        try:
+            self._admit(_adm_stack, "install", stack_id or "")
+        except AdmissionRefused as _a:
+            _adm_stack.close()
+            return ActionResult(False, _a.reason, data={"admission_blocked": _a.tag})
+        except reslock.ResourceBusy:
+            _adm_stack.close()
+            return ActionResult(False, "A task is starting right now (admission contended) — retry the "
+                                "install.", data={"contended": True})
         _guard = (self._source_operation_guard(_guard_paths, op="install")
                   if on_admit is not None else contextlib.nullcontext())
-        with _guard:
+        with _adm_stack, _guard:
             if on_admit is not None and not on_admit():
                 return ActionResult(False, "Install superseded before admission — nothing was changed.")
             for path, comp, selector, resolved in groups:
@@ -838,34 +861,34 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     if a.target == str(dest):
                         a.status, a.detail = result.status, result.detail
                         a.provenance = result.provenance
-        # Password-auth by DEFAULT: after a successful source adoption and BEFORE the caller builds the
-        # firmware, ensure the meshcom HMAC secret + param exist (idempotent — keeps an existing secret),
-        # so the firmware bakes the shared secret in the same install. Covers per-stack + CLI install;
-        # auto-install adopts+builds directly (its own hook, before its build). Skip on a failed adopt —
-        # nothing gets built, so don't flip visible HMAC state on a broken install.
-        hmac_err = ""
-        if not any(a.status == "failed" for a in plan.actions):
-            for sid in {st.id for st, _ in install_items}:
-                if self.hmac_applies(sid):
-                    hr = self.hmac_set_secret(sid, "enable")
-                    if not hr.ok:
-                        # FAIL CLOSED: a failed enable must NOT report install success — the firmware would
-                        # otherwise be built (by the caller) with an empty password while the operator
-                        # believes auth is on.
-                        hmac_err = f"{sid}: {self._hmac_redact(hr.summary)}"
-                        break
-        retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
-        res = self._plan_result(plan, applied=True, next_apply=None)
-        if hmac_err:
-            return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
-                                f"({hmac_err}); fix and re-run before starting the meshcom link.",
-                                details=list(res.details) + extra_out,
-                                next_commands=res.next_commands)
-        if not retire_ok:
-            return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
-                                details=list(res.details) + extra_out,
-                                next_commands=res.next_commands)
-        return res
+            # Password-auth by DEFAULT: after a successful source adoption and BEFORE the caller builds the
+            # firmware, ensure the meshcom HMAC secret + param exist (idempotent — keeps an existing secret),
+            # so the firmware bakes the shared secret in the same install. Covers per-stack + CLI install;
+            # auto-install adopts+builds directly (its own hook, before its build). Skip on a failed adopt —
+            # nothing gets built, so don't flip visible HMAC state on a broken install.
+            hmac_err = ""
+            if not any(a.status == "failed" for a in plan.actions):
+                for sid in {st.id for st, _ in install_items}:
+                    if self.hmac_applies(sid):
+                        hr = self.hmac_set_secret(sid, "enable")
+                        if not hr.ok:
+                            # FAIL CLOSED: a failed enable must NOT report install success — the firmware would
+                            # otherwise be built (by the caller) with an empty password while the operator
+                            # believes auth is on.
+                            hmac_err = f"{sid}: {self._hmac_redact(hr.summary)}"
+                            break
+            retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
+            res = self._plan_result(plan, applied=True, next_apply=None)
+            if hmac_err:
+                return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
+                                    f"({hmac_err}); fix and re-run before starting the meshcom link.",
+                                    details=list(res.details) + extra_out,
+                                    next_commands=res.next_commands)
+            if not retire_ok:
+                return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
+                                    details=list(res.details) + extra_out,
+                                    next_commands=res.next_commands)
+            return res
 
     def _plan_result(self, plan: Plan, *, applied: bool, next_apply: str | None) -> ActionResult:
         details = [
@@ -1157,6 +1180,69 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             counts = st.counts = {}
         return counts
 
+    # LOCK ORDER (fixed, to avoid deadlock): (1) task admission -> (2) controller/config/lifecycle/
+    # source resource locks -> (3) the self-update lock. The admission key is always acquired FIRST.
+    ADMISSION_KEY = "controller-task-admission"
+
+    def _admit(self, stack, op: str, target: str = "") -> None:
+        """Acquire the ONE interprocess task-admission flock (`controller-task-admission`) into `stack`,
+        RE-ENTRANT per thread (shared `_held_counts`), and — on the FRESH (outermost) acquire — run the
+        STRICT blocker check UNDER the held lock, raising `AdmissionRefused` if a controller self-update
+        or uninstall is pending/in progress. A NESTED acquire (e.g. start nested inside an admitted
+        restart, or build inside an admitted auto-install) reuses the held lock and never re-checks, so
+        it can never self-deadlock or self-refuse. A second `ControllerService` on the same runtime root
+        (any process) contends on the same flock. Skipped entirely when the runtime root is absent (no
+        lockfile created, no check) — preserving zero-filesystem-mutation behavior."""
+        if not self._paths.runtime_root_exists:
+            return
+        counts = self._held_counts()
+        if counts.get(self.ADMISSION_KEY, 0) > 0:          # reentrant: already admitted in THIS thread
+            counts[self.ADMISSION_KEY] += 1
+            stack.callback(self._admit_release)
+            return
+        self._acquire_key(stack, self.ADMISSION_KEY, op, target)   # interprocess flock, released on close
+        counts[self.ADMISSION_KEY] = 1
+        stack.callback(self._admit_release)
+        blocked = self._task_admission_blocked()           # STRICT, under the lock
+        if blocked is not None:
+            raise AdmissionRefused(blocked[0], blocked[1])
+
+    def _admit_release(self) -> None:
+        counts = self._held_counts()
+        n = counts.get(self.ADMISSION_KEY, 0)
+        if n <= 1:
+            counts.pop(self.ADMISSION_KEY, None)
+        else:
+            counts[self.ADMISSION_KEY] = n - 1
+
+    def _admit_raw(self, stack, op: str, target: str = "") -> None:
+        """Acquire the task-admission flock into `stack` WITHOUT the strict self-update/uninstall
+        self-check — for the operations that OWN the update/uninstall and would otherwise refuse
+        themselves (the managed self-update helper, controller-uninstall prep). It STILL bumps
+        `_held_counts`, so a nested admitted call (e.g. the helper's inner `self_update_apply`) reuses
+        the SAME lock reentrantly instead of self-contending. Raises `reslock.ResourceBusy` if ANOTHER
+        holder has it. Skipped when the runtime root is absent (no lockfile, no mutation)."""
+        if not self._paths.runtime_root_exists:
+            return
+        counts = self._held_counts()
+        if counts.get(self.ADMISSION_KEY, 0) > 0:          # already held in THIS thread -> reentrant
+            counts[self.ADMISSION_KEY] += 1
+            stack.callback(self._admit_release)
+            return
+        self._acquire_key(stack, self.ADMISSION_KEY, op, target)   # interprocess flock
+        counts[self.ADMISSION_KEY] = 1
+        stack.callback(self._admit_release)
+
+    @contextmanager
+    def _admission_guard(self, op: str, target: str = ""):
+        """Standalone held task-admission for ops that do NOT go through the lifecycle/source guards
+        (detached web-job spawn, auto-install, HMAC, self-update, controller-uninstall prep). Holds the
+        admission flock across the whole `with` body; raises `AdmissionRefused` on the fresh acquire if
+        blocked. Reentrant, so nested admitted calls are safe."""
+        with contextlib.ExitStack() as stack:
+            self._admit(stack, op, target)
+            yield
+
     # How long to WAIT for a resource claim held by our OWN controller process before failing.
     _SELF_LOCK_WAIT_S = 5.0
 
@@ -1199,6 +1285,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         do_handoff = op in ("start", "restart") and fresh_source
         try:
             with contextlib.ExitStack() as stack:
+                # Lock order #1: task admission, held across the whole lifecycle op. start/restart are
+                # task-STARTS (gated); stop is NOT (it must run to quiesce during uninstall — item 2).
+                # restart's admission is reused reentrant by its nested stop/start.
+                if op in ("start", "restart"):
+                    self._admit(stack, op, target)
                 idx_stack = contextlib.ExitStack()
                 try:
                     if do_handoff:

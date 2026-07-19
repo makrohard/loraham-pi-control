@@ -266,6 +266,8 @@ def _serve(behavior):
                 conn, _ = srv.accept()
             except socket.timeout:
                 continue
+            except OSError:
+                break                    # srv closed by stop() -> exit cleanly (no unhandled thread exc)
             with conn:
                 conn.settimeout(0.5)
                 try:
@@ -284,6 +286,7 @@ def _serve(behavior):
     def stop():
         stopped["v"] = True
         srv.close()
+        t.join(2)                        # deterministic: wait for the loop to exit (never leak it)
     return port, received, stop
 
 

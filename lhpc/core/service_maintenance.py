@@ -10,7 +10,7 @@ from .snapshot_memo import invalidates_snapshot
 from . import runtime_fs
 from .model import RunState
 from .paths import PathContainmentError
-from .service_base import ActionResult, SourceTxnBlocked
+from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 
 
 class MaintenanceOpsMixin:
@@ -491,11 +491,22 @@ class MaintenanceOpsMixin:
             epoch = self._parse_utc(ts)
             return {"finished_ago_s": max(0, now - epoch)} if epoch is not None else {}
 
+        def _bounded_reason(reason):
+            # Never echo an unbounded/None reason into the banner.
+            return (str(reason).strip()[:200]) if reason else "malformed or unreadable state — recovery required"
+
         try:
             bst = self.auto_install_status()
         except Exception:                          # noqa: BLE001 — a GET must never 500
             bst = None
-        if bst and not bst.get("unsafe"):
+        if bst and bst.get("unsafe"):
+            # A MALFORMED / unreadable auto-install marker (top-level `unsafe`) MUST be surfaced as a
+            # recovery-required task — it is the state an operator most needs to see. Never hidden,
+            # never expires until resolved.
+            out.append({"kind": "auto-install", "run_id": bst.get("run_id", ""),
+                        "label": "Install / build all stacks", "href": "/auto-install",
+                        "state": "unsafe", "hint": _bounded_reason(bst.get("reason"))})
+        elif bst:
             rid, state = bst.get("run_id", ""), bst.get("state")
             base = {"kind": "auto-install", "run_id": rid, "label": "Install / build all stacks",
                     "href": "/auto-install"}
@@ -518,7 +529,14 @@ class MaintenanceOpsMixin:
             hst = self.hmac_apply_status()
         except Exception:                          # noqa: BLE001
             hst = None
-        if hst and not hst.get("unsafe"):
+        if hst and hst.get("unsafe"):
+            # Same as auto-install: a malformed/unreadable HMAC marker is surfaced as recovery-required
+            # rather than silently dropped.
+            sid, action = hst.get("sid", "meshcom"), hst.get("action", "enable")
+            out.append({"kind": "hmac", "run_id": hst.get("run_id", ""),
+                        "label": f"HMAC {action} on {sid}", "href": f"/stacks/{sid}/hmac/{action}",
+                        "state": "unsafe", "hint": _bounded_reason(hst.get("reason"))})
+        elif hst:
             rid, phase = hst.get("run_id", ""), hst.get("phase")
             sid, action = hst.get("sid", "meshcom"), hst.get("action", "enable")
             base = {"kind": "hmac", "run_id": rid, "label": f"HMAC {action} on {sid}",
@@ -906,6 +924,8 @@ class MaintenanceOpsMixin:
                                           "confirmation")}
                 ok, msg = known_working.record(self._paths, stack_id, cand["entries"],
                                                validated)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot confirm '{stack_id}': {blocked}")
         except reslock.ResourceBusy as busy:
@@ -985,7 +1005,9 @@ class MaintenanceOpsMixin:
         # runtime-state recheck -> plan -> mutate. A concurrent Start contends on the
         # same source locks; a concurrent config/remote save waits on config-stable.
         try:
-            with self._config_stable():
+            # LOCK ORDER #1: admission OUTSIDE config-stability (the inner source guard reuses it
+            # reentrantly), so a source update never contends config/admission out of order.
+            with self._admission_guard("update", target or ""), self._config_stable():
                 with self._source_operation_guard(sorted(affected), op="update"):
                     self._op_seam("update-locked")
                     # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
@@ -1040,6 +1062,8 @@ class MaintenanceOpsMixin:
                     # the source mutation and this retirement — only stale pre-update
                     # markers are retired. A clear failure is a truthful INCOMPLETE.
                     ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Update blocked for '{target or 'all'}': {blocked}",
                                 next_commands=["lhpc status"])
@@ -1194,7 +1218,177 @@ class MaintenanceOpsMixin:
                 ok = False
         return ok
 
-    @invalidates_snapshot
+    def controller_uninstall_prep(self) -> ActionResult:
+        """INTERNAL op invoked by uninstall.sh BEFORE it removes any controller code/state. Held under
+        the ONE task-admission lock so a NEW task start CONTENDS (fails its own locked admission) while
+        prep runs; it then proves quiescence from DURABLE evidence and stops the managed stacks with
+        VERIFIED cessation. Fail CLOSED — any doubt refuses and leaves everything in place. (uninstall.sh
+        already wrote the .lhpc-uninstalling guard, so prep does NOT run the strict self-check — it IS
+        the uninstall — it inspects the durable job/auto-install/HMAC/snapshot evidence instead.)"""
+        import contextlib
+        from . import reslock
+        with contextlib.ExitStack() as adm:
+            try:
+                self._acquire_key(adm, self.ADMISSION_KEY, "uninstall-prep", "")
+            except reslock.ResourceBusy:
+                return ActionResult(False, "A task is starting right now (admission lock contended) — "
+                                    "retry the uninstall.", data={"prep_blocked": "busy"})
+            return self._uninstall_prep_locked()
+
+    def _uninstall_prep_locked(self) -> ActionResult:
+        from .model import RunState
+        LIVE = (RunState.RUNNING, RunState.DEGRADED)
+        # 1) a controller self-update in flight is incompatible with tearing the controller down
+        try:
+            req = self.classify_request()
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+            return ActionResult(False, f"Cannot verify self-update state ({exc}) — refusing to prepare "
+                                "uninstall.", data={"prep_blocked": "unverifiable"})
+        if req in ("pending", "in_flight", "malformed"):
+            return ActionResult(False, "A controller self-update is pending or in progress — resolve it "
+                                "before uninstalling.", data={"prep_blocked": "self_update"})
+        # 2) active OR unprovable build/test/web-job markers
+        jobs = self.active_jobs(include_unsafe=True)
+        if jobs:
+            return ActionResult(False, "Active or unprovable build/test/web jobs exist — resolve them "
+                                "before uninstalling.",
+                                details=tuple(f"  {j.get('name') or j.get('op', 'job')} "
+                                              f"{j.get('reason') or j.get('target', '')}" for j in jobs),
+                                data={"prep_blocked": "jobs"})
+        # 3) unresolved auto-install / HMAC state
+        try:
+            ai_block = self._auto_install_gate()
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+            ai_block = f"unverifiable ({exc})"
+        if ai_block:
+            return ActionResult(False, f"An auto-install run is unresolved — {ai_block}.",
+                                data={"prep_blocked": "auto_install"})
+        try:
+            hst = self.hmac_apply_status()
+            hmac_bad = bool(hst) and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted"))
+        except Exception:                                 # noqa: BLE001 — cannot prove safe -> refuse
+            hmac_bad = True
+        if hmac_bad:
+            return ActionResult(False, "HMAC apply state is running or unresolved/unsafe — resolve it "
+                                "before uninstalling.", data={"prep_blocked": "hmac"})
+        # 4) INITIAL fresh snapshot (an exception is fail-closed); an UNKNOWN component blocks
+        try:
+            snap = self.build_snapshot(fresh=True)
+        except Exception as exc:                          # noqa: BLE001 — cannot prove state -> refuse
+            return ActionResult(False, f"Could not assess component runtime state ({exc}) — refusing to "
+                                "uninstall.", data={"prep_blocked": "snapshot"})
+        unknown = [f"{ss.stack.id}/{cid}" for ss in snap.stacks
+                   for cid, cs in ss.components.items() if cs.run_state == RunState.UNKNOWN]
+        if unknown:
+            return ActionResult(False, "Component runtime state is UNKNOWN (cannot prove it stopped) — "
+                                "refusing to uninstall.", details=tuple(f"  {u}" for u in unknown),
+                                data={"prep_blocked": "unknown"})
+        # 5) stop CLIENT stacks BEFORE the shared daemon; check EVERY stop. A client stop that is not
+        #    verified stopped returns IMMEDIATELY — the daemon is never stopped.
+        details = []
+        clients = [ss.stack.id for ss in snap.stacks if ss.stack.main != self.DAEMON_ID
+                   and any(cs.run_state in LIVE for cs in ss.components.values())]
+        daemons = [ss.stack.id for ss in snap.stacks if ss.stack.main == self.DAEMON_ID
+                   and any(cs.run_state in LIVE for cs in ss.components.values())]
+        for sid in clients:
+            res = self.stop(sid, apply=True)
+            details.append(f"  stop {sid}: {res.summary}")
+            if not res.ok:
+                return ActionResult(False, f"Client stack '{sid}' did not stop cleanly — NOT stopping "
+                                    "the shared daemon, and refusing to remove controller state.",
+                                    details=tuple(details), data={"prep_blocked": "client_stop_failed"})
+        for sid in daemons:
+            res = self.stop(sid, apply=True)
+            details.append(f"  stop {sid}: {res.summary}")
+            if not res.ok:
+                return ActionResult(False, f"Daemon stack '{sid}' did not stop cleanly — refusing to "
+                                    "remove controller state.", details=tuple(details),
+                                    data={"prep_blocked": "daemon_stop_failed"})
+        # 6) FINAL fresh snapshot (an exception is fail-closed); nothing may still be running/degraded/unknown
+        try:
+            snap2 = self.build_snapshot(fresh=True)
+        except Exception as exc:                          # noqa: BLE001 — cannot prove state -> refuse
+            return ActionResult(False, f"Could not re-assess component runtime state ({exc}) — refusing "
+                                "to uninstall.", data={"prep_blocked": "snapshot"})
+        still = [f"{ss.stack.id}/{cid}={cs.run_state.value}" for ss in snap2.stacks
+                 for cid, cs in ss.components.items()
+                 if cs.run_state in LIVE or cs.run_state == RunState.UNKNOWN]
+        if still:
+            return ActionResult(False, "Some components are still running/degraded/unknown after stop — "
+                                "refusing to remove controller state.",
+                                details=tuple(details) + tuple(f"  STILL {s}" for s in still),
+                                data={"prep_blocked": "not_quiesced"})
+        return ActionResult(True, "Quiescent: all managed stacks stopped and verified — safe to remove "
+                            "controller state.", details=tuple(details), data={"quiescent": True})
+
+    def controller_uninstall_guard_claim(self, pid: str, nonce: str, start_time: str) -> ActionResult:
+        """Atomically CLAIM the uninstall guard for uninstall.sh — created O_CREAT|O_EXCL|O_NOFOLLOW via
+        `open_marker_excl`, so a pre-existing guard of ANY kind (regular / symlink / special / stale) is
+        NEVER truncated, followed or replaced. `FileExistsError` => a concurrent or interrupted uninstall
+        already owns it => refused. Records the CALLER's (the shell's) pid + nonce + /proc start time so a
+        live owner is distinguishable from PID reuse."""
+        import json
+        from . import runtime_fs, updater_units
+        from .service_base import _proc_ceased
+        guard = self._paths.under(updater_units.UNINSTALL_GUARD)
+        payload = json.dumps({"pid": pid, "nonce": nonce, "start_time": start_time})
+        try:
+            m = runtime_fs.open_marker_excl(self._paths, guard, payload)
+            m.close()
+            return ActionResult(True, "uninstall guard claimed.", data={"nonce": nonce})
+        except FileExistsError:
+            pass                                          # a guard exists — decide below
+        except Exception as exc:                          # noqa: BLE001 — containment/fs error
+            return ActionResult(False, f"Could not claim the uninstall guard: {exc}",
+                                data={"claim_failed": True})
+        # A guard already exists. RECLAIM it ONLY if its recorded owner is PROVEN DEAD (an interrupted
+        # uninstall — preserving a safe retry path); a LIVE owner is a real concurrent uninstall (refuse);
+        # a malformed/unreadable/foreign-typed guard is refused (never blindly replaced).
+        try:
+            rec = json.loads(runtime_fs.read_text_regular(self._paths, guard, max_bytes=4096))
+            owner_pid, owner_start = int(rec["pid"]), int(rec["start_time"])
+        except Exception:                                 # noqa: BLE001 — cannot prove -> refuse
+            return ActionResult(False, "An uninstall guard already exists and is unreadable/malformed "
+                                "— refusing (verify no uninstall runs, then remove it).",
+                                data={"guard_unsafe": True})
+        if not _proc_ceased(owner_pid, owner_start):
+            return ActionResult(False, "An uninstall is already in progress (its guard owner is alive) "
+                                "— refusing.", data={"guard_live": True})
+        try:
+            runtime_fs.unlink(self._paths, guard)         # descriptor-safe, no-follow
+            m = runtime_fs.open_marker_excl(self._paths, guard, payload)
+            m.close()
+        except Exception as exc:                          # noqa: BLE001
+            return ActionResult(False, f"could not reclaim the stale uninstall guard: {exc}",
+                                data={"reclaim_failed": True})
+        return ActionResult(True, "reclaimed a STALE uninstall guard (a previous uninstall was "
+                            "interrupted).", data={"nonce": nonce, "reclaimed": True})
+
+    def controller_uninstall_guard_release(self, nonce: str) -> ActionResult:
+        """Remove the uninstall guard ONLY if it is the one this invocation owns (its recorded `nonce`
+        matches). Strict no-follow, regular-only, bounded read + nonce compare, then a descriptor-safe
+        unlink. NEVER removes a pre-existing / foreign / replaced / unreadable guard. Absent = no-op."""
+        import json
+        from . import runtime_fs, updater_units
+        from .paths import PathContainmentError
+        path = self._paths.under(updater_units.UNINSTALL_GUARD)
+        try:
+            rec = json.loads(runtime_fs.read_text_regular(self._paths, path, max_bytes=4096))
+        except FileNotFoundError:
+            return ActionResult(True, "no uninstall guard to release.", data={"absent": True})
+        except (OSError, PathContainmentError, ValueError):
+            return ActionResult(False, "uninstall guard is unreadable/unsafe — NOT removing it "
+                                "(foreign or tampered).", data={"unsafe": True})
+        if not (isinstance(rec, dict) and rec.get("nonce") == nonce):
+            return ActionResult(False, "uninstall guard is owned by a different invocation — NOT "
+                                "removing it.", data={"foreign": True})
+        try:
+            runtime_fs.unlink(self._paths, path)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"could not remove the uninstall guard: {exc}",
+                                data={"unlink_failed": True})
+        return ActionResult(True, "uninstall guard released.", data={"released": True})
+
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target
         component is running; never removes a source still referenced by another
@@ -1250,7 +1444,8 @@ class MaintenanceOpsMixin:
         self._op_seam("uninstall-preflight")
         all_paths = sorted({c.source.path for _, c in items})
         try:
-            with self._config_stable():
+            # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
+            with self._admission_guard("uninstall", target or ""), self._config_stable():
               with self._source_operation_guard(all_paths, op="uninstall"):
                 self._op_seam("uninstall-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
@@ -1301,6 +1496,8 @@ class MaintenanceOpsMixin:
                 # KEPT shared paths: durably record this stack's departure so the LAST
                 # sharer's uninstall removes the leaf (live membership, not manifest).
                 ok = self._depart_kept_paths(kept, target_ids, out) and ok
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Uninstall blocked for '{target or 'all'}': {blocked}",
                                 next_commands=["lhpc status"])
@@ -1408,7 +1605,8 @@ class MaintenanceOpsMixin:
         all_paths = sorted({c.source.path for c in stack.components if c.source}
                            | set(orphans)) or [sid]
         try:
-            with self._config_stable():
+            # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
+            with self._admission_guard("clean", sid), self._config_stable():
                 with self._source_operation_guard(all_paths, op="clean"):
                     self._op_seam("clean-locked")
                     # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
@@ -1514,6 +1712,8 @@ class MaintenanceOpsMixin:
                                 ok = False
                                 out.append(f"  [fail] logs/{name}")
                     out.append(f"  [removed] {removed_logs} log file(s)")
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Clean blocked for '{sid}': {blocked}",
                                 next_commands=["lhpc status"])

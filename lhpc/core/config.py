@@ -1170,11 +1170,14 @@ def _stack_config_path(paths: Paths, stack_id: str, band: str = "") -> Path:
 
 
 def load_stack_config(paths: Paths, stack_id: str, band: str = "") -> dict:
-    """User-defined configuration for a stack/band (runtime-local, git-ignored)."""
-    try:
-        return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, band))
-    except ConfigError:
-        return {}            # a corrupt stored config falls back to defaults
+    """User-defined configuration for a stack/band (runtime-local, git-ignored).
+
+    FAIL-CLOSED: ONLY an absent file yields `{}` (use-defaults). A present-but-malformed, unreadable,
+    non-regular, oversized, symlinked, or wrong-typed persisted file raises a typed `ConfigError`
+    (from `_load_runtime_toml`) rather than silently degrading to defaults — the bad file is left in
+    place for diagnosis, and start/restart/reset/status/config-views/web must surface the error and
+    refuse to continue with defaults (CLI: typed failure, no side effects; web: 409, no traceback/echo)."""
+    return _load_runtime_toml(paths, _stack_config_path(paths, stack_id, band))
 
 
 # TOML basic-string control-character escapes (TOML v1.0 §String). Other C0 controls + DEL are

@@ -16,7 +16,7 @@ from .config import load_stack_config
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
-from .service_base import ActionResult, SourceTxnBlocked
+from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 
 import re as _re
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
@@ -333,10 +333,11 @@ class LifecycleOpsMixin:
         if fo_err:
             return ActionResult(False, f"Cannot start '{target}': invalid parameter — {fo_err}",
                                 next_commands=[f"lhpc status {target}"])
-        # Hold saved configuration STABLE from lock planning through the whole applied start (LOCK
-        # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _start_impl).
+        # LOCK ORDER #1: task admission is acquired OUTSIDE the config-stability guard and BEFORE any
+        # mutation (incl. clear_daemon_feed) — a start refused by a pending self-update/uninstall
+        # touches nothing. The inner _lifecycle_guard reuses this admission reentrantly.
         try:
-            with self._config_stable():
+            with self._admission_guard("start", target), self._config_stable():
                 # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
                 _order = self._run_order(target)
                 _radio = ""
@@ -361,6 +362,11 @@ class LifecycleOpsMixin:
                 except reslock.ResourceBusy as busy:
                     return ActionResult(False, f"Cannot start '{target}': {busy}",
                                         next_commands=[f"lhpc status {target}"])
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot start '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
         except SourceTxnBlocked as blocked:
             # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
@@ -389,6 +395,8 @@ class LifecycleOpsMixin:
                                               stop_owners=stop_owners, band=band,
                                               daemon_overrides=daemon_overrides,
                                               file_overrides=file_overrides)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             # The config-stability guard itself was busy (e.g. a auto-install auto-install run holds config
             # EXCLUSIVE for its whole lifetime) — refuse typed rather than hang or crash.
@@ -1395,7 +1403,8 @@ class LifecycleOpsMixin:
                 cr = CompResult(component=comp.id, stack=target, action="stop",
                     outcome=Outcome.BLOCKED,
                     summary="not attempted — a dependent is still running or not verified stopped")
-                results.append(cr); own_results.append(cr)
+                results.append(cr)
+                own_results.append(cr)
                 details.append(f"  [blocked] {comp.id}: a dependent is still running — daemon left up")
                 continue
             if comp.units and not comp.run_argv:
@@ -1403,7 +1412,8 @@ class LifecycleOpsMixin:
                 cr = CompResult(component=comp.id, stack=target, action="stop",
                     outcome=Outcome.MANUAL_REQUIRED,
                     summary=f"system service — stop as root: sudo systemctl stop {comp.units[0].name}")
-                results.append(cr); own_results.append(cr)
+                results.append(cr)
+                own_results.append(cr)
                 details.append(f"  [manual_required] {comp.id}: stop it as root: "
                                f"sudo systemctl stop {comp.units[0].name}")
                 continue
@@ -1414,7 +1424,8 @@ class LifecycleOpsMixin:
                 cr = life.stop(comp, band=band)
             else:
                 cr = life.stop(comp)
-            results.append(cr); own_results.append(cr)
+            results.append(cr)
+            own_results.append(cr)
             details.append(f"  [{cr.outcome.value}] {comp.id}: {cr.summary}"
                            + (f" (pid {cr.pid})" if cr.pid else ""))
 
@@ -1512,8 +1523,11 @@ class LifecycleOpsMixin:
         # Hold saved configuration STABLE from PREFLIGHT through the whole stop→start transition, so
         # a valid target is never stopped and then rejected by a concurrently-mutated config (LOCK
         # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _restart_impl).
+        # LOCK ORDER #1: task admission OUTSIDE config-stability and BEFORE preflight/any stop — a
+        # restart refused by a pending self-update/uninstall never stops the running stack. The inner
+        # _lifecycle_guard (and the nested stop's) reuse this admission reentrantly.
         try:
-            with self._config_stable():
+            with self._admission_guard("restart", target), self._config_stable():
                 # PREFLIGHT all start inputs BEFORE lock planning, the guard, owner handling or any
                 # stop. A failed preflight is a typed failure that never acquires a lock or touches
                 # lifecycle state. Canonical values feed lock/radio planning + _restart_impl.
@@ -1538,6 +1552,11 @@ class LifecycleOpsMixin:
                 except reslock.ResourceBusy as busy:
                     return ActionResult(False, f"Cannot restart '{target}': {busy}",
                                         next_commands=[f"lhpc status {target}"])
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot restart '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot restart '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -1561,6 +1580,8 @@ class LifecycleOpsMixin:
                 return self._restart_impl_inner(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
                                                 file_overrides=file_overrides)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Cannot restart '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -1700,6 +1721,8 @@ class LifecycleOpsMixin:
                                       "session_ident": res.session_ident}
                         ok = False
                         break
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
             return ActionResult(False, f"Build blocked for '{target}': {blocked}",
                                 next_commands=[f"lhpc status {target}"])
@@ -1815,154 +1838,170 @@ class LifecycleOpsMixin:
         any secondary component job is spawned; a blocked primary spawns none. Each job carries an attempt
         reservation (green/red banner) gated on parent identity tracking."""
         from . import commands, reslock, runtime_fs, jobresult, procident
-        import sys, os, uuid, time as _time
+        import sys
+        import os
+        import uuid
+        import time as _time
         life = self._lifecycle()
+        import contextlib as _contextlib
+        _adm_stack = _contextlib.ExitStack()
+        try:
+            self._admit(_adm_stack, "web-job", target)
+        except AdmissionRefused as _adm:
+            _adm_stack.close()
+            return None, "blocked", _adm.reason
+        except reslock.ResourceBusy:
+            _adm_stack.close()
+            return None, "blocked", "a task is starting right now (admission contended) — retry"
+        try:
+            if op == "install" and source not in self.SOURCE_CHOICES:
+                return None, "blocked", (f"invalid source '{source}' (choose "
+                                         f"{', '.join(self.SOURCE_CHOICES)})")
+            items, err = self._resolve(target)
+            if err:
+                return None, "blocked", err
+            comps = [c for _, c in items]
+            # BUILD-REQUIRES ordering for DETACHED (parallel, unsequenceable) jobs: a provider like RadioLib
+            # must have its artifact built BEFORE the daemon's build.sh runs. `_resolve` returns only RUNNABLE
+            # components, so a non-runnable library provider is otherwise never built by the web job at all.
+            # Pull the owning stack's declared providers in; if any is not built yet, build the MISSING
+            # provider(s) THIS round and defer the consumer (the operator builds again once they finish) —
+            # never build a provider and its consumer in the same parallel round (the consumer would race the
+            # provider's artifact). When the providers are already built, build the consumer(s) only.
+            build_dep_note = ""
+            if op == "build":
+                provider_ids = {d for c in comps for d in (c.build_requires or ())}
+                if provider_ids:
+                    sid = self.stack_of(target)
+                    st_full = self.stack(sid) if sid else None
+                    have = {c.id for c in comps}
+                    if st_full is not None:
+                        comps = comps + [c for c in st_full.components
+                                         if c.id in provider_ids and c.build_steps and c.id not in have]
+                    unbuilt_prov = [c for c in comps if c.id in provider_ids and not self.is_built(c)]
+                    if unbuilt_prov:
+                        comps = unbuilt_prov
+                        names = ", ".join(c.name for c in unbuilt_prov)
+                        build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
+                                          "to build the rest once it finishes.")
+                    else:
+                        comps = [c for c in comps if c.id not in provider_ids]
+            src_paths = {c.source.path for c in comps if c.source}
+            src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
 
-        if op == "install" and source not in self.SOURCE_CHOICES:
-            return None, "blocked", (f"invalid source '{source}' (choose "
-                                     f"{', '.join(self.SOURCE_CHOICES)})")
-        items, err = self._resolve(target)
-        if err:
-            return None, "blocked", err
-        comps = [c for _, c in items]
-        # BUILD-REQUIRES ordering for DETACHED (parallel, unsequenceable) jobs: a provider like RadioLib
-        # must have its artifact built BEFORE the daemon's build.sh runs. `_resolve` returns only RUNNABLE
-        # components, so a non-runnable library provider is otherwise never built by the web job at all.
-        # Pull the owning stack's declared providers in; if any is not built yet, build the MISSING
-        # provider(s) THIS round and defer the consumer (the operator builds again once they finish) —
-        # never build a provider and its consumer in the same parallel round (the consumer would race the
-        # provider's artifact). When the providers are already built, build the consumer(s) only.
-        build_dep_note = ""
-        if op == "build":
-            provider_ids = {d for c in comps for d in (c.build_requires or ())}
-            if provider_ids:
-                sid = self.stack_of(target)
-                st_full = self.stack(sid) if sid else None
-                have = {c.id for c in comps}
-                if st_full is not None:
-                    comps = comps + [c for c in st_full.components
-                                     if c.id in provider_ids and c.build_steps and c.id not in have]
-                unbuilt_prov = [c for c in comps if c.id in provider_ids and not self.is_built(c)]
-                if unbuilt_prov:
-                    comps = unbuilt_prov
-                    names = ", ".join(c.name for c in unbuilt_prov)
-                    build_dep_note = (f"Building the build dependency first ({names}) — run Build again "
-                                      "to build the rest once it finishes.")
-                else:
-                    comps = [c for c in comps if c.id not in provider_ids]
-        src_paths = {c.source.path for c in comps if c.source}
-        src_keys = sorted({reslock.source_lock_key(c.source.path) for c in comps if c.source})
+            # ---- Part G: refuse up-front (auto-install lease / undismissed-unsafe same-source / source-txn busy) ----
+            gate = self._auto_install_gate()
+            if gate:
+                return None, "blocked", f"blocked — {gate}"
+            ublk = self._web_unsafe_source_block(src_keys)
+            if ublk:
+                return None, "blocked", ublk
+            pre = self._web_source_precheck(src_paths)
+            if pre:
+                return None, "blocked", f"blocked — {pre}"
 
-        # ---- Part G: refuse up-front (auto-install lease / undismissed-unsafe same-source / source-txn busy) ----
-        gate = self._auto_install_gate()
-        if gate:
-            return None, "blocked", f"blocked — {gate}"
-        ublk = self._web_unsafe_source_block(src_keys)
-        if ublk:
-            return None, "blocked", ublk
-        pre = self._web_source_precheck(src_paths)
-        if pre:
-            return None, "blocked", f"blocked — {pre}"
+            runtime = str(self._paths.runtime_root)
+            runtime_fs.ensure_dir(self._paths, self._paths.under("state", "locks"))
+            post_dir = self._paths.under("state", "jobs")
+            runtime_fs.ensure_dir(self._paths, post_dir)
+            index_lock = str(reslock.lock_file_path(self._paths, self._installer()._index_key()))
+            txn_dir = str(self._paths.under("state", "source-txn"))
 
-        runtime = str(self._paths.runtime_root)
-        runtime_fs.ensure_dir(self._paths, self._paths.under("state", "locks"))
-        post_dir = self._paths.under("state", "jobs")
-        runtime_fs.ensure_dir(self._paths, post_dir)
-        index_lock = str(reslock.lock_file_path(self._paths, self._installer()._index_key()))
-        txn_dir = str(self._paths.under("state", "source-txn"))
+            def _settle_track(log, aid, pid, terr) -> str:
+                """Turn a `_track_or_terminate` outcome into a terminal reservation + a TYPED code the orchestrator
+                trusts: "" tracked-ok; "orphan" (ORPHAN RISK ⇒ blocking `unsafe`); "terminated" (proven-terminated
+                ⇒ ordinary `failed`). Never inferred later from free text."""
+                if not terr:
+                    return ""
+                if "ORPHAN RISK" in terr:
+                    jobresult.terminalize(self._paths, log, aid, "unsafe",
+                                          detail="the job could not be identity-tracked and its stop is "
+                                                 "UNPROVEN — inspect processes (ps) then Recover",
+                                          driver_ident=procident.proc_identity(pid))
+                    return "orphan"
+                jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
+                return "terminated"
 
-        def _settle_track(log, aid, pid, terr) -> str:
-            """Turn a `_track_or_terminate` outcome into a terminal reservation + a TYPED code the orchestrator
-            trusts: "" tracked-ok; "orphan" (ORPHAN RISK ⇒ blocking `unsafe`); "terminated" (proven-terminated
-            ⇒ ordinary `failed`). Never inferred later from free text."""
-            if not terr:
-                return ""
-            if "ORPHAN RISK" in terr:
-                jobresult.terminalize(self._paths, log, aid, "unsafe",
-                                      detail="the job could not be identity-tracked and its stop is "
-                                             "UNPROVEN — inspect processes (ps) then Recover",
-                                      driver_ident=procident.proc_identity(pid))
-                return "orphan"
-            jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
-            return "terminated"
+            def _spawn_install():
+                name = f"install-{target}"
+                log, aid = name + ".log", uuid.uuid4().hex
+                if not jobresult.reserve(self._paths, log, aid, "install", target,
+                                         self.stack_of(target) or "", src_keys):
+                    return None, aid, "could not record the install job (a live attempt exists)"
+                argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
+                        "--web-result", log, "--attempt-id", aid]
+                ln, pid = life.spawn_job(name, argv, runtime)
+                if not ln or not pid:
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                    return None, aid, f"could not start install for '{target}'"
+                return log, aid, _settle_track(
+                    log, aid, pid, self._track_or_terminate(life, ln, pid, target, "install", attempt_id=aid))
 
-        def _spawn_install():
-            name = f"install-{target}"
-            log, aid = name + ".log", uuid.uuid4().hex
-            if not jobresult.reserve(self._paths, log, aid, "install", target,
-                                     self.stack_of(target) or "", src_keys):
-                return None, aid, "could not record the install job (a live attempt exists)"
-            argv = [sys.executable, "-m", "lhpc", "install", target, "--yes", "--source", source,
-                    "--web-result", log, "--attempt-id", aid]
-            ln, pid = life.spawn_job(name, argv, runtime)
-            if not ln or not pid:
-                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
-                return None, aid, f"could not start install for '{target}'"
-            return log, aid, _settle_track(
-                log, aid, pid, self._track_or_terminate(life, ln, pid, target, "install", attempt_id=aid))
+            def _spawn_build(c, steps, name):
+                log, aid = name + ".log", uuid.uuid4().hex
+                src = str(life.source_dir(c))
+                ckeys = sorted({reslock.source_lock_key(c.source.path)}) if c.source else []
+                lock_paths = ([str(reslock.lock_file_path(self._paths, ckeys[0]))] if ckeys else [])
+                if not jobresult.reserve(self._paths, log, aid, op, c.id,
+                                         self.stack_of(c.id) or "", ckeys):
+                    return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
+                try:
+                    script = commands.render_build_launcher(
+                        steps, runtime, src, lock_paths, index_lock=index_lock, txn_dir=txn_dir,
+                        result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "")
+                except commands.CommandError as exc:
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
+                    return None, aid, f"cannot {op} '{c.id}': {exc}"
+                uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
+                launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
+                ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
+                if not ln or not pid:
+                    jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                    return None, aid, f"could not start {op} for '{c.id}'"
+                return log, aid, _settle_track(
+                    log, aid, pid, self._track_or_terminate(life, ln, pid, c.id, op, attempt_id=aid))
 
-        def _spawn_build(c, steps, name):
-            log, aid = name + ".log", uuid.uuid4().hex
-            src = str(life.source_dir(c))
-            ckeys = sorted({reslock.source_lock_key(c.source.path)}) if c.source else []
-            lock_paths = ([str(reslock.lock_file_path(self._paths, ckeys[0]))] if ckeys else [])
-            if not jobresult.reserve(self._paths, log, aid, op, c.id,
-                                     self.stack_of(c.id) or "", ckeys):
-                return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
-            try:
-                script = commands.render_build_launcher(
-                    steps, runtime, src, lock_paths, index_lock=index_lock, txn_dir=txn_dir,
-                    result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "")
-            except commands.CommandError as exc:
-                jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
-                return None, aid, f"cannot {op} '{c.id}': {exc}"
-            uid = f"{name}-{os.getpid()}-{_time.monotonic_ns()}"
-            launcher = runtime_fs.write_launcher(self._paths, post_dir / f"{uid}.py", script)
-            ln, pid = life.spawn_job(name, [sys.executable, str(launcher)], src)
-            if not ln or not pid:
-                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
-                return None, aid, f"could not start {op} for '{c.id}'"
-            return log, aid, _settle_track(
-                log, aid, pid, self._track_or_terminate(life, ln, pid, c.id, op, attempt_id=aid))
+            # ---- ordered job list (primary first) ----
+            if op == "install":
+                spawn_fns = [_spawn_install]
+            else:
+                bj = []
+                for c in comps:
+                    if op == "build" and c.build_steps:
+                        bj.append((c, list(c.build_steps), f"build-{c.id}"))
+                    elif op == "test" and c.test_argv:
+                        bj.append((c, [{"argv": list(c.test_argv)}], f"test-{c.id}"))
+                if not bj:
+                    return None, "blocked", f"nothing to {op} for '{target}'"
+                s = self.stack(target)
+                main_id = s.main if s else None
+                pi = next((i for i, (c, _, _) in enumerate(bj) if c.id == main_id), 0)
+                ordered = [bj[pi]] + [j for i, j in enumerate(bj) if i != pi]
+                spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
 
-        # ---- ordered job list (primary first) ----
-        if op == "install":
-            spawn_fns = [_spawn_install]
-        else:
-            bj = []
-            for c in comps:
-                if op == "build" and c.build_steps:
-                    bj.append((c, list(c.build_steps), f"build-{c.id}"))
-                elif op == "test" and c.test_argv:
-                    bj.append((c, [{"argv": list(c.test_argv)}], f"test-{c.id}"))
-            if not bj:
-                return None, "blocked", f"nothing to {op} for '{target}'"
-            s = self.stack(target)
-            main_id = s.main if s else None
-            pi = next((i for i, (c, _, _) in enumerate(bj) if c.id == main_id), 0)
-            ordered = [bj[pi]] + [j for i, j in enumerate(bj) if i != pi]
-            spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
-
-        # ---- primary: spawn + handshake; a blocked primary spawns NO secondaries ----
-        plog, paid, pout = spawn_fns[0]()
-        if plog is None:                        # reserve/spawn/render failed
+            # ---- primary: spawn + handshake; a blocked primary spawns NO secondaries ----
+            plog, paid, pout = spawn_fns[0]()
+            if plog is None:                        # reserve/spawn/render failed
+                self.prune_logs()
+                return None, "blocked", f"blocked — {pout}"
+            if pout == "orphan":                    # PROVEN: tracking failed, cessation UNPROVEN → blocking unsafe
+                self.prune_logs()
+                return None, "blocked", "blocked — the job could not be tracked; Recover it first"
+            if pout == "terminated":                # PROVEN: driver terminated before it ran → ordinary failed
+                self.prune_logs()
+                return None, "blocked", "blocked — the job process was terminated before it ran"
+            admission, reason = self._web_admit_handshake(plog, paid)
+            if admission == "blocked":
+                self.prune_logs()
+                return None, "blocked", (f"blocked — {reason}" if reason and not reason.startswith("blocked")
+                                         else (reason or "blocked"))
+            for fn in spawn_fns[1:]:            # admitted/pending: start the secondary component jobs
+                fn()
             self.prune_logs()
-            return None, "blocked", f"blocked — {pout}"
-        if pout == "orphan":                    # PROVEN: tracking failed, cessation UNPROVEN → blocking unsafe
-            self.prune_logs()
-            return None, "blocked", "blocked — the job could not be tracked; Recover it first"
-        if pout == "terminated":                # PROVEN: driver terminated before it ran → ordinary failed
-            self.prune_logs()
-            return None, "blocked", "blocked — the job process was terminated before it ran"
-        admission, reason = self._web_admit_handshake(plog, paid)
-        if admission == "blocked":
-            self.prune_logs()
-            return None, "blocked", (f"blocked — {reason}" if reason and not reason.startswith("blocked")
-                                     else (reason or "blocked"))
-        for fn in spawn_fns[1:]:            # admitted/pending: start the secondary component jobs
-            fn()
-        self.prune_logs()
-        return plog, admission, build_dep_note
+            return plog, admission, build_dep_note
+
+        finally:
+            _adm_stack.close()   # release admission held across the spawn
 
     def prune_logs(self) -> int:
         """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
@@ -2157,7 +2196,7 @@ class LifecycleOpsMixin:
         return (f"{op} '{cid}' spawned but its job marker could not be persisted AND the "
                 "process could NOT be confirmed stopped — ORPHAN RISK; check `ps` and kill it.")
 
-    def active_jobs(self, cleanup: bool = True) -> list[dict]:
+    def active_jobs(self, cleanup: bool = True, *, include_unsafe: bool = False) -> list[dict]:
         """Build/test jobs whose ORIGINAL process is still alive (identity-verified).
         A reused PID, a malformed marker, or a symlinked marker is never treated as a
         live job; proven-finished markers are cleaned through the safe API.
@@ -2165,6 +2204,13 @@ class LifecycleOpsMixin:
         `cleanup=True` (op-boundary callers) clears the marker of a finished/reused job.
         `cleanup=False` is STRICTLY READ-ONLY (no unlink) — the GET-path running-task
         projection uses it so `/api/tasks` never mutates state.
+
+        `include_unsafe=True` (the SELF-UPDATE/uninstall admission gate) ADDITIONALLY reports every
+        marker that cannot be PROVEN safe — an unreadable jobs directory, a symlinked/non-regular/
+        oversized/uninspectable/malformed marker — as `{"unsafe": True, "name", "reason"}`. The gate
+        must block on any such entry: an update/uninstall proceeding past an unprovable job marker
+        could tear down a still-running build. (`cleanup=False` is implied when include_unsafe is set —
+        the gate never mutates.)
 
         UNTRUSTED-STATE SAFE (P2): each marker is inspected non-blocking, no-follow,
         regular-only, and BYTE-BOUNDED. A FIFO/device (would block), a directory, a
@@ -2179,13 +2225,20 @@ class LifecycleOpsMixin:
         # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping jobs dir
         # fails closed (no trusted jobs); a symlinked marker LEAF is diagnostic evidence,
         # never treated as a live job.
+        if include_unsafe:
+            cleanup = False                     # the admission gate is strictly read-only
         try:
             entries = runtime_fs.scandir_nofollow(self._paths, d)
-        except (OSError, PathContainmentError):
-            return []
+        except (OSError, PathContainmentError) as exc:
+            # An unreadable/escaping jobs directory cannot prove NO job is running -> a blocker.
+            return [{"unsafe": True, "reason": f"jobs directory unreadable: {exc}"}] if include_unsafe else []
         out = []
         for name, is_link in sorted(entries):
-            if is_link or not name.endswith(".job"):
+            if not name.endswith(".job"):
+                continue
+            if is_link:
+                if include_unsafe:
+                    out.append({"unsafe": True, "name": name, "reason": "job marker is a symlink"})
                 continue
             f = d / name
             # DESCRIPTOR-SAFE gate: regular file, and small enough to be a real marker.
@@ -2194,6 +2247,10 @@ class LifecycleOpsMixin:
             stt = runtime_fs.stat_leaf_nofollow(self._paths, f)
             if stt is None or not _stat.S_ISREG(stt.st_mode) \
                     or stt.st_size > self._JOB_MARKER_MAX:
+                if include_unsafe:
+                    why = ("uninspectable" if stt is None
+                           else "non-regular" if not _stat.S_ISREG(stt.st_mode) else "oversized")
+                    out.append({"unsafe": True, "name": name, "reason": f"job marker {why}"})
                 continue                        # non-regular/oversized -> untrusted, retain
             try:
                 # BOUNDED, non-blocking, no-follow, regular-only read (never blocks on a
@@ -2202,7 +2259,10 @@ class LifecycleOpsMixin:
                     self._paths, f, max_bytes=self._JOB_MARKER_MAX))
                 pid = int(raw["pid"])
             except (OSError, PathContainmentError, KeyError, ValueError,
-                    tomllib.TOMLDecodeError):
+                    tomllib.TOMLDecodeError) as exc:
+                if include_unsafe:
+                    out.append({"unsafe": True, "name": name,
+                                "reason": f"job marker malformed/unreadable: {exc}"})
                 continue                        # malformed/unsafe -> retain for diagnosis
             if procident.identity_matches(raw, pid):
                 out.append({"log": raw.get("log"), "target": raw.get("target"),
@@ -2303,6 +2363,8 @@ class LifecycleOpsMixin:
                                          "session_ident": res.session_ident}
                             ok = False
                             break
+            except AdmissionRefused as _adm:
+                return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
             except SourceTxnBlocked as blocked:
                 return ActionResult(False, f"Host test blocked for '{target}': {blocked}",
                                     next_commands=[f"lhpc status {target}"])
@@ -2347,24 +2409,36 @@ class LifecycleOpsMixin:
                                 details=details,
                                 next_commands=[f"lhpc test {target} --tx --yes"],
                                 data={"changes": len(bands)})
-        details = []
-        ok = True
-        attempted_bands: list = []
-        for band in bands:
-            # Operator Abort between frames: stop BEFORE the next transmit. A bare `break` would be
-            # UNtruthful (ok stays True → "PASSED"); return a non-success cancelled result instead.
-            if should_cancel and should_cancel():
-                return ActionResult(
-                    False, f"TX test cancelled by operator (Abort) after {len(attempted_bands)} "
-                    "band attempt(s).", details=details,
-                    data={"cancelled": True, "attempted_bands": attempted_bands})
-            attempted_bands.append(band)                   # a frame may transmit even if unconfirmed
-            res = life.run_daemon_tx_test(band, payload)
-            ok = ok and res.ok
-            details.append(f"  [{'ok' if res.ok else 'fail'}] band {res.band}: {res.detail} "
-                           f"(TXOK {res.txok_before}->{res.txok_after})")
-        return ActionResult(ok, f"TX test {'PASSED' if ok else 'did not confirm'} for '{target}'.",
-                            details=details, next_commands=[f"lhpc status {target}", f"lhpc logs {target}"])
+        # An applied TX test transmits REAL RF — hold task admission (lock order #1) across the whole
+        # transmit loop so it can never run concurrently with a controller self-update/uninstall. A
+        # refusal returns BEFORE any frame is transmitted.
+        from . import reslock as _reslock
+        try:
+            with self._admission_guard("tx-test", target):
+                details = []
+                ok = True
+                attempted_bands: list = []
+                for band in bands:
+                    # Operator Abort between frames: stop BEFORE the next transmit. A bare `break` would
+                    # be UNtruthful (ok stays True → "PASSED"); return a non-success cancelled result.
+                    if should_cancel and should_cancel():
+                        return ActionResult(
+                            False, f"TX test cancelled by operator (Abort) after {len(attempted_bands)} "
+                            "band attempt(s).", details=details,
+                            data={"cancelled": True, "attempted_bands": attempted_bands})
+                    attempted_bands.append(band)           # a frame may transmit even if unconfirmed
+                    res = life.run_daemon_tx_test(band, payload)
+                    ok = ok and res.ok
+                    details.append(f"  [{'ok' if res.ok else 'fail'}] band {res.band}: {res.detail} "
+                                   f"(TXOK {res.txok_before}->{res.txok_after})")
+                return ActionResult(ok, f"TX test {'PASSED' if ok else 'did not confirm'} for '{target}'.",
+                                    details=details,
+                                    next_commands=[f"lhpc status {target}", f"lhpc logs {target}"])
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except _reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot TX-test '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
 
     def run_params_for(self, target: str):
         """Run parameters offered for `target` (from its main/own components)."""

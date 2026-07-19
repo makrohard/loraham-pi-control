@@ -14,6 +14,11 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+# INTENTIONAL: kill only the main console process, never its control group. LHPC identity-tracks and
+# lifecycle-manages the LoRaHAM stacks and detached build/test jobs it starts; a web restart or a
+# self-update must NOT tear those workloads down. Controller uninstall is the ONE path that stops and
+# verifies them explicitly. The default KillMode=control-group would kill them on every web restart.
+KillMode=process
 Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
 WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
 ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc web --socket

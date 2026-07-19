@@ -103,3 +103,34 @@ def _no_daemon_verify_wait(monkeypatch):
     monkeypatch.setattr(ControllerService, "DAEMON_VERIFY_TIMEOUT_S", 0.0)
     monkeypatch.setattr(ControllerService, "ENDPOINT_VERIFY_TIMEOUT_S", 0.0)
     monkeypatch.setattr(Lifecycle, "OBSERVE_TIMEOUT_S", 0.0)
+
+
+# --- session-wide propagation of unhandled THREAD exceptions -------------------------------------
+# An exception in a thread's run() is otherwise only a PytestUnhandledThreadExceptionWarning that never
+# fails CI. Record every such exception and FAIL the session at the end (with thread + traceback), so a
+# leaked/racy test thread is a hard failure, not a warning. It does NOT suppress or filter the warning.
+import threading as _threading  # noqa: E402
+import traceback as _traceback  # noqa: E402
+
+_THREAD_EXCEPTIONS: list = []
+_prev_thread_hook = _threading.excepthook
+
+
+def _record_thread_exception(args):  # noqa: ANN001
+    _THREAD_EXCEPTIONS.append(
+        "".join(_traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+        + f"(thread: {getattr(args.thread, 'name', '?')})")
+    if _prev_thread_hook is not None:
+        _prev_thread_hook(args)
+
+
+_threading.excepthook = _record_thread_exception
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ANN001
+    if _THREAD_EXCEPTIONS:
+        tr = session.config.pluginmanager.get_plugin("terminalreporter")
+        if tr is not None:
+            tr.write_line(f"\nFAIL: {len(_THREAD_EXCEPTIONS)} unhandled thread exception(s):\n"
+                          + "\n---\n".join(_THREAD_EXCEPTIONS))
+        session.exitstatus = 1

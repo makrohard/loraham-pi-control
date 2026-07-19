@@ -77,3 +77,31 @@ def test_nested_public_stop_refreshes_the_outer_readers(tmp_path):
     except Exception:                                # noqa: BLE001 — harness has no processes
         pass
     assert svc.build_snapshot() is not a
+
+
+def test_snapshot_memo_is_thread_local(tmp_path):
+    # The shared ControllerService is hit by concurrent Waitress worker threads. The memo must be
+    # thread-local: one thread's invalidation must NOT clobber another thread's cached snapshot, and
+    # each thread computes its own. Sequenced with events so the interleaving is deterministic.
+    import threading
+    svc = _svc(tmp_path)
+    r = {}
+    a_built, b_done = threading.Event(), threading.Event()
+
+    def thread_a():
+        r["a1"] = svc.build_snapshot()          # A memoizes in A's thread-local
+        a_built.set()
+        b_done.wait(5)                          # ... while B builds + invalidates on its own thread
+        r["a2"] = svc.build_snapshot()          # must return A's SAME object (B could not clobber it)
+
+    def thread_b():
+        a_built.wait(5)
+        r["b1"] = svc.build_snapshot()          # B memoizes in B's own thread-local (distinct object)
+        svc.invalidate_snapshot()               # clears ONLY B's memo
+        b_done.set()
+
+    ta, tb = threading.Thread(target=thread_a), threading.Thread(target=thread_b)
+    ta.start(); tb.start(); ta.join(5); tb.join(5)
+
+    assert r["a1"] is r["a2"]                    # A's memo survived B's invalidate -> thread-local
+    assert r["b1"] is not r["a1"]               # each thread assessed its own snapshot

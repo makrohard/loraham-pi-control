@@ -199,3 +199,50 @@ opens no TCP port. Remote access is provided by the separate production front-en
 this unit to a public address: the managed **`lhpc-nginx.service`** terminates HTTPS and enforces
 client-certificate (mTLS) auth plus a source-CIDR gate, and remote exposure is opt-in behind a typed
 confirmation. See [`webserver.md`](webserver.md) for the topology and the expose-with-mTLS runbook.
+
+## Security & lifecycle hardening
+
+These guarantees hold in every deployment; keep them in mind when operating or auditing the controller.
+
+- **Canonical user units are installed and enabled by `install.sh`** (unless service installation is
+  explicitly disabled). It renders the four canonical units (`lhpc-web.service`,
+  `lhpc-selfupdate.service`, `lhpc-selfupdate.path`, and — when nginx is present — `lhpc-nginx.service`),
+  runs `daemon-reload`, enables the request watcher and the web service, and lingers the user so the
+  console autostarts at boot. The generated units are byte-identical to the shipped `deploy/*.service`
+  templates (differing only in `%h` vs the resolved paths — a single source of truth).
+
+- **Trusted-host / DNS-rebinding enforcement runs in EVERY serving mode**, including the plain
+  interactive loopback-HTTP console — not only the productive/HTTPS front-end. An empty, missing,
+  malformed, or unrelated `Host` is rejected with **400** before any session, CSRF token, or mutation;
+  the check compares the real `Host` (never a client-supplied `X-Forwarded-Host`). Loopback forms
+  (`localhost`, `127.0.0.1`, `[::1]`, with any port) are accepted; configured DNS SANs and — only when
+  the console is deliberately remote-exposed — bare IP literals are also accepted.
+
+- **`KillMode=process` is deliberate** on both the shipped and generated `lhpc-web.service`. LHPC
+  identity-tracks and lifecycle-manages the LoRaHAM stacks and detached build/test jobs it starts, so a
+  **web restart or a self-update must not tear those workloads down**. The default
+  `KillMode=control-group` would kill them on every web restart; controller uninstall is the one path
+  that stops and verifies them explicitly.
+
+- **Uninstall is quiescence-gated.** Before removing any controller code or state, `uninstall.sh` writes
+  the `.lhpc-uninstalling` guard (which blocks new task admission) and invokes the controller
+  quiescence prep, which **refuses on active or unprovable build/test/web jobs and on unresolved
+  auto-install/HMAC state, blocks on any UNKNOWN component state, then stops the managed stacks —
+  clients before the shared daemon — and verifies cessation** with a fresh snapshot. If quiescence
+  cannot be proven it fails closed: the guard is removed and **nothing is deleted**. Only canonical,
+  byte-exact same-root units are stopped/removed; a customized/noncanonical same-root unit is left in
+  place and warned about rather than deleting its referenced root.
+
+- **Malformed persisted configuration fails closed.** Only an *absent* stack config file means
+  "use defaults"; a present-but-malformed/unreadable/oversized/wrong-typed file raises a typed error —
+  the CLI returns a clean failure with no side effects, the web returns **409** (no traceback, no echo
+  of the bad value), and the offending file is preserved for diagnosis.
+
+- **Compatibility `/tmp` daemon sockets are peer-credential checked.** The pinned daemon exposes its
+  `/tmp/lora*.sock` names as world-writable-directory compatibility paths (for direct user-run
+  operation), which are vulnerable to local squatting. Immediately after `connect()` and before sending
+  any command, status request, configuration write, or RF payload, LHPC verifies the `/tmp` peer's UID
+  via `SO_PEERCRED` and requires it to equal the controller's effective UID — in both the request/reply
+  and fire-and-forget paths. Protected `/run/loraham` sockets keep their dedicated-UID + directory/group
+  security model and are exempt. A local squatter may still deny service by owning a name, but can never
+  impersonate the daemon or receive controller payloads.

@@ -2,8 +2,9 @@
 #
 # LoRaHAM Pi Control — controller UNINSTALLER.
 #
-# Removes the selected LHPC CONTROLLER deployment. It does NOT inspect, stop, or wait for
-# managed stacks (daemon, MeshCom, MeshCore, direct-radio apps, builds, tests, auto-install jobs).
+# Removes the selected LHPC CONTROLLER deployment. It STOPS and VERIFIES the managed stacks
+# (daemon, MeshCom, MeshCore, direct-radio apps) FIRST — and aborts without removing anything if it
+# cannot prove they ceased or a build/test/auto-install/HMAC job is unresolved.
 #
 #   default : remove src/, venv/, state/, logs/ and generated controller dirs, the
 #             ~/.local/bin/lhpc link and the managed systemd units — KEEP config/, backups/,
@@ -39,7 +40,8 @@ Usage:
   --yes, -y                   do not prompt for confirmation
   -h, --help                  show this help
 
-Default keeps config/, backups/ and .lhpc-root. Managed stacks are never stopped.
+Default keeps config/, backups/ and .lhpc-root. Managed stacks are STOPPED and VERIFIED first;
+if they cannot be proven stopped, the uninstall aborts and removes nothing.
 EOF
 	exit "${1:-0}"
 }
@@ -127,7 +129,7 @@ if [ "$PURGE" -eq 1 ]; then
 else
 	printf '\nUninstall LoRaHAM Pi Control from:\n\n  %s\n\nREMOVE : src/ venv/ state/ logs/ build/ bin/ profiles/ systemd/ docs/ + managed units + PATH link\nKEEP   : config/ (settings + secrets), backups/, .lhpc-root\n' "$TARGET_DIR"
 fi
-printf 'Managed stacks are NOT stopped by this script.\n\n'
+printf 'Managed stacks are STOPPED and VERIFIED before removal (clients before the shared daemon);\nif quiescence cannot be proven, this aborts and removes nothing.\n\n'
 if [ "$ASSUME_YES" -ne 1 ]; then
 	printf 'Proceed? [y/N] '
 	read -r reply </dev/tty 2>/dev/null || reply=""
@@ -138,7 +140,58 @@ fi
 # Written FIRST (root-level, with process identity). The web unit conditions on its ABSENCE, so
 # the updater's OnFailure=lhpc-web.service cannot resurrect the console mid-teardown. Recovery
 # can clear a stale guard after proving this pid is gone.
-printf '{"pid": %s, "nonce": "%s", "started": %s}\n' "$$" "${RANDOM}${RANDOM}" "$(date +%s 2>/dev/null || echo 0)" > "$GUARD"
+# Capture config-only-ness BEFORE writing the guard — the guard file itself would otherwise make
+# `is_config_only` false (it is not in the allowed remainder set).
+CONFIG_ONLY=0; is_config_only && CONFIG_ONLY=1
+
+# Guard identity: a per-invocation nonce + this shell's pid/start-time, so a live owner is
+# distinguishable from PID reuse and the RELEASE removes only the guard THIS run owns.
+NONCE="${RANDOM}${RANDOM}${RANDOM}"
+GUARD_START="$(awk '{print $22}' /proc/$$/stat 2>/dev/null || echo 0)"
+guard_release() {   # remove ONLY the guard this invocation owns (never a pre-existing/foreign one)
+	if [ -x "${VENV}/bin/lhpc" ]; then
+		"${VENV}/bin/lhpc" _uninstall-guard-release --root "$TARGET_DIR" --nonce "$NONCE" >/dev/null 2>&1 || true
+	else
+		rm -f "$GUARD" 2>/dev/null || true   # config-only remainder: no controller op, no web/tasks
+	fi
+}
+
+# ATOMIC, EXCLUSIVE, NO-FOLLOW guard claim — NEVER truncates/follows/replaces a pre-existing guard of
+# any type, and a live concurrent uninstall is refused. Descriptor-based controller op for a real
+# deployment; a `set -C` (noclobber) create as the fallback for a config-only remainder with no lhpc.
+if [ -x "${VENV}/bin/lhpc" ]; then
+	"${VENV}/bin/lhpc" _uninstall-guard-claim --root "$TARGET_DIR" --pid "$$" --nonce "$NONCE" --start "$GUARD_START" \
+		|| die "could not claim the uninstall guard — a concurrent/interrupted uninstall may own it, or ${GUARD} is unsafe. Recover it (verify no uninstall is running, then remove ${GUARD}), and re-run."
+else
+	( set -C; printf '{"pid": %s, "nonce": "%s", "started": %s}\n' "$$" "$NONCE" "$GUARD_START" > "$GUARD" ) 2>/dev/null \
+		|| die "an uninstall guard already exists at ${GUARD} — refusing (a concurrent or interrupted uninstall). Remove it once you are sure none is running, then re-run."
+fi
+
+# --------------------------------------------------------------------------- quiescence gate
+# BEFORE removing any controller code/state: prove the managed workloads are stopped. The guard above
+# already blocks NEW task admission; this controller command additionally REFUSES on active/unsafe
+# build/test/web jobs or unresolved auto-install/HMAC state, blocks on any UNKNOWN component state,
+# then STOPS the managed stacks (clients before the shared daemon) and VERIFIES cessation. If it cannot
+# prove quiescence it fails closed — we remove the guard we just wrote and abort WITHOUT deleting
+# anything. Skipped only for a legacy config-only remainder (no venv/executable/state to inspect).
+if [ -x "${VENV}/bin/lhpc" ]; then
+	step "Prepare uninstall — stop managed stacks and verify cessation"
+	if ! "${VENV}/bin/lhpc" _controller-uninstall-prep --root "$TARGET_DIR"; then
+		# Preparation safely REFUSED before teardown began — remove the guard THIS run owns, retain
+		# everything else, and exit nonzero.
+		guard_release
+		die "Uninstall preparation could not prove the managed stacks are stopped (see the message above) — aborting. Nothing was removed; the checkout, state, and units are untouched."
+	fi
+elif [ "$CONFIG_ONLY" -eq 1 ]; then
+	# The ONLY case that skips workload prep: a legacy config-only remainder with no executable/state
+	# to inspect (nothing can be running). (Captured BEFORE the guard was written.)
+	note "no ${VENV}/bin/lhpc — config-only remainder, nothing to stop"
+else
+	# A normal deployment whose controller command is missing/broken — we cannot prove quiescence, so
+	# we must NOT delete anything. Release the guard THIS run owns and abort.
+	guard_release
+	die "the controller command ${VENV}/bin/lhpc is missing, but $TARGET_DIR is not a config-only remainder — cannot prove the managed stacks are stopped. Aborting without removing anything (reinstall/repair, then retry)."
+fi
 
 sysctl_ok() { command -v systemctl >/dev/null 2>&1; }
 render_unit() { "${VENV}/bin/python" -m lhpc.core.updater_units render "$1" "$TARGET_DIR" "$CHECKOUT" "$VENV" 2>/dev/null; }
@@ -159,35 +212,107 @@ owns_root() {                             # $1=file — provenance names THIS ro
 # byte-exact canonical units are stopped/removed; a noncanonical same-root unit is left + warned.
 step "Managed systemd units"
 UNITS_REMOVED=0
-for spec in "lhpc-nginx.service:${NGINX_UNIT}" \
-            "lhpc-selfupdate.path:${PATH_UNIT}" \
-            "lhpc-selfupdate.service:${HELPER_UNIT}" \
-            "lhpc-web.service:${WEB_UNIT}"; do
+# The canonical units, kind:path, in teardown order (used identically by PASS 0/1/2 below).
+UNIT_SPECS=(
+	"lhpc-nginx.service:${NGINX_UNIT}"
+	"lhpc-selfupdate.path:${PATH_UNIT}"
+	"lhpc-selfupdate.service:${HELPER_UNIT}"
+	"lhpc-web.service:${WEB_UNIT}"
+)
+
+# PASS 0 — RECOVER from a PRIOR interrupted uninstall. A `*.uninstall-staged` artifact with no live
+# canonical counterpart means an earlier run staged a unit aside, then failed to reload AND failed to
+# fully restore it. We MUST resurrect such a unit — and prove a successful daemon-reload — before doing
+# anything else, so the reload requirement can NEVER be bypassed by the canonical filename being
+# temporarily absent. We fail closed on any ambiguity: a staged file that is not byte-exact canonical
+# (customized/malformed), a live canonical file coexisting with its staged counterpart, or a restore
+# that does not complete all abort while retaining ALL controller code, state and the guard.
+RECOVERED=0
+for spec in "${UNIT_SPECS[@]}"; do
+	kind="${spec%%:*}"; file="${spec#*:}"; staged="${file}.uninstall-staged"
+	{ [ -e "$staged" ] || [ -L "$staged" ]; } || continue
+	if [ -e "$file" ] || [ -L "$file" ]; then
+		die "found BOTH ${file} and ${staged} from a prior interrupted uninstall — refusing to overwrite either. Keep the correct one by hand, then re-run. Nothing was removed."
+	fi
+	is_canonical "$kind" "$staged" || die "leftover ${staged} is not a byte-exact canonical ${kind} (customized or malformed) — refusing to restore or delete it. Resolve it by hand, then re-run. Nothing was removed."
+	mv -f "$staged" "$file" 2>/dev/null || die "could not restore leftover ${staged} -> ${file} — retaining all controller code, state and the uninstall guard. Resolve it, then re-run."
+	{ [ -f "$file" ] && [ ! -e "$staged" ]; } || die "restore of leftover ${staged} did not complete — retaining all controller code, state and the uninstall guard. Resolve it, then re-run."
+	RECOVERED=1; note "recovered leftover ${kind} from a prior interrupted uninstall"
+done
+if [ "$RECOVERED" -eq 1 ]; then
+	sysctl_ok || die "recovered leftover units but systemctl is unavailable to reload — retaining all controller code, state and the uninstall guard. Re-run when systemctl is available."
+	systemctl --user daemon-reload 2>/dev/null || die "recovered leftover units but systemctl --user daemon-reload FAILED — the units are restored; retaining all controller code, state and the uninstall guard. Re-run to retry."
+fi
+
+# PASS 1 — PROVE every canonical unit STOPPED (fail-safe). A stop failure, an unavailable systemctl
+# while a canonical unit exists, or a CUSTOMIZED same-root unit ABORTS the uninstall: `die` exits
+# nonzero BEFORE any controller code/state is removed and BEFORE the guard is cleared, so everything is
+# retained. A foreign unit (another deployment) is left untouched and does NOT block.
+for spec in "${UNIT_SPECS[@]}"; do
 	kind="${spec%%:*}"; file="${spec#*:}"
 	if is_canonical "$kind" "$file"; then
-		if sysctl_ok; then
-			systemctl --user stop "$kind" 2>/dev/null || warn "could not stop $kind cleanly — continuing."
-			systemctl --user disable "$kind" 2>/dev/null || true
-		fi
+		sysctl_ok || die "systemctl is unavailable but a canonical ${kind} exists — cannot prove it is stopped. Retaining all controller code, state and the uninstall guard."
+		systemctl --user stop "$kind" 2>/dev/null || die "could not stop ${kind} — retaining all controller code, state and the uninstall guard. Resolve it, then re-run uninstall."
+		systemctl --user disable "$kind" 2>/dev/null || true
 	elif [ -e "$file" ] || [ -L "$file" ]; then
 		if owns_root "$file"; then
-			warn "$kind exists but is NOT the canonical unit (customized) — left in place; it may still reference this deleted root. Remove it by hand: rm ${file}"
+			die "${kind} is a CUSTOMIZED unit that references THIS runtime root (${file}) — refusing to delete a root its unit still points at. Remove or repoint it by hand, then re-run uninstall. Nothing was removed."
 		else
-			note "$kind belongs to a different deployment — left untouched"
+			note "${kind} belongs to a different deployment — left untouched"
 		fi
 	fi
 done
-# clear any pending/in-flight request AFTER the watcher + helper are down
+# The watcher + helper are now PROVEN stopped -> safe to clear any pending/in-flight request.
 rm -f "${TARGET_DIR}/state/selfupdate.request" "${TARGET_DIR}/state/selfupdate.inflight" 2>/dev/null || true
-# now remove ONLY the canonical unit files, then reload
-for spec in "lhpc-nginx.service:${NGINX_UNIT}" \
-            "lhpc-selfupdate.path:${PATH_UNIT}" \
-            "lhpc-selfupdate.service:${HELPER_UNIT}" \
-            "lhpc-web.service:${WEB_UNIT}"; do
+# PASS 2 — TRANSACTIONAL unit removal. STAGE each canonical unit ASIDE (a rename, NOT a delete), then
+# daemon-reload. If reload FAILS (or systemctl is gone), RESTORE the staged units so systemd still sees
+# the still-installed units, and abort — retaining ALL controller code, state and the guard. A retry
+# re-stages and re-reloads. Controller code/state is deleted ONLY AFTER a successful reload, so a
+# reload failure can NEVER be bypassed by a subsequent run finding the files already gone.
+STAGED=()
+# Restore every staged unit to its canonical path and VERIFY each restore — a rename back that does not
+# leave the canonical file in place (and its staged counterpart gone) is a restore FAILURE. Returns
+# nonzero if ANY unit could not be restored, so callers never claim "restored" without proof.
+restore_staged() {
+	local _f _rc=0
+	for _f in ${STAGED[@]+"${STAGED[@]}"}; do
+		mv -f "${_f}.uninstall-staged" "$_f" 2>/dev/null || true
+		if [ ! -f "$_f" ] || [ -e "${_f}.uninstall-staged" ]; then _rc=1; fi
+	done
+	return "$_rc"
+}
+for spec in "${UNIT_SPECS[@]}"; do
 	kind="${spec%%:*}"; file="${spec#*:}"
-	if is_canonical "$kind" "$file"; then rm -f "$file"; UNITS_REMOVED=1; note "removed $kind"; fi
+	if is_canonical "$kind" "$file"; then
+		# A staged counterpart alongside a live canonical file is the both-exist ambiguity PASS 0
+		# resolves; if one is present now, refuse to clobber it rather than overwrite blindly.
+		{ [ -e "${file}.uninstall-staged" ] || [ -L "${file}.uninstall-staged" ]; } && \
+			die "unexpected ${file}.uninstall-staged alongside a canonical ${file} — refusing to overwrite it. Resolve it by hand, then re-run. Nothing further was removed."
+		mv -f "$file" "${file}.uninstall-staged" \
+			|| { restore_staged || true; die "could not stage ${kind} (${file}) for removal — retaining controller code, state and the guard."; }
+		STAGED+=("$file")
+		UNITS_REMOVED=1; note "staged $kind for removal"
+	fi
 done
-[ "$UNITS_REMOVED" -eq 1 ] && sysctl_ok && systemctl --user daemon-reload 2>/dev/null || true
+# If we staged canonical units, daemon-reload MUST succeed before we finalize (and before any code/state
+# deletion downstream) — otherwise restore the units and retain everything so a retry converges. If a
+# restore itself fails, the staged files remain: a retry recovers them via PASS 0 (which re-proves the
+# reload), so the reload requirement is still never bypassed.
+if [ "$UNITS_REMOVED" -eq 1 ]; then
+	if ! sysctl_ok; then
+		if restore_staged; then
+			die "systemctl became unavailable — restored the units and retained controller code, state and the uninstall guard."
+		fi
+		die "systemctl became unavailable AND one or more units could NOT be restored — retaining ALL controller code, state and the guard. Re-run to recover from the staged unit files."
+	fi
+	if ! systemctl --user daemon-reload 2>/dev/null; then
+		if restore_staged; then
+			die "systemctl --user daemon-reload FAILED — restored the units (systemd still has them) and retained controller code, state and the guard. Re-run to retry."
+		fi
+		die "systemctl --user daemon-reload FAILED AND one or more units could NOT be restored — retaining ALL controller code, state and the guard. Re-run to recover from the staged unit files."
+	fi
+	for _f in ${STAGED[@]+"${STAGED[@]}"}; do rm -f "${_f}.uninstall-staged" 2>/dev/null || true; done   # reload OK -> finalize
+fi
 
 # --------------------------------------------------------------------------- PATH symlink
 step "Command integration"

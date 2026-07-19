@@ -15,7 +15,7 @@ import uuid
 from .snapshot_memo import invalidates_snapshot
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
-from .service_base import ActionResult, SourceTxnBlocked as _SourceTxnBlocked
+from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked as _SourceTxnBlocked
 
 # Secret file (first line = the password) and the bridge run-param that points at it. `{runtime}` in the
 # param value is resolved by commands.expand_argv at start; an empty value emits no arg -> open auth.
@@ -432,7 +432,8 @@ class HmacOpsMixin:
             return ActionResult(False, "Runtime root is not bootstrapped yet.",
                                 next_commands=["lhpc bootstrap"])
         try:
-            with reslock.operation_lock(self._paths, "hmac-apply", stack_id, ""):
+            with self._admission_guard("hmac-apply", stack_id), \
+                 reslock.operation_lock(self._paths, "hmac-apply", stack_id, ""):   # admission FIRST
                 if self.hmac_apply_running():
                     return ActionResult(False, "An HMAC apply is already running — wait for it "
                                         "to finish.")
@@ -489,6 +490,8 @@ class HmacOpsMixin:
                     self._hmac_mark_failed(marker, None, err)
                     return ActionResult(False, err)
                 return ActionResult(True, f"HMAC {action} started.", data={"run_id": run_id})
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy:
             return ActionResult(False, "An HMAC apply is already starting (start lock contended).")
 
@@ -552,7 +555,10 @@ class HmacOpsMixin:
             emit("Runtime root is not bootstrapped yet. Run 'lhpc bootstrap' first.")
             return 1
         try:
-            with reslock.operation_lock(self._paths, "hmac-apply", stack_id, ""):
+            # LOCK ORDER #1: foreground HMAC apply participates in task admission — a self-update/
+            # uninstall in progress refuses it (before any marker/mutation).
+            with self._admission_guard("hmac-apply-cli", stack_id), \
+                 reslock.operation_lock(self._paths, "hmac-apply", stack_id, ""):
                 if self.hmac_apply_running():
                     emit("An HMAC apply is already running — wait for it to finish.")
                     return 1
@@ -590,6 +596,9 @@ class HmacOpsMixin:
                         runtime_fs.unlink(self._paths, self._paths.under("state", "jobs", slug + ".job"))
                     except (OSError, PathContainmentError, validators.ValidationError):
                         pass
+        except AdmissionRefused as _adm:
+            emit(_adm.reason)
+            return 1
         except reslock.ResourceBusy:
             emit("An HMAC apply is already starting (start lock contended).")
             return 1

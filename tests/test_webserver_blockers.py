@@ -119,12 +119,15 @@ def test_gui_revoke_requires_typed_label(tmp_path):
 
 # --- blocker 7: trusted-host (productive only) ------------------------------
 
-def test_trusted_host_enforced_only_in_productive_mode(tmp_path):
+def test_trusted_host_enforced_in_all_modes(tmp_path):
+    # Item 1: the trusted-host policy is enforced in EVERY serving mode — including the interactive
+    # loopback console (Secure cookies off), not only productive/HTTPS.
     app, _ = _app(tmp_path)
     c = app.test_client()
-    # non-productive (Secure cookies off) -> host not enforced
-    assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 200
-    # productive HTTPS -> unknown Host rejected, loopback allowed
+    # interactive (Secure cookies off) -> an unknown/rebinding Host is STILL rejected; loopback allowed
+    assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
+    assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200
+    # productive HTTPS -> identical policy
     app.config["SESSION_COOKIE_SECURE"] = True
     assert c.get("/stacks", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/stacks", headers={"Host": "127.0.0.1"}).status_code == 200

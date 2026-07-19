@@ -49,7 +49,10 @@ def test_console_running_pill_is_request_scoped(tmp_path):
 
 def test_console_pill_reattaches_port_behind_nginx(tmp_path):
     # nginx forwards a PORTLESS Host ($host), so the console pill must reattach the nginx console port;
-    # the raw dev server carries the port in Host directly.
+    # the raw dev server carries the port in Host directly. A behind-nginx REMOTE peer means the console
+    # is remote-exposed, so the bare IP-literal Host is legitimately accepted by the trusted-host policy.
+    from lhpc.core import config as _config
+    _config.save_webserver_config(Paths(runtime_root=tmp_path), remote_exposed=True)
     app, _ = _app_svc(tmp_path)
     c = app.test_client()
     proxied = c.get("/stacks", headers={"X-LHPC-Peer": "remote", "Host": "192.168.1.5"}).get_data(as_text=True)

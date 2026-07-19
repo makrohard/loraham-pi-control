@@ -15,10 +15,8 @@ Two field-verified defects, both covered here:
    without being enabled the run-failure path names it as the likely cause.
 """
 
-import tempfile
 from pathlib import Path
 
-import pytest
 
 from lhpc.core.config import update_yaml
 from lhpc.core.paths import Paths

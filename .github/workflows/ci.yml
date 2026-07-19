@@ -1,0 +1,64 @@
+name: CI
+
+# Release gate: runs on pushes to main and on pull requests. Fails closed — no step is
+# allowed to be skipped or weakened to obtain a green result.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the workflow only needs to read the repository.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same ref so only the latest matters.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs (never floating tags).
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package and audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install pytest ruff bandit pip-audit
+
+      - name: Byte-compile production code
+        run: python -m compileall -q lhpc
+
+      - name: Shell-syntax check installer scripts
+        run: bash -n install.sh uninstall.sh
+
+      - name: Ruff (production code, default rules)
+        run: ruff check lhpc
+
+      - name: Ruff (tests — fatal errors only)
+        run: ruff check tests --select F,E9
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Bandit (high severity gate)
+        run: bandit -q -r lhpc -lll
+
+      - name: pip-audit (dependency vulnerabilities)
+        run: pip-audit . --strict --progress-spinner=off

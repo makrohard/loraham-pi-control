@@ -161,11 +161,18 @@ systemctl --user disable lhpc-web     # stop it auto-starting on boot
 journalctl --user -u lhpc-web -f      # live logs
 ```
 
-**Uninstall** removes **LHPC itself, not your managed stacks** — the daemon/apps keep running
-until you stop them. `./uninstall.sh` removes the code, venv, state and the service but
-**keeps your `config/`** (settings + secrets); `./uninstall.sh --purge` wipes everything,
-config included. (`--target <dir>`, `--yes` to skip the prompt.) The scripts live in the
-checkout at `~/loraham-pi-control/src/loraham-pi-control/`, not the runtime root.
+**Uninstall** stops your managed stacks, verifies they ceased, and only then removes **LHPC itself**.
+`./uninstall.sh` first writes a guard that blocks new work, refuses to proceed while any build/test/
+web job or auto-install/HMAC apply is unresolved (or any component state is UNKNOWN), stops the
+managed stacks (clients before the shared daemon) and verifies cessation — and if it cannot prove
+quiescence it **aborts without deleting anything**. On success it removes the code, venv, state and
+service but **keeps your `config/`** (settings + secrets); `./uninstall.sh --purge` wipes everything,
+config included. (`--target <dir>`, `--yes` to skip the prompt.) The scripts live in the checkout at
+`~/loraham-pi-control/src/loraham-pi-control/`, not the runtime root.
+
+See [`docs/deployment.md#security--lifecycle-hardening`](docs/deployment.md#security--lifecycle-hardening)
+for the full guarantees: Host enforcement in every mode, `KillMode=process` preserving workloads across
+web restarts, the quiescence-gated uninstall, fail-closed config, and `/tmp` socket peer-cred checks.
 
 > Working on LHPC itself? Clone anywhere and `pip install -e .` in a venv for a dev checkout
 > — that instance is intentionally *not* self-hosted (the controller row shows "not

@@ -297,17 +297,114 @@ def test_self_update_apply_operator_stops_and_restarts_web(tmp_path, monkeypatch
     assert ["systemctl", "--user", "start", "lhpc-web.service"] in fake.calls   # restarted after
 
 
-def test_self_update_apply_operator_web_inactive_delegates(tmp_path, monkeypatch):
+def _pip_key(root):
+    import sys
+    return (sys.executable, "-m", "pip", "install", "-e", str(root))
+
+
+def _op_inactive(tmp_path, monkeypatch, apply_result, *, pip=None):
+    """An operator svc with web INACTIVE, a stubbed self_update_apply and repo_root, and (optionally) a
+    stubbed pip result. Returns (svc, fake, root)."""
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService
+    from lhpc.core import selfupdate
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    root = tmp_path / "repo"; root.mkdir()
+    monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: root))
+    monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False: apply_result)
+    cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(1, "", "")}   # off
+    if pip is not None:
+        cmds[_pip_key(root)] = pip
+    svc, fake = _op_svc(tmp_path, cmds)
+    return svc, fake, root
+
+
+def test_operator_inactive_real_advance_syncs_venv(tmp_path, monkeypatch):
+    # Item 1: web inactive + a REAL advance still synchronizes the editable venv (no service control).
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult
+    svc, fake, root = _op_inactive(tmp_path, monkeypatch,
+                                   ActionResult(True, "advanced", data={}), pip=CR(0, "", ""))
+    r = svc.self_update_apply_operator()
+    assert r.ok and r.data.get("update_applied")
+    assert list(_pip_key(root)) in fake.calls                                    # venv sync ran
+    assert not any(c[:3] == ["systemctl", "--user", "stop"] for c in fake.calls)  # no service control
+
+
+def test_operator_inactive_already_current_no_sync(tmp_path, monkeypatch):
+    from lhpc.core.services import ActionResult
+    svc, fake, root = _op_inactive(tmp_path, monkeypatch,
+                                   ActionResult(True, "already up to date", data={"already": True}))
+    r = svc.self_update_apply_operator()
+    assert r.ok
+    assert list(_pip_key(root)) not in fake.calls                                # NO sync on a no-op
+
+
+def test_operator_inactive_apply_failure_no_sync(tmp_path, monkeypatch):
+    from lhpc.core.services import ActionResult
+    svc, fake, root = _op_inactive(tmp_path, monkeypatch,
+                                   ActionResult(False, "apply refused", data={"busy": True}))
+    r = svc.self_update_apply_operator()
+    assert not r.ok
+    assert list(_pip_key(root)) not in fake.calls                                # NO sync on a failure
+
+
+def test_operator_inactive_sync_failure_is_typed(tmp_path, monkeypatch):
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ActionResult
+    svc, fake, root = _op_inactive(tmp_path, monkeypatch,
+                                   ActionResult(True, "advanced", data={}), pip=CR(1, "boom traceback", ""))
+    r = svc.self_update_apply_operator()
+    assert not r.ok and r.data.get("venv_sync_failed") and r.data.get("update_applied")
+    assert "pip install -e" in r.summary                                         # bounded recovery command
+
+
+def test_operator_admission_held_across_apply_and_sync(tmp_path, monkeypatch):
+    # Item 1: admission is NEVER released between apply and venv sync — the lock is held during BOTH.
     from lhpc.core.probes.backends import CommandResult as CR
     from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core import selfupdate
     monkeypatch.delenv("INVOCATION_ID", raising=False)
+    root = tmp_path / "repo"; root.mkdir()
+    monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: root))
+    held = {}
+    def fake_apply(self, *, force=False):
+        held["apply"] = self._held_counts().get(self.ADMISSION_KEY, 0)
+        return ActionResult(True, "advanced", data={})
+    monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(1, "", ""),
+            _pip_key(root): CR(0, "", "")}
+    svc, fake = _op_svc(tmp_path, cmds)
+    real_run = fake.run
+    def rec_run(argv, timeout, cwd=None, env=None):
+        if list(argv) == list(_pip_key(root)):
+            held["sync"] = svc._held_counts().get(svc.ADMISSION_KEY, 0)
+        return real_run(argv, timeout, cwd=cwd, env=env)
+    monkeypatch.setattr(fake, "run", rec_run)
+    svc.self_update_apply_operator()
+    assert held.get("apply", 0) > 0 and held.get("sync", 0) > 0                   # held across BOTH
+
+
+def test_operator_active_restart_failure_is_not_success(tmp_path, monkeypatch):
+    # Item 2: a failed required restart is ALWAYS ok=False, retaining accurate partial-update info.
+    from lhpc.core.probes.backends import CommandResult as CR
+    from lhpc.core.services import ControllerService, ActionResult
+    from lhpc.core import selfupdate
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    root = tmp_path / "repo"; root.mkdir()
+    monkeypatch.setattr(selfupdate, "repo_root", staticmethod(lambda: root))
     monkeypatch.setattr(ControllerService, "self_update_apply",
-                        lambda self, *, force=False: ActionResult(True, "plain apply", data={}))
-    cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(1, "", "")}  # off
+                        lambda self, *, force=False: ActionResult(True, "advanced", data={}))
+    cmds = {("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service"): CR(0, "", ""),   # ON
+            ("systemctl", "--user", "stop", "lhpc-web.service"): CR(0, "", ""),
+            _pip_key(root): CR(0, "", ""),
+            ("systemctl", "--user", "start", "lhpc-web.service"): CR(1, "", "boom")}   # restart FAILS
     svc, fake = _op_svc(tmp_path, cmds)
     r = svc.self_update_apply_operator()
-    assert r.ok and r.summary == "plain apply"
-    assert not any(c[:3] == ["systemctl", "--user", "stop"] for c in fake.calls)   # no service control
+    assert not r.ok                                                              # NOT reported as success
+    assert r.data.get("web_restart_failed") and r.data.get("update_applied")     # partial-update info
+    assert "systemctl --user start lhpc-web.service" in r.summary                # exact recovery command
+    assert "boom" not in r.summary                                               # no raw command output
 
 
 def test_self_update_apply_operator_refuses_in_managed_unit(tmp_path, monkeypatch):
@@ -1861,7 +1958,14 @@ def test_run_service_final_unlink_failure_retains_evidence(tmp_path, monkeypatch
     _write_request(tmp_path, "normal")
     monkeypatch.setattr(ControllerService, "self_update_apply",
                         lambda self, *, force=False: ActionResult(True, "ok", data={"already": True}))
-    monkeypatch.setattr(runtime_fs, "unlink", lambda *a, **k: (_ for _ in ()).throw(OSError("busy")))
+    # Fail ONLY the final in-flight unlink (its intent) — NOT the admission flock-owner unlink that the
+    # helper's task-admission release now also performs through runtime_fs.unlink.
+    _real_unlink = runtime_fs.unlink
+    def _fail_inflight(paths, path, *a, **k):
+        if str(path).endswith("selfupdate.inflight"):
+            raise OSError("busy")
+        return _real_unlink(paths, path, *a, **k)
+    monkeypatch.setattr(runtime_fs, "unlink", _fail_inflight)
     res = svc.self_update_run_service()
     assert not res.ok and res.data.get("cleanup_failed")
     assert (tmp_path / "state" / "selfupdate.inflight").exists()   # retained
@@ -1945,6 +2049,14 @@ def _repair_svc(tmp_path, monkeypatch, show_for):
         argv = ("systemctl", "--user", "show", "-p", "FragmentPath", "-p", "DropInPaths", kind)
         svc._fake.commands[argv] = CommandResult(returncode=0, stdout=show_for(kind, str(ud / kind)),
                                                  stderr="")
+    # A successful systemctl environment: every integration step the repair now checks returns rc 0
+    # (individual tests override a specific one to exercise a failure).
+    for argv in (("systemctl", "--user", "daemon-reload"),
+                 ("systemctl", "--user", "enable", "--now", U.PATH_UNIT),
+                 ("systemctl", "--user", "enable", U.WEB_UNIT),
+                 ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT),
+                 ("systemctl", "--user", "restart", U.WEB_UNIT)):
+        svc._fake.commands[argv] = CommandResult(returncode=0, stdout="", stderr="")
     return svc
 
 
@@ -2002,11 +2114,14 @@ def _legacy_svc(tmp_path, monkeypatch, *, seed_show=True):
             svc._fake.commands[("systemctl", "--user", "show", "-p", "FragmentPath",
                                 "-p", "DropInPaths", kind)] = \
                 CommandResult(returncode=0, stdout=f"FragmentPath={ud/kind}\nDropInPaths=\n", stderr="")
-        # the watcher enable + is-active probe (restart=False migration) succeed by default
-        svc._fake.commands[("systemctl", "--user", "enable", "--now", "lhpc-selfupdate.path")] = \
-            CommandResult(returncode=0, stdout="", stderr="")
-        svc._fake.commands[("systemctl", "--user", "is-active", "--quiet", "lhpc-selfupdate.path")] = \
-            CommandResult(returncode=0, stdout="", stderr="")
+        # Every integration step the repair now checks succeeds by default (daemon-reload, both
+        # enables, the watcher is-active probe, and the web restart); a test overrides one to fail.
+        for argv in (("systemctl", "--user", "daemon-reload"),
+                     ("systemctl", "--user", "enable", "--now", "lhpc-selfupdate.path"),
+                     ("systemctl", "--user", "enable", U.WEB_UNIT),
+                     ("systemctl", "--user", "is-active", "--quiet", "lhpc-selfupdate.path"),
+                     ("systemctl", "--user", "restart", U.WEB_UNIT)):
+            svc._fake.commands[argv] = CommandResult(returncode=0, stdout="", stderr="")
     return svc
 
 
@@ -2123,15 +2238,17 @@ def test_repair_success_proves_path_active_before_marker(tmp_path, monkeypatch):
     assert (tmp_path / "state" / "selfupdate.request").exists()
 
 
-def test_repair_restart_true_unaffected_by_watcher_active(tmp_path, monkeypatch):
-    """restart=True (CLI) stays best-effort: an inactive watcher does not fail it (web restart
-    pulls the .path up via Wants=)."""
+def test_repair_restart_true_also_verifies_watcher_active(tmp_path, monkeypatch):
+    """Item 8: the watcher-active check now applies in BOTH modes. restart=True must NOT silently
+    leave the request watcher down — an inactive .path fails the repair and no root marker is written
+    (a partial integration is never reported as success)."""
     from lhpc.core.probes.backends import CommandResult
     svc = _legacy_svc(tmp_path, monkeypatch)
     svc._fake.commands[("systemctl", "--user", "is-active", "--quiet", "lhpc-selfupdate.path")] = \
         CommandResult(returncode=3, stdout="inactive", stderr="")
-    assert svc.self_update_repair_integration(restart=True).ok
-    assert (tmp_path / ".lhpc-root").exists()
+    res = svc.self_update_repair_integration(restart=True)
+    assert not res.ok and res.data.get("path_watcher_failed")
+    assert not (tmp_path / ".lhpc-root").exists()
 
 
 def _write_overwrite_unit(ud, root, execline):

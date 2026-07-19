@@ -189,31 +189,39 @@ class SelfUpdateOpsMixin:
         `force=True`. Legacy default-equal config is migrated to the new defaults only when the source
         transition it was captured against actually completed — recorded DURABLY before source changes
         and recovered from the journal after a crash. Cleanup failure on force is a truthful partial."""
-        from . import selfupdate
-        jobs = self.active_jobs()
-        if jobs:
-            return ActionResult(False, "An lhpc job is still running — finish it before self-updating.",
-                                details=tuple(f"  {j.get('op', 'job')} {j.get('target', '')}"
-                                              for j in jobs),
-                                data={"blocked_by_jobs": True})
-        # LIVE identity gate (recomputed here, NEVER trusting the cache): only a genuinely
-        # UNSAFE self-hosted checkout (tampered layout: symlink / group-writable / wrong
-        # branch-origin / repo mismatch) blocks apply before any mutation. A `not_applicable`
-        # verdict (NOT self-hosted — a dev checkout or a plain/tangled deployment) does NOT
-        # block: self-update proceeds via the normal `repo_root()` mechanism.
-        if self.controller() is not None:
-            idv = self.controller_identity_live()
-            if idv.get("status") == "unsafe":
-                return ActionResult(False, f"Self-update blocked: unsafe controller identity "
-                                    f"({idv['reason']}). No changes were made.",
-                                    data={"identity_unsafe": True, "identity": idv})
-        # LOCK ORDER (fixed): controller-runtime EXCLUSIVE first (so the running web server —
-        # which holds it SHARED — can never have its source mutated underneath it), THEN the
-        # self-update lock. Both non-blocking; incompatible holders refuse promptly.
+        from . import reslock, selfupdate
+        from .service_base import AdmissionRefused
+        # LOCK ORDER: (1) task admission FIRST — held across the WHOLE mutation so no task can be
+        # reserved/spawned/started while the checkout + venv are changing; (2) controller-runtime +
+        # self-update locks. `_admission_guard`'s strict check ALSO enforces "direct/operator apply
+        # requires the request state ABSENT" (a pending/in-flight/malformed request blocks) and refuses
+        # during an uninstall — with zero mutation. An already-admitted task -> typed busy.
         try:
-            with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
-                with selfupdate.update_lock(self._paths):
-                    return self._self_update_locked(force)
+            with self._admission_guard("self-update-apply"):
+                # Re-run ALL authoritative blocker checks AFTER admission is held (nothing can have
+                # started a job/auto-install/HMAC in the acquisition window).
+                blk = self._self_update_blockers()
+                if blk:
+                    return ActionResult(False, f"Self-update blocked: {blk[0]} — resolve it before "
+                                        "self-updating.", data={f"blocked_by_{blk[1]}": True})
+                # LIVE identity gate (recomputed here, NEVER trusting the cache): only a genuinely
+                # UNSAFE self-hosted checkout blocks apply before any mutation.
+                if self.controller() is not None:
+                    idv = self.controller_identity_live()
+                    if idv.get("status") == "unsafe":
+                        return ActionResult(False, f"Self-update blocked: unsafe controller identity "
+                                            f"({idv['reason']}). No changes were made.",
+                                            data={"identity_unsafe": True, "identity": idv})
+                # controller-runtime EXCLUSIVE (so the running web server, holding it SHARED, can never
+                # have its source mutated underneath it), THEN the self-update lock. Both non-blocking.
+                with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
+                    with selfupdate.update_lock(self._paths):
+                        return self._self_update_locked(force)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy:
+            return ActionResult(False, "A task is starting right now (admission contended) — try the "
+                                "update again shortly.", data={"contended": True})
         except selfupdate.ControllerRuntimeBusy:
             return ActionResult(
                 False, "lhpc-web.service is running — stop it, update, then start it again.",
@@ -232,16 +240,43 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Could not acquire the self-update lock (unsafe runtime state) "
                                 "— aborting without changes.", data={"lock_error": True})
 
-    def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
-        """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO. If the managed web console is
-        running it holds the controller-runtime lock SHARED, so an in-process apply refuses. Here —
-        in an interactive operator shell — we STOP lhpc-web, apply, sync the venv on a real advance
-        (mirroring the one-click helper), then START lhpc-web again. When the console is NOT running
-        this is exactly the plain in-process apply (no service control). REFUSES inside a managed
-        unit: a managed process must never drive systemctl."""
-        import os as _os
+    def _apply_and_sync(self, force: bool) -> ActionResult:
+        """Apply the source update, then — ONLY on a REAL advance — synchronize the editable venv install
+        with the SAME `sys.executable -m pip install -e <repo-root>` the managed helper runs, so a
+        dependency change never leaves the install unusable. MUST be called with task admission already
+        HELD (by the operator flow) so nothing starts between apply and sync. A no-op/already-current or a
+        failed/refused apply runs NO pip. On a real advance the result carries `update_applied=True`; a
+        pip failure returns `ok=False` + `venv_sync_failed=True`, preserving the apply-result data."""
+        import dataclasses as _dc
         import sys as _sys
-        from . import selfupdate, updater_units
+        from . import selfupdate
+        res = self.self_update_apply(force=force)
+        if not (res.ok and not res.data.get("already")):
+            return res                                        # no-op / already-current / failed / refused
+        res = _dc.replace(res, data={**res.data, "update_applied": True})   # a real source advance
+        root = selfupdate.repo_root()
+        if root is not None:
+            pip = self._system.runner.run(
+                [_sys.executable, "-m", "pip", "install", "-e", str(root)], self._PIP_SYNC_TIMEOUT_S)
+            if pip.returncode != 0:
+                detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
+                return _dc.replace(res, ok=False,
+                                   summary="Update applied but the venv sync FAILED — run "
+                                   f"{_sys.executable} -m pip install -e {root} manually."
+                                   + (f" ({detail})" if detail else ""),
+                                   data={**res.data, "venv_sync_failed": True})
+        return res
+
+    def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
+        """OPERATOR-CONTEXT `lhpc self-update --apply`: WARN-then-DO under a CONTINUOUSLY-held task
+        admission lock. If the managed web console is running it holds the controller-runtime lock
+        SHARED, so we STOP lhpc-web, apply + sync the venv, then START it again. When the console is NOT
+        running we STILL apply AND sync the venv (a dependency change must never leave it unusable) — the
+        only difference is no service control. Admission is NEVER released between apply and sync in
+        either case. REFUSES inside a managed unit (a managed process must never drive systemctl)."""
+        import os as _os
+        from . import reslock, updater_units
+        from .service_base import AdmissionRefused
         if _os.environ.get("INVOCATION_ID"):
             return ActionResult(False, "refusing to stop/start services from a managed unit — run "
                                 "`lhpc self-update --apply` from an interactive operator shell")
@@ -249,42 +284,39 @@ class SelfUpdateOpsMixin:
         act = self._system.runner.run(
             ["systemctl", "--user", "is-active", "--quiet", updater_units.WEB_UNIT], _S)
         web_active = (not getattr(act, "not_found", False)) and act.returncode == 0
-        if not web_active:
-            return self.self_update_apply(force=force)         # nothing to orchestrate
-        stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
-        if getattr(stop, "not_found", False) or stop.returncode != 0:
-            return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
-                                details=["systemctl --user stop lhpc-web",
-                                         "lhpc self-update --apply",
-                                         "systemctl --user start lhpc-web"],
-                                data={"stop_failed": True})
-        restart_failed = False
         try:
-            res = self.self_update_apply(force=force)
-            # Venv sync on a real advance so the restarted console has any new deps (the managed
-            # helper does the same). Only when we actually stopped the console (full managed-style
-            # flow) — a no-op apply or the web-not-running path never touches the venv.
-            if res.ok and not res.data.get("already"):
-                root = selfupdate.repo_root()
-                if root is not None:
-                    pip = self._system.runner.run(
-                        [_sys.executable, "-m", "pip", "install", "-e", str(root)],
-                        self._PIP_SYNC_TIMEOUT_S)
-                    if pip.returncode != 0:
-                        detail = selfupdate._summarize_output(pip.stderr or pip.stdout)
-                        res = ActionResult(False, "Update applied but the venv sync FAILED — run "
-                                           f"{_sys.executable} -m pip install -e {root} manually."
-                                           + (f" ({detail})" if detail else ""),
-                                           data={**dict(res.data), "venv_sync_failed": True})
-        finally:
-            start = self._system.runner.run(["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
-            restart_failed = getattr(start, "not_found", False) or start.returncode != 0
-        if restart_failed:
-            return ActionResult(res.ok, res.summary + "  WARNING: lhpc-web did NOT restart — run "
-                                "`systemctl --user start lhpc-web`.",
-                                details=tuple(res.details), data={**dict(res.data),
-                                                                  "web_restart_failed": True})
-        return res
+            with self._admission_guard("self-update-operator"):
+                if not web_active:
+                    # No service to orchestrate — but STILL apply AND sync the venv, under held admission.
+                    return self._apply_and_sync(force)
+                stop = self._system.runner.run(["systemctl", "--user", "stop", updater_units.WEB_UNIT], _S)
+                if getattr(stop, "not_found", False) or stop.returncode != 0:
+                    return ActionResult(False, "could not stop lhpc-web.service — stop it manually then retry",
+                                        details=["systemctl --user stop lhpc-web",
+                                                 "lhpc self-update --apply",
+                                                 "systemctl --user start lhpc-web"],
+                                        data={"stop_failed": True})
+                try:
+                    res = self._apply_and_sync(force)         # admission still held; venv synced here
+                finally:
+                    start = self._system.runner.run(
+                        ["systemctl", "--user", "start", updater_units.WEB_UNIT], _S)
+                    restart_failed = getattr(start, "not_found", False) or start.returncode != 0
+                if restart_failed:
+                    # A failed REQUIRED restart is ALWAYS ok=False (the console is unavailable). Distinguish
+                    # partial success: the source update may have applied (update_applied) — preserve that
+                    # AND any venv_sync failure. The summary gives the exact recovery command, no raw output.
+                    return ActionResult(False, res.summary + "  — AND lhpc-web did NOT restart. Recover "
+                                        "with: systemctl --user start lhpc-web.service",
+                                        details=tuple(res.details),
+                                        data={**dict(res.data), "web_restart_failed": True,
+                                              "update_applied": bool(res.data.get("update_applied"))})
+                return res
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy:
+            return ActionResult(False, "A task is starting right now (admission contended) — retry the "
+                                "update.", data={"contended": True})
 
     def _self_update_locked(self, force: bool) -> ActionResult:
         from . import selfupdate
@@ -431,7 +463,7 @@ class SelfUpdateOpsMixin:
         root = str(self._paths.runtime_root)
         integ = updater_units.integration(self._user_unit_dir(), root)
         req = self.classify_request()
-        if req in ("in_flight", "malformed") or self._marker_present(updater_units.UNINSTALL_GUARD):
+        if req in ("in_flight", "malformed") or self.uninstall_guard_blocks():
             integ = dict(integ, status="recovery_required", request=req)
         else:
             integ["request"] = req
@@ -504,9 +536,6 @@ class SelfUpdateOpsMixin:
                                 f"not the canonical managed set ({integ['status']}). Run `lhpc "
                                 "self-update --repair-integration`, or `lhpc self-update --apply`.",
                                 data={"integration": integ["status"]})
-        if self.active_jobs():
-            return ActionResult(False, "An lhpc job is still running — finish it before self-updating.",
-                                data={"blocked_by_jobs": True})
         st = self.self_update_status()
         if not st.get("available"):
             return ActionResult(False, "Self-update is unavailable — lhpc is not running from a "
@@ -516,30 +545,64 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Self-update blocked: unsafe controller identity "
                                 f"({idv.get('reason', '')}).", data={"identity_unsafe": True})
         mode = "overwrite" if overwrite else "normal"
-        try:
-            m = runtime_fs.open_marker_excl(self._paths,
-                                            self._paths.under(*updater_units.REQUEST_REL),
-                                            mode + "\n")
-            m.close()
-        except FileExistsError:
-            return ActionResult(False, "An update request is already pending — the console is about "
-                                "to update.", data={"already_pending": True})
-        except Exception as exc:                               # containment / fs error
-            return ActionResult(False, f"Could not queue the update request: {exc}",
-                                data={"trigger_failed": True})
+        import contextlib
+        from . import reslock
+        # Hold task admission through the EXCLUSIVE request-marker creation (lock order #1): a new task
+        # cannot start while we create it. Recheck the uninstall guard + request state AND run the
+        # complete strict blocker scan UNDER the lock, so nothing slips in between the checks and the
+        # atomic marker create.
+        with contextlib.ExitStack() as adm:
+            try:
+                self._acquire_key(adm, self.ADMISSION_KEY, "self-update-trigger", "")
+            except reslock.ResourceBusy:
+                return ActionResult(False, "A task is starting right now (admission contended) — retry "
+                                    "the update.", data={"contended": True})
+            if self.uninstall_guard_blocks():
+                return ActionResult(False, "A controller uninstall is in progress — cannot self-update.",
+                                    data={"uninstalling": True})
+            if self.classify_request() != "absent":
+                return ActionResult(False, "An update request is already pending — the console is about "
+                                    "to update.", data={"already_pending": True})
+            blk = self._self_update_blockers()
+            if blk:
+                return ActionResult(False, f"Self-update blocked: {blk[0]}.",
+                                    data={f"blocked_by_{blk[1]}": True})
+            try:
+                m = runtime_fs.open_marker_excl(self._paths,
+                                                self._paths.under(*updater_units.REQUEST_REL),
+                                                mode + "\n")
+                m.close()
+            except FileExistsError:
+                return ActionResult(False, "An update request is already pending — the console is about "
+                                    "to update.", data={"already_pending": True})
+            except Exception as exc:                           # containment / fs error
+                return ActionResult(False, f"Could not queue the update request: {exc}",
+                                    data={"trigger_failed": True})
         return ActionResult(True, "Update queued — the console will stop, update itself and come "
                             "back automatically.", data={"triggered": True, "mode": mode})
 
     # ---- the helper (unit ExecStart): claim -> apply -> sync -> record -> release -------------
 
     def self_update_run_service(self) -> ActionResult:
-        """PLUMBING, run ONLY by lhpc-selfupdate.service. Claims the request (atomic rename to an
-        in-flight record carrying the helper's process identity), applies (existing gates: web
-        already stopped by Conflicts+After -> EXCLUSIVE lock free; live identity; dirty refusal
-        unless overwrite), syncs the venv on a real advance, records the outcome, and releases the
-        in-flight record LAST. NO systemctl — the unit's OnSuccess/OnFailure restarts the console.
-        the strict record and the final release must BOTH succeed, else the run is INCOMPLETE and
-        the in-flight record is retained (one-click stays blocked until --recover-request)."""
+        """PLUMBING, run ONLY by lhpc-selfupdate.service. Holds task ADMISSION across the COMPLETE
+        transaction (claim -> apply -> venv sync -> durable record -> in-flight release) so no task can
+        be started while the checkout/venv are still changing (closing the post-update window).
+        Admission is acquired RAW — the helper OWNS the in-flight record it is about to write, so the
+        strict request self-check would wrongly refuse it — but it is still reentrant, so the inner
+        `self_update_apply` reuses the SAME lock. A concurrent holder -> typed busy, zero mutation."""
+        import contextlib
+        from . import reslock
+        with contextlib.ExitStack() as adm:
+            try:
+                self._admit_raw(adm, "self-update-helper")
+            except reslock.ResourceBusy:
+                return ActionResult(False, "A task is starting right now (admission contended) — the "
+                                    "update helper will retry on the next request.", data={"contended": True})
+            return self._self_update_run_service_locked()
+
+    def _self_update_run_service_locked(self) -> ActionResult:
+        """The helper body, run UNDER the held task-admission lock (see `self_update_run_service`):
+        claim -> prove ownership -> apply -> venv sync -> durable record -> in-flight release."""
         import sys
         import time as _time
         from . import runtime_fs, selfupdate, updater_units
@@ -574,6 +637,16 @@ class SelfUpdateOpsMixin:
                                 data={"malformed": True})
         force = (mode == "overwrite")
         runtime_fs.write_marker(self._paths, inflight, json.dumps(self._helper_identity(mode)))
+        # PROVE this exact helper owns the in-flight record it just wrote (durable PID + /proc start
+        # time) — defends against a concurrent clobber between claim and write, and against a foreign/
+        # forged/PID-reused owner. Unproven -> block, retain evidence, recovery required.
+        if not self._helper_owns_inflight():
+            selfupdate.record_last_apply_strict(
+                self._paths, ok=False,
+                summary="In-flight update ownership could not be proven — recovery required.")
+            return ActionResult(False, "In-flight update ownership could not be proven — recovery "
+                                "required (`lhpc self-update --recover-request`).",
+                                data={"ownership_unproven": True})
 
         res = ActionResult(False, "Self-update service did not run.", data={})
         try:
@@ -626,6 +699,23 @@ class SelfUpdateOpsMixin:
                                 "recovery required)", data={**dict(res.data), "cleanup_failed": True})
         return res
 
+    def _helper_owns_inflight(self) -> bool:
+        """True iff the in-flight record's identity matches THIS process — its recorded PID AND that
+        PID's current /proc start time both equal this process's. Fail-closed: a missing/malformed/
+        unreadable record, a foreign PID, or a PID whose start time differs (PID reuse) all return
+        False. Never trusts PID alone."""
+        from . import runtime_fs, updater_units
+        try:
+            rec = json.loads(runtime_fs.read_text_regular(
+                self._paths, self._paths.under(*updater_units.INFLIGHT_REL), max_bytes=4096))
+        except Exception:                                  # noqa: BLE001 — cannot prove -> not owner
+            return False
+        if not isinstance(rec, dict):
+            return False
+        pid = rec.get("pid")
+        return (pid == os.getpid()
+                and rec.get("start_time") == _proc_start_time(os.getpid()))
+
     def _helper_identity(self, mode: str) -> dict:
         """Bounded process-identity record stored in the in-flight marker so recovery can prove
         the original helper has ceased before clearing it (never age-based)."""
@@ -637,6 +727,61 @@ class SelfUpdateOpsMixin:
                 "exe": (os.readlink(f"/proc/{pid}/exe") if os.path.exists(f"/proc/{pid}/exe") else ""),
                 "argv_hash": hashlib.sha256(("\0".join(sys.argv)).encode()).hexdigest()[:16],
                 "claimed_at": int(_time.time())}
+
+    def uninstall_guard_blocks(self) -> bool:
+        """STRICT, fail-CLOSED uninstall-guard inspection for admission/teardown decisions. Absence is
+        the ONLY 'not uninstalling' result: a present guard of ANY kind (regular, symlink, directory,
+        FIFO, device) blocks new work, and an inspection failure (cannot prove absent) ALSO blocks.
+        Descriptor-anchored, no-follow. Do NOT use the fail-soft `_marker_present` (which returns False
+        on any exception, and cannot tell absent from unreadable) for a security decision."""
+        from . import runtime_fs, updater_units
+        return runtime_fs.guard_state(
+            self._paths, self._paths.under(updater_units.UNINSTALL_GUARD)) != "absent"
+
+    def _task_admission_blocked(self) -> "tuple[str, str] | None":
+        """STRICT reason a NEW task start is refused under admission — `(reason, tag)` or None. Blocks
+        when the uninstall guard is present/unsafe (strict) OR a self-update request is pending/in
+        flight/malformed. Runs UNDER the held admission lock. Absent runtime root -> no markers -> None
+        (callers skip the whole guard when the root is absent, so there is zero filesystem mutation)."""
+        if self.uninstall_guard_blocks():
+            return ("A controller uninstall is in progress (.lhpc-uninstalling) — refusing to start "
+                    "new work. Let it finish, or recover it.", "uninstalling")
+        try:
+            req = self.classify_request()
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+            return (f"Could not verify controller update state ({exc}) — refusing to start new work.",
+                    "unverifiable")
+        if req in ("pending", "in_flight", "malformed"):
+            return ("A controller self-update is pending or in progress — refusing to start new work "
+                    "until it completes (`lhpc self-update --recover-request` if stuck).", req)
+        return None
+
+    def _self_update_blockers(self) -> "tuple[str, str] | None":
+        """The COMPLETE strict blocker scan SHARED by self_update_trigger and self_update_apply so both
+        gate on identical logic. Blocks on: an active OR unprovable job (active_jobs(include_unsafe=True)
+        — unsafe jobs dir / symlinked / non-regular / oversized / disappeared / malformed marker),
+        unresolved auto-install, and running/interrupted/malformed/unsafe HMAC. ANY inspection exception
+        fails CLOSED. Returns (reason, tag) or None. It does NOT check the request/uninstall markers —
+        those are the admission (trigger) / request-ownership (apply) concern of each caller."""
+        try:
+            jobs = self.active_jobs(include_unsafe=True)
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+            return (f"could not inspect running jobs ({exc})", "jobs")
+        if jobs:
+            return ("an lhpc build/test/web job is running or its state cannot be proven safe", "jobs")
+        try:
+            ai = self._auto_install_gate()
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+            ai = f"unverifiable ({exc})"
+        if ai:
+            return (f"an auto-install run is unresolved — {ai}", "auto_install")
+        try:
+            hst = self.hmac_apply_status()
+            if hst and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted")):
+                return ("an HMAC apply is running or its state is unresolved/unsafe", "hmac")
+        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+            return (f"could not inspect HMAC state ({exc})", "hmac")
+        return None
 
     # ---- request-state recovery (operator shell) ---------------------------------------------
 
@@ -713,7 +858,7 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Not a self-hosted deployment (no checkout at "
                                 f"{checkout}) — cannot manage web/updater units.",
                                 data={"not_self_hosted": True})
-        if self._marker_present(updater_units.UNINSTALL_GUARD):
+        if self.uninstall_guard_blocks():
             return ActionResult(False, "An uninstall is in progress (.lhpc-uninstalling present) — "
                                 "recover it first (`lhpc self-update --recover-request`).",
                                 data={"uninstalling": True})
@@ -734,7 +879,11 @@ class SelfUpdateOpsMixin:
         except ValueError as exc:
             return ActionResult(False, str(exc), data={"write_refused": True})
         S = 20.0
-        self._system.runner.run(["systemctl", "--user", "daemon-reload"], timeout=S)
+        reload_res = self._system.runner.run(["systemctl", "--user", "daemon-reload"], timeout=S)
+        if reload_res.returncode != 0:
+            return ActionResult(False, "systemctl --user daemon-reload failed after writing the units "
+                                "— not proceeding (the units are on disk but not activated). Check "
+                                "`systemctl --user status`.", data={"daemon_reload_failed": True})
         # Authoritative loader check (operator shell HAS the bus): the ACTIVE fragment must be our
         # file AND carry NO drop-ins — a drop-in can override the sandbox / ExecStart /
         # InaccessiblePaths of the vetted unit, so either condition FAILS the repair before we
@@ -755,33 +904,46 @@ class SelfUpdateOpsMixin:
                                     f"({props['DropInPaths'].strip()[:120]}) — it can override the "
                                     "sandbox; remove it, then repair.", data={"dropin": kind})
         # Enable both, and START the watcher now so a request marker is caught even before the web
-        # is (re)started under the new unit.
+        # is (re)started under the new unit. Every step's return code is CHECKED and fails the repair
+        # truthfully — a partial integration is never reported as success, and the root marker is
+        # written ONLY after all required steps prove they succeeded.
         en = self._system.runner.run(["systemctl", "--user", "enable", "--now",
                                       updater_units.PATH_UNIT], timeout=S)
-        self._system.runner.run(["systemctl", "--user", "enable", updater_units.WEB_UNIT], timeout=S)
-        # Migration mode (restart=False): the still-running OLD web does NOT pull the watcher up
-        # via Wants=, so it MUST be active now — otherwise a queued request would never be consumed.
-        # Fail BEFORE writing the root marker (and thus before the caller triggers).
-        if not restart:
-            act = self._system.runner.run(["systemctl", "--user", "is-active", "--quiet",
-                                           updater_units.PATH_UNIT], timeout=S)
-            if en.returncode != 0 or act.returncode != 0:
-                return ActionResult(False, "Installed the units but could not start the request "
-                                    "watcher (lhpc-selfupdate.path) — not proceeding. Check "
-                                    "`systemctl --user status lhpc-selfupdate.path`.",
-                                    data={"path_watcher_failed": True})
-        ov_note = self._remove_stale_overwrite_unit(ud)
-        self._write_root_marker()
-        note = ""
+        if en.returncode != 0:
+            return ActionResult(False, "Installed the units but could not enable/start the request "
+                                "watcher (lhpc-selfupdate.path) — not proceeding. Check "
+                                "`systemctl --user status lhpc-selfupdate.path`.",
+                                data={"path_watcher_failed": True})
+        web_en = self._system.runner.run(["systemctl", "--user", "enable", updater_units.WEB_UNIT],
+                                         timeout=S)
+        if web_en.returncode != 0:
+            return ActionResult(False, "Could not enable the web service (lhpc-web.service) — not "
+                                "proceeding.", data={"web_enable_failed": True})
+        # The watcher MUST be active now — in BOTH modes (a migration's still-running OLD web does not
+        # pull it up via Wants=, and a CLI repair must not silently leave it down) — otherwise a queued
+        # request is never consumed. Fail BEFORE writing the root marker / restarting.
+        act = self._system.runner.run(["systemctl", "--user", "is-active", "--quiet",
+                                       updater_units.PATH_UNIT], timeout=S)
+        if act.returncode != 0:
+            return ActionResult(False, "The update path watcher (lhpc-selfupdate.path) is not active "
+                                "after enable --now — not proceeding. Check "
+                                "`systemctl --user status lhpc-selfupdate.path`.",
+                                data={"path_watcher_failed": True})
         if restart:
             rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
                                           timeout=S)
-            note = "" if rst.returncode == 0 else " (web restart returned nonzero — check journalctl)"
+            if rst.returncode != 0:
+                return ActionResult(False, "Installed and enabled the units but the web console "
+                                    "restart FAILED — the repair is NOT marked complete. Check "
+                                    "`journalctl --user -u lhpc-web.service`.",
+                                    data={"web_restart_failed": True})
+        ov_note = self._remove_stale_overwrite_unit(ud)
+        self._write_root_marker()          # ONLY after every required integration step succeeded
         details = [f"  {k}: {a}" for k, a in actions]
         if ov_note:
             details.append(f"  {ov_note}")
         details.append(self._enable_linger(S))
-        return ActionResult(True, "Web + one-click updater integration installed/repaired." + note,
+        return ActionResult(True, "Web + one-click updater integration installed/repaired.",
                             details=tuple(details), data={"actions": dict(actions)})
 
     def _enable_linger(self, timeout: float) -> str:
@@ -871,7 +1033,7 @@ class SelfUpdateOpsMixin:
         if status == "recovery_required":
             return ActionResult(False, "A previous update needs recovery first — run "
                                 "`lhpc self-update --recover-request`.", data={"recovery_required": True})
-        if self._marker_present(updater_units.UNINSTALL_GUARD):
+        if self.uninstall_guard_blocks():
             return ActionResult(False, "An uninstall is in progress — recover it first.",
                                 data={"uninstalling": True})
         if self.classify_request() != "absent":

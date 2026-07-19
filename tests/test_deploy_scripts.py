@@ -21,12 +21,26 @@ _REAL_GIT = "/usr/bin/git"
 
 
 def _fake_bin(tmp_path: Path, *, git_src: Path | None = None, systemctl: str = "ok",
-              trap_lhpc: bool = False) -> Path:
+              trap_lhpc: bool = False, break_restore: bool = False) -> Path:
     """A bin dir (prepended to PATH) with fakes. `git_src` makes `git clone` serve a local
-    clone of that repo as the canonical origin. `systemctl` = ok|stopfail|absent. `trap_lhpc`
-    installs an `lhpc` that fails the test if the uninstaller ever calls it."""
+    clone of that repo as the canonical origin. `systemctl` = ok|stopfail|reloadfail|absent.
+    `trap_lhpc` installs an `lhpc` that fails the test if the uninstaller ever calls it.
+    `break_restore` overlays an `mv` that fails ONLY the restore direction (a `*.uninstall-staged`
+    source), to simulate a rollback that cannot complete — staging and all other moves still pass."""
     b = tmp_path / "fakebin"
     b.mkdir(exist_ok=True)
+    if break_restore:
+        # The source (second-to-last positional arg of `mv -f SRC DST`) ending in .uninstall-staged
+        # marks the restore rename; fail exactly those so restore_staged cannot complete.
+        (b / "mv").write_text(
+            "#!/usr/bin/env bash\n"
+            'args=(); for a in "$@"; do case "$a" in -*) ;; *) args+=("$a");; esac; done\n'
+            'n=${#args[@]}\n'
+            'if [ "$n" -ge 2 ]; then case "${args[$((n-2))]}" in *.uninstall-staged) exit 1;; esac; fi\n'
+            'exec /bin/mv "$@"\n')
+        (b / "mv").chmod(0o755)
+    elif (b / "mv").exists():
+        (b / "mv").unlink()          # a later run in the same tmp_path must not inherit a broken mv
     if git_src is not None:
         # A fake `git clone` that serves this checkout as the canonical origin AND overlays the
         # working tree's uncommitted (tracked-modified + non-ignored untracked) files — so a
@@ -49,7 +63,12 @@ def _fake_bin(tmp_path: Path, *, git_src: Path | None = None, systemctl: str = "
         (b / "git").chmod(0o755)
     if systemctl != "absent":
         log = tmp_path / "systemctl.log"
-        fail = 'if [ "$2" = "stop" ]; then exit 1; fi\n' if systemctl == "stopfail" else ""
+        if systemctl == "stopfail":
+            fail = 'if [ "$2" = "stop" ]; then exit 1; fi\n'
+        elif systemctl == "reloadfail":
+            fail = 'if [ "$2" = "daemon-reload" ]; then exit 1; fi\n'
+        else:
+            fail = ""
         (b / "systemctl").write_text(
             f'#!/usr/bin/env bash\necho "$@" >> "{log}"\n{fail}exit 0\n')
         (b / "systemctl").chmod(0o755)
@@ -85,7 +104,16 @@ def _deployment(root: Path, *, unit_home: Path, unit_target: Path | None = None,
     (root / "config" / "local.toml").write_text('[operator]\ncallsign = "KEEP"\n')
     (root / "config" / "secrets.toml").write_text("hmac = 'x'\n")
     (root / "state" / "locks" / "controller-runtime").write_text("")
-    (root / "venv" / "lhpc" / "bin" / "lhpc").write_text("#!/bin/sh\n")
+    # Executable fake controller: the uninstall quiescence gate invokes `lhpc _controller-uninstall-prep`
+    # (answered "quiescent" -> exit 0 so teardown runs) and the ATOMIC guard claim/release, which we
+    # delegate to the REAL CLI (via the fake python) so the guard file is created/removed for real.
+    _lhpc = root / "venv" / "lhpc" / "bin" / "lhpc"
+    _lhpc.write_text(
+        "#!/bin/sh\ncase \"$1\" in\n"
+        "  _controller-uninstall-prep) exit 0 ;;\n"
+        f"  _uninstall-guard-claim|_uninstall-guard-release) exec \"{root}/venv/lhpc/bin/python\" -m lhpc \"$@\" ;;\n"
+        "esac\n")
+    _lhpc.chmod(0o755)
     # a python that imports lhpc from ANY cwd (a real deployment venv has lhpc pip-installed;
     # here we point PYTHONPATH at the dev checkout) so uninstall's byte-exact render works.
     py = root / "venv" / "lhpc" / "bin" / "python"
@@ -338,16 +366,20 @@ def test_uninstall_leaves_other_targets_service_and_link(tmp_path):
     assert not log.exists() or "stop" not in log.read_text()   # never stopped the other's service
 
 
-def test_uninstall_reports_stop_failure_but_still_removes(tmp_path):
+def test_uninstall_stop_failure_aborts_and_retains(tmp_path):
+    # Item 6: a `systemctl --user stop` failure ABORTS the uninstall — controller code, state, units,
+    # and the guard are ALL retained, nonzero exit — never a partial "removed anyway".
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
     _deployment(root, unit_home=home)
     fb = _fake_bin(tmp_path, systemctl="stopfail")
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "could not stop" in (r.stdout + r.stderr)          # truthful about the partial
-    assert not (root / "src").exists() and not (root / "venv").exists()   # still removed
-    assert not (home / ".config" / "systemd" / "user" / "lhpc-web.service").exists()
+    out = r.stdout + r.stderr
+    assert r.returncode != 0
+    assert "could not stop" in out
+    assert (root / "src").exists() and (root / "venv").exists()            # RETAINED
+    assert (home / ".config" / "systemd" / "user" / "lhpc-web.service").exists()   # unit retained
+    assert (root / ".lhpc-uninstalling").exists()                          # guard retained
 
 
 @pytest.mark.parametrize("bad", ["symlink", "home", "not-lhpc"])
@@ -443,9 +475,9 @@ def test_uninstall_rejects_copied_marker_from_other_root(tmp_path):
     assert root.exists()
 
 
-def test_uninstall_leaves_customized_same_root_unit_and_reports_incomplete(tmp_path):
-    """A customized (non-byte-exact) unit for THIS root is NOT blindly removed — left in place,
-    warned, and the run reports incomplete service teardown."""
+def test_uninstall_customized_same_root_unit_aborts(tmp_path):
+    """Item 6: a customized (non-byte-exact) unit that references THIS root ABORTS the uninstall —
+    we never delete a root a unit still points at. It is left in place and nothing is removed."""
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
     _deployment(root, unit_home=home)
@@ -455,7 +487,159 @@ def test_uninstall_leaves_customized_same_root_unit_and_reports_incomplete(tmp_p
     fb = _fake_bin(tmp_path)
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
     out = r.stdout + r.stderr
-    assert r.returncode == 0, out
-    assert (ud / "lhpc-selfupdate.service").exists()          # customized -> left
-    assert "customized" in out or "left in place" in out
-    assert "INCOMPLETE" in out
+    assert r.returncode != 0                                  # aborts
+    assert (ud / "lhpc-selfupdate.service").exists()          # customized unit left in place
+    assert "customized" in out.lower() or "refusing" in out.lower()
+    assert (root / "src").exists() and (root / "venv").exists()   # nothing removed
+
+
+def test_web_units_set_killmode_process():
+    """KillMode=process is set in BOTH the shipped template and the generated canonical web unit, so a
+    web restart or self-update kills only the console — never the controller-managed stacks and detached
+    jobs it lifecycle-tracks. Controller uninstall is the one path that stops+verifies them."""
+    import pathlib
+    from lhpc.core import updater_units
+    assert "KillMode=process" in pathlib.Path("deploy/lhpc-web.service").read_text()
+    assert "KillMode=process" in updater_units._WEB
+
+
+def test_uninstall_daemon_reload_failure_restores_units_and_retains(tmp_path):
+    # Item 5: a daemon-reload failure RESTORES the staged unit files (systemd still has them) and
+    # retains ALL controller code/state + the guard — never a half-torn-down deployment.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = home / ".config" / "systemd" / "user"
+    fb = _fake_bin(tmp_path, systemctl="reloadfail")
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
+    assert r.returncode != 0
+    for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
+        assert (ud / k).exists()                                 # RESTORED (systemd still sees it)
+        assert not (ud / (k + ".uninstall-staged")).exists()     # no staging leftover
+    assert (root / "src").exists() and (root / "venv").exists()  # code retained
+    assert (root / ".lhpc-uninstalling").exists()                # guard retained -> retry can reclaim
+
+
+def test_uninstall_retry_after_reload_failure_succeeds(tmp_path):
+    # Item 5/4: after an interrupted uninstall (reload failed, guard retained), a RETRY with a working
+    # systemctl reclaims the stale guard, re-stages, reloads, and only THEN removes controller files.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = home / ".config" / "systemd" / "user"
+    r1 = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="reloadfail"))
+    assert r1.returncode != 0 and (root / ".lhpc-uninstalling").exists()
+    r2 = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="ok"))
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert not (root / "src").exists() and not (root / "venv").exists()   # NOW removed
+    for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
+        assert not (ud / k).exists()
+
+
+def test_uninstall_concurrent_guard_refused(tmp_path):
+    # Item 4: a pre-existing guard owned by a LIVE process (this test process) is NOT overwritten and
+    # blocks a second uninstall.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    guard = root / ".lhpc-uninstalling"
+    import os
+    from lhpc.core.service_base import _proc_start_time
+    guard.write_text(f'{{"pid": {os.getpid()}, "nonce": "OTHER", "start_time": {_proc_start_time(os.getpid())}}}')
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
+    assert r.returncode != 0 and "guard" in (r.stdout + r.stderr).lower()
+    assert guard.read_text().count("OTHER") == 1                 # NOT overwritten
+    assert (root / "src").exists()                               # nothing removed
+
+
+# --------------------------------------------------------------------- item 3: retry-safe unit rollback
+
+def _unit_dir(home: Path) -> Path:
+    return home / ".config" / "systemd" / "user"
+
+
+def test_uninstall_reload_failure_with_broken_restore_leaves_staged_and_retains(tmp_path):
+    # Item 3: when daemon-reload fails AND the restore itself cannot complete, the run must NOT report
+    # success or delete anything — it retains ALL code/state + the guard and leaves the staged unit
+    # files behind so a retry can recover them (the reload requirement is never bypassed).
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = _unit_dir(home)
+    fb = _fake_bin(tmp_path, systemctl="reloadfail", break_restore=True)
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
+    assert r.returncode != 0
+    assert (root / "src").exists() and (root / "venv").exists()   # code retained
+    assert (root / ".lhpc-uninstalling").exists()                 # guard retained
+    staged = [k for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path")
+              if (ud / (k + ".uninstall-staged")).exists()]
+    assert staged, "a restore that could not complete must leave the staged unit(s) behind"
+    assert "recover from the staged unit files" in (r.stdout + r.stderr)
+
+
+def test_uninstall_retry_recovers_leftover_staged_units_then_completes(tmp_path):
+    # Item 3: a retry after an interrupted uninstall that left ONLY `*.uninstall-staged` files (canonical
+    # absent) must restore + successfully daemon-reload them BEFORE it may delete code/state. Run 1 breaks
+    # both the reload and the restore (leftover staged, no canonical); run 2 (working) recovers + finishes.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = _unit_dir(home)
+    r1 = _run(UNINSTALL, ["--target", str(root), "--yes"], home,
+              _fake_bin(tmp_path, systemctl="reloadfail", break_restore=True))
+    assert r1.returncode != 0
+    assert any((ud / (k + ".uninstall-staged")).exists()
+               for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"))
+    assert (root / "src").exists()                                # not deleted while staged/unreloaded
+    r2 = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path, systemctl="ok"))
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    assert not (root / "src").exists() and not (root / "venv").exists()   # NOW removed
+    for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
+        assert not (ud / k).exists() and not (ud / (k + ".uninstall-staged")).exists()
+
+
+def test_uninstall_fails_closed_when_canonical_and_staged_both_exist(tmp_path):
+    # Item 3: a live canonical unit AND a `*.uninstall-staged` counterpart is ambiguous — refuse to
+    # overwrite either and remove nothing.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = _unit_dir(home)
+    canon = ud / "lhpc-web.service"
+    (ud / "lhpc-web.service.uninstall-staged").write_text(canon.read_text())   # both present
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
+    assert r.returncode != 0 and "BOTH" in (r.stdout + r.stderr)
+    assert canon.exists() and (ud / "lhpc-web.service.uninstall-staged").exists()   # neither overwritten
+    assert (root / "src").exists()                                # nothing removed
+
+
+def test_uninstall_fails_closed_on_malformed_leftover_staged(tmp_path):
+    # Item 3: a leftover `*.uninstall-staged` whose content is NOT byte-exact canonical (customized or
+    # corrupt), with no live canonical counterpart, must not be restored or deleted — fail closed.
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = _unit_dir(home)
+    (ud / "lhpc-web.service").unlink()                            # canonical absent (as after staging)
+    (ud / "lhpc-web.service.uninstall-staged").write_text("[Service]\nExecStart=/bin/false\n")   # garbage
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, _fake_bin(tmp_path))
+    assert r.returncode != 0 and "not a byte-exact canonical" in (r.stdout + r.stderr)
+    assert (ud / "lhpc-web.service.uninstall-staged").read_text().startswith("[Service]\nExecStart=/bin/false")
+    assert not (ud / "lhpc-web.service").exists()                 # not resurrected
+    assert (root / "src").exists()                                # nothing removed
+
+
+def test_uninstall_reload_failure_restore_handles_spaces_in_path(tmp_path):
+    # Item 3: staged-path handling is space-safe (the staged paths live in a quoted Bash array). A
+    # reload failure under a home with a space still restores every unit and leaves no staging leftover.
+    home = tmp_path / "ho me"; home.mkdir()
+    root = home / "loraham-pi-control"
+    _deployment(root, unit_home=home)
+    ud = _unit_dir(home)
+    r = _run(UNINSTALL, ["--target", str(root), "--yes"], home,
+             _fake_bin(tmp_path, systemctl="reloadfail"))
+    assert r.returncode != 0
+    for k in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
+        assert (ud / k).exists()                                  # restored despite the space in the path
+        assert not (ud / (k + ".uninstall-staged")).exists()
+    assert (root / "src").exists()

@@ -206,3 +206,24 @@ def test_spawn_web_job_blocked_by_auto_install_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "_auto_install_gate", lambda self: "a auto-install run is already in progress")
     log, admission, reason = svc.spawn_web_job("build", "meshcom")
     assert log is None and admission == "blocked" and "blocked" in reason and "auto-install" in reason
+
+
+def test_malformed_auto_install_status_is_surfaced_as_unsafe(tmp_path, monkeypatch):
+    # A malformed/unreadable auto-install marker (top-level unsafe:True) must appear as a
+    # recovery-required task with a bounded reason — NOT be silently hidden.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "auto_install_status",
+                        lambda self: {"unsafe": True, "reason": "marker JSON unreadable"})
+    monkeypatch.setattr(ControllerService, "hmac_apply_status", lambda self: None)
+    t = next(t for t in svc.running_tasks() if t["kind"] == "auto-install")
+    assert t["state"] == "unsafe" and "unreadable" in t["hint"]
+
+
+def test_malformed_hmac_status_is_surfaced_as_unsafe(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "auto_install_status", lambda self: None)
+    monkeypatch.setattr(ControllerService, "hmac_apply_status",
+                        lambda self: {"unsafe": True, "reason": "schema mismatch",
+                                      "sid": "meshcom", "action": "enable"})
+    t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
+    assert t["state"] == "unsafe" and "schema mismatch" in t["hint"]

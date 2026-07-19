@@ -68,6 +68,17 @@ class SourceTxnBlocked(Exception):
     is present — every source-mutating op fails closed until an operator resolves it."""
 
 
+class AdmissionRefused(Exception):
+    """Raised (on the FRESH/outermost acquire) by the task-admission guard when a controller
+    self-update or uninstall is pending/in progress. Carries a human reason + a `data` tag; ops catch
+    it and convert to a typed refusal `ActionResult`. Nested (reentrant) acquires never raise it."""
+
+    def __init__(self, reason: str, tag: str = "admission_blocked"):
+        super().__init__(reason)
+        self.reason = reason
+        self.tag = tag
+
+
 @dataclass(frozen=True)
 class ConfigWrite:
     """Structured result of generating one component's config file."""

@@ -319,6 +319,12 @@ def open_existing_marker(paths: Paths, path: Path) -> "OwnedMarker":
     return OwnedMarker(name, pfd, file_fd, st.st_dev, st.st_ino)
 
 
+# Defensible upper bound for an "ordinary" runtime read (bytes). Runtime state — configs, journals,
+# markers, secrets, cert bundles — is small; 8 MiB is far above any legitimate leaf yet caps a
+# runaway/hostile file rather than reading it whole into memory.
+_DEFAULT_READ_MAX = 1 << 23
+
+
 def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: bool):
     """Open a runtime leaf relative to its descriptor-anchored parent fd. Returns the open
     fd (the parent fds are closed; the leaf fd stays open)."""
@@ -326,41 +332,81 @@ def _open_leaf(paths: Paths, path: Path, flags: int, mode: int, *, create_dirs: 
         return os.open(name, flags, mode, dir_fd=parent_fd)
 
 
+def _require_regular_fd(fd: int, path) -> None:
+    """fstat a HELD fd and refuse anything but a regular file — closing the fd first so a FIFO,
+    socket, device or directory leaf can never be read/written/truncated. Pairs with O_NONBLOCK on
+    the open so a FIFO leaf can't block the open() before this check runs."""
+    if not _stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"refusing a non-regular runtime leaf: {path}")
+
+
+def _read_fd_bounded(fd: int, max_bytes: int, path) -> bytes:
+    """Read a fd bounded by `max_bytes`, REJECTING oversize: it reads one byte beyond the cap so a
+    file at or over the limit raises OSError instead of returning a truncated-but-valid-looking
+    prefix (never hand truncated marker/config data back as valid state)."""
+    chunks: list[bytes] = []
+    got, limit = 0, max_bytes + 1
+    while got < limit:
+        b = os.read(fd, min(65536, limit - got))
+        if not b:
+            break
+        chunks.append(b)
+        got += len(b)
+    if got > max_bytes:
+        raise OSError(f"runtime leaf {path} exceeds the {max_bytes}-byte limit")
+    return b"".join(chunks)
+
+
 def open_log_append(paths: Paths, path: Path):
-    """Open a runtime log for append with O_NOFOLLOW, anchored to its parent fd."""
-    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+    """Open a runtime log for append with O_NOFOLLOW+O_NONBLOCK (anchored); refuse a non-regular leaf."""
+    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
                     0o644, create_dirs=True)
+    _require_regular_fd(fd, path)
     return os.fdopen(fd, "ab")
 
 
 def open_log_truncate(paths: Paths, path: Path):
-    """Create/TRUNCATE a runtime log with O_NOFOLLOW (anchored), returning a text handle."""
-    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+    """Create then TRUNCATE a runtime log, anchored O_NOFOLLOW+O_NONBLOCK. The descriptor is
+    validated as a REGULAR file BEFORE truncating — O_TRUNC is deliberately NOT used, so a FIFO/
+    device/symlinked leaf is refused rather than truncated as a side effect of the open."""
+    fd = _open_leaf(paths, path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                     0o644, create_dirs=True)
+    _require_regular_fd(fd, path)
+    os.ftruncate(fd, 0)
     return os.fdopen(fd, "w", encoding="utf-8")
 
 
 def open_lock(paths: Paths, path: Path):
-    """Open a runtime lock file for exclusive flock with O_NOFOLLOW (anchored). Caller flocks."""
-    fd = _open_leaf(paths, path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600,
+    """Open a runtime lock file for exclusive flock, anchored O_NOFOLLOW+O_NONBLOCK; refuse a
+    non-regular leaf (a FIFO/socket/device lock target is never valid). Caller flocks."""
+    fd = _open_leaf(paths, path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600,
                     create_dirs=True)
+    _require_regular_fd(fd, path)
     return os.fdopen(fd, "w")
 
 
-def read_bytes(paths: Paths, path: Path) -> bytes:
-    """Read a contained runtime leaf as bytes, descriptor-anchored: the leaf is opened
-    `O_RDONLY|O_NOFOLLOW` relative to its parent fd, so a symlink leaf (or a parent swapped
-    to a symlink) is refused AT THE OPEN. Raises PathContainmentError on escape, OSError if
-    missing/symlinked."""
+def read_bytes(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) -> bytes:
+    """Read a contained runtime leaf as bytes, descriptor-anchored and HARDENED: the leaf is opened
+    `O_RDONLY|O_NOFOLLOW|O_NONBLOCK` relative to its parent fd (a symlink leaf, or a parent swapped
+    to a symlink, is refused AT THE OPEN; a FIFO can't block the open), `fstat`-verified as a regular
+    file, and read bounded by `max_bytes` with oversize REJECTED (not truncated). Raises
+    PathContainmentError on escape, OSError if missing/symlinked/non-regular/oversize."""
     with _walk_parent(paths, path, create=False) as (parent_fd, name):
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
-        with os.fdopen(fd, "rb") as fh:
-            return fh.read()
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        try:
+            _require_regular_fd(fd, path)   # closes fd + raises on non-regular
+        except OSError:
+            raise
+        try:
+            return _read_fd_bounded(fd, max_bytes, path)
+        finally:
+            os.close(fd)
 
 
-def read_text(paths: Paths, path: Path) -> str:
-    """No-follow text read (see `read_bytes`)."""
-    return read_bytes(paths, path).decode("utf-8")
+def read_text(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) -> str:
+    """No-follow, regular-file-only, bounded text read (see `read_bytes`)."""
+    return read_bytes(paths, path, max_bytes=max_bytes).decode("utf-8")
 
 
 def read_text_regular(paths: Paths, path: Path, *, max_bytes: int = 1 << 20) -> str:
@@ -376,15 +422,9 @@ def read_text_regular(paths: Paths, path: Path, *, max_bytes: int = 1 << 20) -> 
         try:
             if not _stat.S_ISREG(os.fstat(fd).st_mode):
                 raise OSError(f"refusing to read a non-regular runtime leaf: {path}")
-            chunks: list[bytes] = []
-            got = 0
-            while got < max_bytes:
-                b = os.read(fd, min(65536, max_bytes - got))
-                if not b:
-                    break
-                chunks.append(b)
-                got += len(b)
-            return b"".join(chunks).decode("utf-8", "replace")
+            # Bounded read that REJECTS oversize (reads one byte past the cap) rather than returning a
+            # truncated-but-valid-looking prefix of a marker/config.
+            return _read_fd_bounded(fd, max_bytes, path).decode("utf-8", "replace")
         finally:
             os.close(fd)
 
@@ -394,12 +434,15 @@ def tail(paths: Paths, path: Path, lines: int = 200, max_bytes: int = 256 * 1024
     missing leaf, a symlinked leaf/parent, or an escape returns []."""
     try:
         with _walk_parent(paths, path, create=False) as (parent_fd, name):
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
             with os.fdopen(fd, "rb") as fh:
-                size = os.fstat(fh.fileno()).st_size
+                st = os.fstat(fh.fileno())
+                if not _stat.S_ISREG(st.st_mode):     # a FIFO/device/socket log leaf is never valid
+                    raise OSError("non-regular log leaf")
+                size = st.st_size
                 if size > max_bytes:
                     fh.seek(size - max_bytes)
-                data = fh.read()
+                data = fh.read(max_bytes)             # bounded even if the file grew after fstat
     except (OSError, PathContainmentError):
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
@@ -414,15 +457,18 @@ def tail_since(paths: Paths, path: Path, floor: int, lines: int = 200,
     than nothing. NO-FOLLOW, descriptor-anchored; a missing/symlinked/escaping leaf returns []."""
     try:
         with _walk_parent(paths, path, create=False) as (parent_fd, name):
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
             with os.fdopen(fd, "rb") as fh:
-                size = os.fstat(fh.fileno()).st_size
+                st = os.fstat(fh.fileno())
+                if not _stat.S_ISREG(st.st_mode):     # a FIFO/device/socket log leaf is never valid
+                    raise OSError("non-regular log leaf")
+                size = st.st_size
                 start = floor if 0 < floor <= size else 0
                 if size - start > max_bytes:      # keep the LAST max_bytes of the post-floor span
                     start = size - max_bytes
                 if start:
                     fh.seek(start)
-                data = fh.read()
+                data = fh.read(max_bytes)         # bounded even if the file grew after fstat
     except (OSError, PathContainmentError):
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
@@ -493,6 +539,30 @@ def stat_leaf_nofollow(paths: Paths, path: Path):
                 return None
     except (OSError, PathContainmentError):
         return None
+
+
+def guard_state(paths: Paths, path: Path) -> str:
+    """STRICT presence classification for a SECURITY-SENSITIVE marker (the uninstall guard, a request
+    record) — for admission/teardown decisions that must FAIL CLOSED. Unlike `stat_leaf_nofollow`
+    (which returns None for BOTH absent and unreadable), this distinguishes:
+
+      * ``"absent"`` — a genuine ENOENT leaf (the ONLY 'safe / not present' result);
+      * ``"present"`` — an existing leaf of ANY kind (regular, symlink, directory, FIFO, device);
+      * ``"unsafe"`` — any inspection failure (permission, a swapped/symlinked/escaping parent) — it
+        CANNOT prove absence, so the caller must treat it as blocking.
+
+    Descriptor-anchored, no-follow; never follows a symlink leaf or a swapped parent."""
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            try:
+                os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                return "present"
+            except FileNotFoundError:
+                return "absent"
+            except OSError:
+                return "unsafe"          # permission/other — cannot prove absent
+    except (OSError, PathContainmentError):
+        return "unsafe"                  # escaped/swapped/unreadable parent — cannot prove absent
 
 
 def unlink(paths: Paths, path: Path) -> None:

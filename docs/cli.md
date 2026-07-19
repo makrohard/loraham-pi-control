@@ -170,5 +170,14 @@ lhpc webserver cert discard-export <label>
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.
 
+### _controller-uninstall-prep
+Internal quiescence gate — `lhpc _controller-uninstall-prep [--root <dir>]` — invoked by `uninstall.sh` before it removes any controller state. Refuses on active/unprovable build/test/web jobs, unresolved auto-install/HMAC state, or any UNKNOWN component state; otherwise stops the managed stacks (clients before the shared daemon) and verifies cessation. Exit 0 = safe to remove; nonzero = abort teardown. Not for direct use.
+
+### _uninstall-guard-claim
+Internal atomic guard claim — `lhpc _uninstall-guard-claim [--root <dir>] --pid <pid> --nonce <n> --start <starttime>` — invoked by `uninstall.sh` to claim the `.lhpc-uninstalling` guard `O_CREAT|O_EXCL|O_NOFOLLOW` (never truncating/following/replacing a pre-existing guard). A live-owner guard is refused; a stale (dead-owner) guard is reclaimed. Not for direct use.
+
+### _uninstall-guard-release
+Internal owned-only guard release — `lhpc _uninstall-guard-release [--root <dir>] --nonce <n>` — removes the `.lhpc-uninstalling` guard ONLY if its recorded nonce matches (a foreign/unreadable guard is left in place). Not for direct use.
+
 ### help
 `lhpc help [<topic>]` — detailed help on a topic: `safety`, `resources`, `profiles`.

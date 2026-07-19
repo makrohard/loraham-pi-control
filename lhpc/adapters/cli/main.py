@@ -359,6 +359,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_hd.add_argument("action", choices=("enable", "disable", "renew"))
     p_hd.add_argument("run_id")
 
+    # Internal: uninstall.sh's quiescence gate — refuses on active jobs / unresolved auto-install|HMAC
+    # / UNKNOWN state, then stops managed stacks (clients before the shared daemon) with verified
+    # cessation. Exit 0 = safe to remove controller state; nonzero = abort teardown. Not for direct use.
+    p_up = sub.add_parser("_controller-uninstall-prep")
+    p_up.add_argument("--root", default="", help="target runtime root")
+
+    # Internal: uninstall.sh's ATOMIC guard claim/release (O_EXCL|O_NOFOLLOW). claim exits nonzero if a
+    # guard already exists (concurrent/interrupted uninstall) or is unsafe; release removes ONLY the
+    # guard owned by --nonce. Not for direct use.
+    p_gc = sub.add_parser("_uninstall-guard-claim")
+    p_gc.add_argument("--root", default="")
+    p_gc.add_argument("--pid", default="")
+    p_gc.add_argument("--nonce", required=True)
+    p_gc.add_argument("--start", default="")
+    p_gr = sub.add_parser("_uninstall-guard-release")
+    p_gr.add_argument("--root", default="")
+    p_gr.add_argument("--nonce", required=True)
+
     p_help = sub.add_parser("help", help="Detailed help on a topic")
     p_help.add_argument("topic", nargs="?", help="safety | resources | profiles")
 
@@ -542,6 +560,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry. Fail-closed boundary: a malformed/unreadable stored configuration surfaces as a
+    clean typed failure (rc 1) with the offending file left untouched — never a traceback, and never
+    a silent fall-through to defaults."""
+    from lhpc.core.config import ConfigError
+    try:
+        return _run(argv)
+    except ConfigError as exc:
+        sys.stderr.write(
+            f"error: a stored configuration file is unreadable or malformed — {exc}\n"
+            "It was left untouched for inspection; repair or remove it, then retry.\n")
+        return 1
+
+
+def _run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
     if extra:
@@ -572,6 +604,17 @@ def main(argv: list[str] | None = None) -> int:
         return _render(svc.explain(args.stack))
     if args.command == "doctor":
         return _render(svc.doctor())
+    if args.command in ("_controller-uninstall-prep", "_uninstall-guard-claim",
+                        "_uninstall-guard-release"):
+        if getattr(args, "root", ""):
+            from pathlib import Path as _Path
+            from lhpc.core.paths import Paths as _Paths
+            svc = ControllerService(paths=_Paths(runtime_root=_Path(args.root)))
+        if args.command == "_controller-uninstall-prep":
+            return _render(svc.controller_uninstall_prep())
+        if args.command == "_uninstall-guard-claim":
+            return _render(svc.controller_uninstall_guard_claim(args.pid, args.nonce, args.start))
+        return _render(svc.controller_uninstall_guard_release(args.nonce))
     if args.command == "bootstrap":
         return _apply_flow(lambda apply: svc.bootstrap(apply=apply), yes=args.yes)
     if args.command == "install":

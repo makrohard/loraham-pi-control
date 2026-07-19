@@ -24,6 +24,7 @@ from flask import (
     Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for,
 )
 
+from lhpc.core import config as _config
 from lhpc.core import validators
 from lhpc.core.outcomes import manual_required_only
 from lhpc.core.services import ControllerService
@@ -231,22 +232,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.before_request
     def _trusted_host():  # noqa: ANN202
-        """Explicit trusted-host policy — ENFORCED only in productive HTTPS mode (Secure cookies), so
-        the interactive loopback-TCP console and the test client (plain http) are unaffected. The real
-        Host header is compared, never a client-supplied X-Forwarded-Host (nginx blanks those).
+        """Explicit trusted-host policy — ENFORCED IN EVERY SERVING MODE, including the plain-loopback
+        interactive console (NOT keyed on Secure cookies or productive mode). It runs before any session
+        is created, any CSRF token is used, and any mutation, so a rejected Host can never drive state.
+        The REAL Host header is compared (Werkzeug `request.host` — the Host header or SERVER_NAME),
+        NEVER a client-supplied X-Forwarded-Host (nginx blanks those and no ProxyFix trusts them).
 
         It defends against DNS REBINDING / Host spoofing, which both require a *name*: the attacker's
         page lives at `evil.example`, its record is flipped to this host's address, and the browser
         then sends `Host: evil.example` — rejected, because names must be configured in `dns_sans`.
         A bare IP literal cannot be rebound (a browser only sends one when the operator typed an IP),
         so while the console is REMOTELY EXPOSED any IP-literal Host is accepted. That is what makes a
-        multi-homed Pi (eth0 + wlan0) and IPv6 work without enumerating interfaces — `local_ip()` knows
-        exactly one IPv4 address. Loopback-only deployments keep the strict allowlist.
+        multi-homed Pi (eth0 + wlan0) and IPv6 work without enumerating interfaces. Loopback-only
+        deployments keep the strict allowlist (localhost / 127.0.0.1 / [::1], with any port suffix).
+
+        An empty, missing, malformed, or unrelated Host is rejected with 400.
         """
-        # Enforced whenever we serve productively behind nginx. NOT keyed on Secure cookies alone:
-        # an `http` console must drop those (browsers discard them) yet keep this policy.
-        if not (app.config.get("SESSION_COOKIE_SECURE") or app.config.get("LHPC_PRODUCTIVE")):
-            return None
         raw = request.host or ""
         host = _host_only(raw)
         allowed = {"localhost", "127.0.0.1", "::1"}
@@ -261,7 +262,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             exposed = bool(ws.remote_exposed)
         except Exception:                                # noqa: BLE001 — unreadable config -> loopback only
             pass
-        if not host or _host_allowed(host, allowed, exposed):
+        # A present, allowed Host passes; empty/missing/malformed/unrelated all fall through to 400.
+        if host and _host_allowed(host, allowed, exposed):
             return None
         # The RAW header never reaches the response: only the normalized host, as bounded text/plain.
         # The full diagnostic goes to the log (logs/lhpc-web.log via the unit's StandardError).
@@ -274,6 +276,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "(or the IP to ip_sans) in config/local.toml. Remote exposure additionally accepts "
                 "any bare IP address.\n")
         return Response(body, status=400, mimetype="text/plain")
+
+    @app.errorhandler(_config.ConfigError)
+    def _malformed_config(exc):  # noqa: ANN202
+        # A stored config file is present but malformed/unreadable/oversized/wrong-typed. Fail closed:
+        # a bounded, operator-repairable 409 — NEVER a traceback, and NEVER the malformed value echoed
+        # back. The detail (path + parse error) goes only to the server log. The bad file is preserved.
+        app.logger.warning("malformed stored config (409): %s", str(exc)[:500])
+        body = ("409 Conflict: a stored configuration file is unreadable or malformed. It was left "
+                "untouched for inspection. Repair or remove it (config/*.toml under the runtime root), "
+                "then retry.\n")
+        return Response(body, status=409, mimetype="text/plain")
 
     def _runtime_root() -> str:
         return str(service.runtime_root)  # display only

@@ -63,13 +63,13 @@ def _matched_listeners(listeners, port: int, family: str | None) -> list:
     """The loopback listeners of the DECLARED family on `port` (localhost -> either).
     A wrong-family or non-loopback listener on the same port is never matched."""
     out = []
-    for l in listeners:
-        if l.port != port:
+    for lis in listeners:
+        if lis.port != port:
             continue
-        if family in (None, "ipv4") and l.family == "ipv4" and l.ip in _V4_LOOPBACK:
-            out.append(l)
-        elif family in (None, "ipv6") and l.family == "ipv6" and l.ip in _V6_LOOPBACK:
-            out.append(l)
+        if family in (None, "ipv4") and lis.family == "ipv4" and lis.ip in _V4_LOOPBACK:
+            out.append(lis)
+        elif family in (None, "ipv6") and lis.family == "ipv6" and lis.ip in _V6_LOOPBACK:
+            out.append(lis)
     return out
 
 

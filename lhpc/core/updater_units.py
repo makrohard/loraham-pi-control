@@ -64,6 +64,11 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+# INTENTIONAL: kill only the main console process, never its control group. LHPC identity-tracks and
+# lifecycle-manages the LoRaHAM stacks and detached build/test jobs it starts; a web restart or a
+# self-update must NOT tear those workloads down. Controller uninstall is the ONE path that stops and
+# verifies them explicitly. The default KillMode=control-group would kill them on every web restart.
+KillMode=process
 Environment=LHPC_RUNTIME_ROOT={root}
 WorkingDirectory={checkout}
 ExecStart={venv}/bin/lhpc web --socket
@@ -380,19 +385,44 @@ def write_set(user_dir: Path, root: str) -> list[tuple[str, str]]:
         detail = ", ".join(f"{k}: {v}" for k, v in blocking.items())
         raise ValueError(f"refusing to write updater units — existing unit(s) are not "
                          f"provably this deployment's: {detail}. Resolve them manually first.")
+    import tempfile
     user_dir.mkdir(parents=True, exist_ok=True)
     actions = []
+    changed = False
     for kind in ALL_UNITS:
         if verdicts[kind] == OK:
             actions.append((kind, "unchanged"))
             continue
         text = render(kind, root, checkout, venv)
-        tmp = user_dir / f".{kind}.tmp"
-        with open(os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644),
-                  "w") as fh:
-            fh.write(text)
-        os.replace(str(tmp), str(user_dir / kind))
+        # Stage to a UNIQUE, exclusive temp name (mkstemp -> O_EXCL, no collision/race), flush+fsync
+        # the bytes, then atomically replace. On ANY failure the temp is removed so no partial unit
+        # is left behind.
+        fd, tmp = tempfile.mkstemp(dir=str(user_dir), prefix=f".{kind}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, str(user_dir / kind))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        changed = True
         actions.append((kind, "written" if verdicts[kind] == MISSING else "restored"))
+    # fsync the unit DIRECTORY so the renames survive a crash (durable, not just atomic).
+    if changed:
+        try:
+            dfd = os.open(str(user_dir), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
     return actions
 
 
