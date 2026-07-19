@@ -89,10 +89,12 @@ def test_python_stacks_have_in_tree_venv_build_steps():
             assert "--system-site-packages" in steps[0]["argv"]
             assert not any("rpi-lgpio" in a for a in steps[1]["argv"])
         assert steps[1]["argv"][0] == ".venv/bin/pip", cid
-    # meshcom-qemu is self-sufficient from a FRESH clone: workspace setup scripts run
-    # before build.sh (live finding: linked trees carried a pre-built .work/)
+    # meshcom-qemu is self-sufficient from a FRESH clone: the MANAGED tools (a PlatformIO venv + the
+    # sha256-verified qemu, both INSIDE the runtime root) are provisioned first, then the workspace setup
+    # scripts run before build.sh (live finding: linked trees carried a pre-built .work/).
     q_steps = [st["argv"][0] for st in comps["meshcom-qemu"]["build_steps"]]
-    assert q_steps == ["scripts/setup.sh", "scripts/apply-overlay.sh",
+    assert q_steps == ["python3", "{runtime}/build/tools/platformio/.venv/bin/pip", "scripts/fetch-qemu.sh",
+                       "scripts/setup.sh", "scripts/apply-overlay.sh",
                        "scripts/prepare-openeth.sh", "scripts/build.sh"]
     # meshcom secret is in-root and fail-closed
     q = comps["meshcom-qemu"]["build_steps"][-1]["env"]["XR_PASSWORD"]

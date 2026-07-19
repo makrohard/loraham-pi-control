@@ -60,6 +60,65 @@ def test_run_job_failure_state(tmp_path):
     assert not res.ok and res.returncode == 1
 
 
+def test_run_job_announces_log_path_at_creation(tmp_path):
+    # Item 7: on_log_open fires the MOMENT the log file exists (before the run) with the EXACT path the
+    # job writes to — so a long, silent build can be tailed from another terminal.
+    from pathlib import Path
+    argv = ["echo", "hi"]
+    fake = FakeSystem(commands={tuple(argv): CommandResult(0, "hi\n", "")})
+    seen: list = []
+    res = run_job(fake.system.runner, name="build-x", argv=argv, cwd=None,
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path),
+                  on_log_open=lambda name, path: seen.append((name, path)))
+    assert seen == [("build-x", str(tmp_path / "logs" / "build-x.log"))]
+    assert seen[0][1] == res.log_path and Path(res.log_path).exists()   # announced == the file it wrote
+
+
+def test_logs_resolves_newest_build_log_over_stale_unsuffixed(tmp_path):
+    # Item 7: `lhpc logs <comp>` (band-less) resolves to the NEWEST job log across start/build/test,
+    # so it agrees with what a just-finished build wrote — never a stale unsuffixed sibling.
+    import os
+    comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
+    life = _life(FakeSystem().system, tmp_path)
+    logs = life.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    stale = logs / "build-widget.log"
+    fresh = logs / "build-widget-1.log"
+    stale.write_text("OLD single-step build\n")
+    fresh.write_text("NEW multi-step build step 1\n")
+    old = time.time() - 100
+    os.utime(stale, (old, old))                                         # stale is older
+    path, tail = life.logs(comp)
+    assert path == str(fresh) and any("NEW multi-step" in ln for ln in tail)
+
+
+def test_logs_band_scoped_still_uses_start_log(tmp_path):
+    # Item 7: a band-scoped caller (RX/TX feed) still gets the exact band's START log, unchanged.
+    comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
+    life = _life(FakeSystem().system, tmp_path)
+    logs = life.logs_dir(); logs.mkdir(parents=True, exist_ok=True)
+    (logs / "start-widget-868.log").write_text("run log 868\n")
+    (logs / "build-widget.log").write_text("build log\n")
+    path, _ = life.logs(comp, band="868")
+    assert path == str(logs / "start-widget-868.log")
+
+
+def test_log_announcer_records_details_and_emits_live_and_dedups(tmp_path):
+    # Item 7: the service announcer records one copy-pasteable line per new log into `details` AND
+    # emits it live via _progress (the CLI printer), deduping repeat opens of the same file.
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    emitted: list = []
+    svc._progress = emitted.append
+    details: list = []
+    p = "/home/u/loraham-pi-control/logs/build-meshcom-qemu-3.log"
+    cb = svc._log_announcer("meshcom-qemu", details)
+    cb("build-meshcom-qemu-3", p)
+    cb("build-meshcom-qemu-3", p)                                       # same file -> not repeated
+    assert details == [f"  [log] meshcom-qemu -> tail -f {p}"]
+    assert emitted == [f"[log] meshcom-qemu -> tail -f {p}"]
+
+
 def test_run_job_output_unverified_alone_is_unsafe(tmp_path):
     # P1: an escaped descendant holding the output pipe open (output_unverified) makes the job UNSAFE even
     # when the DIRECT child exited 0 — a SUCCEEDED direct process does NOT prove a descendant stopped.

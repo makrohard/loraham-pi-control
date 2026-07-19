@@ -313,6 +313,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="Bounded local health checks")
 
+    p_deps = sub.add_parser("deps", help="Show declared system dependencies (or render a bootstrap script)")
+    p_deps.add_argument("--script", action="store_true",
+                        help="Print an executable bootstrap-deps.sh (run it yourself with sudo)")
+
     p_boot = sub.add_parser("bootstrap", help="Create the runtime root and default config")
     p_boot.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
@@ -593,6 +597,10 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     svc = ControllerService()
+    # Interactive CLI: surface each job's log path LIVE (the moment its file is created) so a long,
+    # silent build/host-test can be followed from another terminal instead of guessing which file to
+    # tail. Service/web/test callers that never set `_progress` get no stray output.
+    svc._progress = lambda s: print(s, flush=True)
 
     if args.command == "list":
         return _render(svc.list_stacks())
@@ -604,6 +612,11 @@ def _run(argv: list[str] | None = None) -> int:
         return _render(svc.explain(args.stack))
     if args.command == "doctor":
         return _render(svc.doctor())
+    if args.command == "deps":
+        if getattr(args, "script", False):
+            print(svc.deps_script(), end="")          # raw, redirectable: `lhpc deps --script > bootstrap-deps.sh`
+            return 0
+        return _render(svc.deps_declared())
     if args.command in ("_controller-uninstall-prep", "_uninstall-guard-claim",
                         "_uninstall-guard-release"):
         if getattr(args, "root", ""):

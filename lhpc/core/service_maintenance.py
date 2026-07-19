@@ -429,6 +429,55 @@ class MaintenanceOpsMixin:
                                    stack_id, comp_index)
         return deps.grouped(report)
 
+    def _declared_dep_commands(self) -> list[str]:
+        """EVERY declared SYSTEM (sudo/apt-level) dependency remediation command — the controller's own
+        apt deps (git, nginx, python3-venv, ...) plus every stack component's `require` install (apt,
+        OBS repo, SPI/config.txt, group grants, service-disable). Order: controller deps, then manifest
+        order. Includes SATISFIED deps too — this is a fresh-install PRE-CLONE bootstrap, not a gap
+        report. Venv-level `python -m pip install` commands are EXCLUDED: the venv does not exist before
+        the clone, and install.sh provisions those into the venv it creates (never a bare/global pip)."""
+        raw: list[str] = []
+
+        def _add(cmd: str) -> None:
+            if cmd and "-m pip install" not in cmd:       # venv-level, provisioned post-clone by install.sh
+                raw.append(cmd)
+
+        for grp in self.controller_system_deps():
+            for d in grp["deps"]:
+                _add(d.get("install", ""))
+        for s in self.stacks():
+            for c in s.components:
+                for req in c.requires:
+                    _add(req.install)
+        return raw
+
+    def deps_script(self) -> str:
+        """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
+        operator runs BEFORE cloning/installing. lhpc only PRINTS it; it never runs privileged
+        commands. The dep revision in the header fingerprints the declared command set."""
+        import hashlib
+        from . import deps
+        raw = self._declared_dep_commands()
+        rev = hashlib.sha256("\n".join(sorted(set(raw))).encode()).hexdigest()[:12]
+        return deps.render_bootstrap_script(raw, rev)
+
+    def deps_declared(self) -> ActionResult:
+        """Readable preview of what `lhpc deps --script` would render — the declared system
+        prerequisites, deduplicated, each marked NOT executed by LHPC."""
+        from . import deps as deps_mod
+        seen: set[str] = set()
+        details = ["Declared system prerequisites (run `lhpc deps --script` for a runnable script):"]
+        for cmd in self._declared_dep_commands():
+            c = (cmd or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            details.append("  " + c.replace("\n", "\n    "))
+        details.append(f"  ({deps_mod.NOT_EXECUTED_NOTE})")
+        return ActionResult(True, f"{len(seen)} declared system-dependency command(s).",
+                            details=details,
+                            next_commands=["lhpc deps --script > bootstrap-deps.sh"])
+
     _TASK_BANNER_EXPIRY_S = 60      # ONE server-side expiry constant (client never removes earlier)
 
     def _parse_utc(self, ts):

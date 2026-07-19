@@ -44,9 +44,44 @@ checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are on
 ### System dependencies
 
 LHPC never installs system packages itself — it shows the exact copyable command for each
-missing one (per-stack **System dependencies** view + the **Checks** page). On a fresh Raspberry
-Pi OS (Trixie or Bookworm) you can prepare everything up front — install only what the stacks
-you'll actually run need:
+missing one (per-stack **System dependencies** view + the **Checks** page).
+
+**One-script bootstrap (pre-clone).** `lhpc deps --script` renders *every* declared system
+prerequisite — apt packages (merged into one non-interactive `apt-get install -y`, downloader/GPG/TLS
+utilities included), the meshtasticd OBS repo (dedicated keyring + `signed-by=` over HTTPS), the SPI
+`config.txt` overlay, the `spi`/`gpio` group grants, and disabling the OS-managed `meshtasticd` — into
+one script you run yourself. It works both as an ordinary user (it calls `sudo` internally) and via
+`sudo bash`. A rendered snapshot ships in the repo root as [`bootstrap-deps.sh`](bootstrap-deps.sh)
+for the moment *before* you've cloned anything:
+
+```bash
+# on a fresh Raspberry Pi OS Trixie (arm64) image, BEFORE cloning:
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh
+sudo bash bootstrap-deps.sh --spi-mode soft-cs        # see SPI modes below; --operator-user <name> if run as root
+sudo reboot                                           # for the SPI overlay + group membership to take effect
+# (from an existing checkout you can regenerate it: lhpc deps --script > bootstrap-deps.sh)
+```
+
+- **`--spi-mode` is required** and hardware-specific:
+  - `soft-cs` — meshtasticd software chip-select (`/dev/spidev0.0` only): `dtparam=spi=on` +
+    `dtoverlay=spi0-0cs`. Use for a **single-radio** LoRaHAM Pi / Uputronics (the common case).
+  - `hardware-cs` — enables SPI **without** the overlay, keeping hardware CE0/CE1 for a setup that
+    needs them (e.g. a **dual Uputronics**).
+  - `skip` — no boot-config change (SPI already configured).
+  It is idempotent (re-running never duplicates lines) and **fails closed** on a conflicting existing
+  `config.txt` rather than appending contradictory overlays.
+- **Group grants go to the operator, never root**: the resolved user is `--operator-user` if given,
+  else `$SUDO_USER` when run via sudo, else the invoking user. Run directly as root without a provable
+  operator and it stops before mutating anything.
+- **QEMU + PlatformIO are NOT in this script** — the managed MeshCom build (`lhpc build`) provisions
+  them (sha256-verified, inside the runtime root). Only `libslirp0` (and the download/extract utilities)
+  are apt-level here.
+
+The apt package set is **identical on a Pi Zero 2W and a Pi 5** (same Trixie arm64 packages); only the
+SPI mode is hardware-specific. See [docs/field-notes.md](docs/field-notes.md) for the Raspberry Pi
+Imager first-boot gotcha, the realistic MeshCom build timeout, and the offline-QEMU workflow.
+
+Or install only what the stacks you'll actually run need, by hand:
 
 ```bash
 # --- LHPC itself (git + Python 3.11+ venv + pip) ---

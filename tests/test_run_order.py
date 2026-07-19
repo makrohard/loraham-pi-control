@@ -293,6 +293,54 @@ def test_dual_band_reachable_not_ready_fails_without_relaunch(tmp_path):
     assert "start daemon --radio 433" not in text and "--radio both" not in text
 
 
+def _daemon_svc_owned(tmp_path, replies, owner_band):
+    """A _daemon_svc (installed/built daemon) with a RUNNING meshtastic owning `owner_band`."""
+    import os
+    binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
+    binp.parent.mkdir(parents=True)
+    binp.write_text("#!/bin/sh\nsleep 0.1\n")
+    os.chmod(binp, 0o755)
+    svc = ControllerService(system=FakeSystem(unix_replies=replies,
+                            cmdlines_data={200: ["meshtasticd"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    svc._set_running_band("meshtastic", owner_band)
+    return svc
+
+
+@pytest.mark.needs_session
+def test_daemon_start_skips_band_owned_by_meshtastic(tmp_path):
+    # Item 3 (one-owned): meshtastic owns 868 -> the daemon serves 433 only, reports the skip, and
+    # NEVER starts 868 or stops meshtastic (the working band is not taken down).
+    svc = _daemon_svc_owned(tmp_path, {}, "868")
+    text = "\n".join(svc.start("daemon", apply=True).details)
+    assert _band_starts([text]) == {"433"}                       # only the FREE band started
+    assert "868 owned by meshtastic" in text                     # skip reported
+    assert "start daemon --radio 868" not in text and "--radio both" not in text
+
+
+@pytest.mark.needs_session
+def test_daemon_start_all_bands_owned_is_clean_refusal(tmp_path, monkeypatch):
+    # Item 3 (all-owned): every active band owned by a running radio-direct stack -> clean refusal,
+    # NO daemon launch attempted.
+    svc = _daemon_svc(tmp_path, {})
+    monkeypatch.setattr(type(svc), "_direct_radio_owners",
+                        lambda self, bands: {b: "meshtastic" for b in bands if b in ("433", "868")})
+    res = svc.start("daemon", apply=True)
+    text = "\n".join(res.details)
+    assert not res.ok
+    assert _band_starts([text]) == set()                         # no start attempted
+    assert "all active radio bands are owned" in text
+
+
+@pytest.mark.needs_session
+def test_daemon_start_all_free_serves_both(tmp_path):
+    # Item 3 (all-free): with no radio-direct owner running, both bands are served as before.
+    svc = _daemon_svc(tmp_path, {})
+    text = "\n".join(svc.start("daemon", apply=True).details)
+    assert _band_starts([text]) == {"433", "868"}
+    assert "owned by" not in text
+
+
 def test_client_single_band_startup_unchanged(tmp_path):
     # A single-band client with its band already served applies once, no daemon relaunch.
     svc = ControllerService(system=FakeSystem(unix_replies={"/tmp/loraconf433.sock": _RDY}).system,
@@ -470,9 +518,24 @@ def test_opposite_band_meshtastic_permits_daemon_start(tmp_path):
     assert svc.run_blockers("daemon", radio="433") == []
 
 
-def test_radio_both_blocked_by_direct_owner_either_band(tmp_path):
-    assert any("868" in bl["resource"] for bl in _msvc(tmp_path, "868").run_blockers("daemon", radio="both"))
-    assert any("433" in bl["resource"] for bl in _msvc(tmp_path, "433").run_blockers("daemon", radio="both"))
+def test_radio_both_arbitrates_away_the_owned_band(tmp_path):
+    # Item 3: a serve-all/both daemon start ARBITRATES an owned band away and serves only the free
+    # band — it never blocks or stops a running radio-direct owner (symmetric with meshtastic start
+    # stopping the daemon band). An EXPLICIT single-band request still conflicts (tests above).
+    assert not any("868" in bl["resource"]
+                   for bl in _msvc(tmp_path, "868").run_blockers("daemon", radio="both"))
+    assert _msvc(tmp_path, "868")._daemon_arbitrated_bands("both") == (["433"], {"868": "meshtastic"})
+    assert not any("433" in bl["resource"]
+                   for bl in _msvc(tmp_path, "433").run_blockers("daemon", radio="both"))
+    assert _msvc(tmp_path, "433")._daemon_arbitrated_bands("both") == (["868"], {"433": "meshtastic"})
+
+
+def test_explicit_single_band_request_is_never_arbitrated_away(tmp_path):
+    # Item 3: `--radio 868` while meshtastic owns 868 is an EXPLICIT request — it must still conflict
+    # (surfaced as a blocker), not be silently skipped.
+    svc = _msvc(tmp_path, "868")
+    assert svc._daemon_arbitrated_bands("868") == (["868"], {})
+    assert any("868" in bl["resource"] for bl in svc.run_blockers("daemon", radio="868"))
 
 
 def test_daemon_start_lock_keys_track_radio_mode(tmp_path):

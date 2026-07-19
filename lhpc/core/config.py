@@ -704,24 +704,33 @@ def update_yaml(text: str, params, values, subst) -> str:
     preserving everything else. Updates the FIRST occurrence of each key in its
     section (uncommenting a `#  key: …` line if that is the first occurrence), so
     the active value is set while commented alternative blocks are left untouched.
-    Blank non-flag values leave the base as-is."""
+    Blank non-flag values leave the base as-is — UNLESS the param is `omit_if_empty`
+    (OPTIONAL-ABSENT), in which case an active key line inherited from the base is
+    REMOVED so the key is omitted from the generated file entirely (never an empty
+    value). Commented example lines for the key are left commented (already inactive)."""
     want = {}
+    remove = set()
     for p in params:
         raw = subst(str(values.get(p.name, p.default)))
         if p.kind != "flag" and raw.strip() == "":
+            if getattr(p, "omit_if_empty", False):
+                remove.add((p.section, p.key))     # optional-absent + unset -> OMIT the key
             continue
         want[(p.section, p.key)] = _yaml_value(p.kind, raw)
     lines = text.splitlines()
+    out: list[str] = []
     section = ""
     done = set()
-    for i, line in enumerate(lines):
+    for line in lines:
         bare = line.strip()
         if not bare or bare.startswith("---"):
+            out.append(line)
             continue
         # Section header: an UNcommented top-level `Key:` with no inline value.
         if (not bare.startswith("#") and bare.endswith(":")
                 and (len(line) - len(line.lstrip())) == 0 and ":" not in bare[:-1]):
             section = bare[:-1].strip()
+            out.append(line)
             continue
         # Analyse a possibly-commented key line, preserving the key's own indent.
         analysed = line
@@ -730,14 +739,21 @@ def update_yaml(text: str, params, values, subst) -> str:
             analysed = line[:h] + line[h + 1:]      # drop one '#', keep indentation
         a = analysed.strip()
         if not a or a.startswith("#") or ":" not in a:
+            out.append(line)
             continue
         indent = len(analysed) - len(analysed.lstrip())
         key = a.split(":", 1)[0].strip()
         sec = "" if indent == 0 else section
+        # OMIT an ACTIVE (uncommented) line for an optional-absent unset param — drop it entirely.
+        # (A commented `#  key:` example is already inactive; leave it commented.)
+        if (sec, key) in remove and not bare.startswith("#"):
+            continue
         if (sec, key) in want and (sec, key) not in done:
-            lines[i] = f"{' ' * indent}{key}: {want[(sec, key)]}"
+            out.append(f"{' ' * indent}{key}: {want[(sec, key)]}")
             done.add((sec, key))
-    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+            continue
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
 def _patch_local_table(data: dict, table: str, updates: dict) -> None:

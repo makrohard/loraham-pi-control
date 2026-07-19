@@ -921,14 +921,22 @@ main = "meshtastic"
     exec_name = "meshtasticd"
 
     [[stack.component.require]]
+    # ca-certificates + curl + gnupg underpin the OBS repo setup below (HTTPS fetch + key dearmor).
+    # Declared so the generated bootstrap installs them BEFORE the repo block uses them.
+    cmd = "gpg"
+    install = "sudo apt install -y ca-certificates curl gnupg"
+    note = "TLS certs + curl + gnupg — required to add the Meshtastic OBS apt repository (HTTPS key fetch, dearmor to a scoped keyring)."
+    [[stack.component.require]]
     check_file = "/usr/bin/meshtasticd"
+    # SCOPED key (dedicated /etc/apt/keyrings + signed-by=, never global trusted.gpg.d) over HTTPS.
     install = '''
 . /etc/os-release
-echo "deb http://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_${VERSION_ID}/ /" | sudo tee /etc/apt/sources.list.d/network:Meshtastic:beta.list
-curl -fsSL "https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_${VERSION_ID}/Release.key" | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg > /dev/null
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL "https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_${VERSION_ID}/Release.key" | gpg --dearmor | sudo tee /etc/apt/keyrings/meshtastic-obs.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/meshtastic-obs.gpg] https://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_${VERSION_ID}/ /" | sudo tee /etc/apt/sources.list.d/meshtastic-obs.list
 sudo apt update
 sudo apt install -y meshtasticd'''
-    note = "meshtasticd is NOT in the Debian/RPiOS repos — the command adds Meshtastic's OBS apt repo + signing key (auto-selecting Debian_13 for Trixie / Debian_12 for Bookworm via os-release), then installs."
+    note = "meshtasticd is NOT in the Debian/RPiOS repos — adds Meshtastic's OBS apt repo over HTTPS with a DEDICATED keyring (/etc/apt/keyrings + signed-by=, not global trust), auto-selecting Debian_13 for Trixie / Debian_12 for Bookworm via os-release, then installs."
     [[stack.component.require]]
     check_file = "/dev/spidev0.0"
     install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
@@ -1032,23 +1040,27 @@ sudo apt install -y meshtasticd'''
       band_defaults = { "433" = "25", "868" = "16" }
       label = "Lora IRQ pin (DIO0)"
       advanced = true
+      # OPTIONAL-ABSENT (no default, no band_defaults). The Uputronics RF95 boards have NO reset line
+      # (NC, vendor-confirmed) and NO Busy pin (RF95 has none — the old "DIO1" label was wrong). Writing
+      # Reset: 6 makes meshtasticd assert-abort (gpiod_line_request_reconfigure_lines 'request' failed)
+      # because BCM 6/13 are the LoRaHAM daemon's LEDs — so when unset (the default for these boards)
+      # `omit_if_empty` OMITS the key entirely rather than writing a harmful pin. Left advanced so an
+      # exotic board that GENUINELY has the pin can still set it.
       [[stack.component.config_file.param]]
       name = "reset"
       key = "Reset"
       section = "Lora"
       kind = "int"
-      default = "6"
-      band_defaults = { "433" = "5", "868" = "6" }
-      label = "Lora Reset pin"
+      omit_if_empty = true
+      label = "Lora Reset pin (leave empty for Uputronics — no reset line)"
       advanced = true
       [[stack.component.config_file.param]]
       name = "busy"
       key = "Busy"
       section = "Lora"
       kind = "int"
-      default = "12"
-      band_defaults = { "433" = "24", "868" = "12" }
-      label = "Lora Busy pin (DIO1)"
+      omit_if_empty = true
+      label = "Lora Busy pin (leave empty for Uputronics — RF95 has no busy pin)"
       advanced = true
 
     [[stack.component.endpoint]]
@@ -1213,8 +1225,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "6519d25401e1b5b680af18f7a5a02adda2e2472d"
-    pin_tag = "6519d25"
+    pin_commit = "3ed34983c2e0ab22ff88851570132cd63ba7976e"
+    pin_tag = "3ed3498"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1247,11 +1259,24 @@ main = "meshcom-qemu"
   # (upstream icssw-org pinned tag) has NO external-radio transport, so the extradio
   # build boots with "LoRa radio disabled (no backend)" and never talks to the bridge —
   # no messages in either direction (live finding).
+  # SELF-CONTAINED tools, located-and-versioned INSIDE the runtime root (no reliance on $HOME/pipx):
+  #  * PlatformIO -> a managed venv at {root}/build/tools/platformio (retires the pipx system dep;
+  #    passed to the build scripts by ABSOLUTE path via PIO=). pipx stays a documented standalone-dev
+  #    alternative.
+  #  * Espressif QEMU -> fetch-qemu.sh downloads the sha256-pinned aarch64 tarball (fail-closed; offline
+  #    via LHPC_QEMU_TARBALL) into {root}/build/tool-cache; run.sh receives the resolved binary via the
+  #    `qemu` param (default below). aarch64 is correct for BOTH a Pi Zero 2W and a Pi 5.
+  # PLATFORMIO_CORE_DIR is an explicit RUNTIME-OWNED package/tool cache under the root, passed to BOTH
+  # framework-install (prepare-openeth) and build (build.sh) so a CLI build and a web-service build use
+  # the SAME in-root store (prepare-openeth.sh/build.sh honor `${PLATFORMIO_CORE_DIR:-$HOME/.platformio}`).
   build_steps = [
+    { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"] },
+    { argv = ["scripts/fetch-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606"] },
     { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"] },
     { argv = ["scripts/apply-overlay.sh"] },
-    { argv = ["scripts/prepare-openeth.sh"] },
-    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
+    { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" } },
+    { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
   ]
   readiness = "endpoint"
   run = "scripts/run.sh {env} {qemu}"
@@ -1265,6 +1290,16 @@ main = "meshcom-qemu"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
+  # Cold `pio` build is ~26 min on a Pi Zero 2W (field-measured); each provisioning/setup/build step
+  # gets this per-step budget with >2x margin so a slow step is never silently TERM-killed mid-build.
+  build_timeout = 3600.0
+  # AUTHORITATIVE completion marker, co-located WITH the firmware artifact (same .pio/build/<env> dir as
+  # flash.bin). build() removes it before the FIRST step and writes it ONLY after the LAST step succeeds,
+  # and is_built() gates on it — so a stale flash.bin from an earlier build can NEVER read "built" after a
+  # failed/interrupted rebuild. Cleaning the firmware (rm .pio/build/<env>) removes the marker with it.
+  # The env matches the build_steps' hardcoded `--env qemu-headless-extradio-gpsd` (build_marker is a
+  # literal path — no {env} substitution — so it must name the concrete env the build produces).
+  build_marker = ".work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/.lhpc-build-complete"
   # MeshCom's callsign is a NODE setting applied over the net-console (12323) and stored in
   # flash/NVS (survives restarts). Wait for the port, then push `--setcall` — no nc/shell. QEMU
   # opens 12323 almost immediately, but the firmware needs ~a minute to boot before it accepts a
@@ -1289,28 +1324,31 @@ main = "meshcom-qemu"
     install = "sudo apt install -y libslirp0"
     note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. arm64/aarch64 path (this project's target)."
     [[stack.component.require]]
-    # Satisfied when qemu-system-xtensa is on PATH OR at the ~/.espressif path — mirroring run.sh's
-    # own resolution (--qemu > PATH > ~/.espressif). The PATH probe is the reliable fallback if the
-    # ~/.espressif file check misbehaves (e.g. HOME differs in the service context).
-    cmd = "qemu-system-xtensa"
-    check_file = "~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
-    install = '''
-mkdir -p ~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606
-cd ~/.espressif/tools/qemu-xtensa/esp_develop_9.0.0_20240606
-wget https://github.com/espressif/qemu/releases/download/esp-develop-9.0.0-20240606/qemu-xtensa-softmmu-esp_develop_9.0.0_20240606-aarch64-linux-gnu.tar.xz
-tar -xJf qemu-xtensa-softmmu-esp_develop_9.0.0_20240606-aarch64-linux-gnu.tar.xz'''
-    note = "Espressif qemu-system-xtensa (aarch64 prebuilt, soft-pinned esp_develop_9.0.0_20240606) — NOT installed by setup.sh/build.sh; run.sh resolves --qemu > PATH > this ~/.espressif path. Satisfied once qemu-system-xtensa is on PATH OR at that path."
+    # fetch-qemu.sh downloads the pinned tarball (wget) and extracts it with tar -J (xz-utils). Declared
+    # so the generated bootstrap installs them before the managed build invokes fetch-qemu.sh.
+    cmd = "wget"
+    install = "sudo apt install -y wget xz-utils"
+    note = "wget + xz-utils — the managed qemu provisioning (scripts/fetch-qemu.sh) downloads and xz-extracts the pinned Espressif tarball."
     [[stack.component.require]]
-    # PlatformIO CLI — scripts/prepare-openeth.sh + build.sh invoke `pio`. pipx installs it into
-    # ~/.local/bin, which lhpc's build steps DO see: the runner PATH includes ~/.local/bin (see
-    # _FIXED_ENV in probes/backends.py) so a pipx install is found under the web service too, not only
-    # in the operator's shell.
+    # PROVISIONED by the managed setup step (build_steps: scripts/fetch-qemu.sh into
+    # {runtime}/build/tool-cache) — sha256-pinned + fail-closed, aarch64 (both Zero 2W and Pi 5), offline
+    # via LHPC_QEMU_TARBALL. The pre-check is satisfied when the IN-ROOT binary exists OR
+    # qemu-system-xtensa is on PATH (operator override / standalone dev). run.sh receives the resolved
+    # binary via the `qemu` param (default below); it keeps its own --qemu > PATH > IDF_TOOLS_PATH
+    # fallbacks for standalone use.
+    cmd = "qemu-system-xtensa"
+    check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    provisioned = true
+    note = "Espressif qemu-system-xtensa (aarch64, sha256-pinned esp_develop_9.0.0_20240606) — provisioned INTO the runtime root by `lhpc build` (scripts/fetch-qemu.sh; offline via LHPC_QEMU_TARBALL). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
+    [[stack.component.require]]
+    # PROVISIONED by the managed setup step (build_steps: a venv at {runtime}/build/tools/platformio),
+    # invoked by ABSOLUTE path (PIO=) from prepare-openeth.sh/build.sh — this retires the pipx system
+    # dependency. The pre-check is satisfied when the in-root pio exists OR `pio` is on PATH (operator
+    # override / standalone pipx). pipx stays the documented standalone-dev alternative (docs/field-notes).
     cmd = "pio"
-    install = '''
-sudo apt install -y pipx
-pipx install platformio
-pipx ensurepath'''
-    note = "PlatformIO CLI (meshcom firmware build; pipx puts it in ~/.local/bin — open a new shell after ensurepath)"
+    check_file = "{runtime}/build/tools/platformio/.venv/bin/pio"
+    provisioned = true
+    note = "PlatformIO CLI (meshcom firmware build) — provisioned as a managed venv in the runtime root by `lhpc build`; standalone dev may instead `pipx install platformio`. Satisfied once the in-root pio exists OR `pio` is on PATH."
 
     # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
     # operator callsign. Applied via the net-console after boot (see post_start).
@@ -1333,15 +1371,18 @@ pipx ensurepath'''
     [[stack.component.param]]
     name = "qemu"
     kind = "str"
+    validator = "path"
     arg = "--qemu"
-    default = ""
-    label = "qemu-system-xtensa path (auto if blank)"
+    # The MANAGED in-root binary provisioned by fetch-qemu.sh; the operator can override with a custom
+    # build. run.sh still falls back to PATH > IDF_TOOLS_PATH when invoked standalone (no --qemu).
+    default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
+    label = "qemu-system-xtensa path (managed in-root; override for a custom build)"
     advanced = true
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "6519d25401e1b5b680af18f7a5a02adda2e2472d"
-    pin_tag = "6519d25"
+    pin_commit = "3ed34983c2e0ab22ff88851570132cd63ba7976e"
+    pin_tag = "3ed3498"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1398,7 +1439,7 @@ main = "meshcore-pi"
   [[stack.component]]
   id = "meshcore-pi"
   readiness = "endpoint"
-  # A Python node that imports its stack (LoRaRF/scapy/crypto) before opening TCP 5000 can
+  # A Python node that imports its stack (scapy/crypto) before opening TCP 5000 can
   # take well over the 6 s global default to become ready — scapy's import alone can approach
   # 45 s on 512 MB / A53-class hardware, so give it a generous window so start verifies instead
   # of tearing it down. Tune down if your Pi is faster.
@@ -1419,20 +1460,24 @@ main = "meshcore-pi"
   # that: it is written ONLY after the LAST step succeeds and is what `is_built` gates on.
   bin = ".venv/bin/python"
   build_marker = ".venv/.lhpc-build-complete"
-  # venv + pip-install of 7 packages (scapy, LoRaRF, pycryptodome, ...) overran the 600 s default on a
+  # venv + pip-install of 6 packages (scapy, pycryptodome, ...) overran the 600 s default on a
   # Pi Zero 2W and was silently TERM-killed mid-pip; give the build room, and its pytest suite too.
   build_timeout = 1800.0
   test_timeout = 900.0
   # Self-sufficient managed clone: the venv is built IN-TREE by `lhpc build`. Upstream has
   # no requirements file — deps enumerated from its README (an upstream requirements.txt
   # would make this declarative).
-  # --system-site-packages: the Pi OS already ships the GPIO/SPI bindings
-  # (python3-rpi.gpio, python3-lgpio, python3-spidev) — reusing them avoids compiling
-  # lgpio from source (which needs swig); pip adds only what the OS lacks.
+  # This 868 node runs the DAEMON-SOCKET interface (lorahaminterface): it reaches the radio over
+  # the loraham daemon's unix sockets and NEVER drives SPI/GPIO itself, so it needs NO GPIO
+  # bindings and NO LoRaRF (LoRaRF is only imported by the direct-SPI `lora` interface, which this
+  # deployment does not configure). Dropping LoRaRF also drops its transitive RPi.GPIO, whose sdist
+  # does not build on Trixie's Python and whose classic variant is incompatible with the Pi 5's RP1
+  # — so both hardware classes keep their OS defaults untouched. --system-site-packages is kept so
+  # the venv can reuse any system packages present; the deps below are all pure-Python.
   build_steps = [
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", "pycryptodome", "aiotools", "pyserial_asyncio",
-              "typing-extensions", "LoRaRF", "scapy==2.5.0", "pytest"] },
+              "typing-extensions", "scapy==2.5.0", "pytest"] },
   ]
 
     # meshcore-pi has no CLI flags — all settings live in the TOML. The controller

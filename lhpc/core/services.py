@@ -1018,7 +1018,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         Start (no launch, no daemon CONF SET, no param apply). A missing band or a stopped client
         makes it False so the normal apply-once-then-start path runs."""
         has_daemon = any(c.id == self.DAEMON_ID for _, c in order)
-        need = self._daemon_serve_bands(radio) if has_daemon else []   # served bands (never a dual value)
+        # Served bands (never a dual value), arbitrated away from bands a running radio-direct stack
+        # owns — so a daemon already serving only the free band(s) reads as healthy, not perpetually
+        # "needs 868" while meshtastic owns it.
+        need = self._daemon_arbitrated_bands(radio)[0] if has_daemon else []
         for _stack, comp in order:
             if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
                 continue
@@ -1091,9 +1094,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
                 return self._daemon_claimed_bands()
             # START: clamp to the active radio mode (M-1) — never lock/serve an excluded band, never
-            # 'both'. `_daemon_serve_bands` returns the active band(s) for any non-single request.
+            # 'both'. A serve-all start is ALSO arbitrated away from bands a running radio-direct stack
+            # owns, so this single source of truth for the conflict set + lock set matches what the
+            # daemon will actually serve (it starts the free band(s), not the owned one).
             r = radio or str(self.stack_config(sid).get("radio") or "")
-            return set(self._daemon_serve_bands(r))
+            kept, _ = self._daemon_arbitrated_bands(r)
+            return set(kept)
         # Client.
         if op == "stop":
             eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)

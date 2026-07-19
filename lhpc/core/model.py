@@ -148,6 +148,9 @@ class Requirement:
     note: str = ""
     groups: tuple[str, ...] = ()   # required unix-group membership (run-time capability)
     absent_file: str = ""       # a file (e.g. a systemd wants-symlink) that must NOT exist (run-time)
+    provisioned: bool = False   # provisioned INTO the runtime root by the build/setup step (a managed
+    #                             tool like the in-root qemu / PlatformIO venv): still checked at START,
+    #                             but EXCLUDED from the INSTALL gate — it does not exist until `lhpc build`.
 
 
 @dataclass(frozen=True)
@@ -263,6 +266,10 @@ class FileParam:
     hidden: bool = False         # written to the file but not shown on the Config page
     validator: str = ""          # named validator for kind="str" (callsign/freq/host/port/band/node)
     group: str = ""              # settings sub-section title (see RunParam.group)
+    omit_if_empty: bool = False  # OPTIONAL-ABSENT: when unset/blank, OMIT the key from the generated
+    #                              file entirely (and remove an active key line inherited from the base)
+    #                              — never write an empty value. For pins a board genuinely lacks
+    #                              (Uputronics Reset/Busy): a written value assert-aborts meshtasticd.
 
 
 @dataclass(frozen=True)

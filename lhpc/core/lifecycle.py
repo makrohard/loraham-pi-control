@@ -175,6 +175,13 @@ class Lifecycle:
 
     # -- locations ---------------------------------------------------------
 
+    def _resolve_req_path(self, path: str) -> str:
+        """Resolve a requirement's file path: substitute `{runtime}` (the runtime root) so a require can
+        verify a MANAGED in-root artifact (`{runtime}/build/tool-cache/...`, `{runtime}/build/tools/...`),
+        then expanduser for a per-user tool path (`~/.espressif`). Best-effort — an unset HOME leaves `~`
+        literal, and the PATH `cmd` probe stays a reliable escape hatch/operator override."""
+        return os.path.expanduser(path.replace("{runtime}", str(self.paths.runtime_root)))
+
     def missing_requirements(self, comp: Component) -> list:
         """Component dependencies not satisfied: a command not on PATH, or (for
         -dev packages) a `check_file` header that does not exist."""
@@ -193,7 +200,7 @@ class Lifecycle:
                 # INVERSE run-time requirement: the named file (a systemd wants-symlink of a conflicting
                 # root service) must NOT exist. Present => the service is enabled and will seize the shared
                 # radio => unsatisfied, so START is blocked (fail-closed). expanduser for symmetry.
-                if self.system.fs.exists(os.path.expanduser(req.absent_file)):
+                if self.system.fs.exists(self._resolve_req_path(req.absent_file)):
                     missing.append(req)
                 continue
             if req.check_file or req.cmd:
@@ -205,7 +212,7 @@ class Lifecycle:
                 # exactly as before. expanduser is best-effort: a wrong/unset HOME just falls back to the
                 # PATH probe, so a PATH install is always a reliable escape hatch.
                 on_path = bool(req.cmd) and shutil.which(req.cmd) is not None
-                at_file = bool(req.check_file) and self.system.fs.exists(os.path.expanduser(req.check_file))
+                at_file = bool(req.check_file) and self.system.fs.exists(self._resolve_req_path(req.check_file))
                 if not (on_path or at_file):
                     missing.append(req)
                 continue
@@ -245,7 +252,8 @@ class Lifecycle:
                                 # with a manifest `build_timeout`.
 
     def build(self, comp: Component, timeout: float | None = None,
-              log_base: str | None = None, redactor=None, should_cancel=None) -> JobResult:
+              log_base: str | None = None, redactor=None, should_cancel=None,
+              on_log_open=None) -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
@@ -285,7 +293,7 @@ class Lifecycle:
             name = base + (f"-{i}" if len(steps) > 1 else "")
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
                            env=(env or None), logs_dir=self.logs_dir(), timeout=eff_timeout,
-                           redactor=redactor, should_cancel=should_cancel)
+                           redactor=redactor, should_cancel=should_cancel, on_log_open=on_log_open)
             if not last.ok:
                 return last
         if last is None:        # nothing to build
@@ -1016,13 +1024,42 @@ class Lifecycle:
         legacy = d / f"start-{comp.id}.log"
         return legacy if legacy.is_file() else None
 
+    def _newest_job_log(self, comp_id: str, kinds=("start", "build", "test")) -> Path | None:
+        """The NEWEST (by mtime) non-symlink `<kind>-<comp_id>[-*].log` across the given job kinds —
+        so `lhpc logs <comp>` names the SAME file the newest job actually wrote (a running start log,
+        or a fresh build/host-test log), never a stale unsuffixed sibling from a prior run."""
+        d = self.logs_dir()
+        try:
+            entries = runtime_fs.scandir_nofollow(self.paths, d)
+        except (OSError, PathContainmentError):
+            return None
+        bases = [f"{k}-{comp_id}" for k in kinds]
+        newest, newest_mtime = None, -1.0
+        for name, is_symlink in entries:
+            if is_symlink or not name.endswith(".log"):
+                continue
+            stem = name[:-4]                      # drop ".log"
+            if not any(stem == b or stem.startswith(b + "-") for b in bases):
+                continue
+            p = d / name
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:                       # vanished between scandir and stat
+                continue
+            if mtime > newest_mtime:
+                newest, newest_mtime = p, mtime
+        return newest
+
     def logs(self, comp: Component, lines: int = 200,
              band: str = "") -> tuple[str, list[str]]:
         for path in comp.log_paths:
             p = Path(path)
             if p.exists():
                 return str(p), tail_log(p, lines)
-        job_log = self.start_log(comp, band)
+        # A band-scoped caller (the RX/TX feed) wants the exact band's start log; a band-less
+        # `lhpc logs <comp>` wants the NEWEST job log across start/build/test — so it resolves to the
+        # very file a just-finished build wrote, matching the [log] line the job announced.
+        job_log = self.start_log(comp, band) if band else self._newest_job_log(comp.id)
         if job_log is not None:
             # runtime-owned log -> no-follow tail through the authoritative API.
             return str(job_log), runtime_fs.tail(self.paths, job_log, lines)
@@ -1059,7 +1096,7 @@ class Lifecycle:
                                 # known-slow suite overrides it with a manifest `test_timeout`.
 
     def host_test(self, comp: Component, timeout: float | None = None,
-                  log_base: str | None = None, should_cancel=None) -> JobResult | None:
+                  log_base: str | None = None, should_cancel=None, on_log_open=None) -> JobResult | None:
         # `log_base` (auto-install driver) overrides the default `test-<comp.id>` job/log name
         # with a RUN-SPECIFIC one, so a run's test log never collides with a prior run's.
         # `should_cancel` (auto-install Abort) is polled while the test runs — like build().
@@ -1081,7 +1118,7 @@ class Lifecycle:
                              returncode=1, log_path="", tail=[str(exc)])
         return run_job(self.system.runner, name=base, argv=argv, paths=self.paths,
                        cwd=src, logs_dir=self.logs_dir(), timeout=eff_timeout,
-                       should_cancel=should_cancel)
+                       should_cancel=should_cancel, on_log_open=on_log_open)
 
     # -- daemon readiness + bounded TX test --------------------------------
 

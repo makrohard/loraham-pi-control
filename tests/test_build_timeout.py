@@ -145,3 +145,72 @@ def test_runner_path_no_duplicate_local_bin(monkeypatch):
     monkeypatch.setenv("HOME", "/home/operator")
     monkeypatch.setenv("PATH", "/home/operator/.local/bin:/usr/bin")
     assert backends._runner_path().split(":").count("/home/operator/.local/bin") == 1
+
+
+# --- Item 3: MeshCom realistic timeout + firmware-co-located completion marker ---------------------
+
+def _meshcom(svc):
+    return next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
+
+
+def _flash_dir(svc, comp):
+    # The build_steps hardcode --env qemu-headless-extradio-gpsd, so the firmware + marker live here.
+    return svc._lifecycle().source_dir(comp) / ".work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd"
+
+
+def test_meshcom_timeout_exceeds_measured_cold_build(tmp_path, monkeypatch):
+    # Cold `pio` build is ~26 min (~1560 s) on a Zero 2W; the per-step budget must clear it with margin.
+    svc = _svc(tmp_path)
+    comp = _meshcom(svc)
+    assert comp.build_timeout >= 3600.0 and comp.build_timeout > 1560.0
+    seen = _capture_run_job_timeout(monkeypatch)
+    svc._lifecycle().build(comp)
+    assert seen["timeout"] == comp.build_timeout      # honored per step, not the 900 s default
+
+
+def test_meshcom_marker_is_colocated_with_flash_and_gates_is_built(tmp_path):
+    # A stale flash.bin with NO completion marker (a failed/interrupted rebuild) must read NOT built.
+    svc = _svc(tmp_path)
+    comp = _meshcom(svc)
+    assert comp.build_marker.endswith("qemu-headless-extradio-gpsd/.lhpc-build-complete")
+    fd = _flash_dir(svc, comp); fd.mkdir(parents=True, exist_ok=True)
+    (fd / "flash.bin").write_text("stale firmware\n")           # artifact present...
+    assert not svc.is_built(comp)                               # ...but no marker -> NOT built
+    # Removing/cleaning the firmware dir takes the marker with it (co-located): still not built.
+    (svc._lifecycle().source_dir(comp) / comp.build_marker).write_text("ok\n")
+    assert svc.is_built(comp)
+    import shutil
+    shutil.rmtree(fd)                                           # clean the firmware artifact + its marker
+    assert not svc.is_built(comp)
+
+
+def test_meshcom_successful_build_stamps_marker_only_after_last_step(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    comp = _meshcom(svc)
+    fd = _flash_dir(svc, comp); fd.mkdir(parents=True, exist_ok=True)
+    (fd / "flash.bin").write_text("firmware\n")
+    marker = svc._lifecycle().source_dir(comp) / comp.build_marker
+    steps_run = {"n": 0}
+    def _fake_run_job(runner, **kw):
+        steps_run["n"] += 1
+        assert not marker.exists()          # marker must NOT exist during any step (only after the last)
+        return JobResult(name="b", state=JobState.SUCCEEDED, returncode=0, log_path="", tail=[])
+    monkeypatch.setattr(lifecycle_mod, "run_job", _fake_run_job)
+    res = svc._lifecycle().build(comp)
+    assert res.ok and steps_run["n"] == len(comp.build_steps)   # every step ran
+    assert marker.exists() and svc.is_built(comp)               # stamped only after the last step
+
+
+def test_meshcom_failed_rebuild_leaves_no_marker(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    comp = _meshcom(svc)
+    fd = _flash_dir(svc, comp); fd.mkdir(parents=True, exist_ok=True)
+    (fd / "flash.bin").write_text("stale firmware\n")
+    marker = svc._lifecycle().source_dir(comp) / comp.build_marker
+    marker.write_text("stale\n")                                # a prior build's marker
+    assert svc.is_built(comp)
+    monkeypatch.setattr(lifecycle_mod, "run_job",
+                        lambda runner, **kw: JobResult(name="b", state=JobState.FAILED,
+                                                       returncode=1, log_path="", tail=["boom"]))
+    res = svc._lifecycle().build(comp)
+    assert not res.ok and not marker.exists() and not svc.is_built(comp)   # stale flash != built

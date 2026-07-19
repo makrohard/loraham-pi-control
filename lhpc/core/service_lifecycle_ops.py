@@ -475,8 +475,15 @@ class LifecycleOpsMixin:
             commands = []   # copyable commands the operator must run themselves
             for _, comp in order:
                 if comp.id == self.DAEMON_ID:
-                    details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
-                                   + (f", TXMODE={tx}" if tx else ""))
+                    kept, owned = self._daemon_arbitrated_bands(radio)
+                    if owned:
+                        served = "+".join(kept) if kept else "none"
+                        skips = ", ".join(f"{b} owned by {owned[b]}" for b in sorted(owned))
+                        details.append(f"  [daemon] start/ensure --radio {served} ({skips} — skipped)"
+                                       + (f", TXMODE={tx}" if tx else ""))
+                    else:
+                        details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
+                                       + (f", TXMODE={tx}" if tx else ""))
                 elif comp.interactive:
                     cmd = self.manual_start_command(comp)
                     details.append(f"  [manual] {comp.id} is interactive — the daemon is "
@@ -856,6 +863,72 @@ class LifecycleOpsMixin:
                 out.append(pid)              # unknown mode -> conservatively serves the band
         return out
 
+    def _direct_radio_owners(self, bands) -> dict:
+        """For each band in `bands`, the id of a RUNNING radio-direct owner of that band — a non-daemon
+        component holding an EXCLUSIVE `loraham.radio.<band>` claim on the band it is ACTUALLY using.
+        Keyed off resource metadata, NOT process names. Bands with no such owner are absent from the
+        result. `meshtastic-<band>` and `daemon-<band>` are the same physical radio, so a running
+        meshtastic on 868 makes 868 owned; a serve-all daemon start uses this to serve only free bands
+        instead of colliding (which would fail-closed and take the working band down too)."""
+        want = {b for b in bands if b in ("433", "868")}
+        if not want:
+            return {}
+        owners: dict[str, str] = {}
+        for ss in self.build_snapshot().stacks:
+            sid = ss.stack.id
+            multi = bool(self.stack_bands(sid))
+            for c in ss.stack.components:
+                if c.id == self.DAEMON_ID:
+                    continue                             # the daemon PROVIDES the radio; not a direct owner
+                if ss.components[c.id].run_state not in (RunState.RUNNING, RunState.DEGRADED):
+                    continue
+                if multi:
+                    eb = self._effective_band(sid, c.band)
+                    active = {eb} if eb in ("433", "868") else set()
+                else:
+                    active = {c.band} if c.band else set()
+                for r in c.resources:
+                    if r.mode == ResourceMode.EXCLUSIVE and r.key.startswith("loraham.radio."):
+                        rb = r.key.rsplit(".", 1)[-1]
+                        if rb in want and rb in active and rb not in owners:
+                            owners[rb] = c.id
+        return owners
+
+    def _daemon_arbitrated_bands(self, radio: str = ""):
+        """`(kept, skipped)`: the bands a daemon start should actually SERVE, and the bands it SKIPS
+        because a running radio-direct stack already owns them (`band -> owner id`). An EXPLICIT
+        single-band request (`radio` == '433'/'868') is NEVER arbitrated away — the operator asked for
+        that band, so a genuine conflict is surfaced by the normal blocker path, not silently skipped.
+        Only a serve-all start (empty `radio`) is arbitrated to the free bands."""
+        base = self._daemon_serve_bands(radio)
+        if radio in ("433", "868"):
+            return list(base), {}
+        owners = self._direct_radio_owners(base)
+        kept = [b for b in base if b not in owners]
+        return kept, owners
+
+    def _log_announcer(self, comp_id: str, details: list, seen: set | None = None):
+        """An `on_log_open(name, path)` callback that records a copy-pasteable
+        `[log] <comp> -> tail -f <path>` line into `details` AND emits it LIVE (via `self._progress`,
+        which the interactive CLI sets) the MOMENT a job's log file is created — so a long, silent
+        build/host-test can be followed from another terminal instead of guessing which file to tail
+        (or following a stale unsuffixed one)."""
+        seen = seen if seen is not None else set()
+
+        def _cb(_name, path):
+            if not path or path in seen:
+                return
+            seen.add(path)
+            line = f"  [log] {comp_id} -> tail -f {path}"
+            details.append(line)
+            emit = getattr(self, "_progress", None)
+            if emit is not None:
+                try:
+                    emit(line.strip())
+                except Exception:
+                    pass
+        return _cb
+
     def _ensure_daemon(self, life, stack, comp, running, radio, params, start_sid,
                        daemon_overrides=None):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
@@ -875,7 +948,7 @@ class LifecycleOpsMixin:
         # Bands this start must make ready — always explicit single band(s) clamped to the active mode
         # (M-1): lhpc never serves an excluded band; it always spawns one process per band. Each needed
         # band is spawned as an explicit `--radio <band>` process below.
-        needed = self._daemon_serve_bands(radio)
+        needed, owned = self._daemon_arbitrated_bands(radio)
         views = {b: daemon_control.read_view(self._system, b) for b in needed}
         # Classify each band from CONF readiness AND process topology. A CONF socket that is
         # unreachable does NOT mean the radio is free: an observed daemon PROCESS may still hold it.
@@ -886,8 +959,20 @@ class LifecycleOpsMixin:
         claimed_down = [b for b in needed if not views[b].reachable and b in claimed]
         absent = [b for b in needed if not views[b].reachable and b not in claimed]
         lines, ok_all = [], True
-        # Note when a single radio mode narrows an all-bands request.
-        if (radio or "") == "" and set(needed) != {"433", "868"}:
+        # Band arbitration: skip bands a running radio-direct stack owns (meshtastic-<band> and
+        # daemon-<band> are the SAME physical radio) — serve only the free band(s) instead of colliding,
+        # which would fail-closed and take the already-working band down too.
+        for b in sorted(owned):
+            lines.append(f"  [skip] {b} owned by {owned[b]} — daemon serving "
+                         f"{'+'.join(needed) if needed else 'no free band'} only")
+        if not needed:
+            # Every active band is owned by a running radio-direct stack -> clean refusal, no launch.
+            lines.append("  [BLOCKED] daemon: all active radio bands are owned by a running radio-"
+                         "direct stack — stop it, or start the daemon on a free band")
+            return lines, False
+        # Note when a single radio mode narrows an all-bands request (only when nothing was arbitrated
+        # away — the skip line already explains a band-owned narrowing).
+        if (radio or "") == "" and not owned and set(needed) != {"433", "868"}:
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
         for b in not_ready:
             ok_all = False
@@ -1705,9 +1790,10 @@ class LifecycleOpsMixin:
                             fn = f"{log_base}-{i}.log" if n > 1 else f"{log_base}.log"
                             title = (f"{comp.name} — Build log (step {i + 1}/{n})"
                                      if n > 1 else f"{comp.name} — Build log")
-                            on_component_log(title, fn)
+                            on_component_log(f"{title} · logs/{fn}", fn)   # per-step path shown in the web view
                     res = life.build(comp, log_base=log_base,
-                                     redactor=redactor, should_cancel=should_cancel)
+                                     redactor=redactor, should_cancel=should_cancel,
+                                     on_log_open=self._log_announcer(comp.id, details))
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
@@ -2347,8 +2433,9 @@ class LifecycleOpsMixin:
                         log_base = None
                         if run_id and on_component_log is not None and comp.test_argv:
                             log_base = ai_mod.component_log_base(run_id, f"test-{comp.id}")
-                            on_component_log(f"{comp.name} — Test log", f"{log_base}.log")
-                        res = life.host_test(comp, log_base=log_base, should_cancel=should_cancel)
+                            on_component_log(f"{comp.name} — Test log · logs/{log_base}.log", f"{log_base}.log")
+                        res = life.host_test(comp, log_base=log_base, should_cancel=should_cancel,
+                                             on_log_open=self._log_announcer(comp.id, details))
                         if res is None:
                             details.append(f"  [skip] {comp.id}: no host test")
                             continue

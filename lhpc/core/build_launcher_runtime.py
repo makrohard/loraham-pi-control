@@ -48,6 +48,34 @@ def _lock_tries() -> int:
     return max(1, int(float(os.environ.get("LHPC_BUILD_LOCK_WAIT_S", "10")) / _LOCK_POLL))
 
 
+def _build_child_oom_score_adj():
+    """The oom_score_adj to bias a build child toward the OOM killer, so memory pressure (a -j
+    over-subscribed compile on a 512 MB Zero 2W) reaps the runaway build child BEFORE the
+    lhpc-web controller (which stays at its default 0). Positive, clamped to the kernel's
+    [-1000, 1000]; LHPC_BUILD_OOM_SCORE_ADJ overrides. A non-integer override returns None ->
+    leave the score unchanged rather than fail the build."""
+    raw = os.environ.get("LHPC_BUILD_OOM_SCORE_ADJ", "500")
+    try:
+        return max(-1000, min(1000, int(raw)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _bias_child_oom() -> None:
+    """preexec (post-fork / pre-exec, in the CHILD): best-effort raise of this process's
+    oom_score_adj. NEVER fatal — a container/kernel that forbids the write leaves the child at
+    its inherited score and the build proceeds. Safe as a preexec_fn because the detached
+    launcher process is single-threaded."""
+    adj = _build_child_oom_score_adj()
+    if adj is None:
+        return
+    try:
+        with open("/proc/self/oom_score_adj", "w") as fh:
+            fh.write("%d\n" % adj)
+    except OSError:
+        pass
+
+
 def _flock_bounded(fd: int, tries: int) -> bool:
     for _ in range(tries):
         try:
@@ -90,7 +118,10 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     # races line-buffered output and fails under load). glibc tools keep their own
     # ~4 KB block flushes — still live via the fd redirect, just coarser.
     env = {**env, "PYTHONUNBUFFERED": "1"}
-    p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, start_new_session=True)
+    # Bias the build child toward the OOM killer (preexec, in the child) so memory pressure reaps
+    # it before the lhpc-web controller. start_new_session already isolates the process group.
+    p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, start_new_session=True,
+                         preexec_fn=_bias_child_oom)
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:
         return p.wait(timeout=timeout), False

@@ -57,6 +57,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             hidden=p.get("hidden", False),
             validator=p.get("validator", ""),
             group=p.get("group", ""),
+            omit_if_empty=p.get("omit_if_empty", False),
         )
         for p in raw.get("param", [])
     )
@@ -460,7 +461,8 @@ def _parse_component(raw: dict) -> Component:
             Requirement(cmd=r.get("cmd", ""), install=r.get("install", ""),
                         check_file=r.get("check_file", ""), note=r.get("note", ""),
                         groups=tuple(r.get("groups", [])),
-                        absent_file=r.get("absent_file", ""))
+                        absent_file=r.get("absent_file", ""),
+                        provisioned=bool(r.get("provisioned", False)))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),

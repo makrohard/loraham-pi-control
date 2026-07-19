@@ -63,6 +63,7 @@ def run_job(
     env: dict | None = None,
     redactor=None,
     should_cancel=None,
+    on_log_open=None,
 ) -> JobResult:
     """Run one bounded command (structured argv, shell=False), persist its output,
     return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
@@ -85,6 +86,14 @@ def run_job(
         # the runner is NOT invoked when log setup failed.
         return JobResult(name=name, state=JobState.FAILED, returncode=126, log_path="",
                          tail=[f"job log could not be created safely: {exc}"])
+    # The log file now EXISTS — announce its exact path before the (possibly long, silent) run so the
+    # operator can `tail -f` the right file instead of guessing / following a stale one. Best-effort:
+    # an announcer error never affects the job.
+    if on_log_open is not None:
+        try:
+            on_log_open(name, str(log_path))
+        except Exception:
+            pass
 
     try:
         # LIVE log: when the runner supports fd streaming (real system), the child's

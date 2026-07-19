@@ -23,7 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.13 is Raspberry Pi OS Trixie's interpreter (the deployment target); 3.11 retained for
+        # Bookworm compatibility. 3.12 kept as the in-between.
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       # Third-party actions are pinned to immutable commit SHAs (never floating tags).
       - name: Checkout
@@ -45,8 +47,8 @@ jobs:
       - name: Byte-compile production code
         run: python -m compileall -q lhpc
 
-      - name: Shell-syntax check installer scripts
-        run: bash -n install.sh uninstall.sh
+      - name: Shell-syntax check installer + bootstrap scripts
+        run: bash -n install.sh uninstall.sh bootstrap-deps.sh
 
       - name: Ruff (production code, default rules)
         run: ruff check lhpc

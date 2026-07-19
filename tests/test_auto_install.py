@@ -64,7 +64,7 @@ def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explici
     object.__setattr__(comp, "test_requires_running", True)
     try:
         class _FakeLife:
-            def host_test(self, comp, log_base=None, should_cancel=None):
+            def host_test(self, comp, log_base=None, should_cancel=None, on_log_open=None):
                 ran.append(comp.id)
                 return type("R", (), {"ok": True, "returncode": 0, "log_path": "x",
                                       "state": type("S", (), {"value": "succeeded"})()})()

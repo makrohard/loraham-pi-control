@@ -35,6 +35,32 @@ does is available here too.
 ### doctor
 `lhpc doctor` — bounded local health checks.
 
+### deps
+`lhpc deps` — list every declared system prerequisite (apt packages, the meshtasticd OBS
+repository, the SPI/`config.txt` overlay, `spi`/`gpio` group grants, and disabling the OS-managed
+`meshtasticd`). These are the sudo/apt-level prerequisites only; the Python venv is provisioned by
+`install.sh` after cloning, so venv `pip install` steps are deliberately excluded.
+
+`lhpc deps --script` renders them into ONE hardened, executable bootstrap script (standalone
+`apt install` lines merged into a single non-interactive `apt-get install -y` that runs FIRST, the
+OBS repo added with a dedicated keyring + `signed-by=` over HTTPS, SPI/group sections re-rendered as
+validated operator-safe logic). lhpc never runs privileged commands — you run the script yourself:
+
+```
+lhpc deps --script > bootstrap-deps.sh
+sudo bash bootstrap-deps.sh --spi-mode soft-cs        # or hardware-cs | skip; --operator-user <name> if root
+```
+
+`--spi-mode` is **required**: `soft-cs` (meshtasticd software CS — single-radio LoRaHAM Pi/Uputronics),
+`hardware-cs` (SPI on, no overlay — keeps CE0/CE1 for e.g. a dual Uputronics), or `skip`. It is
+idempotent and fails closed on a conflicting existing `config.txt`. Group grants go to the resolved
+operator (`--operator-user`, else `$SUDO_USER`, else the invoking user) — never root. QEMU + PlatformIO
+are provisioned later by `lhpc build`, not by this script.
+
+The apt package set is identical on a Pi Zero 2W and a Pi 5. A rendered snapshot (`bootstrap-deps.sh`)
+is shipped in the repo root for the pre-clone moment; regenerate it with the command above when
+dependencies change (CI shell-syntax-checks the committed snapshot).
+
 ### source-check
 `lhpc source-check [<target>]` — check managed sources for available upstream updates (read-only).
 

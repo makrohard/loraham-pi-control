@@ -111,3 +111,51 @@ def test_run_step_failure_propagates_exit_code(tmp_path):
     with pytest.raises(SystemExit) as e:
         blr.run(_spec(tmp_path, steps=[{"argv": ["false"], "env": {}}], lock_names=["src.lock"]))
     assert e.value.code == 1
+
+
+# --- Item 6: build children are biased toward the OOM killer (protect the lhpc-web controller) ------
+
+def test_oom_score_adj_default_and_override_and_clamp(monkeypatch):
+    monkeypatch.delenv("LHPC_BUILD_OOM_SCORE_ADJ", raising=False)
+    assert blr._build_child_oom_score_adj() == 500                      # positive default
+    monkeypatch.setenv("LHPC_BUILD_OOM_SCORE_ADJ", "250")
+    assert blr._build_child_oom_score_adj() == 250
+    monkeypatch.setenv("LHPC_BUILD_OOM_SCORE_ADJ", "5000")
+    assert blr._build_child_oom_score_adj() == 1000                     # clamped to kernel max
+    monkeypatch.setenv("LHPC_BUILD_OOM_SCORE_ADJ", "nonsense")
+    assert blr._build_child_oom_score_adj() is None                     # bad value -> leave unchanged
+
+
+def test_run_step_spawns_child_with_oom_preexec(monkeypatch, tmp_path):
+    # The build child is spawned with a preexec_fn that raises its oom_score_adj — proving the wiring
+    # without depending on kernel permissions.
+    captured = {}
+    real_popen = blr.subprocess.Popen
+
+    class _Fake:
+        def __init__(self, *a, **k):
+            captured.update(k)
+            self._p = real_popen(["true"])
+            self.pid = self._p.pid
+        def wait(self, timeout=None):
+            return self._p.wait(timeout=timeout)
+    monkeypatch.setattr(blr.subprocess, "Popen", _Fake)
+    monkeypatch.setattr(blr.proctree, "capture_session_token", lambda pid: None)
+    blr._run_step(["true"], str(tmp_path), {}, 30.0)
+    assert captured.get("preexec_fn") is blr._bias_child_oom
+    assert captured.get("start_new_session") is True
+
+
+def _oom_writable() -> bool:
+    import subprocess
+    return subprocess.run(["sh", "-c", "echo 500 > /proc/self/oom_score_adj"],
+                          capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _oom_writable(), reason="oom_score_adj not writable in this environment")
+def test_oom_preexec_actually_raises_child_score(tmp_path):
+    # A REAL child spawned via _run_step ends up with the raised oom_score_adj (proves the preexec runs
+    # in the child before exec). The child records its own score to a file.
+    out = tmp_path / "score"
+    blr._run_step(["sh", "-c", f"cat /proc/self/oom_score_adj > {out}"], str(tmp_path), {}, 30.0)
+    assert out.read_text().strip() == "500"

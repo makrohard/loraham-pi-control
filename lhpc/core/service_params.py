@@ -562,7 +562,7 @@ class ParamsConfigMixin:
         group membership) are EXCLUDED — they gate start, not install/build, so they never block the
         install gate; they still surface in `system_deps`."""
         return [d for d in self.system_deps(target)
-                if not d["satisfied"] and not d["runtime"]]
+                if not d["satisfied"] and not d["runtime"] and not d.get("provisioned")]
 
     def install_dep_gate(self, target: str) -> dict:
         """Split the unsatisfied INSTALL-time deps of a stack into a hard-block set and a warn-only set.
@@ -609,6 +609,9 @@ class ParamsConfigMixin:
                          # run-time capabilities (group membership AND a must-not-run service) gate start,
                          # not install -> excluded from the install gate, still surfaced here.
                          "runtime": bool(req.groups or req.absent_file),
+                         # a MANAGED tool provisioned into the runtime root by the build/setup step does
+                         # not exist until `lhpc build`, so it must NOT block install (still gates start).
+                         "provisioned": bool(req.provisioned),
                          "mandatory": not c.optional}
                 by_key[key] = entry
                 out.append(entry)

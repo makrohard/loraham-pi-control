@@ -262,3 +262,114 @@ def test_no_dependency_surface_ever_advises_apt_install_systemd(tmp_path):
         installs += [d["install"] for lst in svc.install_dep_gate(s.id).values() for d in lst]
     offenders = [c for c in installs if "systemd" in (c or "")]
     assert not offenders, offenders
+
+
+# --- Item 5: `lhpc deps --script` bootstrap generator -------------------------------------------
+
+def test_render_bootstrap_merges_and_dedups_apt(tmp_path):
+    from lhpc.core import deps
+    script = deps.render_bootstrap_script([
+        "sudo apt install -y cmake",
+        "sudo apt install socat",                 # no -y -> still merged, non-interactively
+        "sudo apt-get install -y cmake",          # dup pkg -> deduped
+        "sudo apt install -y --no-install-recommends libssl-dev",   # flag dropped
+    ], revision="deadbeef")
+    # exactly one merged, non-interactive apt install line; packages sorted + unique; no flags leaked
+    assert script.count("apt-get install -y") == 1
+    body = script.split("apt-get install -y", 1)[1]
+    assert "cmake" in body and body.count("cmake") == 1
+    assert "socat" in body and "libssl-dev" in body
+    assert "--no-install-recommends" not in script
+    assert "deadbeef" in script                   # revision in header
+    import subprocess
+    p = subprocess.run(["bash", "-n", "-c", script], capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr
+
+
+def test_render_bootstrap_preserves_multiline_blocks_verbatim(tmp_path):
+    from lhpc.core import deps
+    obs = ("echo deb ... | sudo tee /etc/apt/sources.list.d/x.list\n"
+           "sudo apt update\nsudo apt install -y meshtasticd")
+    script = deps.render_bootstrap_script(["sudo apt install -y git", obs, obs], revision="r")
+    # a multi-line block is emitted verbatim (never merged out of order) and deduplicated
+    assert script.count("sources.list.d/x.list") == 1
+    assert "sudo apt install -y meshtasticd" in script       # kept AFTER the repo add, not merged up
+
+
+def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
+    svc = _svc(tmp_path)
+    script = svc.deps_script()
+    # every declared category is present
+    assert "apt-get install -y" in script                    # merged apt packages
+    assert "sources.list.d" in script or "opensuse" in script  # OBS repo block
+    assert "dtparam=spi=on" in script                        # SPI / config.txt
+    assert "usermod -aG" in script                           # group grants
+    assert "systemctl disable --now meshtasticd" in script   # system-meshtasticd disable
+    # NOT a venv-level pip install, and no leaked absolute dev path
+    assert "-m pip install" not in script
+    assert "/home/" not in script
+    import subprocess
+    assert subprocess.run(["bash", "-n", "-c", script], capture_output=True).returncode == 0
+
+
+def test_shipped_bootstrap_snapshot_is_up_to_date(tmp_path):
+    # The committed bootstrap-deps.sh must equal what `lhpc deps --script` renders now (regenerate it
+    # when the declared dependencies change).
+    import pathlib
+    svc = _svc(tmp_path)
+    shipped = pathlib.Path("bootstrap-deps.sh")
+    assert shipped.exists(), "bootstrap-deps.sh snapshot missing — run `lhpc deps --script > bootstrap-deps.sh`"
+    assert shipped.read_text() == svc.deps_script(), \
+        "bootstrap-deps.sh is stale — regenerate with `lhpc deps --script > bootstrap-deps.sh`"
+
+
+def test_bootstrap_script_never_advises_apt_install_systemd(tmp_path):
+    # Same guardrail as the other dep surfaces: never advise removing/installing systemd via apt.
+    assert "install systemd" not in _svc(tmp_path).deps_script()
+
+
+def test_qemu_and_pio_are_managed_not_copyboxes(tmp_path):
+    # Item 2/4: qemu + PlatformIO are provisioned INTO the runtime root by the managed setup step, so the
+    # pre-clone bootstrap no longer carries the $HOME qemu download or the pipx copybox. libslirp0 (a
+    # genuine apt dependency) stays.
+    script = _svc(tmp_path).deps_script()
+    assert "espressif/qemu/releases" not in script and "qemu-xtensa" not in script
+    assert "pipx" not in script
+    assert "libslirp0" in script
+
+
+def test_managed_tool_requires_verify_in_root_artifacts(tmp_path):
+    # Item 2: the qemu + pio requires verify the IN-ROOT artifact via a {runtime}-substituted check_file
+    # (or the PATH `cmd` override); neither carries an install copybox anymore.
+    svc = _svc(tmp_path)
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
+    reqs = {r.cmd: r for r in comp.requires if r.cmd in ("qemu-system-xtensa", "pio")}
+    assert "{runtime}/build/tool-cache/qemu-xtensa" in reqs["qemu-system-xtensa"].check_file
+    assert "{runtime}/build/tools/platformio" in reqs["pio"].check_file
+    assert reqs["qemu-system-xtensa"].install == "" and reqs["pio"].install == ""   # managed, no copybox
+    # the {runtime} token resolves to the runtime root (so the pre-check reads the real in-root path)
+    life = svc._lifecycle()
+    resolved = life._resolve_req_path(reqs["qemu-system-xtensa"].check_file)
+    assert str(tmp_path) in resolved and "{runtime}" not in resolved
+
+
+def test_qemu_param_default_points_at_the_in_root_binary(tmp_path):
+    # Item 2a: the managed run passes --qemu <in-root binary> — the param default carries the
+    # {runtime}-templated tool-cache path (expand_argv substitutes {runtime} at launch).
+    svc = _svc(tmp_path)
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
+    qp = next(p for p in comp.run_params if p.name == "qemu")
+    assert qp.arg == "--qemu"
+    assert "{runtime}/build/tool-cache/qemu-xtensa" in qp.default and qp.default.endswith("qemu-system-xtensa")
+
+
+def test_build_steps_provision_managed_tools_in_root(tmp_path):
+    # Item 2: the build's setup steps provision BOTH tools INSIDE the runtime root — a PlatformIO venv
+    # and the sha256-verified qemu — and hand the managed pio to the build scripts by absolute path.
+    svc = _svc(tmp_path)
+    comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
+    argvs = [" ".join(str(t) for t in st.get("argv", [])) for st in comp.build_steps]
+    assert any("venv" in a and "build/tools/platformio" in a for a in argvs)                    # managed pio venv
+    assert any("fetch-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in argvs)      # managed qemu
+    envs = [st.get("env", {}) for st in comp.build_steps]
+    assert any(e.get("PIO", "").endswith("platformio/.venv/bin/pio") for e in envs)              # PIO by abs path

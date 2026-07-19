@@ -166,7 +166,11 @@ _FIXED_ENV = {
     "LC_ALL": "C",
 }
 for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
-           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR"):
+           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR",
+           # ONE explicitly allowlisted LHPC_* override — the offline QEMU tarball for the managed
+           # meshcom build (fetch-qemu.sh). Forwarded here so BOTH the direct runner AND the detached
+           # build launcher (which inherits _FIXED_ENV) honor it. NEVER a wildcard LHPC_* forward.
+           "LHPC_QEMU_TARBALL"):
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 

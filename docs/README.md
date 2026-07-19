@@ -17,6 +17,8 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - [CLI reference](cli.md) — every command. The web console is a front-end to these.
 - [Operations & safety](operations.md) — operating rules, TX safety, secrets,
   backup & restore.
+- [Field notes](field-notes.md) — fresh-install checklist, Pi Zero 2 W vs Pi 5 build
+  durations, QEMU-stack expectations, log naming, and per-board `gpiochip`/GPIO notes.
 
 ## Web console & remote access
 
