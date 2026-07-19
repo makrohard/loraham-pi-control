@@ -136,8 +136,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "") -> str:
     run FIRST (so tools like curl/gpg exist before the blocks that use them). Group grants are
     re-rendered to a validated non-root operator; SPI/config.txt is re-rendered behind a required
     `--spi-mode` (soft-cs | hardware-cs | skip), idempotent and fail-closed on a conflicting existing
-    config; the OBS repo block is emitted verbatim (already scoped-keyring + HTTPS). Output is
-    deterministic (packages sorted) so the shipped snapshot is stable. lhpc NEVER runs these."""
+    config; the OBS repo block is emitted verbatim (already scoped-keyring + HTTPS). On a small-RAM
+    machine (MemTotal < ~600MB) it also provisions a disk swapfile (default 768M, at a priority BELOW
+    zram) as OOM insurance for the firmware build — idempotent, guarded on free space, opt-out via
+    `--no-swapfile`. Output is deterministic (packages sorted) so the shipped snapshot is stable.
+    lhpc NEVER runs these."""
     apt_pkgs: list[str] = []
     seen_pkgs: set[str] = set()
     blocks: list[str] = []
@@ -201,11 +204,14 @@ def render_bootstrap_script(raw_cmds, revision: str = "") -> str:
         "# loraham-pi-control. Works BOTH as an ordinary user (it calls sudo internally) AND via",
         "# `sudo bash bootstrap-deps.sh`. lhpc itself never runs privileged commands.",
         "#",
-        "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]",
+        "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
+        " [--no-swapfile] [--swap-size <MB>]",
         "#     soft-cs      meshtasticd software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (single-radio LoRaHAM Pi / Uputronics)",
         "#     hardware-cs  hardware CE0+CE1, no overlay: dtparam=spi=on only  (e.g. dual Uputronics)",
         "#     skip         no boot-config change (SPI already configured)",
+        "#     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)",
+        "#     --swap-size <MB>   swapfile size when provisioned (default 768)",
         "#",
         "# The apt package set is IDENTICAL on a Pi Zero 2W and a Pi 5; only the SPI mode is hardware-",
         "# specific. QEMU + PlatformIO are provisioned later by the MANAGED build (`lhpc build`), not here.",
@@ -213,16 +219,21 @@ def render_bootstrap_script(raw_cmds, revision: str = "") -> str:
         "")
 
     out("usage() {",
-        '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]" >&2',
+        '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
+        ' [--no-swapfile] [--swap-size <MB>]" >&2',
         "}",
         "")
 
     out('SPI_MODE=""',
         'OPERATOR_USER=""',
+        'NO_SWAPFILE=""',
+        'SWAP_SIZE_MB=""',
         "while [ $# -gt 0 ]; do",
         '\tcase "$1" in',
         '\t\t--spi-mode) SPI_MODE="${2:?--spi-mode needs a value}"; shift 2 ;;',
         '\t\t--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;',
+        '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
+        '\t\t--swap-size) SWAP_SIZE_MB="${2:?--swap-size needs a value (MB)}"; shift 2 ;;',
         "\t\t-h|--help) usage; exit 0 ;;",
         '\t\t*) echo "ERROR: unknown argument: $1" >&2; usage; exit 2 ;;',
         "\tesac",
@@ -235,6 +246,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "") -> str:
         '\t"") echo "ERROR: --spi-mode is required (soft-cs | hardware-cs | skip)." >&2; usage; exit 2 ;;',
         '\t*) echo "ERROR: unknown --spi-mode: $SPI_MODE (soft-cs | hardware-cs | skip)." >&2; exit 2 ;;',
         "esac",
+        'if [ -n "$SWAP_SIZE_MB" ] && ! printf "%s" "$SWAP_SIZE_MB" | grep -qE "^[1-9][0-9]*$"; then',
+        '\techo "ERROR: --swap-size must be a positive integer number of MB: $SWAP_SIZE_MB" >&2; exit 2',
+        "fi",
         "")
 
     if groups_csv:
@@ -294,6 +308,54 @@ def render_bootstrap_script(raw_cmds, revision: str = "") -> str:
         "\t\t;;",
         '\tskip) echo "[bootstrap-deps] SPI: skipped (no boot-config change)." ;;',
         "esac",
+        "")
+
+    out("# --- swap: disk-backed OOM insurance for small-RAM builds (idempotent; skips when unneeded) --",
+        'if [ -n "$NO_SWAPFILE" ]; then',
+        '\techo "[bootstrap-deps] swap: skipped (--no-swapfile)."',
+        "else",
+        '\tSWAPFILE="${LHPC_SWAPFILE:-/var/swap.lhpc}"',
+        '\tMEMINFO="${MEMINFO:-/proc/meminfo}"',
+        '\tSWAPS="${SWAPS:-/proc/swaps}"',
+        '\tFSTAB="${FSTAB:-/etc/fstab}"',
+        '\tSWAP_TARGET_MB="${SWAP_SIZE_MB:-768}"',
+        "\t_memmb=$(( $(awk '/^MemTotal:/{m=$2} END{print m+0}' \"$MEMINFO\" 2>/dev/null || echo 0) / 1024 ))",
+        "\t# disk-backed swap only — zram is compressed RAM (no real backing store), so EXCLUDE it: an",
+        "\t# OOM can happen with zram present (it did — 414Mi zram, 78Mi used, at the kill).",
+        "\t_diskswap_mb=$(( $(awk 'NR>1 && $1 !~ /zram/ {s+=$3} END{print s+0}' \"$SWAPS\" 2>/dev/null"
+        " || echo 0) / 1024 ))",
+        '\tif [ -e "$SWAPFILE" ] || grep -qsF "$SWAPFILE" "$FSTAB"; then',
+        '\t\tif ! grep -qsF "$SWAPFILE" "$SWAPS"; then sudo swapon "$SWAPFILE" 2>/dev/null || true; fi',
+        '\t\techo "[bootstrap-deps] swap: already present ($SWAPFILE)."',
+        '\telif [ "$_memmb" -ge 600 ]; then',
+        '\t\techo "[bootstrap-deps] swap: skipped (MemTotal ${_memmb}MB >= 600MB — enough RAM)."',
+        '\telif [ "$_diskswap_mb" -ge "$SWAP_TARGET_MB" ]; then',
+        '\t\techo "[bootstrap-deps] swap: skipped (disk-backed swap ${_diskswap_mb}MB already >='
+        ' ${SWAP_TARGET_MB}MB target)."',
+        "\telse",
+        '\t\t_swapdir="$(dirname "$SWAPFILE")"',
+        "\t\t_freemb=$(( $(df -Pk \"$_swapdir\" 2>/dev/null | awk 'NR==2{f=$4} END{print f+0}'"
+        " || echo 0) / 1024 ))",
+        "\t\t_need_mb=$(( SWAP_TARGET_MB * 2 ))",
+        '\t\tif [ "$_freemb" -lt "$_need_mb" ]; then',
+        '\t\t\techo "[bootstrap-deps] swap: skipped (only ${_freemb}MB free on $_swapdir; need >='
+        ' ${_need_mb}MB = 2x target — refusing to fill the card)." >&2',
+        "\t\telse",
+        '\t\t\tif ! sudo fallocate -l "${SWAP_TARGET_MB}M" "$SWAPFILE" 2>/dev/null; then',
+        '\t\t\t\tsudo rm -f "$SWAPFILE"',
+        '\t\t\t\tsudo dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_TARGET_MB" status=none',
+        "\t\t\tfi",
+        '\t\t\tsudo chmod 600 "$SWAPFILE"',
+        '\t\t\tsudo mkswap "$SWAPFILE" >/dev/null',
+        "\t\t\t# LOWER priority than zram (zram-generator default 100): the file is overflow, zram stays fast.",
+        '\t\t\tsudo swapon -p 10 "$SWAPFILE"',
+        '\t\t\tif ! grep -qsF "$SWAPFILE" "$FSTAB"; then',
+        '\t\t\t\tprintf "%s\\n" "$SWAPFILE none swap sw,pri=10 0 0" | sudo tee -a "$FSTAB" >/dev/null',
+        "\t\t\tfi",
+        '\t\t\techo "[bootstrap-deps] swap: created $SWAPFILE (${SWAP_TARGET_MB}MB, priority 10 — below zram)."',
+        "\t\tfi",
+        "\tfi",
+        "fi",
         "")
 
     if groups_csv:

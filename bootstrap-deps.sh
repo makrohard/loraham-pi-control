@@ -7,25 +7,31 @@
 # loraham-pi-control. Works BOTH as an ordinary user (it calls sudo internally) AND via
 # `sudo bash bootstrap-deps.sh`. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>]
 #     soft-cs      meshtasticd software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (single-radio LoRaHAM Pi / Uputronics)
 #     hardware-cs  hardware CE0+CE1, no overlay: dtparam=spi=on only  (e.g. dual Uputronics)
 #     skip         no boot-config change (SPI already configured)
+#     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)
+#     --swap-size <MB>   swapfile size when provisioned (default 768)
 #
 # The apt package set is IDENTICAL on a Pi Zero 2W and a Pi 5; only the SPI mode is hardware-
 # specific. QEMU + PlatformIO are provisioned later by the MANAGED build (`lhpc build`), not here.
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>]" >&2
 }
 
 SPI_MODE=""
 OPERATOR_USER=""
+NO_SWAPFILE=""
+SWAP_SIZE_MB=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--spi-mode) SPI_MODE="${2:?--spi-mode needs a value}"; shift 2 ;;
 		--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;
+		--no-swapfile) NO_SWAPFILE=1; shift ;;
+		--swap-size) SWAP_SIZE_MB="${2:?--swap-size needs a value (MB)}"; shift 2 ;;
 		-h|--help) usage; exit 0 ;;
 		*) echo "ERROR: unknown argument: $1" >&2; usage; exit 2 ;;
 	esac
@@ -37,6 +43,9 @@ case "$SPI_MODE" in
 	"") echo "ERROR: --spi-mode is required (soft-cs | hardware-cs | skip)." >&2; usage; exit 2 ;;
 	*) echo "ERROR: unknown --spi-mode: $SPI_MODE (soft-cs | hardware-cs | skip)." >&2; exit 2 ;;
 esac
+if [ -n "$SWAP_SIZE_MB" ] && ! printf "%s" "$SWAP_SIZE_MB" | grep -qE "^[1-9][0-9]*$"; then
+	echo "ERROR: --swap-size must be a positive integer number of MB: $SWAP_SIZE_MB" >&2; exit 2
+fi
 
 # Operator for the group grants: explicit --operator-user, else SUDO_USER when run under
 # sudo, else the invoking user. NEVER grant hardware groups to root; require a real account.
@@ -111,6 +120,49 @@ case "$SPI_MODE" in
 		;;
 	skip) echo "[bootstrap-deps] SPI: skipped (no boot-config change)." ;;
 esac
+
+# --- swap: disk-backed OOM insurance for small-RAM builds (idempotent; skips when unneeded) --
+if [ -n "$NO_SWAPFILE" ]; then
+	echo "[bootstrap-deps] swap: skipped (--no-swapfile)."
+else
+	SWAPFILE="${LHPC_SWAPFILE:-/var/swap.lhpc}"
+	MEMINFO="${MEMINFO:-/proc/meminfo}"
+	SWAPS="${SWAPS:-/proc/swaps}"
+	FSTAB="${FSTAB:-/etc/fstab}"
+	SWAP_TARGET_MB="${SWAP_SIZE_MB:-768}"
+	_memmb=$(( $(awk '/^MemTotal:/{m=$2} END{print m+0}' "$MEMINFO" 2>/dev/null || echo 0) / 1024 ))
+	# disk-backed swap only — zram is compressed RAM (no real backing store), so EXCLUDE it: an
+	# OOM can happen with zram present (it did — 414Mi zram, 78Mi used, at the kill).
+	_diskswap_mb=$(( $(awk 'NR>1 && $1 !~ /zram/ {s+=$3} END{print s+0}' "$SWAPS" 2>/dev/null || echo 0) / 1024 ))
+	if [ -e "$SWAPFILE" ] || grep -qsF "$SWAPFILE" "$FSTAB"; then
+		if ! grep -qsF "$SWAPFILE" "$SWAPS"; then sudo swapon "$SWAPFILE" 2>/dev/null || true; fi
+		echo "[bootstrap-deps] swap: already present ($SWAPFILE)."
+	elif [ "$_memmb" -ge 600 ]; then
+		echo "[bootstrap-deps] swap: skipped (MemTotal ${_memmb}MB >= 600MB — enough RAM)."
+	elif [ "$_diskswap_mb" -ge "$SWAP_TARGET_MB" ]; then
+		echo "[bootstrap-deps] swap: skipped (disk-backed swap ${_diskswap_mb}MB already >= ${SWAP_TARGET_MB}MB target)."
+	else
+		_swapdir="$(dirname "$SWAPFILE")"
+		_freemb=$(( $(df -Pk "$_swapdir" 2>/dev/null | awk 'NR==2{f=$4} END{print f+0}' || echo 0) / 1024 ))
+		_need_mb=$(( SWAP_TARGET_MB * 2 ))
+		if [ "$_freemb" -lt "$_need_mb" ]; then
+			echo "[bootstrap-deps] swap: skipped (only ${_freemb}MB free on $_swapdir; need >= ${_need_mb}MB = 2x target — refusing to fill the card)." >&2
+		else
+			if ! sudo fallocate -l "${SWAP_TARGET_MB}M" "$SWAPFILE" 2>/dev/null; then
+				sudo rm -f "$SWAPFILE"
+				sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAP_TARGET_MB" status=none
+			fi
+			sudo chmod 600 "$SWAPFILE"
+			sudo mkswap "$SWAPFILE" >/dev/null
+			# LOWER priority than zram (zram-generator default 100): the file is overflow, zram stays fast.
+			sudo swapon -p 10 "$SWAPFILE"
+			if ! grep -qsF "$SWAPFILE" "$FSTAB"; then
+				printf "%s\n" "$SWAPFILE none swap sw,pri=10 0 0" | sudo tee -a "$FSTAB" >/dev/null
+			fi
+			echo "[bootstrap-deps] swap: created $SWAPFILE (${SWAP_TARGET_MB}MB, priority 10 — below zram)."
+		fi
+	fi
+fi
 
 # --- hardware group membership (granted to the resolved operator, never root) ------------
 sudo usermod -aG spi,gpio "$OP"

@@ -31,7 +31,19 @@ def _fakebin(tmp_path, *, fake_root=False):
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
     w("install", "exit 0\n")                                   # sudo install -d /etc/apt/keyrings -> noop
     w("wget", "exit 0\n")
-    # tee: /etc/* writes are sandboxed to nothing; CONFIG_TXT (a temp file) is written for real.
+    # swap provisioning: fake the mutating tools and log every call. fallocate/dd also create the
+    # target file (last / of= arg) so a re-run's "already present" file check behaves realistically.
+    sw = tmp_path / "swap.log"
+    w("fallocate", f'f=""; for a in "$@"; do f="$a"; done; : > "$f"; echo "fallocate $*" >> "{sw}"\n')
+    w("dd", f'o=""; for a in "$@"; do case "$a" in of=*) o="${{a#of=}}";; esac; done; '
+            f'[ -n "$o" ] && : > "$o"; echo "dd $*" >> "{sw}"\n')
+    w("mkswap", f'echo "mkswap $*" >> "{sw}"; exit 0\n')
+    w("swapon", f'echo "swapon $*" >> "{sw}"; exit 0\n')
+    # df: report a controllable free-space figure (default ~100 GiB) so the free-space guard is
+    # host-independent; the insufficient-space test lowers FAKE_DF_FREE_KB. Mirrors `df -Pk` columns.
+    w("df", 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"\n'
+            'echo "fake 200000000 1000000 ${FAKE_DF_FREE_KB:-104857600} 1% /"\n')
+    # tee: /etc/* writes are sandboxed to nothing; CONFIG_TXT / FSTAB (temp files) are written for real.
     w("tee", 'last=""; for a in "$@"; do case "$a" in -*) ;; *) last="$a";; esac; done\n'
              'case "$last" in /etc/*) cat >/dev/null ;; *) exec /usr/bin/tee "$@" ;; esac\n')
     if fake_root:
@@ -42,12 +54,25 @@ def _fakebin(tmp_path, *, fake_root=False):
     return b, apt, um
 
 
-def _run(tmp_path, args, *, fake_root=False, sudo_user=None, config_seed=None):
+def _run(tmp_path, args, *, fake_root=False, sudo_user=None, config_seed=None,
+         meminfo=None, swaps=None, swapfile=None, fstab=None, free_kb=None):
     fb, apt, um = _fakebin(tmp_path, fake_root=fake_root)
     config = tmp_path / "config.txt"
     if config_seed is not None:
         config.write_text(config_seed)
-    env = {**os.environ, "PATH": f"{fb}:/usr/bin:/bin", "CONFIG_TXT": str(config)}
+    # Sandbox the swap section fully: default to HIGH-RAM meminfo + an EMPTY (header-only) /proc/swaps
+    # so it is a deterministic no-op unless a test opts into low-RAM / disk-swap fixtures. Real
+    # /proc/{meminfo,swaps} and /etc/fstab are NEVER read/written.
+    if meminfo is None:
+        meminfo = tmp_path / "meminfo.default"; meminfo.write_text("MemTotal:       8000000 kB\n")
+    if swaps is None:
+        swaps = tmp_path / "swaps.default"; swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n")
+    env = {**os.environ, "PATH": f"{fb}:/usr/bin:/bin", "CONFIG_TXT": str(config),
+           "MEMINFO": str(meminfo), "SWAPS": str(swaps),
+           "LHPC_SWAPFILE": str(swapfile or (tmp_path / "swap.lhpc")),
+           "FSTAB": str(fstab or (tmp_path / "fstab"))}
+    if free_kb is not None:
+        env["FAKE_DF_FREE_KB"] = str(free_kb)
     env.pop("SUDO_USER", None)
     if sudo_user is not None:
         env["SUDO_USER"] = sudo_user
@@ -139,6 +164,99 @@ def test_missing_spi_mode_is_rejected(tmp_path):
     r, _cfg, apt, um = _run(tmp_path, [])
     assert r.returncode == 2 and "spi-mode is required" in r.stderr
     assert apt == "" and um == ""                              # validated before any mutation
+
+
+# --- small-RAM swapfile provisioning --------------------------------------------------------------
+
+def _meminfo(tmp_path, mem_mb):
+    p = tmp_path / "meminfo"
+    p.write_text(f"MemTotal:       {mem_mb * 1024} kB\nSwapTotal:      0 kB\n")
+    return p
+
+
+def _swaps(tmp_path, *rows):
+    p = tmp_path / "swaps"
+    p.write_text("Filename\tType\tSize\tUsed\tPriority\n" + "".join(r + "\n" for r in rows))
+    return p
+
+
+def _swaparg(*extra):
+    # skip SPI (isolate the swap section from config writes) + a real operator.
+    return ["--spi-mode", "skip", "--operator-user", _USER, *extra]
+
+
+def test_swap_provisioned_on_low_ram(tmp_path):
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 460))   # ~449 MB < 600
+    assert r.returncode == 0, r.stderr
+    log = (tmp_path / "swap.log").read_text()
+    assert "mkswap" in log and "swapon -p 10" in log                     # formatted + low-priority swapon
+    assert "swap.lhpc none swap sw,pri=10 0 0" in (tmp_path / "fstab").read_text()
+    assert (tmp_path / "swap.lhpc").exists()                             # file allocated
+    assert "swap: created" in r.stdout
+
+
+def test_swap_skipped_when_enough_ram(tmp_path):
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 4096))
+    assert r.returncode == 0, r.stderr
+    assert "swap: skipped (MemTotal" in r.stdout
+    assert not (tmp_path / "swap.log").exists()                          # no mutating tools called
+
+
+def test_zram_swap_is_not_counted_as_disk_backing(tmp_path):
+    # 800 MiB of zram present but ZERO disk swap -> STILL provisions (the field-proven OOM-with-zram case).
+    sw = _swaps(tmp_path, "/dev/zram0 partition 819200 78324 100")
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 460), swaps=sw)
+    assert r.returncode == 0, r.stderr
+    assert "mkswap" in (tmp_path / "swap.log").read_text() and "swap: created" in r.stdout
+
+
+def test_swap_skipped_when_disk_swap_already_sufficient(tmp_path):
+    # 900 MiB disk-backed file swap (>= 768 target) already present (plus zram) -> skip.
+    sw = _swaps(tmp_path, "/dev/zram0 partition 819200 0 100", "/var/oldswap file 921600 0 -2")
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 460), swaps=sw)
+    assert r.returncode == 0, r.stderr
+    assert "swap: skipped (disk-backed swap" in r.stdout
+    assert not (tmp_path / "swap.log").exists()
+
+
+def test_no_swapfile_opts_out(tmp_path):
+    r, *_ = _run(tmp_path, _swaparg("--no-swapfile"), meminfo=_meminfo(tmp_path, 460))
+    assert r.returncode == 0, r.stderr
+    assert "swap: skipped (--no-swapfile)" in r.stdout
+    assert not (tmp_path / "swap.log").exists()
+
+
+def test_swap_provisioning_is_idempotent(tmp_path):
+    mi = _meminfo(tmp_path, 460)
+    a = _run(tmp_path, _swaparg(), meminfo=mi)[0]
+    assert a.returncode == 0 and "swap: created" in a.stdout
+    (tmp_path / "swap.log").unlink()                                     # isolate the 2nd run's tool calls
+    b = _run(tmp_path, _swaparg(), meminfo=mi)[0]
+    assert b.returncode == 0 and "swap: already present" in b.stdout
+    log2 = (tmp_path / "swap.log").read_text() if (tmp_path / "swap.log").exists() else ""
+    assert "mkswap" not in log2                                          # never re-formats
+    assert (tmp_path / "fstab").read_text().count("swap.lhpc none swap") == 1   # no duplicate fstab line
+
+
+def test_swap_size_override(tmp_path):
+    r, *_ = _run(tmp_path, _swaparg("--swap-size", "512"), meminfo=_meminfo(tmp_path, 460))
+    assert r.returncode == 0, r.stderr
+    assert "fallocate -l 512M" in (tmp_path / "swap.log").read_text()
+    assert "512MB" in r.stdout
+
+
+def test_swap_skipped_when_free_space_insufficient(tmp_path):
+    # Only ~97 MB free but 768 MB target needs 2x=1536 MB -> refuse (never fill the card).
+    r, *_ = _run(tmp_path, _swaparg(), meminfo=_meminfo(tmp_path, 460), free_kb=100_000)
+    assert r.returncode == 0, r.stderr
+    assert "refusing to fill the card" in r.stderr
+    assert not (tmp_path / "swap.log").exists()
+
+
+def test_swap_size_must_be_numeric(tmp_path):
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "skip", "--swap-size", "abc"])
+    assert r.returncode == 2 and "positive integer" in r.stderr
+    assert apt == "" and um == ""                                        # rejected up front
 
 
 # --- dependency closure ordering + snapshot -------------------------------------------------------

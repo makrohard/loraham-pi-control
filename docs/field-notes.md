@@ -43,6 +43,19 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
   the OOM killer so the controller survives, and the QEMU build defaults to a memory-aware `-j`
   (`min(nproc, floor(MemTotal_GB))` → `-j1` on 512 MB, full parallelism on a Pi 5), but freeing RAM
   still makes the build faster and safer.
+- **Disk swapfile as OOM insurance (small-RAM boards).** Trixie's default swap is **zram** —
+  *compressed pages that still live in RAM*, so it adds no real backing store. A firmware build can
+  still be OOM-killed with zram present (field-observed: cc1plus killed at `-j1` with 414 MiB of zram,
+  only 78 MiB in use, while the web stack was resident). To prevent the *hard* OOM, `bootstrap-deps.sh`
+  provisions a **disk-backed** swapfile (`/var/swap.lhpc`, default 768 MB) when `MemTotal < ~600 MB`,
+  at a **lower priority than zram** — zram stays the fast tier and the file is overflow that only backs
+  the peak. It is created only when there is no sufficient existing disk swap (zram is *not* counted)
+  **and** the target filesystem has ≥ 2× the size free (else it warns and skips rather than fill the
+  card); it is idempotent (a re-run detects the file/`fstab` entry and no-ops). **Trade-off:** the
+  swapfile lives on the SD card, so heavy paging adds flash wear — the cost of build reliability on a
+  512 MB box. Opt out with `--no-swapfile` (or size it with `--swap-size <MB>`); on a Pi 5 or any board
+  with ≥ 600 MB RAM it is never created. A build that pages heavily every time is a signal to stop the
+  web stack (above) or move to more RAM.
 - Builds are detached: they survive a web-service restart. Every job prints a copy-pasteable
   `tail -f <log>` line the moment its log is created — follow the exact file from another terminal
   instead of guessing (`lhpc logs <comp>` resolves to the same newest file).
