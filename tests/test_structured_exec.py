@@ -230,14 +230,22 @@ def _mk_comp_with_post(post):
                      post_steps=tuple(post))
 
 
-def _render(post, params=None):
+def _render(post, params=None, result_path="", runtime="/rt"):
     from lhpc.core import commands
 
     class _Op:
         callsign = "OE1ABC"
     comp = _mk_comp_with_post(post)
     return commands.render_post_launcher(list(post), comp, params or {}, _Op(),
-                                         "/rt", "/rt/src", "")
+                                         runtime, "/rt/src", "", result_path=result_path)
+
+
+def _sidecar_root(tmp_path):
+    """A real runtime root: a sidecar path is validated against it at render time and walked
+    descriptor-anchored by the runner."""
+    root = tmp_path / "rt"
+    (root / "state" / "post").mkdir(parents=True, exist_ok=True)
+    return root, root / "state" / "post" / "r.json"
 
 
 def test_tcp_send_probe_fields_are_rendered_and_param_expanded():
@@ -344,5 +352,61 @@ def test_probe_match_skips_all_sends():
         r = _run_launcher(code)
         assert not [d for d in received if d.startswith("--setcall")]
         assert "probe matched" in r.stderr
+    finally:
+        stop()
+
+
+def test_acked_send_writes_result_sidecar(tmp_path):
+    # Deaf console for 2 probes, then alive with the wrong call, then ACK -> the terminal
+    # result sidecar reports 'acked' with the attempt count and elapsed window.
+    import json
+    state = {"n": 0}
+    def behavior(received, data):
+        if data.startswith("--info"):
+            state["n"] += 1
+            if state["n"] <= 2:
+                return ""                                        # booting: deaf
+            return "Call:N0CALL Short:N0C set\n"
+        if data.startswith("--setcall"):
+            return "Call:OE1ABC Short:OE1 set\n"                 # ACK
+        return ""
+    port, received, stop = _serve(behavior)
+    root, rp = _sidecar_root(tmp_path)
+    try:
+        code = _render([{"kind": "tcp_send", "port": port, "label": "callsign",
+                         "data": "--setcall {param:mc_callsign}\n",
+                         "probe": "--info\n",
+                         "probe_stop_on": "Call: <{param:mc_callsign}>",
+                         "stop_on": "Call:{param:mc_callsign}",
+                         "repeat": 10, "interval": 0.1}], result_path=str(rp),
+                       runtime=str(root))
+        r = _run_launcher(code)
+        assert r.returncode == 0
+        st = json.loads(rp.read_text())["steps"][0]
+        assert st["outcome"] == "acked" and st["label"] == "callsign"
+        assert st["attempts"] == 3 and st["elapsed_s"] >= 0
+    finally:
+        stop()
+
+
+def test_probe_match_writes_probe_matched_result(tmp_path):
+    import json
+    def behavior(received, data):
+        return "Call:OE1ABC Short:OE1 set\n"                     # already ours
+    port, received, stop = _serve(behavior)
+    root, rp = _sidecar_root(tmp_path)
+    try:
+        code = _render([{"kind": "tcp_send", "port": port, "label": "callsign",
+                         "data": "--setcall {param:mc_callsign}\n",
+                         "probe": "--info\n",
+                         "probe_stop_on": "Call:{param:mc_callsign}",
+                         "stop_on": "Call:{param:mc_callsign}",
+                         "repeat": 5, "interval": 0.1}], result_path=str(rp),
+                       runtime=str(root))
+        r = _run_launcher(code)
+        assert r.returncode == 0
+        st = json.loads(rp.read_text())["steps"][0]
+        assert st["outcome"] == "probe-matched" and st["attempts"] == 1
+        assert not [d for d in received if d.startswith("--setcall")]
     finally:
         stop()

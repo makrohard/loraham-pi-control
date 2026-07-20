@@ -45,18 +45,19 @@ def test_stop_also_takes_resource_locks(tmp_path):
 def test_start_blocked_by_held_source_lock(tmp_path):
     # P0.5: a start holds the canonical source lock; a concurrent update/uninstall
     # holding it must block the start (no racing the source during startup setup).
+    # Uses a SOURCED stack (chat -> src/LoRaHAM_Daemon); meshtastic declares no source.
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/LoRaHAM_Pi"),
+    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/LoRaHAM_Daemon"),
                                 "update", "x"):
-        res = svc.run_action("start", "meshtastic", apply=True)
+        res = svc.run_action("start", "chat", apply=True)
     assert not res.ok and "busy" in res.summary.lower()
 
 
 def test_start_does_not_hold_unrelated_source(tmp_path):
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
+    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/meshcore-pi"),
                                 "update", "x"):
-        res = svc.run_action("start", "meshtastic", apply=True)   # different source tree
+        res = svc.run_action("start", "chat", apply=True)         # different source tree
     assert "busy" not in res.summary.lower()
 
 
@@ -65,9 +66,9 @@ def test_start_does_not_hold_unrelated_source(tmp_path):
 def test_direct_start_call_is_locked(tmp_path):
     # A DIRECT svc.start() (not via run_action) must still acquire the source lock.
     svc = _svc(tmp_path)
-    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/LoRaHAM_Pi"),
+    with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/LoRaHAM_Daemon"),
                                 "update", "x"):
-        res = svc.start("meshtastic", apply=True)
+        res = svc.start("chat", apply=True)
     assert not res.ok and "busy" in res.summary.lower()
 
 

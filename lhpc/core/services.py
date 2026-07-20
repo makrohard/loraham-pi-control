@@ -18,6 +18,7 @@ import contextlib
 from contextlib import contextmanager
 from pathlib import Path
 
+from .lifecycle import GUI_MISSING_HINT
 from .snapshot_memo import invalidates_snapshot
 from . import manifest as manifest_mod
 from .config import (
@@ -534,6 +535,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st))
+                # Terminal post-start outcome (e.g. the MeshCom callsign push: confirmed /
+                # NOT applied + the re-apply command). Fail-soft: status must render even
+                # when a result sidecar is unreadable. Shared loop → the line appears in
+                # BOTH `lhpc status` and the scoped `lhpc status <stack>`.
+                try:
+                    details.extend(f"        {line}"
+                                   for line in self._post_start_outcomes(comp.id))
+                except Exception:
+                    pass
         observed = self._observed_conflicts(snap)
         if observed:
             details.append("")
@@ -614,6 +624,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         s = self.stack(stack_id)
         if s is None:
             return self._unknown_stack(stack_id)
+        gui_unavailable = set(self.gui_unavailable_components(s))
         details = [s.summary, "", "Components (manual start order):"]
         ordered = sorted(
             s.components, key=lambda c: (c.start_order is None, c.start_order or 0)
@@ -630,6 +641,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 details.append(f"        claims {r.key} ({r.mode.value}{extra})")
             if c.note:
                 details.append(f"        note: {c.note}")
+            if c.id in gui_unavailable:
+                details.append(f"        UNAVAILABLE HERE: {GUI_MISSING_HINT}")
         return ActionResult(
             ok=True,
             summary=f"Stack '{s.id}': {s.name}",
@@ -852,6 +865,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     pass                       # unsafe parent -> adopt_source refuses typed
                 st_of = next((st2 for st2 in self.stacks()
                               if any(c2.id == comp.id for c2 in st2.components)), None)
+                # Announce the clone log BEFORE the (possibly minutes-long, off-TTY-silent)
+                # adoption — same copy-pasteable watch line the auto-install run emits.
+                if comp.source and comp.source.strategy != "link":
+                    extra_out.append(f"  [log] {comp.id} -> tail -f "
+                                     f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                 result = self._adopt_dev_fallback(inst, st_of, comp, selector, resolved,
                                                   force=False,
                                                   locked=_locked_adopt)
@@ -1251,6 +1269,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # How long to WAIT for a resource claim held by our OWN controller process before failing.
     _SELF_LOCK_WAIT_S = 5.0
+    # How long to tolerate an UNIDENTIFIABLE holder (flock taken, `.owner` not yet published).
+    # Deliberately tiny: it covers one file write, not a real wait, so external contention still
+    # fails fast instead of every conflict becoming a multi-second stall.
+    _OWNER_PUBLISH_GRACE_S = 0.25
 
     def _acquire_key(self, stack, k: str, op: str, target: str) -> None:
         """Enter one reslock key into `stack`. A claim held by ANOTHER process is a real external
@@ -1260,16 +1282,35 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         shortly → wait BOUNDED, so the operator is never told their own stack is 'busy' on itself,
         while a genuinely hung holder still can't wedge us forever."""
         from . import reslock
-        deadline = time.monotonic() + self._SELF_LOCK_WAIT_S
+        now = time.monotonic()
+        deadline = now + self._SELF_LOCK_WAIT_S
+        # PUBLICATION GRACE. `operation_lock` takes the flock and only THEN writes its `.owner`
+        # record, so a contender that arrives inside that window is told "busy" by a holder it
+        # cannot yet identify. Treating that as an external conflict made a same-process wait fail
+        # immediately — intermittently, and more often under load, which is exactly when two
+        # controller threads overlap. An unidentified holder is therefore retried BRIEFLY (this is
+        # the only ambiguous state) and never for longer than the same-process budget.
+        grace = min(now + self._OWNER_PUBLISH_GRACE_S, deadline)
         while True:
             try:
                 stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
-                return
+                return                      # the lock became available -> normal acquisition
             except reslock.ResourceBusy as busy:
-                same_process = str(busy.holder.get("pid")) == str(os.getpid())
-                if not same_process or time.monotonic() >= deadline:
+                holder = busy.holder if isinstance(busy.holder, dict) else {}
+                pid = holder.get("pid")
+                if pid is None or not str(pid).strip():
+                    # Absent/malformed owner: mid-publication, or a corrupt record. Retry only
+                    # inside the short grace, then surface the SAME typed ResourceBusy — an
+                    # unidentifiable holder must never become a five-second stall.
+                    if time.monotonic() < grace:
+                        time.sleep(0.01)
+                        continue
                     raise
-                time.sleep(0.1)
+                if str(pid) != str(os.getpid()):
+                    raise                   # a genuinely EXTERNAL holder -> fail fast, as before
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)             # our own overlapping op -> bounded serialization
 
     @contextmanager
     def _lifecycle_guard(self, op: str, target: str, band: str = "",

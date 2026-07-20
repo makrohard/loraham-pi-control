@@ -231,15 +231,20 @@ def test_library_shows_build_dependency_pill_not_optional(tmp_path):
     assert "build dependency" in body
 
 
-def test_meshtasticd_and_spi_copyboxes_are_executable(tmp_path):
-    # Field-verified (Trixie lite): meshtasticd is in NO distro repo, so the copybox must add the
-    # Meshtastic OBS apt repo + signing key before installing (the bare `apt install -y meshtasticd`
-    # fails); the SPI box must be a runnable command, not prose. Requires absent under the bare FakeSystem.
+def test_meshtastic_and_spi_copyboxes_are_executable(tmp_path):
+    # meshtasticd is BUILT from the managed source now (server-only, upstream env `native`), so no
+    # dependency surface may add a third-party apt repo or install the OBS package — its Depends are
+    # what dragged a desktop stack onto a headless image. What IS declared: the build/runtime
+    # libraries, as one runnable apt command. The SPI box must be a command, not prose.
     svc = _svc(tmp_path)
     deps = svc.system_deps("meshtastic")
-    mesh = next(d for d in deps if "meshtasticd" in d["what"])
-    assert "download.opensuse.org" in mesh["install"]          # adds the OBS repo…
-    assert mesh["install"].rstrip().endswith("apt install -y meshtasticd")   # …then installs
+    for d in deps:
+        assert "opensuse" not in (d["install"] or "")
+        assert "install -y meshtasticd" not in (d["install"] or "")
+    libs = next(d for d in deps if "libyaml-cpp-dev" in (d["install"] or ""))
+    assert libs["install"].startswith("sudo apt install -y")
+    for forbidden in ("libsdl", "libx11", "xkbcommon", "libinput", "libpulse"):
+        assert forbidden not in libs["install"]
     spi = next(d for d in deps if d["what"].startswith("SPI device"))
     assert spi["install"].startswith("printf")                 # a command, not prose
     assert "/boot/firmware/config.txt" in spi["install"] and "Enable SPI" not in spi["install"]
@@ -275,11 +280,15 @@ def test_render_bootstrap_merges_and_dedups_apt(tmp_path):
         "sudo apt install -y --no-install-recommends libssl-dev",   # flag dropped
     ], revision="deadbeef")
     # exactly one merged, non-interactive apt install line; packages sorted + unique; no flags leaked
-    assert script.count("apt-get install -y") == 1
-    body = script.split("apt-get install -y", 1)[1]
+    # into the PACKAGE LIST. The generator itself installs with --no-install-recommends (Recommends
+    # are what dragged a desktop stack onto a headless image), so the flag appears on the install
+    # line by design — but never as a token declared by a require.
+    assert script.count("apt-get install -y --no-install-recommends") == 1
+    body = script.split("apt-get install -y --no-install-recommends", 1)[1]
     assert "cmake" in body and body.count("cmake") == 1
     assert "socat" in body and "libssl-dev" in body
-    assert "--no-install-recommends" not in script
+    pkg_block = body.split("\n\n", 1)[0]
+    assert "--no-install-recommends" not in pkg_block
     assert "deadbeef" in script                   # revision in header
     import subprocess
     p = subprocess.run(["bash", "-n", "-c", script], capture_output=True, text=True)
@@ -301,7 +310,9 @@ def test_deps_script_service_has_every_category_and_no_venv_pip(tmp_path):
     script = svc.deps_script()
     # every declared category is present
     assert "apt-get install -y" in script                    # merged apt packages
-    assert "sources.list.d" in script or "opensuse" in script  # OBS repo block
+    # NO third-party apt repository: meshtasticd is built from the managed source now, so nothing
+    # adds a repo or installs the OBS package (whose Depends dragged in a desktop stack).
+    assert "sources.list.d" not in script and "opensuse" not in script
     assert "dtparam=spi=on" in script                        # SPI / config.txt
     assert "usermod -aG" in script                           # group grants
     assert "systemctl disable --now meshtasticd" in script   # system-meshtasticd disable
@@ -373,3 +384,538 @@ def test_build_steps_provision_managed_tools_in_root(tmp_path):
     assert any("fetch-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in argvs)      # managed qemu
     envs = [st.get("env", {}) for st in comp.build_steps]
     assert any(e.get("PIO", "").endswith("platformio/.venv/bin/pio") for e in envs)              # PIO by abs path
+
+
+# --- Item K: GUI-only dependency taxonomy ----------------------------------------------------------
+# This box HAS GTK and tkinter, so absence is SIMULATED (FakeSystem / monkeypatched find_spec) —
+# never inferred from the host, which would make these tests pass for the wrong reason.
+
+def _scopes(tmp_path):
+    return _svc(tmp_path)._declared_dep_scopes()
+
+
+def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
+    core, gui = _scopes(tmp_path)
+    # EXACT invariants, not a denylist: a denylist rots and proves nothing about new deps.
+    # The opt-in scope is GUI toolkits PLUS the Voice-only audio libraries (Voice is skipped by
+    # default on a headless rig, so its private deps have no business in every bootstrap).
+    assert sorted(gui) == ["sudo apt install -y libasound2-dev",
+                           "sudo apt install -y libcodec2-dev",
+                           "sudo apt install -y libgtk-3-dev",
+                           "sudo apt install -y python3-tk"]
+    assert not set(core) & set(gui)                 # a command lives in exactly one scope
+    assert not any("gtk" in c or "python3-tk" in c or "asound" in c or "codec2" in c for c in core)
+    assert any("ncurses" in c for c in core)        # shared with chat -> core wins
+
+
+def test_default_script_body_is_exactly_the_core_scope(tmp_path):
+    svc = _svc(tmp_path)
+    core, gui = svc._declared_dep_scopes()
+    script = svc.deps_script()
+    # Drop the --dry-run guard first: it NAMES GUI packages in its denylist regex (to refuse them),
+    # which must not be confused with installing them.
+    body = script.split("# --- --dry-run", 1)[0] + script.split("exit 0\nfi", 1)[-1]
+    head, _, tail = body.partition("--- GUI-only dependencies")
+    for cmd in gui:                                  # GUI packages ONLY below the guard
+        pkg = cmd.split()[-1]
+        assert pkg not in head
+        assert pkg in tail
+    assert 'if [ -n "$WITH_GUI" ]' in tail
+
+
+def test_moving_a_dep_between_scopes_changes_the_revision(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    before = svc.deps_script()
+    core, gui = svc._declared_dep_scopes()
+    # Same command SET, different scope: a revision that hashed commands alone would not move.
+    monkeypatch.setattr(type(svc), "_declared_dep_scopes",
+                        lambda self: (sorted(core + gui), []))
+    after = svc.deps_script()
+    def _rev(s):
+        return next(ln for ln in s.splitlines() if "dependency revision" in ln)
+    assert _rev(before) != _rev(after)
+
+
+def test_core_declaration_wins_over_a_gui_declaration(tmp_path, monkeypatch):
+    """AND-merge: one non-GUI declaration keeps the command in the DEFAULT bootstrap, once."""
+    svc = _svc(tmp_path)
+    stacks = svc.stacks()
+    dup = None
+    for s in stacks:
+        for c in s.components:
+            for r in c.requires:
+                if getattr(r, "gui", False):
+                    dup = r
+                    break
+    assert dup is not None
+    monkeypatch.setattr(type(dup), "gui", property(lambda self: False), raising=False)
+    core, gui = svc._declared_dep_scopes()
+    assert dup.install in core
+    assert dup.install not in gui
+    assert core.count(dup.install) == 1
+
+
+def test_module_probe_uses_find_spec_and_is_honest(tmp_path, monkeypatch):
+    import importlib.util
+
+    from lhpc.core import lifecycle
+    assert lifecycle.module_present("tkinter") is True
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert lifecycle.module_present("tkinter") is False
+    def _boom(name):
+        raise ImportError("no parent")
+    monkeypatch.setattr(importlib.util, "find_spec", _boom)
+    assert lifecycle.module_present("tkinter") is False
+
+
+def test_dotted_module_names_are_rejected_at_parse():
+    # find_spec("a.b") IMPORTS a — that would break the no-side-effect GET guarantee.
+    from lhpc.core.manifest import _require_module
+    for bad in ("a.b", "os.path", "", " x-y "):
+        if bad.strip():
+            with pytest.raises(ManifestError):
+                _require_module(bad, "c")
+    assert _require_module("tkinter", "c") == "tkinter"
+
+
+def test_gui_deps_are_warn_not_block_in_the_install_gate(tmp_path):
+    svc = _svc(tmp_path)                             # FakeSystem: no gtk headers
+    gate = svc.install_dep_gate("voice")
+    labels = lambda ds: [d["what"] for d in ds]
+    assert any("GTK" in w for w in labels(gate["warn"]))
+    assert not any("GTK" in w for w in labels(gate["block"]))
+    # still VISIBLE — a GUI dep is opt-in, not hidden
+    assert any("GTK" in d["what"] for d in svc.missing_system_deps("voice"))
+
+
+# --- Item K: component-scoped skip (GUI absent) ----------------------------------------------------
+
+def _no_tkinter(monkeypatch):
+    """Simulate a headless box with no python3-tk (this box HAS it)."""
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name: None if name == "tkinter" else real(name))
+
+
+def test_meshcore_keeps_working_headless_only_nodegui_is_skipped(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    st = svc.stack("meshcore")
+    assert svc.gui_unavailable_components(st) == ("meshcore-nodegui",)
+    # OPTIONAL GUI component -> the STACK is not skipped: the CLI still works.
+    assert svc.gui_skipped_stack(st) is False
+    work = next(w for s, w in svc._auto_install_scope() if s.id == "meshcore")
+    assert work.skipped == ("meshcore-nodegui",)
+    ids = {c.id for c in work.source} | {c.id for c in work.build} | {c.id for c in work.test}
+    assert "meshcore-nodegui" not in ids
+    assert "meshcore-cli" in ids or "meshcore-pi" in ids       # headless components survive
+
+
+def test_voice_stack_is_skipped_whole_when_gtk_is_absent(tmp_path):
+    svc = _svc(tmp_path)                              # FakeSystem: no gtk headers
+    st = svc.stack("voice")
+    assert svc.gui_skipped_stack(st) is True
+    scope = svc._auto_install_scope()
+    assert len(scope) == len(svc.stacks())            # every stack still gets a ROW
+    work = next(w for s, w in scope if s.id == "voice")
+    assert "loraham-voice" in work.skipped
+
+
+def _tree(root):
+    """Every path under `root` with its mtime+size — a real zero-mutation fingerprint."""
+    return {str(p.relative_to(root)): (p.stat().st_mtime_ns, p.stat().st_size)
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_direct_build_voice_refuses_before_running_a_step(tmp_path):
+    svc = _svc(tmp_path)
+    before = _tree(tmp_path)
+    r = svc.build("voice", apply=True)
+    assert r.ok is False
+    assert "GUI toolkit" in r.summary
+    assert any("headless-safe default" in d for d in r.details)
+    # Refused during PREFLIGHT: not one byte of state may have been written — no build marker, no
+    # log, no lock file. (The previous `... or True` assertion could never fail.)
+    assert _tree(tmp_path) == before
+
+
+def test_direct_build_meshcore_skips_nodegui_and_continues(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    r = svc.build("meshcore", apply=False)
+    assert r.ok is True
+    assert not any("[build] meshcore-nodegui" in d for d in r.details)
+    assert any("[skip] meshcore-nodegui" in d for d in r.details)
+
+
+def test_skipped_is_a_valid_marker_status_and_not_a_failure(tmp_path):
+    from lhpc.core import auto_install as ai
+    assert "skipped" in ai.STACK_STATUSES
+
+
+def test_direct_build_of_a_skipped_component_is_typed_no_work_not_success(tmp_path, monkeypatch):
+    """`lhpc build meshcore-nodegui` on a headless box: every requested component is skipped, so the
+    result must be an explicit no-work/skipped outcome — never "succeeded"/"built" — and it must not
+    execute a build step, mutate a marker or take a source lock."""
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    before = _tree(tmp_path)
+    r = svc.build("meshcore-nodegui", apply=True)
+    assert "succeed" not in r.summary.lower() and "built" not in r.summary.lower()
+    assert "Nothing to build" in r.summary
+    assert r.data.get("skipped") == ["meshcore-nodegui"] and r.data.get("built") == 0
+    assert _tree(tmp_path) == before                      # zero mutation
+
+
+def test_dry_run_build_of_a_skipped_component_reports_no_work(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    r = svc.build("meshcore-nodegui", apply=False)
+    assert "Nothing to build" in r.summary
+    assert any("[skip] meshcore-nodegui" in d for d in r.details)
+
+
+def test_partial_build_reports_succeeded_with_gui_skips(tmp_path, monkeypatch):
+    """Headless work remains -> it is built AND the skip is preserved in the result."""
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    calls = []
+    life = svc._lifecycle()
+    class L:
+        def build(self, comp, **kw):
+            calls.append(comp.id)
+            class R:
+                ok, state, returncode, log_path, tail = True, type("S", (), {"value": "ok"})(), 0, "l", []
+                cancelled = unsafe = False
+                unsafe_scope = session_ident = ""
+            return R()
+        def __getattr__(self, n):
+            return getattr(life, n)
+    monkeypatch.setattr(svc, "_lifecycle", lambda: L())
+    r = svc.build("meshcore", apply=True)
+    assert r.ok is True
+    assert "succeeded with GUI skips" in r.summary
+    assert "meshcore-nodegui" in r.summary
+    assert "meshcore-nodegui" not in calls                 # never built
+    assert r.data.get("skipped") == ["meshcore-nodegui"]
+
+
+# --- order-independent dedup + disjoint counters ---------------------------------------------------
+
+def _synth(tmp_path, decls):
+    """A one-stack manifest whose components declare the SAME install command with the given
+    (gui, optional) flags, in the given order."""
+    comps = []
+    for i, (gui, optional) in enumerate(decls):
+        comps.append(f'''
+[[stack.component]]
+id = "c{i}"
+name = "C{i}"
+kind = "service"
+purpose = "p"
+optional = {str(optional).lower()}
+  [[stack.component.require]]
+  gui = {str(gui).lower()}
+  check_file = "/nonexistent/shared.h"
+  install = "sudo apt install -y sharedpkg"
+  note = "Shared header"
+''')
+    import tomllib
+    text = ('[[stack]]\nid = "syn"\nname = "Syn"\nsummary = "s"\nmain = "c0"\n' + "".join(comps))
+    return parse_manifest(tomllib.loads(text))
+
+
+@pytest.mark.parametrize("order", [
+    [(True, False), (False, False)],       # GUI declared FIRST
+    [(False, False), (True, False)],       # core declared FIRST
+])
+def test_core_declaration_wins_regardless_of_order(tmp_path, order):
+    svc = _svc(tmp_path)
+    stacks = _synth(tmp_path, order)
+    monkey = {s.id: s for s in stacks}
+    svc.stack = lambda t, _m=monkey: _m.get(t)                        # type: ignore[assignment]
+    deps = svc.system_deps("syn")
+    assert len(deps) == 1                                             # present ONCE
+    assert deps[0]["gui"] is False                                    # core wins
+    assert deps[0]["mandatory"] is True                               # normal semantics restored
+
+
+def test_all_gui_declarations_stay_gui_only(tmp_path):
+    svc = _svc(tmp_path)
+    stacks = _synth(tmp_path, [(True, False), (True, True)])
+    monkey = {s.id: s for s in stacks}
+    svc.stack = lambda t, _m=monkey: _m.get(t)                        # type: ignore[assignment]
+    deps = svc.system_deps("syn")
+    assert len(deps) == 1
+    assert deps[0]["gui"] is True
+    assert deps[0]["mandatory"] is False                              # GUI-only is never mandatory
+
+
+def test_optional_and_gui_counters_are_disjoint(tmp_path):
+    svc = _svc(tmp_path)
+    ov = svc.dependency_overview()
+    for sec in ov["sections"]:
+        for d in sec["deps"]:
+            if d.get("gui"):
+                assert d["mandatory"] is False
+    gui = [d for sec in ov["sections"] for d in sec["deps"]
+           if not d["satisfied"] and d.get("gui")]
+    opt = [d for sec in ov["sections"] for d in sec["deps"]
+           if not d["satisfied"] and not d["mandatory"] and not d.get("gui")
+           and not d.get("restart_pending")]
+    assert ov["gui_missing"] == len(gui)
+    assert ov["optional_missing"] == len(opt)
+    assert not [d for d in gui if d in opt]                           # no dep counted twice
+
+
+# --- managed server-only Meshtastic ---------------------------------------------------------------
+# meshtasticd is BUILT from a pinned upstream checkout with upstream's `native` environment, instead
+# of installed from the OBS package (built `native-tft`, so it links X11/libinput/xkbcommon and its
+# Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM onto a headless rig).
+
+def _mesh(svc):
+    return svc.stack("meshtastic").components[0]
+
+
+def test_meshtastic_is_a_normal_managed_source_with_the_usual_selectors(tmp_path):
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    assert c.source is not None and c.source.path == "src/meshtastic-firmware"
+    assert len(c.source.pin_commit) == 40                       # pinned by FULL sha
+    assert c.source.remote.endswith("meshtastic/firmware.git") and c.source.branch
+    # No bespoke update path: the ordinary selectors plan normally.
+    for sel in ("pinned", "dev"):
+        r = svc.install("meshtastic", apply=False, source=sel)
+        assert r.ok and any("meshtastic-firmware" in d for d in r.details), sel
+
+
+def test_meshtastic_builds_the_server_only_env_and_never_native_tft(tmp_path):
+    c = _mesh(_svc(tmp_path))
+    steps = c.build_steps
+    argvs = [" ".join(s.get("argv", [])) for s in steps]
+    blob = "\n".join(argvs)
+    assert "--environment native" in blob
+    assert "native-tft" not in blob                             # the X11/TFT build, never built here
+    # The link gate is a BUILD STEP: a binary that links a display stack must not be publishable.
+    assert any("meshtastic-link-gate.sh" in a for a in argvs)
+    assert any("meshtastic-web-assets.sh" in a for a in argvs)
+    # Serialised compile: a parallel native build is what OOMs a 512 MB Zero 2W.
+    run_step = next(s for s in steps if "run" in s.get("argv", []) and "--environment" in s["argv"])
+    env = dict(run_step.get("env") or {})
+    assert env.get("PLATFORMIO_RUN_JOBS") == "1"
+    assert env.get("PLATFORMIO_CORE_DIR") == "{runtime}/build/tools/platformio/core"
+    # The web-asset step carries the pin COMMIT as well as the hash, and that commit must be the
+    # source pin — a bumped pin with a stale argument would silently drop pinned verification.
+    web = next(s for s in steps if "meshtastic-web-assets.sh" in " ".join(s.get("argv", [])))
+    assert web["argv"][-2] == c.source.pin_commit
+
+
+def test_meshtastic_runs_the_runtime_owned_binary_and_web_root(tmp_path):
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    assert c.run_argv[0] == "{runtime}/build/tools/meshtasticd/meshtasticd"
+    assert "/usr/bin/meshtasticd" not in " ".join(c.run_argv)
+    assert c.bin == "build/tools/meshtasticd/meshtasticd"       # the server IS the artifact
+    root = next(p for p in c.config_file.params if p.key == "RootPath")
+    assert root.default == "{runtime}/build/tools/meshtasticd/web"   # never /usr/share
+
+
+def test_meshtastic_declares_no_graphical_or_audio_dependency(tmp_path):
+    joined = " ".join((r.install or "") + " " + (r.check_file or "")
+                      for r in _mesh(_svc(tmp_path)).requires)
+    for forbidden in ("libsdl", "libx11", "libwayland", "mesa", "libllvm",
+                      "libpulse", "libinput", "libxkbcommon", "libgtk"):
+        assert forbidden not in joined.lower(), forbidden
+
+
+def test_source_update_leaves_the_stack_needing_a_rebuild(tmp_path):
+    # The completion marker is written only after every build step; the artifact lives under the
+    # runtime root, so a replaced checkout cannot read as built until it is rebuilt.
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    svc = _svc(tmp_path)
+    c = _mesh(svc)
+    assert c.build_marker                                       # strict completion marker declared
+    assert svc.is_built(c) is False                             # nothing built yet
+    src = tmp_path / "src" / "meshtastic-firmware"
+    src.mkdir(parents=True)
+    marker = src / c.build_marker
+    marker.write_text(BUILD_MARKER_TEXT)
+    assert svc.is_built(_mesh(_svc(tmp_path))) is True
+    # An update REPLACES the checkout, taking the source-local marker with it.
+    marker.unlink()
+    assert svc.is_built(_mesh(_svc(tmp_path))) is False         # -> "Build required" again
+
+
+def test_partial_build_does_not_read_as_built(tmp_path):
+    # The binary alone is NOT the completion signal: a run that installed meshtasticd but died
+    # before the web assets were provisioned would otherwise start and serve a missing UI.
+    svc = _svc(tmp_path)
+    art = tmp_path / "build" / "tools" / "meshtasticd" / "meshtasticd"
+    art.parent.mkdir(parents=True)
+    art.write_text("#!/bin/true\n")
+    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True)
+    assert svc.is_built(_mesh(_svc(tmp_path))) is False
+
+
+# --- shipped build helpers: web assets follow the source; the link gate is fail-closed ------------
+# Driven offline via LHPC_MESHTASTIC_WEB_TARBALL / fake readelf+ldd, so no network or real binary.
+
+def _scripts():
+    from lhpc.core.assets import asset_path
+    return asset_path("scripts")
+
+
+def _fake_tar(tmp_path, name="index.html", body="<html>ok</html>"):
+    import subprocess
+    import tarfile
+    stage = tmp_path / "stage"; stage.mkdir()
+    (stage / name).write_text(body)
+    subprocess.run(["gzip", str(stage / name)], check=True)      # release ships gzipped members
+    tar = tmp_path / "build.tar"
+    with tarfile.open(tar, "w") as tf:
+        tf.add(stage / f"{name}.gz", arcname=f"{name}.gz")
+    import hashlib
+    return tar, hashlib.sha256(tar.read_bytes()).hexdigest()
+
+
+def _checkout(tmp_path, version="2.6.7"):
+    src = tmp_path / "src"; (src / "bin").mkdir(parents=True)
+    (src / "bin" / "web.version").write_text(version + "\n")
+    return src
+
+
+def _git_init(src):
+    """Make `src` a real checkout and return its HEAD sha (the helper reads it to pick its mode)."""
+    import subprocess
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@e", "PATH": "/usr/bin:/bin", "HOME": str(src)}
+    run = lambda *a: subprocess.run(["git", "-C", str(src), *a], env=env, check=True,
+                                    capture_output=True)     # noqa: E731
+    run("init", "-q")
+    run("add", "-A")
+    run("commit", "-qm", "t")
+    out = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], env=env,
+                         capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+def _run_web(tmp_path, src, dest, tar, pin_commit="", pinned_sha=""):
+    import os
+    import subprocess
+    return subprocess.run(
+        ["bash", str(_scripts() / "meshtastic-web-assets.sh"), str(src), str(dest),
+         pin_commit, pinned_sha],
+        env={**os.environ, "LHPC_MESHTASTIC_WEB_TARBALL": str(tar)},
+        capture_output=True, text=True, timeout=60)
+
+
+def test_web_assets_enforce_the_pinned_hash_when_head_is_the_pin(tmp_path):
+    # PINNED HEAD: the declared digest describes exactly this revision, so it is asserted.
+    src, dest = _checkout(tmp_path), tmp_path / "web"
+    head = _git_init(src)
+    tar, digest = _fake_tar(tmp_path)
+    r = _run_web(tmp_path, src, dest, tar, pin_commit=head, pinned_sha=digest)
+    assert r.returncode == 0, r.stderr
+    assert "enforcing the declared web asset hash" in r.stdout
+    assert (dest / "index.html").read_text() == "<html>ok</html>"      # unpacked AND gunzipped
+    prov = (dest.parent / "web.provenance").read_text()
+    assert "web_version=2.6.7" in prov and f"web_sha256={digest}" in prov and "pinned=yes" in prov
+    assert f"firmware_rev={head}" in prov
+
+
+def test_web_assets_pinned_mismatch_fails_and_keeps_the_old_ui(tmp_path):
+    src, dest = _checkout(tmp_path), tmp_path / "web"
+    head = _git_init(src)
+    dest.mkdir(); (dest / "index.html").write_text("PREVIOUS")
+    tar, _digest = _fake_tar(tmp_path)
+    r = _run_web(tmp_path, src, dest, tar, pin_commit=head, pinned_sha="0" * 64)
+    assert r.returncode == 3
+    assert "checksum mismatch" in r.stderr
+    assert (dest / "index.html").read_text() == "PREVIOUS"            # never half-swapped
+
+
+def test_web_assets_do_not_assert_the_pinned_hash_on_a_non_pinned_head(tmp_path):
+    # DEV/STABLE: HEAD is NOT the pin, so the pinned digest describes a DIFFERENT revision and must
+    # not be enforced — the observed hash is recorded instead. (Passing it unconditionally would
+    # fail every dev build.)
+    src, dest = _checkout(tmp_path, version="2.7.1"), tmp_path / "web"
+    head = _git_init(src)
+    tar, digest = _fake_tar(tmp_path)
+    r = _run_web(tmp_path, src, dest, tar, pin_commit="b" * 40, pinned_sha="0" * 64)
+    assert r.returncode == 0, r.stderr                                # the stale pin is NOT applied
+    assert "NOT the pinned revision" in r.stdout
+    prov = (dest.parent / "web.provenance").read_text()
+    assert "web_version=2.7.1" in prov and f"web_sha256={digest}" in prov and "pinned=no" in prov
+    assert f"firmware_rev={head}" in prov
+
+
+def test_web_assets_follow_the_checkout_not_a_hardcoded_version(tmp_path):
+    # The version comes from THIS checkout; a checkout without it cannot silently reuse anything.
+    src, dest = tmp_path / "src", tmp_path / "web"
+    (src / "bin").mkdir(parents=True)
+    tar, digest = _fake_tar(tmp_path)
+    r = _run_web(tmp_path, src, dest, tar, pin_commit="a" * 40, pinned_sha=digest)
+    assert r.returncode == 2 and "web.version" in r.stderr
+    assert not dest.exists()
+
+
+def _run_gate(tmp_path, needed, ldd_out=None):
+    """Run the link gate against a fake readelf/ldd reporting `needed`."""
+    import os
+    import subprocess
+    fb = tmp_path / "fb"; fb.mkdir(exist_ok=True)
+    lines = "".join(f"Shared library: [{n}]\n" for n in needed)
+    (fb / "readelf").write_text(f"#!/usr/bin/env bash\ncat <<'E'\n{lines}E\n")
+    (fb / "ldd").write_text("#!/usr/bin/env bash\ncat <<'E'\n"
+                            + "".join(f"{n} => /lib/{n} (0x0)\n" for n in (ldd_out or needed))
+                            + "E\n")
+    for f in ("readelf", "ldd"):
+        (fb / f).chmod(0o755)
+    binary = tmp_path / "meshtasticd"; binary.write_text("x")
+    return subprocess.run(["bash", str(_scripts() / "meshtastic-link-gate.sh"), str(binary)],
+                          env={**os.environ, "PATH": f"{fb}:/usr/bin:/bin"},
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_link_gate_passes_a_server_only_binary(tmp_path):
+    r = _run_gate(tmp_path, ["libyaml-cpp.so.0.8", "libuv.so.1", "libgpiod.so.3",
+                             "libulfius.so.2.7", "libc.so.6"])
+    assert r.returncode == 0, r.stderr
+    assert "link gate OK" in r.stdout
+
+
+@pytest.mark.parametrize("lib", ["libX11.so.6", "libSDL2-2.0.so.0", "libinput.so.10",
+                                 "libxkbcommon.so.0", "libpulse.so.0", "libwayland-client.so.0"])
+def test_link_gate_refuses_a_display_or_audio_dependency(tmp_path, lib):
+    r = _run_gate(tmp_path, ["libc.so.6", lib])
+    assert r.returncode == 3
+    assert "forbidden libraries" in r.stderr and lib in r.stderr
+
+
+def test_link_gate_catches_a_transitively_pulled_library(tmp_path):
+    # Clean NEEDED, dirty closure: still fatal — the process would load it either way.
+    r = _run_gate(tmp_path, ["libc.so.6"], ldd_out=["libc.so.6", "libpulse.so.0"])
+    assert r.returncode == 3
+    assert "transitive closure" in r.stderr
+
+
+def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):
+    """lhpc runs meshtasticd ROOTLESS. The managed build replaced an apt package, so this checks the
+    replacement did not smuggle privilege in: no build, run or post-start command may invoke sudo or
+    otherwise assume uid 0. Privileged setup stays where it belongs — the operator-run bootstrap."""
+    c = _mesh(_svc(tmp_path))
+    argvs = [list(s.get("argv", [])) for s in c.build_steps]
+    argvs += [list(s.get("argv", [])) for s in c.post_steps if s.get("kind") == "exec"]
+    argvs += [list(c.run_argv)]
+    for argv in argvs:
+        assert argv, "empty argv"
+        joined = " ".join(argv)
+        for priv in ("sudo", "pkexec", "doas", "su "):
+            assert priv not in joined, f"{priv!r} in {joined!r}"
+        assert not argv[0].startswith("/usr/sbin/")          # not a root-only binary path
+    # Every artifact it writes lives under the runtime root, which the operator owns.
+    assert c.bin.startswith("build/") and not c.bin.startswith("/")
+    for s in c.build_steps:
+        for tok in s.get("argv", []):
+            assert not tok.startswith(("/etc/", "/usr/", "/var/", "/opt/")), tok

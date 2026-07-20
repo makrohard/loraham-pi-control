@@ -64,6 +64,7 @@ def run_job(
     redactor=None,
     should_cancel=None,
     on_log_open=None,
+    announce: str | None = None,
 ) -> JobResult:
     """Run one bounded command (structured argv, shell=False), persist its output,
     return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
@@ -86,6 +87,19 @@ def run_job(
         # the runner is NOT invoked when log setup failed.
         return JobResult(name=name, state=JobState.FAILED, returncode=126, log_path="",
                          tail=[f"job log could not be created safely: {exc}"])
+    # QUIET-STEP preamble: for a step known to be silent for minutes (e.g. pio's platform/
+    # toolchain resolution buffers everything off-TTY while downloading hundreds of MB), write
+    # the caller-supplied announce line INTO the log BEFORE the child runs — it is guaranteed
+    # to be the log's first content, so a `tail -f` never shows a bare 0-byte file. Best-effort
+    # (a cosmetic line must never fail the job — deliberate asymmetry with `log_write_failed`,
+    # which covers the child's actual output). Static controller text only: this write bypasses
+    # the redaction sink, so never put secrets in an announce.
+    if announce:
+        try:
+            log_fh.write(announce.rstrip("\n") + "\n")
+            log_fh.flush()
+        except OSError:
+            pass
     # The log file now EXISTS — announce its exact path before the (possibly long, silent) run so the
     # operator can `tail -f` the right file instead of guessing / following a stale one. Best-effort:
     # an announcer error never affects the job.

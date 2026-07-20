@@ -556,6 +556,28 @@ class ParamsConfigMixin:
                     out[p.name] = _op_subst(bd)               # default with operator tokens
         return out
 
+    def gui_unavailable_components(self, stack) -> tuple:
+        """Component ids of `stack` that CANNOT work here because a GUI-only dependency of theirs is
+        absent. GET-safe (composes `missing_requirements` only).
+
+        This is the ONE predicate behind every GUI skip — auto-install planning and direct `lhpc
+        build` both consult it BEFORE locks, markers or steps, so an unavailable GUI component is
+        never discovered by letting pkg-config or an import fail mid-build."""
+        out = []
+        life = self._lifecycle()
+        for c in stack.components:
+            missing = life.missing_requirements(c)
+            if any(getattr(r, "gui", False) for r in missing):
+                out.append(c.id)
+        return tuple(out)
+
+    def gui_skipped_stack(self, stack) -> bool:
+        """True when a MANDATORY component of the stack is GUI-unavailable — the whole stack is then
+        recorded skipped. An OPTIONAL one (meshcore-nodegui) only removes itself: MeshCore stays
+        fully usable headless through its CLI."""
+        skip = set(self.gui_unavailable_components(stack))
+        return any(c.id in skip and not c.optional for c in stack.components)
+
     def missing_system_deps(self, target: str) -> list[dict]:
         """Unsatisfied INSTALL-time system dependencies (e.g. -dev packages) for a stack's components,
         with the command to install each. Empty = all satisfied. Run-time capabilities (`runtime`, e.g.
@@ -580,20 +602,24 @@ class ParamsConfigMixin:
         """ALL declared system requirements for a stack (dev packages, headers,
         device nodes) with their satisfied state + install command — for the app
         tab ('Installed' vs a copyable install command) and the install gate.
-        `mandatory` = required by a non-optional component (mandatory wins on dedup)."""
+        `mandatory` = declared by a component that is BOTH non-optional and non-GUI. `gui` = EVERY
+        declaration marks it GUI-only (core wins). Both are derived from all declarations after the
+        sweep, so neither depends on manifest declaration order."""
         life = self._lifecycle()
         s = self.stack(target)
-        out, by_key = [], {}
+        out, by_key, decls = [], {}, {}
         for c in (s.components if s else ()):
             missing = life.missing_requirements(c)
             for req in c.requires:
                 key = req.install or req.cmd or req.check_file or req.absent_file
                 if not key:
                     continue
+                is_gui = bool(getattr(req, "gui", False))
+                # ORDER-INDEPENDENT MERGE: collect the raw declaration facts here and derive
+                # `gui` / `mandatory` from ALL of them after the sweep (below). Deriving them
+                # incrementally made the verdict depend on which component declared the dep first.
+                decls.setdefault(key, []).append((is_gui, bool(c.optional)))
                 if key in by_key:
-                    # A dep shared by several components is mandatory if ANY requiring
-                    # component is non-optional (mandatory wins over an optional sibling).
-                    by_key[key]["mandatory"] = by_key[key]["mandatory"] or not c.optional
                     continue
                 sat = req not in missing
                 # Groups req: append the STATE-specific hint (never both). "granted, restart pending"
@@ -609,12 +635,24 @@ class ParamsConfigMixin:
                          # run-time capabilities (group membership AND a must-not-run service) gate start,
                          # not install -> excluded from the install gate, still surfaced here.
                          "runtime": bool(req.groups or req.absent_file),
+                         # GUI-ONLY: opt-in by design, so it is WARN-only in the install gate —
+                         # visible and actionable, but a headless box is not "missing a mandatory
+                         # dependency" for lacking a toolkit it can never use.
+                         "gui": is_gui,
                          # a MANAGED tool provisioned into the runtime root by the build/setup step does
                          # not exist until `lhpc build`, so it must NOT block install (still gates start).
                          "provisioned": bool(req.provisioned),
-                         "mandatory": not c.optional}
+                         "mandatory": False}                # derived below from ALL declarations
                 by_key[key] = entry
                 out.append(entry)
+        # CORE WINS, order-independently: a dep is GUI-only only when EVERY declaration marks it gui
+        # (AND-merge), and it is mandatory only when some declaration is BOTH non-optional AND
+        # non-GUI. One plain declaration therefore restores full mandatory semantics no matter where
+        # it appears in the manifest.
+        for key, entry in by_key.items():
+            ds = decls.get(key, ())
+            entry["gui"] = bool(ds) and all(g for g, _o in ds)
+            entry["mandatory"] = any((not g) and (not o) for g, o in ds)
         return out
 
     def config_view(self, target: str, band: str = "") -> dict:
@@ -1467,13 +1505,30 @@ class ParamsConfigMixin:
         return written
 
     def _resolve_config_dest(self, c, raw: str, for_base: bool = False):
-        """Resolve a FileConfig path/base into one of three policies:
+        """Resolve a FileConfig path/base into one of four policies:
+          * asset    — `{asset}/...`: a template SHIPPED as lhpc package data (bases only);
           * runtime  — `{runtime}/...` only, resolved through `Paths.under` (containment);
           * source   — a RELATIVE path under the managed source root (rejects linked);
           * (reject) — an arbitrary absolute path, unknown placeholder, or traversal.
         Returns a small result with `.status` ("ok"/"failed"/"linked-readonly"),
         `.policy`, `.path`, `.detail`, `.detail_path`."""
         from types import SimpleNamespace
+        if raw == "{asset}" or raw.startswith("{asset}/"):
+            # A packaged base needs no clone and no seeding: it is read from lhpc's own data
+            # at GENERATION time, so it can never go stale against the installed version (a
+            # bootstrap-seeded copy would, since seeding preserves an existing file). Only a
+            # BASE may be an asset — package data is read-only, never a generated destination.
+            rel = raw[len("{asset}"):].lstrip("/")
+            parts = [p for p in rel.split("/") if p]
+            if not for_base:
+                return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
+                                       detail="{asset} is read-only package data — it cannot be a "
+                                              "generated config destination")
+            if not parts or any(p in ("..", ".") for p in parts):
+                return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
+                                       detail="unsafe packaged-base path")
+            return SimpleNamespace(status="ok", policy="asset", path=Path("/".join(parts)),
+                                   detail="", detail_path=raw)
         if raw == "{runtime}" or raw.startswith("{runtime}/"):
             rel = raw[len("{runtime}"):].lstrip("/")
             parts = [p for p in rel.split("/") if p]
@@ -1499,10 +1554,14 @@ class ParamsConfigMixin:
                                detail="", detail_path=raw)
 
     def _read_contained(self, c, dest) -> str:
-        """Read a config base safely: a runtime base via runtime_fs (no-follow); a managed
-        source base via the SAME descriptor-anchored, O_NOFOLLOW traversal as the writer
-        (no check-then-open — a base file or parent swapped to a symlink after a check
-        cannot be followed)."""
+        """Read a config base safely: a packaged base via importlib.resources (zip-safe, and
+        outside the runtime root by construction — no traversal to guard); a runtime base via
+        runtime_fs (no-follow); a managed source base via the SAME descriptor-anchored,
+        O_NOFOLLOW traversal as the writer (no check-then-open — a base file or parent
+        swapped to a symlink after a check cannot be followed)."""
+        if dest.policy == "asset":
+            from .assets import asset_text
+            return asset_text(str(dest.path))
         if dest.policy == "runtime":
             from . import runtime_fs
             return runtime_fs.read_text(self._paths, dest.path)

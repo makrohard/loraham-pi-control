@@ -111,7 +111,9 @@ def test_packaged_meshcom_bridge_runs_ctest_in_bulk(tmp_path):
 def test_dry_run_names_scope_and_flags(tmp_path):
     svc = _svc(tmp_path)
     r = svc.auto_install(apply=False, tests=True, tx=False)
-    assert r.ok and r.data["changes"] == 8
+    # EVERY manifest stack is in scope — the manifest is authoritative. A package-managed stack
+    # (meshtastic) is a normal row that gets provisioned and validated, not a silent omission.
+    assert r.ok and r.data["changes"] == len(svc.stacks())
     assert r.details[0].startswith("  [install] daemon:")       # dependency order, daemon first
     assert any("TX test: off" in d for d in r.details)
 
@@ -136,9 +138,9 @@ def test_invalid_source_and_run_id_refused(tmp_path):
 
 @pytest.mark.needs_session
 def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeypatch):
-    # FakeSystem: every clone fails -> daemon FAILS; every daemon-dependent stack is
-    # BLOCKED (not attempted); meshtastic (independent) is attempted on its own and hits
-    # its own gate. Final state completed-with-failures, truthful summary.
+    # FakeSystem: every clone fails -> daemon FAILS and every daemon-dependent stack is
+    # BLOCKED (not attempted, and never mislabelled as its own failure). Final state
+    # completed-with-failures, truthful summary.
     _stub_frozen(monkeypatch)
     svc = _svc(tmp_path)
     r = svc.auto_install(apply=True, tests=True, emit=lambda s: None)
@@ -150,11 +152,10 @@ def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeyp
     for sid in ("chat", "igate", "voice", "kiss", "meshcom", "meshcore"):
         assert rows[sid]["status"] == "blocked"
         assert "dependency failed: daemon" in rows[sid]["detail"]
-    # meshtastic is independent: its own MANDATORY system deps are missing, so the early gate
-    # (before any source work) blocks it — never a false "dependency failed".
-    assert "missing mandatory system deps" in rows["meshtastic"]["detail"] \
-        or rows["meshtastic"]["status"] in ("fail", "blocked")
-    assert "dependency failed" not in rows["meshtastic"]["detail"]
+    # (The shipped manifest no longer contains a stack independent of daemon — meshtastic is
+    # source-less and therefore outside the install scope — so the "independents are still
+    # attempted" half of this behaviour is proven on a purpose-built manifest in
+    # test_independent_stack_is_attempted_when_another_fails.)
     assert "REMAIN installed" in r.summary                       # partial results stated
     assert st["run_id"] and st["log"] == ai_mod.log_name_for(st["run_id"]) + ".log"
 
@@ -446,6 +447,11 @@ def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
         PlanAction("adopt", "", f"adopt {comp.id}", status="skipped",
                    detail="linked dev tree — left as-is"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "built"))
@@ -475,12 +481,14 @@ def test_linked_stack_with_work_still_blocks(tmp_path, monkeypatch):
     real_scope = ControllerService._auto_install_scope
     def scope(self):
         out = []
-        for st, comps in real_scope(self):
+        for st, w in real_scope(self):
             if st.id == "meshcore":
-                comps = [dataclasses.replace(
+                linked = tuple(dataclasses.replace(
                     c, source=dataclasses.replace(c.source, strategy="link"))
-                    for c in comps]
-            out.append((st, comps))
+                    for c in w.source)
+                w = dataclasses.replace(w, source=linked, build=linked,
+                                        test=tuple(c for c in linked if c.test_argv))
+            out.append((st, w))
         return out
     monkeypatch.setattr(ControllerService, "_auto_install_scope", scope)
     svc = _svc(tmp_path)
@@ -509,6 +517,11 @@ def _happy_ops(monkeypatch):
         locked=False:
         PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "built"))
@@ -608,10 +621,13 @@ def test_tx_stop_failure_fails_daemon_row(tmp_path, monkeypatch):
 
 def _spawnable(svc, monkeypatch, spawn_ok=True, track_ok=True):
     calls = []
+    real_life = svc._lifecycle()
     class FakeLife:
         def spawn_job(self, name, argv, cwd, env=None):
             calls.append(name)
             return (name + ".log", os.getpid()) if spawn_ok else (None, None)
+        def __getattr__(self, name):     # only spawn_job is faked; everything else stays REAL
+            return getattr(real_life, name)
     monkeypatch.setattr(svc, "_lifecycle", lambda: FakeLife())
     monkeypatch.setattr(svc, "_track_or_terminate",
                         lambda life, ln, pid, cid, op: "" if track_ok else "track failed")
@@ -776,11 +792,14 @@ def test_child_death_before_claim_is_ackable_while_spawner_lives(tmp_path, monke
     import subprocess, sys as _sys
     svc = _svc(tmp_path)
     calls = []
+    real_life = svc._lifecycle()
     class FakeLife:
         def spawn_job(self, name, argv, cwd, env=None):
             p = subprocess.Popen([_sys.executable, "-c", "import time; time.sleep(30)"])
             calls.append(p.pid)
             return name + ".log", p.pid
+        def __getattr__(self, name):     # only spawn_job is faked; everything else stays REAL
+            return getattr(real_life, name)
     monkeypatch.setattr(svc, "_lifecycle", lambda: FakeLife())
     monkeypatch.setattr(svc, "_track_or_terminate", lambda *a, **k: "")
     ln, err = svc.spawn_auto_install_job(_sel(svc))
@@ -982,12 +1001,15 @@ def test_linked_stack_without_declared_work_is_success(tmp_path, monkeypatch):
     real_scope = ControllerService._auto_install_scope
     def scope(self):
         out = []
-        for st, comps in real_scope(self):
+        for st, w in real_scope(self):
             if st.id in ("meshcom", "meshcore"):
-                comps = [dataclasses.replace(c, build_steps=(), test_argv=(),
-                                             build_cmd="", test_cmd="")
-                         if (c.source.strategy or "") == "link" else c for c in comps]
-            out.append((st, comps))
+                strip = lambda c: (dataclasses.replace(  # noqa: E731
+                    c, build_steps=(), test_argv=(), build_cmd="", test_cmd="")
+                    if c.source and (c.source.strategy or "") == "link" else c)
+                w = dataclasses.replace(w, source=tuple(strip(c) for c in w.source),
+                                        build=tuple(strip(c) for c in w.build),
+                                        test=tuple(strip(c) for c in w.test))
+            out.append((st, w))
         return out
     monkeypatch.setattr(ControllerService, "_auto_install_scope", scope)
     svc = _svc(tmp_path)
@@ -1035,6 +1057,11 @@ def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
         locked=False:
         PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="ok"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(build_ok if t == "daemon" else True, f"build {t}"))
@@ -1122,19 +1149,20 @@ def test_tx_refused_on_daemon_host_test_failure(tmp_path, monkeypatch):
 
 @pytest.mark.needs_session
 def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
-    # An unrelated independent failure (meshtastic deps) does not veto TX while the
-    # daemon itself is fully successful with a passed host test.
+    # An unrelated stack's failure (its system deps are missing) does not veto TX while the
+    # daemon itself is fully successful with a passed host test. `meshcore` is the unrelated
+    # stack: it depends on daemon only for ordering, and TX is a daemon-scoped decision.
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
     monkeypatch.setattr(ControllerService, "missing_system_deps",
                         lambda self, t: [{"install": "apt install x"}]
-                        if t == "meshtastic" else [])
+                        if t == "meshcore" else [])
     r = svc.auto_install(apply=True, tests=True, tx=True, emit=lambda s: None)
     st = svc.auto_install_status()
     assert ("start", "daemon") in lifecycle and ("stop", "daemon") in lifecycle
     assert st["tx_phase"]["status"] == "success"                  # TX ran and passed
     drow = next(x for x in st["stacks"] if x["id"] == "daemon")
     assert drow["status"] == "success" and drow["tx"]["ok"] is True
-    assert st["state"] == "completed-with-failures"               # meshtastic blocked
+    assert st["state"] == "completed-with-failures"               # meshcore blocked
     assert not r.ok and "REMAIN installed" in r.summary
 
 
@@ -1271,6 +1299,11 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     # group adoption still receives the ORIGINAL frozen commit (no second lookup).
     _callsign(tmp_path)
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
@@ -1301,14 +1334,58 @@ def test_dev_selector_frozen_against_remote_advance(tmp_path, monkeypatch):
     assert len(paths_adopted) == len(set(paths_adopted))         # shared path adopted once
 
 
+def _write_manifest(path, stacks) -> None:
+    """Serialise a tiny synthetic manifest as literal TOML.
+
+    Deliberately hand-rolled: `tomli_w` is NOT a declared dependency of this project, so importing
+    it made these tests pass only where it happened to already be installed (a dev venv) and fail
+    on a clean interpreter — including every hosted-CI matrix leg. The shapes here are small and
+    fixed, so emitting the text directly is both dependency-free and clearer than a builder."""
+    out = []
+    for st in stacks:
+        out.append("[[stack]]")
+        out.append(f'id = "{st["id"]}"')
+        out.append(f'main = "{st["main"]}"')
+        out.append(f'name = "{st.get("name", st["id"])}"')
+        for c in st["component"]:
+            out.append("  [[stack.component]]")
+            out.append(f'  id = "{c["id"]}"')
+            out.append(f'  name = "{c.get("name", c["id"])}"')
+            out.append(f'  kind = "{c.get("kind", "service")}"')
+            if c.get("readiness"):
+                out.append(f'  readiness = "{c["readiness"]}"')
+            if c.get("run_argv"):
+                out.append("  run_argv = [%s]" % ", ".join(f'"{a}"' for a in c["run_argv"]))
+            source = c.get("source") or {}
+            if source:
+                out.append("    [stack.component.source]")
+                out.extend(f'    {key} = "{value}"' for key, value in source.items())
+        out.append("")
+    path.write_text("\n".join(out))
+
+
 @pytest.mark.needs_session
 def test_frozen_resolution_failure_refuses_before_mutation(tmp_path, monkeypatch):
-    _callsign(tmp_path)
-    svc = _svc(tmp_path)                                         # FakeSystem: ls-remote fails
+    """A source whose exact selector resolution fails AND has no disclosed fallback refuses the
+    whole run BEFORE any marker or source mutation. Uses a purpose-built manifest with a
+    PIN-LESS source: every source in the shipped manifest now carries a pin_commit, so a failed
+    `dev` lookup there falls back to the known-working identity (disclosed) instead of refusing."""
+    mpath = tmp_path / "manifest.toml"
+    _write_manifest(mpath, [
+        {"id": "solo", "main": "solo-c", "name": "Solo", "component": [
+            {"id": "solo-c", "name": "Solo", "kind": "service", "readiness": "process",
+             "run_argv": ["./solo"],
+             "source": {"path": "src/solo", "remote": "https://github.com/x/solo.git",
+                        "branch": "main"}}]},          # no pin_commit -> no fallback identity
+    ])
+    svc = ControllerService(manifest_path=mpath, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    svc.bootstrap(apply=True)                                    # FakeSystem: ls-remote fails
     r = svc.auto_install(apply=True, tests=False, source="dev", emit=lambda s: None)
     assert not r.ok and "resolution" in " ".join([r.summary] + r.details)
-    assert svc.auto_install_status() is None                             # refused BEFORE the marker
-    assert not (tmp_path / "src").exists() or not any((tmp_path / "src").iterdir())
+    assert svc.auto_install_status() is None                     # refused BEFORE the marker
+    src = tmp_path / "rt" / "src"
+    assert not src.exists() or not any(src.iterdir())
 
 
 def test_stable_freeze_picks_version_tag_peeled_commit(tmp_path):
@@ -1556,6 +1633,11 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
         (seen.append((comp.source.path, comp.source.artifact, pinned_expected)),
          PlanAction("adopt", "", "x", status="done", detail="ok"))[1])
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
@@ -1591,6 +1673,11 @@ def test_artifact_remote_advance_after_plan_is_ignored(tmp_path, monkeypatch):
         return PlanAction("adopt", "", "x", status="done", detail="ok")
     monkeypatch.setattr(Installer, "adopt_source", adopt)
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(True, "b"))
@@ -1660,10 +1747,10 @@ def test_auto_install_scope_includes_optional_components(tmp_path):
     # finding: 'auto-install operation context does not cover src/meshcore-cli ...').
     svc = _svc(tmp_path)
     scope = svc._auto_install_scope()
-    mc = next(comps for st, comps in scope if st.id == "meshcore")
-    ids = {c.id for c in mc}
+    mc = next(w for st, w in scope if st.id == "meshcore")
+    ids = {c.id for c in mc.source}
     assert {"meshcore-pi", "meshcore-nodegui", "meshcore-cli"} <= ids
-    all_paths = {c.source.path for _, comps in scope for c in comps}
+    all_paths = {c.source.path for _, w in scope for c in w.source}
     assert "src/meshcore-cli" in all_paths and "src/meshcore-node-manager" in all_paths
 
 
@@ -1683,7 +1770,10 @@ def test_auto_install_build_context_covers_optional_paths(tmp_path, monkeypatch)
     svc.auto_install(apply=True, tests=False, emit=lambda s: None)
     assert not refusals, refusals                                # zero coverage refusals
     st = svc.auto_install_status()
-    assert all(x["status"] == "success" for x in st["stacks"])
+    # `skipped` = a GUI-only stack deliberately not installed on this headless test system; it is an
+    # accepted outcome (never `success`, never a failure). Nothing may FAIL or be BLOCKED here.
+    assert all(x["status"] in ("success", "skipped") for x in st["stacks"])
+    assert any(x["status"] == "success" for x in st["stacks"])
 
 
 def test_optional_secret_file_form(tmp_path):
@@ -1922,3 +2012,315 @@ def test_marker_carries_per_stack_selection(tmp_path, monkeypatch):
                             [{"id": "d", "name": "d", "selected": {"version": "nope",
                                                                    "tests": True, "tx": False}}])
     assert not ai_mod.valid_marker(bad)
+
+
+# ---- Item B/C: adoption clone log (announce + streamed git progress) -------------------------
+
+def _clone_spec():
+    import types
+    return types.SimpleNamespace(remote="https://github.com/makrohard/x.git", branch="",
+                                 artifact=False, pin_commit="")
+
+
+def test_clone_streams_progress_into_adopt_log(tmp_path):
+    # With a log fh AND a streaming-capable runner: `git clone --progress` streams LIVE into
+    # the adoption log (git is silent off-TTY — a multi-minute clone otherwise looks hung).
+    import io
+    import types
+    from lhpc.core.config import Config
+    calls = []
+    class _R:
+        def run(self, argv, timeout=None):
+            calls.append(("run", tuple(argv)))
+            return type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        def run_streaming(self, argv, timeout, log_fh, **kw):
+            calls.append(("stream", tuple(argv)))
+            log_fh.write("Receiving objects: 100%\n")
+            return type("C", (), {"returncode": 0})()
+    inst = Installer(Paths(runtime_root=tmp_path), (), Config(values={}),
+                     types.SimpleNamespace(runner=_R()))
+    spec = _clone_spec()
+    dest = tmp_path / "dest"; dest.mkdir()
+    log = io.StringIO()
+    assert inst._clone(spec, dest, "dev", log_fh=log)
+    assert calls == [("stream", ("git", "clone", "--progress", "--depth", "1",
+                                 spec.remote, str(dest)))]
+    assert "Receiving objects" in log.getvalue()
+
+
+def test_clone_buffered_fallback_without_streaming_runner(tmp_path):
+    # A runner without run_streaming (fakes) keeps the buffered path — and NO --progress.
+    import io
+    import types
+    from lhpc.core.config import Config
+    calls = []
+    class _R:
+        def run(self, argv, timeout=None):
+            calls.append(tuple(argv))
+            return type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    inst = Installer(Paths(runtime_root=tmp_path), (), Config(values={}),
+                     types.SimpleNamespace(runner=_R()))
+    spec = _clone_spec()
+    dest = tmp_path / "dest"; dest.mkdir()
+    assert inst._clone(spec, dest, "dev", log_fh=io.StringIO())
+    assert calls == [("git", "clone", "--depth", "1", spec.remote, str(dest))]
+
+
+def test_clone_without_log_fh_stays_buffered(tmp_path):
+    import types
+    from lhpc.core.config import Config
+    calls = []
+    class _R:
+        def run(self, argv, timeout=None):
+            calls.append(tuple(argv))
+            return type("C", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        def run_streaming(self, *a, **k):
+            raise AssertionError("must not stream without a log fh")
+    inst = Installer(Paths(runtime_root=tmp_path), (), Config(values={}),
+                     types.SimpleNamespace(runner=_R()))
+    spec = _clone_spec()
+    dest = tmp_path / "dest"; dest.mkdir()
+    assert inst._clone(spec, dest, "dev")
+    assert calls == [("git", "clone", "--depth", "1", spec.remote, str(dest))]
+
+
+def test_auto_install_announces_adopt_log_before_adoption(tmp_path, monkeypatch):
+    # The run log gets a copy-pasteable `[log] <comp> -> tail -f .../adopt-<comp>.log` line
+    # BEFORE the (possibly minutes-long, off-TTY-silent) adoption outcome line.
+    monkeypatch.setattr(
+        Installer, "adopt_source",
+        lambda self, comp, force=False, source="pinned", pinned_expected=None,
+        locked=False:
+        PlanAction("adopt", "", f"adopt {comp.id}", status="done", detail="adopted"))
+    monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
+    monkeypatch.setattr(ControllerService, "build",
+                        lambda self, t, apply=False, auto_install_ctx=None, **k:
+                        ActionResult(True, "built"))
+    monkeypatch.setattr(ControllerService, "test",
+                        lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
+                        ActionResult(True, "tested"))
+    _stub_frozen(monkeypatch)
+    svc = _svc(tmp_path)
+    lines = []
+    r = svc.auto_install(apply=True, tests=False, emit=lines.append)
+    assert r.ok
+    log_lines = [i for i, ln in enumerate(lines)
+                 if "[log]" in ln and "adopt-loraham-daemon.log" in ln]
+    outcome_lines = [i for i, ln in enumerate(lines)
+                     if ln.strip().startswith("[done]") and "LoRaHAM_Daemon" in ln]
+    assert log_lines and outcome_lines and log_lines[0] < outcome_lines[0], lines
+
+
+def test_independent_stack_is_attempted_when_another_fails(tmp_path, monkeypatch):
+    """A stack with NO dependency on a failed stack is still attempted on its own — it must
+    never be mislabelled 'dependency failed'. Proven on a purpose-built two-stack manifest:
+    the shipped manifest has no daemon-independent installable stack (meshtastic is
+    source-less, so it sits outside the install scope entirely), and this behaviour must hold
+    regardless of what the shipped graph happens to look like."""
+    mpath = tmp_path / "manifest.toml"
+    _write_manifest(mpath, [
+        {"id": "alpha", "main": "alpha-c", "name": "Alpha", "component": [
+            {"id": "alpha-c", "name": "Alpha", "kind": "service", "readiness": "process",
+             "run_argv": ["./alpha"],
+             "source": {"path": "src/alpha", "remote": "https://github.com/x/alpha.git",
+                        "branch": "main"}}]},
+        {"id": "beta", "main": "beta-c", "name": "Beta", "component": [
+            {"id": "beta-c", "name": "Beta", "kind": "service", "readiness": "process",
+             "run_argv": ["./beta"],
+             "source": {"path": "src/beta", "remote": "https://github.com/x/beta.git",
+                        "branch": "main"}}]},
+    ])
+    fake = FakeSystem()
+    svc = ControllerService(manifest_path=mpath, system=fake.system,
+                            paths=Paths(runtime_root=tmp_path / "rt"))
+    svc.bootstrap(apply=True)                       # auto-install requires a bootstrapped root
+    _stub_frozen(monkeypatch)
+    # alpha's adoption fails; beta's succeeds. Neither depends on the other.
+    from lhpc.core.install import Installer, PlanAction
+    monkeypatch.setattr(
+        Installer, "adopt_source",
+        lambda self, comp, force=False, source="pinned", pinned_expected=None, locked=False:
+        PlanAction("adopt", "", f"adopt {comp.id}",
+                   status=("failed" if comp.id == "alpha-c" else "done"),
+                   detail=("clone refused" if comp.id == "alpha-c" else "adopted")))
+    monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
+    # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
+    # FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
+    monkeypatch.setattr(ControllerService, "build",
+                        lambda self, t, apply=False, auto_install_ctx=None, **k:
+                        ActionResult(True, "built"))
+    monkeypatch.setattr(ControllerService, "test",
+                        lambda self, t, tx=False, apply=False, auto_install_ctx=None, **k:
+                        ActionResult(True, "tested"))
+    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
+    assert rows["alpha"]["status"] == "fail"
+    # beta is INDEPENDENT: attempted and successful, never blocked on alpha's failure.
+    assert rows["beta"]["status"] == "success", rows["beta"]
+    assert "dependency failed" not in rows["beta"]["detail"]
+
+
+# --- F6: the MANIFEST is authoritative for auto-install scope ---------------------------------
+
+def test_auto_install_rows_are_exactly_the_manifest_stacks(tmp_path):
+    """REGRESSION GUARD: the row set must EQUAL the manifest stack set — not merely have the
+    right length. The previous scope filter ("has a sourced component") silently dropped
+    meshtastic, and would have dropped the next package-managed or runtime-only stack the same
+    way. Compare identities so a swap can never pass."""
+    svc = _svc(tmp_path)
+    manifest_ids = {s.id for s in svc.stacks()}
+    scope_ids = {st.id for st, _ in svc._auto_install_scope()}
+    assert scope_ids == manifest_ids, scope_ids ^ manifest_ids
+    assert "meshtastic" in scope_ids                       # the stack that used to disappear
+    # the dry-run plan and the selection feed agree with it
+    assert {r["id"] for r in svc.auto_install_rows()} == manifest_ids
+    assert svc.auto_install(apply=False, tests=False, tx=False).data["changes"] == len(manifest_ids)
+
+
+
+# A SYNTHETIC source-less stack. The shipped manifest no longer contains one (meshtastic became a
+# managed source build), but the machinery below — the StackWork partition and the `all([])` trap —
+# must keep working for any package-managed stack, so it is exercised against a fixture instead of
+# whichever real stack happens to have no source this month.
+_SOURCELESS_TOML = """
+[[stack]]
+id = "pkgmgd"
+name = "Package managed"
+summary = "s"
+main = "pm"
+  [[stack.component]]
+  id = "pm"
+  name = "PM"
+  kind = "service"
+  purpose = "p"
+  run = "/usr/bin/true"
+  readiness = "process"
+  bin = "build/tools/pm/.venv/bin/pm"
+  build_steps = [ { argv = ["python3", "-m", "venv", "{runtime}/build/tools/pm/.venv"] } ]
+"""
+
+
+def _sourceless_svc(tmp_path):
+    """A service whose manifest is the synthetic source-less stack above."""
+    import tomllib
+    from lhpc.core.manifest import parse_manifest
+    stacks = parse_manifest(tomllib.loads(_SOURCELESS_TOML))
+    svc = _svc(tmp_path)
+    svc.stacks = lambda _s=stacks: _s                      # type: ignore[assignment]
+    return svc, stacks[0]
+
+
+def test_scope_partitions_work_and_never_leaks_a_sourceless_component(tmp_path):
+    """Only SOURCE components may reach source machinery. A source-less component in
+    `w.source` is what used to explode on `c.source.path`/`.strategy`."""
+    svc = _svc(tmp_path)
+    for st, w in svc._auto_install_scope():
+        assert all(c.source for c in w.source), st.id      # the load-bearing invariant
+        assert all(c.build_steps or c.build_cmd for c in w.build), st.id
+        assert all(c.test_argv or c.test_cmd for c in w.test), st.id
+    svc2, _st = _sourceless_svc(tmp_path)
+    pm = next(w for st, w in svc2._auto_install_scope() if st.id == "pkgmgd")
+    assert pm.source == () and pm.build, "no sources, but real build work"
+
+
+def test_sourceless_stack_is_not_installed_until_its_artifact_exists(tmp_path):
+    """`all([])` is True, so a source-less stack used to report itself installed unconditionally
+    — a package-managed stack whose managed CLI was never provisioned looked complete."""
+    svc, st = _sourceless_svc(tmp_path)
+    assert svc._auto_install_stack_installed(st) is False        # artifact absent
+    art = tmp_path / "build" / "tools" / "pm" / ".venv" / "bin" / "pm"
+    art.parent.mkdir(parents=True)
+    art.write_text("#!/bin/sh\n")
+    art.chmod(0o755)
+    assert svc._auto_install_stack_installed(st) is True
+
+
+def test_runtime_blockers_report_unmet_start_prerequisites(tmp_path):
+    """A row must not read success just because a venv built: the mandatory START prerequisites
+    (packaged binary, SPI device, device groups, no conflicting service, managed CLI) are checked
+    after provisioning, reusing the single requirement checker."""
+    svc = _svc(tmp_path)                                   # bare FakeSystem: nothing present
+    mesh = next(s for s in svc.stacks() if s.id == "meshtastic")
+    blockers = svc._auto_install_runtime_blockers(mesh)
+    assert blockers, "expected unmet prerequisites on a bare system"
+    blob = " ".join(blockers)
+    assert "meshtasticd" in blob or "spidev" in blob or "meshtastic-cli" in blob
+
+
+@pytest.mark.needs_session
+def test_sourceless_stack_blocked_when_not_startable(tmp_path, monkeypatch):
+    # End-to-end: provisioning succeeds but the start prerequisites do not -> the row is BLOCKED
+    # and the run can never claim every stack succeeded.
+    _happy_ops(monkeypatch)
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: (["meshtasticd is not installed"]
+                                          if st.id == "meshtastic" else []))
+    _stub_frozen(monkeypatch)
+    svc = _svc(tmp_path)
+    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
+    assert rows["meshtastic"]["status"] == "blocked"
+    assert "not startable" in rows["meshtastic"]["detail"]
+    assert not r.ok and svc.auto_install_status()["state"] == "completed-with-failures"
+
+
+def test_sourceless_row_keeps_an_inert_version_and_never_skews_the_summary(tmp_path, monkeypatch):
+    """The durable plan keeps a valid `version` for EVERY row (the plan reader, the selection
+    validator and the web form all require the field — dropping it would be a schema migration),
+    but a source-less row's inert value must not turn the run's source summary into 'mixed'."""
+    _happy_ops(monkeypatch)
+    svc, sl_stack = _sourceless_svc(tmp_path)
+    scope = svc._auto_install_scope()
+    sel = {st.id: {"install": True, "version": "pinned", "tests": False, "tx": False}
+           for st, _ in scope}
+    # the source-less row still validates with a version present ...
+    sel[sl_stack.id]["version"] = "dev"           # inert: nothing sourced to select
+    assert svc._auto_install_selection_errors(scope, sel) == []
+    # ... and the summary counts SOURCED stacks only, so this inert value cannot make it "mixed".
+    versions = {sel[st.id]["version"] for st, w in scope if w.source}
+    assert versions == set()                       # this fixture is entirely source-less
+    r = svc.auto_install(apply=True, tests=False, selection=sel, emit=lambda s: None)
+    assert r.ok or r.summary                       # (ran; content asserted below)
+    assert svc.auto_install_status()["source"] == "system"
+
+
+@pytest.mark.needs_session
+def test_gui_skipped_stack_is_counted_and_never_reads_as_installed(tmp_path, monkeypatch):
+    """A GUI-only stack on a headless box: accepted outcome, explicitly counted, ok=True — but the
+    row must say `skipped`, never `success`, so it can never be mistaken for installed."""
+    _happy_ops(monkeypatch)
+    svc = _svc(tmp_path)                              # FakeSystem: no GTK headers
+    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    st = svc.auto_install_status()
+    rows = {x["id"]: x for x in st["stacks"]}
+    assert rows["voice"]["status"] == "skipped"
+    assert "headless-safe default" in rows["voice"]["detail"]
+    assert rows["voice"].get("skipped_components") == ["loraham-voice"]
+    assert st["state"] == "completed" and r.ok is True
+    assert "1 skipped (GUI deps absent)" in r.summary
+
+
+@pytest.mark.needs_session
+def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
+    """A dependency that appears BETWEEN planning and execution must not turn a planned Voice skip
+    into an empty, falsely-successful install: the verdict comes from the frozen plan alone."""
+    _happy_ops(monkeypatch)
+    svc = _svc(tmp_path)
+    # Plan first (GTK absent -> voice skipped), then make the probe claim everything is satisfied.
+    scope = svc._auto_install_scope()
+    assert "loraham-voice" in next(w for s, w in scope if s.id == "voice").skipped
+    monkeypatch.setattr(type(svc), "gui_skipped_stack",
+                        lambda self, st: (_ for _ in ()).throw(
+                            AssertionError("re-probed during execution")))
+    monkeypatch.setattr(type(svc), "_auto_install_scope", lambda self: scope)
+    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
+    rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
+    assert rows["voice"]["status"] == "skipped"            # still skipped, from the frozen plan

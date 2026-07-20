@@ -159,3 +159,21 @@ def test_oom_preexec_actually_raises_child_score(tmp_path):
     out = tmp_path / "score"
     blr._run_step(["sh", "-c", f"cat /proc/self/oom_score_adj > {out}"], str(tmp_path), {}, 30.0)
     assert out.read_text().strip() == "500"
+
+def test_render_carries_substituted_announce_and_run_prints_it_before_argv(tmp_path, capfd):
+    # Item C parity for the detached web build: the render-time-substituted `announce` is
+    # printed BEFORE the `+ argv` echo, so the step log leads with what is happening.
+    script = commands.render_build_launcher(
+        [{"argv": ["true"], "announce": "[resolve] watch {runtime}/core grow"}], "/rt", "/src")
+    assert "'announce': '[resolve] watch /rt/core grow'" in script
+    _locks_dir(tmp_path)
+    blr.run(_spec(tmp_path, steps=[{"argv": ["true"], "env": {},
+                                    "announce": "[resolve] quiet step"}]))
+    out = capfd.readouterr().out
+    assert out.index("[resolve] quiet step") < out.index("+ true")
+
+
+def test_run_step_without_announce_unchanged(tmp_path, capfd):
+    _locks_dir(tmp_path)
+    blr.run(_spec(tmp_path, steps=[{"argv": ["true"], "env": {}}]))
+    assert "[resolve]" not in capfd.readouterr().out

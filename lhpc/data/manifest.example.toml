@@ -522,17 +522,29 @@ main = "loraham-voice"
   note = "GTK desktop app (needs a display/X server + an audio capture/playback device). lhpc seeds loraham_voice.conf (callsign, audio devices, per-band radio params); the in-app config dialog still works and saves back to it."
 
     [[stack.component.require]]
+    # VOICE-ONLY, and Voice is skipped by default on a headless rig — so this joins the same
+    # explicit opt-in scope as the GTK dep rather than sitting in every headless bootstrap. No
+    # other stack declares it, so the core-wins AND-merge leaves it opt-in.
+    gui = true
     check_file = "/usr/include/codec2/codec2.h"
     install = "sudo apt install -y libcodec2-dev"
-    note = "Codec2 development headers"
+    note = "Codec2 development headers (Voice only)"
     [[stack.component.require]]
+    # GUI-ONLY: libgtk-3-dev drags the whole GTK3/X11/Wayland/Pango/Cairo dev chain in, which has no
+    # business on a headless Trixie lite image (a from-zero acceptance run was aborted over exactly
+    # that). `gui = true` keeps it OUT of the default bootstrap; `--with-gui` installs it on a machine
+    # that actually has a display. codec2/ALSA are Voice-only and share this opt-in scope; ncurses
+    # is ALSO declared by chat, so the core-wins merge keeps it in the headless default.
+    gui = true
     check_file = "/usr/include/gtk-3.0/gtk/gtk.h"
     install = "sudo apt install -y libgtk-3-dev"
     note = "GTK 3 development headers"
     [[stack.component.require]]
+    # VOICE-ONLY audio capture/playback headers — same opt-in scope as codec2/GTK above.
+    gui = true
     check_file = "/usr/include/alsa/asoundlib.h"
     install = "sudo apt install -y libasound2-dev"
-    note = "ALSA development headers"
+    note = "ALSA development headers (Voice only)"
     [[stack.component.require]]
     check_file = "/usr/include/ncurses.h"
     install = "sudo apt install -y libncurses-dev"
@@ -877,17 +889,67 @@ main = "meshtastic"
   purpose = "meshtasticd driving the RF95 directly; lhpc starts/stops it rootless with a runtime config."
   tx_capable = true
   pre = 'mkdir -p "{runtime}/state/meshtasticd/ssl"'
-  run = "/usr/bin/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
-  # After meshtasticd is listening on the API, set the LoRa region (TX stays
-  # disabled while region is UNSET). Idempotent; runs detached. Tries the local
-  # meshtastic CLI then PATH.
-  post_start = 'sleep 12; meshtastic --host 127.0.0.1 --set lora.region {region}; meshtastic --host 127.0.0.1 --set-owner "{node_name}" --set-owner-short "{node_short}"'
+  # RUNTIME-OWNED binary, built from the managed source below. Never /usr/bin/meshtasticd: the
+  # OBS package is built from the upstream `native-tft` environment and therefore links
+  # X11/libinput/xkbcommon (and its Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM) onto a
+  # headless rig. We build `native` instead — same upstream source, no display stack.
+  run = "{runtime}/build/tools/meshtasticd/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
   readiness = "endpoint"
+  # THREE managed artifacts, all inside the runtime root: the server-only meshtasticd binary, the
+  # browser UI that belongs to the SAME source revision, and the Meshtastic Python CLI.
+  #
+  # meshtasticd is built from the pinned source with upstream's own `native` PlatformIO
+  # environment. `native-tft` (what the OBS package ships) adds `-lX11 -linput -lxkbcommon` for the
+  # on-device MUI, which a headless rig can never use; `native` has none of that while keeping the
+  # web server (`+<mesh/raspihttp/>`), the TCP API and RF95 SPI/GPIO. The link gate below PROVES the
+  # produced binary is clean rather than trusting the flags.
+  #
+  # The CLI is pinned exactly: 2.7.11 is a pure-python wheel (py3-none-any) declaring >=3.9,<3.15,
+  # verified to install and run on aarch64. It applies the LoRa region after start — without it the
+  # node comes up region-UNSET and silently cannot transmit. No `--only-binary=:all:`: its
+  # transitive wheels resolve on arm64 today, and forcing the flag would turn a future source-only
+  # dep into a hard failure.
+  #
+  # `announce` = quiet-step preamble: pio/pip buffer their output off-TTY, so these steps can run
+  # silent for a long time on a Zero 2W and a 0-byte log reads as hung.
+  build_steps = [
+    { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "pkg", "install", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] Meshtastic native platform + libraries — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
+    { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
+    { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
+    { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
+  ]
+  # The server binary IS the primary artifact. The strict completion marker is written only after
+  # EVERY step above succeeds — so a source update (which clears the marker) reads "Build required"
+  # until the new revision's binary AND its matching web assets are both in place.
+  bin = "build/tools/meshtasticd/meshtasticd"
+  # STRICT SOURCE-LOCAL completion marker: written only after the LAST build step succeeds, so a run
+  # interrupted after the binary is installed but before the web UI is provisioned reads NOT built.
+  # It lives in the source checkout, so replacing that checkout (update / a different selector) takes
+  # the marker with it and the stack reads "Build required" until the new revision is rebuilt —
+  # which is exactly what must happen when the source moves.
+  build_marker = ".lhpc-build-complete"
+  # A native C++ firmware build on a Zero 2W is long; the platform/library resolve alone can run
+  # for many minutes over slow Wi-Fi. Ceiling set from LIVE measurement (not a guess): a Pi Zero 2W
+  # (512 MB, one-job compile) builds up to ~900 objects at ~3-6 objects/min, so a cold build runs
+  # ~2.5-5 h. 4 h could be crossed on the slowest supported board and kill the run just before the
+  # link step; 6 h clears the pessimistic case with margin. A Pi 5 finishes far inside it.
+  build_timeout = 21600.0
+  # After meshtasticd is listening on the API, set the LoRa region — REQUIRED: a node whose region
+  # is UNSET may not transmit, so a failed region push must fail the start (and trigger the verified
+  # cleanup) instead of leaving a silently mute node. Node identity stays optional (a cosmetic
+  # setting), but its outcome is recorded in the post-start sidecar and shown by `lhpc status`.
+  # Both invoke the MANAGED CLI by absolute path via `paths` — never whatever `meshtastic` happens
+  # to be on PATH.
   post_steps = [
     { kind = "delay", seconds = 12 },
-    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], optional = true },
-    { kind = "exec", argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], optional = true },
+    { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    { kind = "exec", label = "node identity", optional = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). lhpc runs/stops it WITHOUT root ONLY WHEN you are in the spi+gpio groups — see System dependencies below; grant with the shown command (then log out/in or reboot) if missing. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
@@ -906,41 +968,59 @@ main = "meshtastic"
     label = "Node name (long)"
     [[stack.component.param]]
     name = "node_short"
+    validator = "node_short"
     kind = "str"
     default = "LHPi"
-    label = "Node name (short, ~4 chars)"
+    label = "Node name (short, max 4 chars)"
 
+    # A NORMAL managed Git source, so Meshtastic gets the ordinary pinned / stable / dev selectors
+    # and the existing Check / Update / Build flows — no bespoke update path. `pinned` (the
+    # known-good default) is the exact commit behind the OBS build we replaced
+    # (2.7.26.61~obs54e0d8d~beta), so this is a like-for-like swap rather than a version jump.
+    # Selecting `dev` clones and builds the configured development branch normally.
+    # The config template still ships WITH lhpc (config_file.base = {asset}/…), so nothing is
+    # cloned merely to read a yaml.
     [stack.component.source]
-    path = "src/LoRaHAM_Pi"
-    remote = "https://github.com/LoRaHAM/LoRaHAM_Pi.git"
-    local_dir = "LoRaHAM_Pi"
-    artifact = true
-    branch = "main"
+    path = "src/meshtastic-firmware"
+    pin_commit = "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb"
+    pin_tag = "v2.7.26.54e0d8d"
+    remote = "https://github.com/meshtastic/firmware.git"
+    branch = "master"
+    local_dir = "meshtastic-firmware"
 
     [stack.component.process]
     exec_name = "meshtasticd"
 
     [[stack.component.require]]
-    # ca-certificates + curl + gnupg underpin the OBS repo setup below (HTTPS fetch + key dearmor).
-    # Declared so the generated bootstrap installs them BEFORE the repo block uses them.
-    cmd = "gpg"
-    install = "sudo apt install -y ca-certificates curl gnupg"
-    note = "TLS certs + curl + gnupg — required to add the Meshtastic OBS apt repository (HTTPS key fetch, dearmor to a scoped keyring)."
+    # curl + ca-certificates fetch the web UI release for this checkout (HTTPS, sha256-verified).
+    cmd = "curl"
+    install = "sudo apt install -y ca-certificates curl"
+    note = "TLS certs + curl — used to fetch the sha256-verified Meshtastic web UI archive."
     [[stack.component.require]]
-    check_file = "/usr/bin/meshtasticd"
-    # SCOPED key (dedicated /etc/apt/keyrings + signed-by=, never global trusted.gpg.d) over HTTPS.
-    install = '''
-. /etc/os-release
-sudo install -d -m 0755 /etc/apt/keyrings
-curl -fsSL "https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_${VERSION_ID}/Release.key" | gpg --dearmor | sudo tee /etc/apt/keyrings/meshtastic-obs.gpg > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/meshtastic-obs.gpg] https://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_${VERSION_ID}/ /" | sudo tee /etc/apt/sources.list.d/meshtastic-obs.list
-sudo apt update
-sudo apt install -y meshtasticd'''
-    note = "meshtasticd is NOT in the Debian/RPiOS repos — adds Meshtastic's OBS apt repo over HTTPS with a DEDICATED keyring (/etc/apt/keyrings + signed-by=, not global trust), auto-selecting Debian_13 for Trixie / Debian_12 for Bookworm via os-release, then installs."
+    # BUILD-TIME libraries for upstream's `native` environment, and the RUNTIME libraries the
+    # produced binary links. This is the COMPLETE set — deliberately no SDL2, X11, Wayland, Mesa,
+    # LLVM, PulseAudio, libinput or xkbcommon: those belong to the `native-tft` on-device UI we do
+    # not build, and the OBS package's own `libsdl2-2.0-0` Depends is overdeclared (its binary
+    # never links SDL) yet is what dragged the desktop cascade onto a headless image.
+    check_file = "/usr/include/yaml-cpp/yaml.h"
+    install = "sudo apt install -y libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libssl-dev libbluetooth-dev pkg-config"
+    note = "Build+runtime libraries for the server-only meshtasticd (yaml-cpp, libuv, gpiod, i2c, usb, ulfius/orcania for the web server, OpenSSL, BlueZ)."
+    [[stack.component.require]]
+    # The MANAGED Meshtastic CLI venv (provisioned by build_steps above; the OBS package ships only
+    # the daemon). NO `cmd` key ON PURPOSE: missing_requirements ORs cmd/check_file, so adding
+    # `cmd = "meshtastic"` would let an unmanaged, unpinned copy that merely happens to be on PATH
+    # satisfy this gate — the exact ambiguity this requirement exists to remove.
+    # `provisioned = true` keeps it OUT of the install/system-dep gate (it is not an apt package the
+    # operator installs) while missing_requirements still BLOCKS START, so a box that never built it
+    # is refused up front instead of starting and silently failing to apply the region.
+    check_file = "{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"
+    provisioned = true
+    install = "lhpc build meshtastic"
+    note = "Managed Meshtastic Python CLI (pinned venv inside the runtime root) — applies the LoRa region after start; without it the node cannot transmit."
     [[stack.component.require]]
     check_file = "/dev/spidev0.0"
     install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
-    note = "SPI device (RF95 on SPI0). REBOOT after enabling. The spi0-0cs overlay exposes ONLY /dev/spidev0.0 (zero hardware chip-selects — correct for meshtasticd's software CS). A setup needing hardware CE0+CE1 (e.g. dual Uputronics) must instead use plain 'dtparam=spi=on' WITHOUT the overlay."
+    note = "SPI device (RF95 on SPI0). REBOOT after enabling. The spi0-0cs overlay exposes ONLY /dev/spidev0.0 (zero kernel chip-selects — correct for LoRaHAM Pi / Uputronics rigs INCLUDING dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs, field-verified). Only a board that really uses kernel-driven CE0/CE1 uses plain 'dtparam=spi=on' WITHOUT the overlay (NOT Uputronics — kernel CE0/CE1=GPIO7/8 would collide with the daemon's GPIO chip-selects)."
     [[stack.component.require]]
     groups = ["spi", "gpio"]
     install = "sudo usermod -aG spi,gpio $USER"
@@ -954,25 +1034,23 @@ sudo apt install -y meshtasticd'''
     install = "sudo systemctl disable --now meshtasticd"
     note = "the packaged root meshtasticd.service must be disabled — it grabs the SPI radio and blocks this rootless stack"
 
-    # meshtasticd YAML config generated from the LoRaHAM base, per band (the Lora
-    # pins differ between the 433 and 868 boards). Written to the runtime root so no
-    # root is needed; run uses -c on it. Web port forced >1024 for rootless.
+    # meshtasticd YAML config generated per band (the Lora pins differ between the 433 and
+    # 868 boards) from the base SHIPPED WITH lhpc (`{asset}/…` = package data, read at
+    # generation time — no clone to fetch it, and it can never go stale against the installed
+    # version the way a bootstrap-seeded copy would).
+    # Written to the runtime root so no root is needed; run uses -c on it.
+    # The WEB PORT is NOT a parameter: it is fixed at 9443 in the packaged base because the
+    # declared endpoint below, the dashboard link, the stackweb nginx upstream and the
+    # "exposed on all interfaces" audit ALL derive from that endpoint address. A settable port
+    # moved only the generated yaml and silently broke every one of them (the readiness probe,
+    # the clickable link and the exposure warning would all watch a dead 9443).
     # Node identity (owner long/short) is a DEVICE setting saved in the node's
-    # prefs, not the YAML — so it is set via the API after start (see post_start),
+    # prefs, not the YAML — so it is set via the API after start (see post_steps),
     # not here. This file holds the hardware/web/log config only.
     [stack.component.config_file]
     path = "{runtime}/config/files/meshtasticd.yaml"
     fmt = "yaml-update"
-    base = "meshtastic/config.yaml"
-      [[stack.component.config_file.param]]
-      name = "web_port"
-      key = "Port"
-      section = "Webserver"
-      kind = "int"
-      default = "9443"
-      min = 1025
-      max = 65535
-      label = "Web UI port (>1024 for rootless)"
+    base = "{asset}/bases/meshtasticd.yaml"
       [[stack.component.config_file.param]]
       name = "ssl_key"
       key = "SSLKey"
@@ -990,6 +1068,18 @@ sudo apt install -y meshtasticd'''
       default = "{runtime}/state/meshtasticd/ssl/certificate.pem"
       validator = "path"
       label = "SSL cert path (writable, for rootless web)"
+      advanced = true
+      [[stack.component.config_file.param]]
+      # The browser UI is a RUNTIME-OWNED artifact provisioned by the build from this checkout's
+      # bin/web.version — never /usr/share/meshtasticd/web, which only exists if the OBS package
+      # we replaced is installed and would serve a UI from an unrelated revision.
+      name = "web_root"
+      key = "RootPath"
+      section = "Webserver"
+      kind = "str"
+      default = "{runtime}/build/tools/meshtasticd/web"
+      validator = "path"
+      label = "Web UI root (provisioned by the build)"
       advanced = true
       [[stack.component.config_file.param]]
       name = "loglevel"
@@ -1116,7 +1206,7 @@ main = "meshcom-qemu"
   build = "cmake -S . -B build && cmake --build build"
   build_steps = [ { argv = ["cmake", "-S", ".", "-B", "build"] }, { argv = ["cmake", "--build", "build"] } ]
   readiness = "endpoint"
-  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"
+  run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file} {ping_interval} {pong_timeout}"
   bin = "build/meshcom-loraham-bridge"
   # Deterministic, hardware-free host test: the bridge's own CTest suite (FakeBackend by default —
   # no daemon, no QEMU, no radio). The build step above already compiles the test binaries +
@@ -1164,11 +1254,36 @@ main = "meshcom-qemu"
     default = ""
     label = "HMAC password file (blank = open auth)"
     advanced = true
+    # XR KEEPALIVE, QEMU-STACK deployment values (live finding): the firmware runs under
+    # QEMU/TCG, whose stalls (JIT warmup, GC, SD-card contention) delay a PONG by tens of
+    # seconds. The bridge-binary defaults (ping 15 s / pong 10 s — right for real hardware)
+    # made every session flap: connect -> configured -> "disconnected: pong-timeout" in a
+    # continuous cycle, and GUI-to-air latency became ~30 s of wait-for-next-reconnect.
+    # 30 s / 90 s keeps one stable session across TCG stalls; the bridge WARNs with the
+    # measured RTT when a pong rides the deadline, so degradation is visible before drops.
+    [[stack.component.param]]
+    name = "ping_interval"
+    kind = "int"
+    arg = "--ping-interval-ms"
+    default = "30000"
+    min = 1
+    max = 3600000
+    label = "XR keepalive PING interval, ms (bridge default 15000 suits real HW; QEMU/TCG needs more)"
+    advanced = true
+    [[stack.component.param]]
+    name = "pong_timeout"
+    kind = "int"
+    arg = "--pong-timeout-ms"
+    default = "90000"
+    min = 1
+    max = 3600000
+    label = "XR keepalive PONG timeout, ms (bridge default 10000 flaps under QEMU/TCG stalls)"
+    advanced = true
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "e0ab0776c97f2c995f2155a57ce350a59a5bfff9"
-    pin_tag = "e0ab077"
+    pin_commit = "f0189206a6657f63c02f12aedb74b99fa525bd98"
+    pin_tag = "f018920"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
@@ -1269,13 +1384,16 @@ main = "meshcom-qemu"
   # PLATFORMIO_CORE_DIR is an explicit RUNTIME-OWNED package/tool cache under the root, passed to BOTH
   # framework-install (prepare-openeth) and build (build.sh) so a CLI build and a web-service build use
   # the SAME in-root store (prepare-openeth.sh/build.sh honor `${PLATFORMIO_CORE_DIR:-$HOME/.platformio}`).
+  # `announce` = quiet-step preamble written as the step log's FIRST content: pio/pip/git buffer
+  # their output off-TTY, so these steps run silent for minutes on a Zero 2W over slow Wi-Fi
+  # (field finding: the platform/toolchain resolve ran >10 min with a 0-byte log — reads as hung).
   build_steps = [
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
-    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"] },
-    { argv = ["scripts/fetch-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606"] },
-    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"] },
+    { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
+    { argv = ["scripts/fetch-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606"], announce = "[fetch] Espressif QEMU tarball — large download + xz unpack; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
+    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"], announce = "[clone] MeshCom-Firmware (feature/external-radio-tcp-draft) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
-    { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" } },
+    { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
   ]
   readiness = "endpoint"
@@ -1316,7 +1434,17 @@ main = "meshcom-qemu"
     # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
     # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
     # wedged in the bootloader (guest reset is not survivable in qemu-xtensa) — live finding.
-    { kind = "tcp_send", port = 12323, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", repeat = 21, interval = 8, skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    # ZERO-2W COLD-BOOT WINDOW (live finding): a QEMU/TCG cold boot on a Pi Zero 2W brings the
+    # console up only after MINUTES — the old fixed window (repeat=21, interval=8 -> 168 s)
+    # expired with every probe hitting a deaf console, zero sends, and the node ran with the
+    # default callsign. The stepped `schedule` keeps the tight 8 s cadence for the first minute
+    # (fast path on Pi 4/5 and warm boots), eases to 15 s, then a 30 s cap: 36 attempts over a
+    # ~13 min window — well past the slowest observed cold boot, still only ~36 one-line
+    # exchanges (no flooding by construction). The readiness probe still guarantees NO blind
+    # send ever reaches a deaf console, and one acknowledged send still ends the window
+    # immediately. `lhpc stack poststart meshcom` re-runs this against a running stack if the
+    # window ever expires.
+    { kind = "tcp_send", port = 12323, label = "callsign", data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     [[stack.component.require]]
@@ -1477,7 +1605,7 @@ main = "meshcore-pi"
   build_steps = [
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", "pycryptodome", "aiotools", "pyserial_asyncio",
-              "typing-extensions", "scapy==2.5.0", "pytest"] },
+              "typing-extensions", "scapy==2.5.0", "pytest"], announce = "[install] Python deps (pycryptodome, scapy, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
   ]
 
     # meshcore-pi has no CLI flags — all settings live in the TOML. The controller
@@ -1602,7 +1730,7 @@ main = "meshcore-pi"
   run_argv = [".venv/bin/python", "main.py"]
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
-    { argv = [".venv/bin/pip", "install", "-r", "requirements.txt"] },
+    { argv = [".venv/bin/pip", "install", "-r", "requirements.txt"], announce = "[install] Python deps (requirements.txt) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
   ]
   # In-tree venv interpreter is the build artifact (honest `is_built`).
   bin = ".venv/bin/python"
@@ -1615,6 +1743,18 @@ main = "meshcore-pi"
     [stack.component.process]
     exec_name = "python"
     all_args = ["main.py"]
+
+    [[stack.component.require]]
+    # GUI-ONLY: the Node Manager is a Tkinter app, and its venv is built WITHOUT
+    # --system-site-packages, so `import tkinter` resolves through the host python — which only has
+    # the _tkinter extension when python3-tk is installed. Probed by MODULE (in-process
+    # importlib.util.find_spec), never by a version-specific /usr/lib/python3.X/tkinter path.
+    # This component is OPTIONAL: on a headless box it is skipped and the rest of the MeshCore
+    # stack (meshcore-pi + the CLI) installs, builds and runs normally.
+    gui = true
+    module = "tkinter"
+    install = "sudo apt install -y python3-tk"
+    note = "Tk toolkit for the Node Manager GUI (desktop only)"
 
     [stack.component.source]
     path = "src/meshcore-node-manager"
@@ -1636,7 +1776,7 @@ main = "meshcore-pi"
   run = ".venv/bin/meshcli {host} {port} {json} {debug}"
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
-    { argv = [".venv/bin/pip", "install", "."] },
+    { argv = [".venv/bin/pip", "install", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"

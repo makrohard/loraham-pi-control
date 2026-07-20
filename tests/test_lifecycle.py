@@ -256,3 +256,91 @@ def test_tx_test_confirms_one_frame(tmp_path, monkeypatch):
     system.unix = StatefulUnix()
     res = _life(system, tmp_path).run_daemon_tx_test("433", "LHPC TX TEST")
     assert res.ok and res.txok_before == 0 and res.txok_after == 1
+
+
+# --- Item B/C: quiet-step announce preamble + per-step-kind log discoverability ---------------
+
+
+def test_run_job_announce_is_first_log_content_real_child(tmp_path):
+    # The announce line is written+flushed into the OWNED log fd BEFORE the child spawns, so
+    # it is the log's first content by construction — a `tail -f` never shows a bare 0-byte
+    # file during a silent-for-minutes step (race-free: no ordering window exists).
+    import sys
+    from lhpc.core.probes import RealSystem
+    ann = "[resolve] ESP32 platform + toolchain — output is quiet; watch the core dir grow"
+    res = run_job(RealSystem().runner, name="build-x",
+                  argv=[sys.executable, "-c", "print('CHILD-OUTPUT')"], cwd=None,
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path),
+                  announce=ann)
+    assert res.ok
+    text = (tmp_path / "logs" / "build-x.log").read_text()
+    assert text.startswith(ann + "\n")
+    assert "CHILD-OUTPUT" in text[len(ann):]
+
+
+def test_run_job_announce_first_with_buffered_fake_runner(tmp_path):
+    # Buffered (fake) runners write output at completion — the announce still leads.
+    argv = ["echo", "hi"]
+    fake = FakeSystem(commands={tuple(argv): CommandResult(0, "hi\n", "")})
+    res = run_job(fake.system.runner, name="t", argv=argv, cwd=None,
+                  logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path),
+                  announce="[fetch] big quiet download")
+    assert res.ok
+    assert (tmp_path / "logs" / "t.log").read_text() == "[fetch] big quiet download\nhi\n"
+
+
+def test_run_job_without_announce_log_unchanged(tmp_path):
+    argv = ["echo", "hi"]
+    fake = FakeSystem(commands={tuple(argv): CommandResult(0, "hi\n", "")})
+    run_job(fake.system.runner, name="t", argv=argv, cwd=None,
+            logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path))
+    assert (tmp_path / "logs" / "t.log").read_text() == "hi\n"
+
+
+def test_build_step_announce_substituted_and_written(tmp_path):
+    # A build step's `announce` is {runtime}/{source}-substituted like argv/env and lands as
+    # the step log's first content; on_log_open still fires (both discoverability channels).
+    argv = ("echo", "ok")
+    fake = FakeSystem(commands={argv: CommandResult(0, "ok\n", "")})
+    comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
+                     build_steps=({"argv": list(argv),
+                                   "announce": "[resolve] watch {runtime}/build/tools grow"},))
+    life = _life(fake.system, tmp_path)
+    seen: list = []
+    res = life.build(comp, on_log_open=lambda n, p: seen.append(p))
+    assert res.ok and seen
+    text = (life.logs_dir() / "build-c.log").read_text()
+    assert text.startswith(f"[resolve] watch {tmp_path}/build/tools grow\n")
+
+
+def test_build_step_announce_bad_placeholder_is_typed_failure(tmp_path):
+    comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
+                     build_steps=({"argv": ["echo"], "announce": "watch {nope} grow"},))
+    res = _life(FakeSystem().system, tmp_path).build(comp)
+    assert not res.ok and "unresolved placeholder" in " ".join(res.tail)
+
+
+def test_logs_resolves_newest_post_and_adopt_logs(tmp_path):
+    # Item B contract: `lhpc logs <comp>` resolves to the SAME newest file a `[log] … tail -f`
+    # line announced — including a detached post runner's log and the adoption clone log.
+    import os
+    comp = Component(id="widget", name="Widget", kind=ComponentKind.SERVICE)
+    life = _life(FakeSystem().system, tmp_path)
+    logs = life.logs_dir(); logs.mkdir(parents=True, exist_ok=True)
+    t = time.time()
+    start = logs / "start-widget.log"; start.write_text("old start\n")
+    post = logs / "post-widget-123-456.log"; post.write_text("retry window\n")
+    adopt = logs / "adopt-widget.log"; adopt.write_text("clone progress\n")
+    os.utime(start, (t - 100, t - 100))
+    os.utime(post, (t - 50, t - 50))
+    os.utime(adopt, (t, t))
+    path, tail = life.logs(comp)
+    assert path == str(adopt) and tail == ["clone progress"]
+    os.utime(post, (t + 10, t + 10))                      # post runner wrote most recently
+    path2, _ = life.logs(comp)
+    assert path2 == str(post)
+    # A sibling component's post log never leaks in (prefix rule needs the full '<comp>-').
+    other = logs / "post-widget2-1-2.log"; other.write_text("other comp\n")
+    os.utime(other, (t + 100, t + 100))
+    path3, _ = life.logs(comp)
+    assert path3 == str(post)

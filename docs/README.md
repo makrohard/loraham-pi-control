@@ -24,10 +24,12 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 
 - [Local deployment](deployment.md) — run the console persistently under a systemd
   user service (loopback only) and how one-click self-update works.
-- [Production webserver (HTTPS + mTLS)](webserver.md) — the nginx front end,
-  client-certificate auth, and exposing the console to your LAN.
+- [Production webserver (HTTPS + mTLS)](webserver.md) — using the console (Dashboard /
+  Stack pages / Settings), the nginx front end, client-certificate auth, and exposing it to your LAN.
 - [WiFi access point (field)](wifi-access-point.md) — turn the Pi into its own WiFi
   network so a phone can reach it with no infrastructure WiFi.
+- [Firewalling the Pi](firewall.md) — `ufw` recipes for local-only, LAN, public and
+  WiFi-AP access; closes the stack ports `lhpc` cannot gate (meshtasticd `:4403`/`:9443`).
 - [Deployment migration](deployment-migration.md) — relocate an existing deployment
   (operator runbook).
 

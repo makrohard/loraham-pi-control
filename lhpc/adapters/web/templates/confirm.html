@@ -21,10 +21,14 @@
       {% endif %}
       {% if optional_deps %}
         <div class="depnote depnote-warn">
-          <strong>Optional dependencies not installed</strong> — recommended but not required;
+          {% if optional_deps | selectattr('gui') | list | length == optional_deps | length %}
+            <strong>GUI-only dependencies not installed (opt-in: --with-gui)</strong>
+          {% else %}<strong>Optional dependencies not installed</strong>{% endif %} — recommended but not required;
           you can proceed without them (the components that need them stay unavailable):
           {% for d in optional_deps %}
-            <div>{{ d.what }}:</div>
+            <div>{{ d.what }}
+              {% if d.gui %}<em>— GUI-only, opt-in: re-run bootstrap-deps.sh with --with-gui</em>
+              {% else %}<em>— optional</em>{% endif %}:</div>
             {% if d.install %}{{ cmdbox('optdep-' ~ loop.index0, d.install) }}{% endif %}
           {% endfor %}
         </div>

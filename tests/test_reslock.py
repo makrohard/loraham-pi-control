@@ -53,10 +53,15 @@ def test_dead_holder_lock_is_free(tmp_path):
     proc = mp.get_context("spawn").Process(target=_hold, args=(tmp_path, "radio.868", 30))
     proc.start()
     try:
-        for _ in range(100):
+        # `spawn` re-execs a fresh interpreter, which on a loaded box (a full matrix run on a Pi)
+        # can take well over the old 2 s budget. Falling through a too-short poll made the
+        # assertion below test an UNHELD lock and fail spuriously — so wait longer and prove the
+        # holder actually published before asserting anything about contention.
+        for _ in range(1500):
             if reslock.read_owner(p, "radio.868"):
                 break
             time.sleep(0.02)
+        assert reslock.read_owner(p, "radio.868"), "holder process never claimed the lock"
         with pytest.raises(reslock.ResourceBusy):           # still held
             with reslock.operation_lock(p, "radio.868", "start", "x"):
                 pass

@@ -172,12 +172,15 @@
                           <button type="submit">Stop</button>
                         </form>
                       {% elif c.interactive %}
+                        {# The blocker banner STAYS, but the command is shown UNCONDITIONALLY: an
+                           interactive client is run by the operator in their own terminal, so
+                           hiding it behind an install/build blocker just removes the one thing
+                           they can act on. #}
                         {% if c.blocker %}
                           {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ c.blocker }}{% endcall %}
-                        {% else %}
-                          <div class="muted">Interactive — run it yourself:</div>
-                          {{ cmdbox('runc-' ~ c.id, c.command) }}
                         {% endif %}
+                        <div class="muted">Interactive — run local:</div>
+                        {{ cmdbox('runc-' ~ c.id, c.command) }}
                       {% elif c.optional and c.runnable %}
                         <form method="post" action="{{ url_for('action') }}" class="act">
                           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -228,10 +231,9 @@
                     </form></p>
                   {% if s.blocker %}
                     {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
-                  {% else %}
-                    <p class="muted">Run it yourself in a terminal (daemon is ensured):</p>
-                    {{ cmdbox('cmd-' ~ s.id, s.command) }}
                   {% endif %}
+                  <p class="muted">Run local in a terminal (daemon is ensured):</p>
+                  {{ cmdbox('cmd-' ~ s.id, s.command) }}
                 {% endif %}
               </div>
             {% endfor %}

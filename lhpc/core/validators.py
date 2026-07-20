@@ -173,6 +173,27 @@ def node_name(value, *, field: str = "node name") -> str:
     return s
 
 
+def node_short_name(value, *, field: str = "short node name") -> str:
+    """A Meshtastic OWNER SHORT name, matching upstream `setOwner`: a non-empty value of at most
+    FOUR characters. Upstream silently TRUNCATES anything longer — which would leave the node
+    advertising an identity the operator never chose — so an overlong value is REJECTED here
+    instead. Printable Unicode is preserved (upstream imposes no ASCII/charset restriction); only
+    control characters and NUL are refused, since this value is written into a generated config
+    and echoed in status lines."""
+    s = str(value).strip()
+    if not s:
+        raise ValidationError(f"{field}: must not be empty")
+    # Control-free only — NOT the shell-metacharacter set: this value reaches the device solely
+    # as one element of a structured shell=False argv, so `#`, `/` and friends are legitimate
+    # short names and rejecting them would invent a restriction upstream does not have.
+    _reject_control(s, field)
+    if len(s) > 4:
+        raise ValidationError(
+            f"{field}: at most 4 characters (Meshtastic truncates longer names; "
+            f"got {len(s)} in {s!r})")
+    return s
+
+
 # Controller-derived path placeholders — expanded to fixed real paths before the value ever
 # reaches a shell/argv/config file (see commands._paths_subst / config subst). They legitimately
 # contain braces, so `path_value` tolerates ONLY these exact tokens; any other brace still fails.
@@ -271,6 +292,7 @@ _NAMED = {
     "bind": bind,
     "band": band,
     "node": node_name,
+    "node_short": node_short_name,
     "path": path_value,
     "aprs_symbol": aprs_symbol,
     "sync": sync_word,

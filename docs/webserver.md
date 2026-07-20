@@ -21,11 +21,13 @@ interactive mode only; use it or the CLI to bootstrap before nginx is up.)
 ## Contents
 
 - [Default behaviour](#default-behaviour-local-https-no-client-cert)
+- [Using the console](#using-the-console)
 - [First-time bootstrap](#first-time-bootstrap-operator-context)
 - [Access modes](#access-modes)
 - [Remote exposure](#remote-exposure-opt-in)
 - [Expose to your LAN with mTLS — runbook](#expose-to-your-lan-with-mtls--runbook)
 - [Remote access to the web console](#remote-access-to-the-web-console)
+- [Stack web-UI proxies](#stack-web-ui-proxies)
 - [Certificates and the two-CA PKI](#certificates-and-the-two-ca-pki)
   - [Install the client certificate in a browser](#install-the-client-certificate-in-a-browser)
   - [Bundle transfer safety](#bundle-transfer-safety)
@@ -41,6 +43,22 @@ Out of the box: `bind = 127.0.0.1`, `port = 8443`, HTTPS on, **local access unau
 **remote exposure disabled**. Loopback clients use HTTPS with no client certificate; remote
 access is off until you explicitly enable it.
 
+`8443` is the default, not a fixed value — change it with `lhpc webserver configure --port <n>`
+(any `1–65535`). This page uses `8443` throughout; substitute your port if you moved it.
+
+## Using the console
+
+The console is a front end to the CLI — every action prints a plan and confirms, exactly as the
+`lhpc` verbs do. Three areas:
+
+- **Dashboard** — per band: the daemon monitor (live RSSI/stats/CAD), the stacks running on that
+  band, and a control to start another.
+- **Stack pages** — Install / Build / Start / Stop / Test / Update / Uninstall, each with a plan
+  and a confirmation. Interactive (TUI) apps show the command to run yourself; GUI/headless apps
+  start and stop directly.
+- **Settings** — per-stack settings (callsign, frequencies, presets …) written into each app's own
+  config file. The **Auto-install** page installs, builds and tests every stack in one guided run.
+
 ## First-time bootstrap (operator context)
 
 The managed web unit serves the Unix socket immediately, but nginx needs a certificate + config
@@ -49,9 +67,16 @@ shell, not the web process:
 
 ```
 sudo apt install -y nginx            # required system dependency
+sudo systemctl disable --now nginx.service   # keep the package; disable the ROOT service — lhpc serves via the rootless lhpc-nginx user unit
 lhpc webserver init --dns pi.local --ip 192.168.0.10   # PKI + server cert; SANs are persisted
 lhpc webserver start-service         # generates+validates config, then enables+starts nginx
 ```
+
+> `bootstrap-deps.sh` installs nginx **and** disables the root service for you — the two
+> lines above are only for a manual install. Installing the Debian `nginx` package
+> activates a system `nginx.service` on `:80`; left running, that root process owns the
+> web ports and the rootless `lhpc-nginx` unit cannot bind. Keep the package, disable the
+> service.
 
 `start-service` is the ONLY path that starts nginx (it uses `systemctl --user` and refuses to run
 from a managed unit). The console is then at `https://127.0.0.1:8443/`. Until nginx is up you can
@@ -86,7 +111,7 @@ lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 - **IPv6 remote exposure is not supported in this release** — IPv6 bind/CIDR values are
   rejected; `::1` is honoured for local access only.
 - LHPC never edits UFW/nftables/router/DNS. Opening the port at your firewall/router is your
-  responsibility.
+  responsibility — see [Firewalling the Pi](firewall.md) for `ufw` recipes per scenario.
 
 `no-auth` + remote means **anyone in the allowed range reaches the console with no client
 authentication**. The Monitor and Configuration views show a persistent red warning while
@@ -101,6 +126,7 @@ web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` wi
 1. **Front-end + PKI** (skip if `install.sh` already did it):
    ```
    sudo apt install -y nginx
+   sudo systemctl disable --now nginx.service             # keep the package, disable the root service (lhpc uses its own user unit)
    lhpc webserver init --dns pi.local --ip 192.168.0.10   # two CAs + server cert (DNS/IP SANs)
    lhpc webserver start-service                            # generate+validate config, start nginx
    ```
@@ -150,6 +176,7 @@ console anyone can reach — no certificate needed to connect:
 
 ```bash
 sudo apt install -y nginx
+sudo systemctl disable --now nginx.service   # keep the package; lhpc uses the rootless user unit
 systemctl --user enable lhpc-nginx.service
 lhpc webserver init
 lhpc webserver start-service
@@ -165,6 +192,34 @@ authentication**. Use it only on a trusted test rig or LAN. The elevated confirm
 are **both** elevated cases (plain `enable-remote` is refused here). To close it again and bind
 back to loopback: `lhpc webserver disable-remote && lhpc webserver apply` (then
 `lhpc webserver verify`).
+
+## Stack web-UI proxies
+
+Everything above concerns the **console** listener. Two stacks ship their **own** web UIs —
+meshtasticd (`:9443`) and MeshCom (`:18083`) — which bind all interfaces with **no
+authentication**. `lhpc` can front each one with a dedicated nginx listener carrying the same
+mTLS + source-CIDR gate as the console, so you never open the raw port:
+
+```
+lhpc webserver proxy meshtastic --mode lan --port 8445 \
+     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+lhpc webserver apply
+```
+
+- `--mode` is `local` (loopback only, no firewall rule needed), `lan` (listen; only `--cidr`
+  ranges pass) or `public` (`0.0.0.0/0`, elevated). Any non-`local` mode needs
+  `--confirm-phrase enable-remote`; `public`, a `no-auth` `--access-mode`, or an `http`
+  `--scheme` need `enable-remote-danger`.
+- `--port` is **required** — a stack with no port set is not proxied. The web console suggests
+  `8444` for meshcom and `8445` for meshtastic; any free port ≥ 1024 works (nginx is rootless).
+- `--access-mode` takes the same values as the console (default `local-open-remote-auth`), and
+  proxied UIs use the **same** client certificates.
+- Only meshcom and meshtastic are eligible (a manifest web endpoint). kiss, meshcore and the
+  daemon speak non-HTTP protocols and cannot be proxied.
+
+Keep the native port firewalled and reach the UI through the proxy port. Firewall recipes:
+[Firewalling the Pi](firewall.md#stack-web-uis--proxy-dont-open). Command details:
+[`docs/cli.md`](cli.md#webserver).
 
 ## Certificates and the two-CA PKI
 
@@ -269,7 +324,10 @@ listener has ceased.
 
 - `waitress` and `cryptography` are declared LHPC dependencies (installed into the venv).
 - `nginx` is a system package; the installer/repair path detects it and instructs/installs it
-  in operator context. The running web service never installs packages.
+  in operator context. The running web service never installs packages. Installing the Debian
+  package activates a **root** `nginx.service` on `:80` — `bootstrap-deps.sh` disables it (the
+  package stays, lhpc serves through the rootless `lhpc-nginx` user unit). After any manual
+  `apt install nginx`, run `sudo systemctl disable --now nginx.service` yourself.
 - The installer writes and enables a rootless `lhpc-nginx.service` user unit (one of the four
   canonical managed units, byte-exact-verified by the self-update integrity proof). It is
   enabled but only starts once `lhpc webserver start-service` has generated + validated its

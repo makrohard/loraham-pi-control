@@ -255,6 +255,11 @@ def run(spec: dict) -> None:
                     detail[0] = "build env/pkg-config error"
                     sys.stderr.write("build env error: %s\n" % exc)
                     raise SystemExit(1)
+                if s.get("announce"):
+                    # Quiet-step preamble (render-time-substituted static text): printed
+                    # BEFORE the argv echo so a silent-for-minutes step's log leads with
+                    # what is happening and where to watch progress.
+                    print(s["announce"], flush=True)
                 print("+ " + " ".join(argv), flush=True)
                 rc, unverified = _run_step(argv, cwd, {**os.environ, **step_env}, step_timeout)
                 if rc != 0:

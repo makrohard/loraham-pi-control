@@ -1,301 +1,278 @@
 # LoRaHAM Pi Control (`lhpc`)
 
-Install, configure and run the amateur-radio LoRa software stacks on a Raspberry
-Pi from one place — a terminal CLI and a local web console.
-
-The Pi's stacks share one set of LoRa radios. `lhpc` adopts each stack's source,
-builds it, starts and stops it in dependency order, enforces that only one stack
-uses a radio band at a time, writes each app's config from one place, and monitors
-and live-tunes the LoRaHAM daemon.
+Install, configure and run the amateur-radio LoRa software stacks on a Raspberry Pi from one place
+— a CLI and a local web console. `lhpc` adopts each stack's source, builds it, starts/stops it in
+dependency order, enforces one stack per radio band, and writes every app's config. For operators
+bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or Pi 5.
 
 ## Contents
 
-- [Stacks](#stacks)
-- [Install (self-hosted)](#install-self-hosted)
-- [CLI](#cli)
-- [Web console](#web-console)
-- [Deployment & self-update](#deployment--self-update)
-- [Documentation](#documentation)
+- [Overview](#overview) — [Stacks](#stacks) · [Hardware](#hardware) · [Not included](#not-included)
+- [Install](#install) — flashed card to running stacks (steps 0–7)
+- [Use](#use) — [CLI](#cli) · [Web console](#web-console) · [Updating](#updating)
+- [Troubleshooting](#troubleshooting) · [Documentation](#documentation)
 
-## Stacks
+## Overview
 
-| Stack | Band(s) | What it is |
+### Stacks
+
+| Stack | Band(s) | What it is | Docs |
+|---|---|---|---|
+| `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets | [daemon](docs/stacks/daemon.md) |
+| `chat` | 433 | APRS/chat TUI (local or over SSH) | [aprs](docs/stacks/aprs.md) |
+| `igate` | 433 | APRS iGate | [aprs](docs/stacks/aprs.md) |
+| `voice` | 433 / 868 | LoRa voice GUI | [voice](docs/stacks/voice.md) |
+| `kiss` | 433 / 868 | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| `meshtastic` | 433 / 868 | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
+| `meshcom` | 433 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
+| `meshcore` | 868 | MeshCore Pi node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
+
+Daemon-backed stacks start the daemon automatically; Meshtastic drives the radio itself and can't
+share a band with the daemon (`lhpc` blocks the conflict).
+
+### Hardware
+
+Tested: **LoRaHAM Pi, Uputronics (single and dual), Waveshare** on Pi **Zero 2W** and **Pi 5**;
+other boards are expected to work but are not validated. `lhpc hardware` lists the catalog:
+
+<!-- test:hw-table:start -->
+| `lhpc hardware …` | Board(s) | Bands → daemon preset |
 |---|---|---|
-| `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets. The foundation the app stacks use. |
-| `chat` | 433 | APRS/chat TUI, local only or via ssh. |
-| `igate` | 433 | APRS iGate local only or via ssh. |
-| `voice` | 433 / 868 | LoRa voice GUI local only. |
-| `kiss` | 433 / 868 | KISS TNC over TCP (port 8001) Allows to connect APRS-Clients like xastir or yaac. |
-| `meshtastic` | 433 / 868 | Meshtastic (rootless `meshtasticd`; web 9443, API 4403). Uses the radio directly. |
-| `meshcom` | 433 | MeshCom firmware in QEMU, bridged to the daemon (web 18083, bridge 7000). |
-| `meshcore` | 868 | MeshCore Pi node (TCP 5000); optional CLI + node GUI. |
+| `loraham` | LoRaHAM dual-module (SX1278 + RFM95) | 433 → loraham, 868 → loraham |
+| `uputronics` | Uputronics dual (CE0 433 + CE1 868) | 433 → uputronics-ce0, 868 → uputronics-ce1 |
+| `uputronics-433` | Uputronics 433 (CE0) | 433 → uputronics-ce0 |
+| `uputronics-868` | Uputronics 868 (CE1) | 868 → uputronics-ce1 |
+| `waveshare-433` | Waveshare SX1262 (433) | 433 → waveshare-sx1262 |
+| `waveshare-868` | Waveshare SX1262 (868) | 868 → waveshare-sx1262 |
+<!-- test:hw-table:end -->
 
-Daemon-backed stacks (chat, igate, voice, kiss, meshcom, meshcore) start the
-daemon automatically. Meshtastic drives the radio itself, so it cannot run while
-the daemon is serving its band — `lhpc` blocks the conflict.
+Waveshare 868 is not yet on-air-validated; a fresh install is unconfigured. **SPI mode:** `soft-cs`
+(`dtparam=spi=on` + `dtoverlay=spi0-0cs`) covers LoRaHAM Pi / Uputronics / Waveshare (incl. dual,
+chip-selects as GPIOs); `hardware-cs` only for kernel-driven CE0/CE1.
 
-## Install (self-hosted)
+### Not included
 
-Requires Python 3.11+. A deployment is **self-hosted**: the runtime root
-`~/loraham-pi-control` is a plain container, and LHPC's own checkout lives *under* it at
-`src/loraham-pi-control` (just like the stacks it manages), with the venv OUTSIDE the
-checkout at `venv/lhpc`. That way `lhpc self-update` and the code it runs are one tree.
+- **No firewall management** — `lhpc` gates its own console; ports a stack opens are yours to close ([firewall](docs/firewall.md)).
+- **No GUI/desktop is ever installed** — only GUI *application* libraries, and only with `--with-gui`.
+- **Licence & TX compliance** stay the operator's responsibility — TX is never implicit.
 
-### System dependencies
+## Install
 
-LHPC never installs system packages itself — it shows the exact copyable command for each
-missing one (per-stack **System dependencies** view + the **Checks** page).
+From a freshly flashed card to running stacks. Steps run in order.
 
-**One-script bootstrap (pre-clone).** `lhpc deps --script` renders *every* declared system
-prerequisite — apt packages (merged into one non-interactive `apt-get install -y`, downloader/GPG/TLS
-utilities included), the meshtasticd OBS repo (dedicated keyring + `signed-by=` over HTTPS), the SPI
-`config.txt` overlay, the `spi`/`gpio` group grants, and disabling the OS-managed `meshtasticd` — into
-one script you run yourself. It works both as an ordinary user (it calls `sudo` internally) and via
-`sudo bash`. A rendered snapshot ships in the repo root as [`bootstrap-deps.sh`](bootstrap-deps.sh)
-for the moment *before* you've cloned anything:
+### 0. Prepare the card
+
+Raspberry Pi Imager: pick your **model**, **Raspberry Pi OS Lite (64-bit)**, and set **hostname,
+username, Wi-Fi + country, enable SSH** before flashing.
+
+<details><summary>Headless fallback — if the imager's first-boot customisation doesn't apply (observed repeatedly)</summary>
 
 ```bash
-# on a fresh Raspberry Pi OS Trixie (arm64) image, BEFORE cloning:
+sudo rfkill unblock wifi
+sudo raspi-config nonint do_wifi_country DE          # your ISO country code
+sudo nmcli device wifi connect "<SSID>" password "<PSK>"
+sudo systemctl enable --now ssh
+sudo hostnamectl set-hostname loraham                # then match /etc/hosts:
+echo "127.0.1.1 loraham" | sudo tee -a /etc/hosts
+sudo sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && sudo locale-gen && sudo update-locale
+```
+</details>
+
+### 1. Check what will be installed  (~30 s, measured)
+
+Read-only pre-flight — resolves the package closure of a fresh image and **fails closed** if
+anything graphical would be pulled in. Changes nothing.
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh
-sudo bash bootstrap-deps.sh --spi-mode soft-cs        # see SPI modes below; --operator-user <name> if run as root
-sudo reboot                                           # for the SPI overlay + group membership to take effect
-# (from an existing checkout you can regenerate it: lhpc deps --script > bootstrap-deps.sh)
+sudo bash bootstrap-deps.sh --dry-run
 ```
 
-- **`--spi-mode` is required** and hardware-specific:
-  - `soft-cs` — meshtasticd software chip-select (`/dev/spidev0.0` only): `dtparam=spi=on` +
-    `dtoverlay=spi0-0cs`. Use for a **single-radio** LoRaHAM Pi / Uputronics (the common case).
-  - `hardware-cs` — enables SPI **without** the overlay, keeping hardware CE0/CE1 for a setup that
-    needs them (e.g. a **dual Uputronics**).
-  - `skip` — no boot-config change (SPI already configured).
-  It is idempotent (re-running never duplicates lines) and **fails closed** on a conflicting existing
-  `config.txt` rather than appending contradictory overlays.
-- **Group grants go to the operator, never root**: the resolved user is `--operator-user` if given,
-  else `$SUDO_USER` when run via sudo, else the invoking user. Run directly as root without a provable
-  operator and it stops before mutating anything.
-- **QEMU + PlatformIO are NOT in this script** — the managed MeshCom build (`lhpc build`) provisions
-  them (sha256-verified, inside the runtime root). Only `libslirp0` (and the download/extract utilities)
-  are apt-level here.
-
-The apt package set is **identical on a Pi Zero 2W and a Pi 5** (same Trixie arm64 packages); only the
-SPI mode is hardware-specific. See [docs/field-notes.md](docs/field-notes.md) for the Raspberry Pi
-Imager first-boot gotcha, the realistic MeshCom build timeout, and the offline-QEMU workflow.
-
-Or install only what the stacks you'll actually run need, by hand:
+### 2. Install dependencies  (~2.5 min cold / 30–50 s re-run, measured)
 
 ```bash
-# --- LHPC itself (git + Python 3.11+ venv + pip) ---
-sudo apt install -y git python3 python3-venv python3-pip
+sudo bash bootstrap-deps.sh --spi-mode soft-cs
+```
 
-# --- lhpc production webserver (HTTPS/mTLS console; skip for loopback-only use) ---
-sudo apt install -y nginx
+`--spi-mode` is **required**: `soft-cs` (LoRaHAM Pi / Uputronics / Waveshare, incl. dual) ·
+`hardware-cs` (kernel CE0/CE1) · `skip`. Also: `--with-gui` (GUI app libs) · `--no-swapfile` ·
+`--swap-size <MB>` (default 768) · `--operator-user <name>` if run as root. Beyond apt it
+**disables the system `nginx.service`** (package stays; `lhpc` serves via its own rootless unit)
+and, under ~600 MB RAM, creates `/var/swap.lhpc` (768 MB, below zram) as OOM insurance for the long
+builds — at some SD-card wear.
 
-# --- stack build/runtime deps (chat, voice, kiss, daemon/RadioLib) ---
-sudo apt install -y \
-  libncurses-dev \
-  libcodec2-dev libgtk-3-dev libasound2-dev \
-  socat \
-  cmake liblgpio-dev build-essential
+<details><summary>Manual — install only what the stacks you'll run need (bootstrap-deps.sh is the source of truth; preview with <code>--dry-run</code>, regenerate with <code>lhpc deps --script</code>)</summary>
 
-# --- meshcom (bridge OpenSSL build + QEMU user-mode networking) ---
-sudo apt install -y libssl-dev libslirp0
+<!-- test:deps-manual:start -->
+```bash
+# lhpc itself + fetch/TLS tools (nginx only if you want the web console)
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nginx ca-certificates curl wget xz-utils
+sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
+sudo apt install -y --no-install-recommends socat                                       # kiss
+sudo apt install -y --no-install-recommends libssl-dev libslirp0                        # meshcom (bridge + QEMU)
+sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (built from source)
+sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev python3-tk           # only with --with-gui (Voice, MeshCore Node Manager)
 
-# --- meshtasticd (Meshtastic OBS repo — not in Debian repos; use Debian_12 for Bookworm) ---
-echo 'deb http://download.opensuse.org/repositories/network:/Meshtastic:/beta/Debian_13/ /' | sudo tee /etc/apt/sources.list.d/network:Meshtastic:beta.list
-curl -fsSL https://download.opensuse.org/repositories/network:Meshtastic:beta/Debian_13/Release.key | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg > /dev/null
-sudo apt update
-sudo apt install -y meshtasticd
+sudo systemctl disable --now nginx.service               # keep the package, disable the ROOT service
+# small-RAM boards (<600 MB): a disk swapfile stops the meshtasticd/meshcom builds OOM-ing
+sudo fallocate -l 768M /var/swap.lhpc && sudo chmod 600 /var/swap.lhpc && sudo mkswap /var/swap.lhpc
+echo '/var/swap.lhpc none swap sw,pri=-2 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
+printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI overlay
+sudo usermod -aG spi,gpio "$USER"                        # → continue at step 3 (reboot)
+```
+<!-- test:deps-manual:end -->
+</details>
 
-# --- SPI + group membership, then reboot ---
-# NOTE: spi0-0cs gives ONLY /dev/spidev0.0 (no hardware chip-selects) — meshtasticd-style soft-CS.
-# For a dual Uputronics needing hardware CE0+CE1, use the dtparam line WITHOUT the overlay.
-printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt
-sudo usermod -aG spi,gpio "$USER"
+### 3. Reboot
+
+The SPI overlay and your new `spi`/`gpio` membership take effect on reboot.
+
+```bash
 sudo reboot
 ```
 
-**One-command install** — `install.sh` does the whole fresh install from the canonical
-repository (branch `main`): clone → venv → editable install → `bootstrap` → symlink `lhpc`
-into `~/.local/bin` → enable the web-console systemd service → verify the controller passes
-its identity check. It is **initial install only** — refuses an existing checkout and runs no
-destructive git; **update later with `lhpc self-update`**.
+### 4. Install lhpc  (~1.5 min, measured)
 
 ```bash
-# system dependencies first (see above); then:
 curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
-#   or, from a checkout:  ./install.sh
-#   options:  --target <dir>   --no-service (skip the web service)   --no-path (skip the CLI symlink)
+#   or from a checkout: ./install.sh
+#   options: --target <dir> · --no-service (skip the web service) · --no-path (skip the CLI symlink)
 ```
 
-**Open the console.** When `install.sh` finishes with `nginx` present it has already brought up the
-managed HTTPS console (it runs `lhpc webserver init` + `start-service` for you): browse to
-**`https://127.0.0.1:8443/`** — your browser warns about the self-signed CA until you import it
-(see [`docs/webserver.md`](docs/webserver.md)). Without nginx, start the loopback console with
-**`lhpc web`** → `http://127.0.0.1:8770/`. To reach it from another machine, see
-[Remote access to the web console](docs/webserver.md#remote-access-to-the-web-console)
-(recommended authenticated mTLS, or public no-auth for a test rig). In the
-field with no WiFi, turn the Pi into its own access point:
-[`docs/wifi-access-point.md`](docs/wifi-access-point.md).
+Everything lands under `~/loraham-pi-control/`: LHPC's checkout at `src/loraham-pi-control`, the
+venv at `venv/lhpc`, settings/secrets/certs under `config/`. (A transient PyPI retry downloading
+`cryptography` is benign — pip retries.)
 
-**Bring up the stacks.** Set your callsign, then install/build/test every stack in one guided run:
+<details><summary>Manual — clone / venv / bootstrap</summary>
 
 ```bash
-lhpc config operator --callsign W1ABC     # your callsign (inherited by all licensed stacks)
-lhpc hardware loraham                      # select your radio hardware — REQUIRED, else the daemon refuses
-                                           #   to start (see `lhpc hardware` for uputronics-ce0/ce1, waveshare-sx1262)
-lhpc auto-install                          # install + build + test all stacks (adds --source, --no-tests, --tx)
-```
-
-You can do the same from the web console's **Stacks** page (and pick the hardware in a stack's
-**Settings**). Then start what you need (`lhpc stack start <stack>`, or the Start button).
-
-<details><summary>Or do it by hand</summary>
-
-```bash
-# 1. Clone LHPC into the runtime root's src/ — this is what makes it self-hosted
 mkdir -p ~/loraham-pi-control/src
-git clone https://github.com/makrohard/loraham-pi-control.git \
-    ~/loraham-pi-control/src/loraham-pi-control
-
-# 2. Create the venv OUTSIDE the checkout, then install
+git clone https://github.com/makrohard/loraham-pi-control.git ~/loraham-pi-control/src/loraham-pi-control
 python3 -m venv ~/loraham-pi-control/venv/lhpc
 ~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
-
-# 3. Create the runtime layout + default config (owner-only, mode 0700)
 ~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
-
-# 4. Adopt + build + test all stacks (add venv/lhpc/bin to PATH, or use the full path)
 export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
-lhpc config operator --callsign W1ABC   # your callsign
-lhpc hardware loraham                    # REQUIRED: pick your radio hardware (daemon refuses otherwise)
-lhpc auto-install                        # guided install + build + test of every stack
-lhpc web                                # http://127.0.0.1:8770/  (loopback console)
 ```
-For the HTTPS/mTLS console instead of `lhpc web`, install nginx and follow
-[`docs/webserver.md`](docs/webserver.md).
 </details>
 
-`lhpc status` then shows the controller row as **identity ok**. To run it persistently as a
-user service, see [`docs/deployment.md`](docs/deployment.md) (the `deploy/lhpc-web.service`
-template already uses this layout). One-click update stops and restarts the console itself;
-only the manual `lhpc self-update --apply` needs it stopped first.
+### 5. Log in again
 
-Set your callsign once with `lhpc config operator --callsign <CALL>` (or in a stack's web
-**Settings**); until then HAM apps default to `N0CALL`. Secrets live only under
-`~/loraham-pi-control/config/`: passwords and HMAC keys in `config/secrets.toml`, file-based
-secrets (e.g. the MeshCom `xr_pw`, the web session key) in `config/secrets/`.
+`~/.local/bin` isn't on `PATH` in your current shell yet. **Reconnect SSH or open a new login
+shell**, or the next command fails with `lhpc: command not found`.
 
-**Manage the service** — `install.sh` runs the web console as a systemd user service (not in
-your terminal); the installer prints these at the end too:
+### 6. Configure
 
 ```bash
-systemctl --user stop lhpc-web        # stop it now (only needed before manual `self-update --apply`)
-systemctl --user status lhpc-web      # confirm it's stopped
-systemctl --user start lhpc-web       # start it again
-systemctl --user disable lhpc-web     # stop it auto-starting on boot
-journalctl --user -u lhpc-web -f      # live logs
+lhpc config operator --callsign W1ABC     # your callsign (inherited by licensed stacks)
+lhpc hardware                             # list the catalog
+lhpc hardware uputronics                  # pick your radio (dual Uputronics shown)
 ```
 
-**Uninstall** stops your managed stacks, verifies they ceased, and only then removes **LHPC itself**.
-`./uninstall.sh` first writes a guard that blocks new work, refuses to proceed while any build/test/
-web job or auto-install/HMAC apply is unresolved (or any component state is UNKNOWN), stops the
-managed stacks (clients before the shared daemon) and verifies cessation — and if it cannot prove
-quiescence it **aborts without deleting anything**. On success it removes the code, venv, state and
-service but **keeps your `config/`** (settings + secrets); `./uninstall.sh --purge` wipes everything,
-config included. (`--target <dir>`, `--yes` to skip the prompt.) The scripts live in the checkout at
-`~/loraham-pi-control/src/loraham-pi-control/`, not the runtime root.
+### 7. Bring up the stacks
 
-See [`docs/deployment.md#security--lifecycle-hardening`](docs/deployment.md#security--lifecycle-hardening)
-for the full guarantees: Host enforcement in every mode, `KillMode=process` preserving workloads across
-web restarts, the quiescence-gated uninstall, fail-closed config, and `/tmp` socket peer-cred checks.
-
-> Working on LHPC itself? Clone anywhere and `pip install -e .` in a venv for a dev checkout
-> — that instance is intentionally *not* self-hosted (the controller row shows "not
-> self-hosted"). Commit and push from there; deploy self-hosted as above.
->
-> Adding or maintaining a stack? See [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
-
-## CLI
+The **web console** is the primary path: reach it locally (step 4 brought it up at
+`https://127.0.0.1:8443/`, or run `lhpc web` → `http://127.0.0.1:8770/`) and use the **Auto-install**
+page. On a **Pi Zero 2W / low-RAM board, prefer the CLI** — a multi-hour build shouldn't depend on a
+browser session. Run it detached so a dropped SSH connection can't abort it:
 
 ```bash
-lhpc status                  # what's running (read-only, bounded — no network)
-lhpc list                    # stacks in the manifest
-lhpc explain <stack>         # components, start order, resources
-
-lhpc install <stack> --yes   # adopt/verify source
-lhpc build <stack>           # build
-lhpc config <stack> call W1ABC  # set a stack setting (e.g. callsign) — validated
-lhpc stack start <stack>     # start (auto-starts the daemon if the stack needs it)
-lhpc stack stop <stack>      # stop
-lhpc logs <stack>            # tail a component log
-
-lhpc daemon <433|868>                       # monitor RSSI / stats / CAD
-lhpc daemon 433 --set TXMODE=DIRECT --yes   # apply a whitelisted live setting
-lhpc test <stack> --tx --yes                # one bounded TX frame per band (real RF — dummy load)
-
-lhpc update | uninstall <stack>
+sudo apt install -y tmux
+tmux
+lhpc auto-install --yes          # detach: Ctrl-B then D · reattach: tmux attach
 ```
 
-Mutating commands print a plan and require `--yes` (or a confirmation) before they
-act. TX is never implicit. Full command reference: [`docs/cli.md`](docs/cli.md).
+Host tests are **off** by default; `--tests` enables them, `--tx` implies `--tests` and transmits
+**real RF** (dummy loads). Build artifacts persist, so a re-run resumes from what is already
+compiled. Durations (**extrapolated**): meshtasticd ~2.5–3.5 h, meshcom ~26 min cold / ~2.5 min
+incremental; full total **pending**. Headless "optional deps missing" warnings are expected.
 
-## Web console
+**Watching progress.** `lhpc` prints a copy-pasteable `[log] <component> -> tail -f <path>` per
+step — use those, not guessed names. Logs update in **batches** (block-buffered off a TTY), so a
+quiet `tail -f` is not a stall — judge by CPU and object count:
 
 ```bash
-lhpc web                     # http://127.0.0.1:8770/  (loopback only)
+ps -eo pcpu,etime,cmd --sort=-pcpu | head -3          # is a compiler actually running?
+while sleep 60; do echo "$(date +%T) objs=$(find ~/loraham-pi-control/src -path '*/.pio/build/*' -name '*.o' | wc -l)"; done
+while sleep 30; do free -m | awk '/Mem:/{print "mem",$3"/"$2} /Swap:/{print "swap",$3}'; vcgencmd measure_temp; done >> ~/watch.log
 ```
 
-- **Dashboard** — per band: the daemon monitor (live RSSI/stats), the stacks
-  running on that band, and a control to start another.
-- **Stack pages** — Install / Build / Start / Stop / Test / Update / Uninstall,
-  each with a plan and confirmation. Interactive (TUI) apps show the
-  command to run yourself; GUI/headless apps start and stop directly.
-- **Settings** — per-stack settings (callsign, frequencies, presets …)
-  written into each app's own config file.
+<details><summary>Per-stack instead of everything</summary>
 
-This bare `lhpc web` mode is **loopback-only** (POST actions are CSRF-protected,
-`Content-Security-Policy: default-src 'self'`) and is not exposed to a network. To reach the
-console from another machine, use the production HTTPS + mTLS front-end (nginx) — see
-[`docs/webserver.md`](docs/webserver.md).
+```bash
+lhpc install <stack>
+lhpc build <stack>
+lhpc stack start <stack>
+lhpc status
+```
+</details>
 
-## Deployment & self-update
+## Use
 
-The supported deployment is **self-hosted**: the runtime root `~/loraham-pi-control` is a
-plain container, LHPC's own checkout lives under it at `src/loraham-pi-control` (alongside
-the managed stack sources), and the venv is at `venv/lhpc`. The systemd unit sets
-`LHPC_RUNTIME_ROOT` explicitly. LHPC's checkout is a **controller identity** — observable
-and updatable via `lhpc self-update`, but never installed/built/started/cleaned/etc.; every
-generic verb aimed at it refuses and points to `lhpc self-update`, and `lhpc status` shows a
-distinct `[controller]` row.
+### CLI
 
-On the web console the controller row (first entry on **Apps**) and the footer version are
-**cached-only on every page load** — they never probe the checkout, `.git`, the network, or
-identity while rendering. The console **checks upstream in the background** (default every
-12 h, configurable via `[web] update_check_hours`, `0` = off), so "Update →" appears in the
-footer by itself; **“Check for updates”** does the same on demand.
+```bash
+lhpc status                        # what's running (read-only)
+lhpc doctor                        # environment / dependency checks
+lhpc logs <target>                 # tail a component log
+lhpc stack start|stop <stack>      # start / stop (plans + confirms)
+lhpc build <target>                # build a stack
+lhpc test <target> [--tx] --yes    # bounded RF test (real TX with --tx)
+lhpc hardware [<setup>]            # show or set the radio hardware
+lhpc config operator --callsign <CALL>
+```
 
-**Updating is one click**: after a confirm, the console writes a request marker that a static
-`lhpc-selfupdate.path` unit turns into a run of the sandboxed helper — which stops the console,
-applies the update (live identity check, all locks), syncs the venv, and lets systemd bring it
-back. The console **cannot** call `systemctl` (its unit blocks the user D-Bus) and one-click runs
-only when the four managed units are proven byte-exact, so a tampered console can't escape or run
-an unvetted updater. Manual path: `systemctl --user stop lhpc-web && lhpc self-update --apply`;
-`lhpc self-update --repair-integration` (re)installs the managed units. Details:
-[`docs/deployment.md`](docs/deployment.md).
+Mutating commands print a plan and need `--yes`; full reference [`docs/cli.md`](docs/cli.md).
 
-The web-service systemd unit is **least-privilege**: read-only filesystem except the runtime
-root and `/tmp`, no broad `$HOME`/`/var` write, the user D-Bus blocked, and build/tool caches
-redirected into a runtime-owned `build/tool-cache/` (never `~/.platformio`, `~/.espressif` or
-`~/.cache`). See
-[`docs/deployment.md`](docs/deployment.md) and the operator relocation runbook in
-[`docs/deployment-migration.md`](docs/deployment-migration.md).
+### Web console
 
-**Backup:** your settings, secrets and certificates all live under `~/loraham-pi-control/config/`
-(plus known-working records in `profiles/`); back them up with a single `tar` — see
-[`docs/operations.md`](docs/operations.md#backup--restore).
+`lhpc web` serves a loopback console at `:8770`; the production HTTPS + mTLS front end (nginx,
+`:8443`) is what you expose to a network:
+
+```bash
+lhpc webserver init --dns pi.local --ip 192.168.0.10
+lhpc webserver start-service
+lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+lhpc webserver cert issue laptop && lhpc webserver cert export laptop ~/laptop.p12
+lhpc webserver apply
+```
+
+Details: [`docs/webserver.md`](docs/webserver.md); opening ports beyond loopback needs a firewall
+([`docs/firewall.md`](docs/firewall.md)).
+
+### Updating
+
+One click in the console, or from a shell (back up `config/` + `profiles/` first —
+[`docs/operations.md`](docs/operations.md#backup--restore)):
+
+```bash
+systemctl --user stop lhpc-web && lhpc self-update --apply
+lhpc self-update --repair-integration      # reinstall the managed units
+```
+
+Serving model and the one-click mechanism: [`docs/deployment.md`](docs/deployment.md).
+
+## Troubleshooting
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| `lhpc: command not found` after install | PATH not applied | log in again (step 5) |
+| build log frozen / silent for minutes | logs update in batches (block-buffered), large downloads too | judge by CPU + object count (step 7); [field-notes](docs/field-notes.md) |
+| build killed / OOM on small-RAM boards | RAM pressure | swapfile (step 2); [field-notes](docs/field-notes.md) |
+| "optional deps missing" on a headless box | GUI components skipped by design | ignore, or `--with-gui` |
+| web console unreachable from another machine | not exposed / firewalled | [Web console](#web-console); [firewall](docs/firewall.md) |
+| SSH dropped, run stopped | orchestrator got SIGHUP; detached build steps may continue | re-run `lhpc auto-install` (resumes from cached artifacts); use tmux (step 7) |
+| board unreachable during a long build | low-RAM boards can lose the network under load | check the console, restart NetworkManager or reboot, then re-run; [field-notes](docs/field-notes.md) |
+| `auto-install` refuses to start after an interrupted run | leftover run markers | `lhpc auto-install --status`, then `lhpc auto-install --recover`; [field-notes](docs/field-notes.md) |
 
 ## Documentation
 
-Full docs are in [`docs/`](docs/README.md), grouped by task — understand it, use it,
-web console & remote access, stacks, reference & policy, and project records. Start
-with the [documentation overview](docs/README.md).
+| Group | Docs |
+|---|---|
+| Understand it | [Architecture](docs/architecture.md) |
+| Use it | [CLI](docs/cli.md) · [Operations & safety](docs/operations.md) · [Field notes](docs/field-notes.md) |
+| Web console & remote access | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WiFi access point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
+| Stacks | [Adding a stack](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Reference & policy | [Hardening](docs/hardening-0.1.md) · [Provenance](docs/provenance.md) |
+
+Full index: [`docs/README.md`](docs/README.md).

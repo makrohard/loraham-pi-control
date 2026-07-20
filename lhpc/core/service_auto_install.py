@@ -8,7 +8,9 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 
+from .lifecycle import GUI_MISSING_HINT
 from .snapshot_memo import invalidates_snapshot
 from . import runtime_fs
 from . import validators
@@ -17,6 +19,7 @@ from .model import RunState
 from .paths import PathContainmentError
 import contextlib
 
+from . import lifecycle as lifecycle_mod
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 
 # ---- cooperative Abort (shared AbortFlag): the detached driver installs SIGTERM/SIGINT handlers
@@ -24,6 +27,63 @@ from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 # between stacks and threads it into each build/test as `should_cancel`. The web Abort route SIGTERMs
 # the driver pid only. A distinct instance from HMAC's ⇒ the two features abort independently. ----
 _auto_install_abort = AbortFlag()
+
+# The ONE recovery verb, named in every acknowledgement-required refusal so a headless operator is
+# never left to reverse-engineer which of the three leftover state files (reservation / lease /
+# marker) to delete. `lhpc auto-install --recover` clears them all in one acknowledged action;
+# `--confirm-orphan` is the explicit confirmation for an unproven-child (ORPHAN RISK) run.
+_RECOVER_CMD = "lhpc auto-install --recover"
+
+
+def _recover_cmd_hint(reason: str) -> str:
+    """Append the exact recovery command to a refusal that requires acknowledgement (the only ones
+    that contain 'acknowledge'); leave 'in progress'/'already reserved' live-run reasons and "" as
+    they are. ORPHAN-RISK refusals additionally name --confirm-orphan."""
+    if not reason or "acknowledge" not in reason:
+        return reason
+    flag = " --confirm-orphan" if "ORPHAN RISK" in reason else ""
+    return f"{reason} — run `{_RECOVER_CMD}{flag}` to clear it (or acknowledge in the web console)"
+
+
+def _is_linked(comp) -> bool:
+    """Is this component adopted as a LINK to an external checkout (lhpc never builds/tests into
+    one)? A SOURCE-LESS component is never linked — asking `comp.source.strategy` about one is the
+    deref that the work partition exists to prevent."""
+    return bool(comp.source) and (comp.source.strategy or "") == "link"
+
+
+@dataclass(frozen=True)
+class StackWork:
+    """The DISJOINT work lists for one auto-install row.
+
+    Carrying a single mixed component list and re-filtering it at each use is how a source-less
+    component reached source-only machinery (grouping, path/strategy resolution, adoption,
+    update, transactions) and blew up on `c.source.path`. The partition is explicit instead:
+    ONLY `source` may enter that machinery, `build` drives the build phase, `test` the host-test
+    phase. A stack may legitimately have all three empty (a purely package-managed stack), which
+    is a valid row — never a reason to drop it from the run."""
+
+    source: tuple = ()      # components with a managed source (adopt / update / transaction)
+    build: tuple = ()       # components with build steps (managed artifacts)
+    test: tuple = ()        # components with host tests
+
+    skipped: tuple = ()     # components excluded up-front (unavailable GUI deps) — NOT installed
+
+    @classmethod
+    def of(cls, stack, skip=()) -> "StackWork":
+        """`skip` names components excluded from ALL THREE lists. It is applied HERE, in the
+        immutable planning partition, so the exclusion happens before source paths are collected,
+        before any lock is taken and before any mutation — never by letting a build fail later."""
+        skip = frozenset(skip or ())
+        comps = tuple(c for c in stack.components if c.id not in skip)
+        return cls(source=tuple(c for c in comps if c.source),
+                   build=tuple(c for c in comps if c.build_steps or c.build_cmd),
+                   test=tuple(c for c in comps if c.test_argv or c.test_cmd),
+                   skipped=tuple(c.id for c in stack.components if c.id in skip))
+
+    @property
+    def any_work(self) -> bool:
+        return bool(self.source or self.build or self.test)
 
 
 class AutoInstallOpsMixin:
@@ -58,9 +118,17 @@ class AutoInstallOpsMixin:
         )
 
     def _auto_install_gate(self) -> str:
-        """Typed reason a NEW auto-install run must not start; "" when clear. A DEAD lease, a
-        dead/foreign auto-install-start reservation, and an interrupted/unsafe marker are all
-        MUTATION-BLOCKING until explicitly acknowledged."""
+        """Typed reason a NEW auto-install run must not start; "" when clear — with the exact
+        recovery COMMAND appended to any acknowledgement-required refusal. Recovery used to be a
+        web-only action (auto_install_ack), and each refusal named only the guard it hit, so a
+        headless operator discovered the three leftover state files one at a time and cleared them
+        by hand. `lhpc auto-install --recover` clears them all in one acknowledged action; naming it
+        HERE means every consumer (start refusal, doctor, dashboard, status) tells the operator how."""
+        return _recover_cmd_hint(self._auto_install_gate_raw())
+
+    def _auto_install_gate_raw(self) -> str:
+        """The typed reason itself. A DEAD lease, a dead/foreign auto-install-start reservation, and
+        an interrupted/unsafe marker are all MUTATION-BLOCKING until explicitly acknowledged."""
         from . import auto_install as ai_mod, procident
         rstate, res = ai_mod.read_reservation(self._paths)
         if rstate == "unsafe":
@@ -125,15 +193,17 @@ class AutoInstallOpsMixin:
             with reslock.operation_lock(self._paths, "auto-install-start", "auto-install", ""):
                 rstate, res = ai_mod.read_reservation(self._paths)
                 if rstate == "unsafe":
-                    return ("the auto-install-start reservation is unreadable or malformed — "
-                            "acknowledge (recover) it before starting a new run")
+                    return _recover_cmd_hint(
+                        "the auto-install-start reservation is unreadable or malformed — "
+                        "acknowledge (recover) it before starting a new run")
                 if rstate == "valid":
                     if res.get("run_id") != run_id:
                         if procident.identity_matches(res.get("ident", {}),
                                                       res.get("pid", -1)):
                             return "a auto-install run is already reserved/in progress"
-                        return ("a previous auto-install start died holding its reservation — "
-                                "acknowledge (recover) it before starting a new run")
+                        return _recover_cmd_hint(
+                            "a previous auto-install start died holding its reservation — "
+                            "acknowledge (recover) it before starting a new run")
                     # OUR run_id: the slot must be in phase `spawned` and bound to
                     # EXACTLY THIS process — a foreign or stale reservation is never
                     # overwritten by a claim.
@@ -690,9 +760,35 @@ class AutoInstallOpsMixin:
         return stack_id == "daemon"
 
     def _auto_install_stack_installed(self, st) -> bool:
-        """Every SOURCED component of the stack is present on disk (not just the main one)."""
-        return all(self._paths.resolve_source(c.source.path).is_dir()
-                   for c in st.components if c.source)
+        """Is this stack's managed material actually present?
+
+        Every SOURCED component must be on disk AND every managed BUILD ARTIFACT must exist. The
+        artifact half matters because `all(...)` over an empty generator is True: a source-less
+        stack used to answer "installed" unconditionally, so a package-managed stack whose managed
+        CLI had never been provisioned reported itself complete. Mandatory RUNTIME prerequisites
+        (packaged binary, device groups, SPI, no conflicting service) are checked separately by
+        `_auto_install_runtime_blockers` — they are a start gate, not an install fact."""
+        work = StackWork.of(st)
+        if not all(self._paths.resolve_source(c.source.path).is_dir() for c in work.source):
+            return False
+        return all(self.is_built(c) for c in work.build)
+
+    def _auto_install_runtime_blockers(self, st) -> list[str]:
+        """Mandatory start prerequisites that are STILL unmet after provisioning — the reason a
+        row must not report success merely because a venv built. Reuses the single requirement
+        checker (`missing_requirements`), which already covers the packaged binary, effective
+        device groups, the SPI device, the must-not-run packaged service and the managed CLI.
+        A configured-but-not-yet-effective group grant is reported as needs-restart, never as
+        success."""
+        life = self._lifecycle()
+        out: list[str] = []
+        for c in st.components:
+            if getattr(c, "optional", False):
+                continue
+            for req in life.missing_requirements(c):
+                pending = bool(req.groups) and life.group_grant_pending(req)
+                out.append(lifecycle_mod.req_remediation(req, pending))
+        return out
 
     def _auto_install_dep_mandatory(self, st, dep_id: str) -> bool:
         """A dependency stack is MANDATORY when a NON-optional component of `st` requires it
@@ -717,7 +813,7 @@ class AutoInstallOpsMixin:
         rows = []
         for st, _comps in scope:
             testable = any(c.test_argv and not c.test_requires_running
-                           and (c.source.strategy or "") != "link"
+                           and not _is_linked(c)
                            for c in st.components)
             deps = []
             for dep in sorted(edges.get(st.id, set())):
@@ -754,8 +850,8 @@ class AutoInstallOpsMixin:
                     errs.append(f"{sid}: the TX test requires install + host tests enabled")
         sel_ids = {st.id for st, _ in scope if selection.get(st.id, {}).get("install")}
         by_path: dict = {}
-        for st, comps in scope:
-            for c in comps:
+        for st, w in scope:
+            for c in w.source:
                 by_path.setdefault(c.source.path, set()).add(st.id)
         for path, decl in sorted(by_path.items()):
             chosen = decl & sel_ids
@@ -821,7 +917,8 @@ class AutoInstallOpsMixin:
             return ActionResult(False, "No stacks with managed sources in the manifest.")
         if not apply:
             details = [f"  [{self.auto_install_mode()}] {st.id}: "
-                       f"{', '.join(c.id for c in comps)}" for st, comps in scope]
+                       f"{', '.join(c.id for c in (w.source or w.build or st.components))}"
+                       for st, w in scope]
             details.append(f"  host tests: {'on' if tests else 'off'}; "
                            f"TX test: {'ON (real RF!)' if tx else 'off'}; "
                            f"source: {source}")
@@ -895,7 +992,7 @@ class AutoInstallOpsMixin:
                     res = ActionResult(False, "Refusing the auto-install run: " + selerr[0],
                                        details=[f"  {e}" for e in selerr])
                 else:
-                    run_scope = [(st, comps) for st, comps in scope if sel[st.id]["install"]]
+                    run_scope = [(st, w) for st, w in scope if sel[st.id]["install"]]
                     if not run_scope:
                         res = ActionResult(False, "No stacks selected for the auto-install run.")
                     elif (any(sel[st.id].get("tx") for st, _ in run_scope)
@@ -943,15 +1040,21 @@ class AutoInstallOpsMixin:
         # choice. Summary fields go into the marker for display.
         source_of = lambda sid: selection[sid]["version"]          # noqa: E731
         tx = any(selection[st.id].get("tx") for st, _ in scope)
-        _versions = {selection[st.id]["version"] for st, _ in scope}
-        src_summary = next(iter(_versions)) if len(_versions) == 1 else "mixed"
+        # Only a SOURCED stack has a meaningful version. A source-less row still carries an inert
+        # valid value (the plan reader, the selection validator and the web form all require the
+        # field), but counting it here would report a false "mixed" the moment its untouched
+        # default differed from what the operator chose for the real sources.
+        _versions = {selection[st.id]["version"] for st, w in scope if w.source}
+        src_summary = (next(iter(_versions)) if len(_versions) == 1
+                       else ("mixed" if _versions else "system"))
         tests_summary = any(selection[st.id]["tests"] for st, _ in scope)
         # cheap pre-lock preflight (typed early refusal; authoritative recheck post-lock)
         pre_running = self._auto_install_running_components(scope)
         if pre_running:
             return self._auto_install_running_refusal(pre_running)
         stacks_ids = [st.id for st, _ in scope]
-        all_paths = sorted({c.source.path for _, comps in scope for c in comps})
+        # Lock ONLY real source paths — a source-less row contributes none.
+        all_paths = sorted({c.source.path for _, w in scope for c in w.source})
 
         class _Abort(Exception):
             pass
@@ -1009,7 +1112,7 @@ class AutoInstallOpsMixin:
                                             "identity-tracked (job marker not persisted).")
                 # ONE immutable global plan (frozen selectors/remotes) + reconciliation —
                 # conflicts refuse BEFORE any marker/candidate/source mutation.
-                items = [(st, c) for st, comps in scope for c in comps]
+                items = [(st, c) for st, w in scope for c in w.source]
                 groups, conflicts = self._plan_source_groups(items, source_of, freeze=True)
                 if conflicts:
                     return ActionResult(False, "Refusing the auto-install run: incompatible "
@@ -1025,7 +1128,7 @@ class AutoInstallOpsMixin:
                 # actionable, and terminal-truthful (completed-with-failures).
                 tx_refused = ""
                 if tx:
-                    dstack = next(((st, comps) for st, comps in scope
+                    dstack = next(((st, w) for st, w in scope
                                    if st.id == "daemon"), None)
                     if not getattr(self.config().operator, "callsign", ""):
                         tx_refused = ("no operator callsign is configured — set it in "
@@ -1034,23 +1137,24 @@ class AutoInstallOpsMixin:
                         tx_refused = "the daemon stack is not part of this run"
                     else:
                         blocked = [f"{c.source.path}: {plan[c.source.path][1]}"
-                                   for c in dstack[1]
+                                   for c in dstack[1].source
                                    if plan[c.source.path][0] == "blocked"]
                         if blocked:
                             tx_refused = ("the daemon source group is blocked — "
                                           + "; ".join(blocked))
-                        elif not any(c.build_steps for c in dstack[1]):
+                        elif not any(c.build_steps for c in dstack[1].build):
                             tx_refused = "the daemon has no host build planned"
-                        elif not any(c.test_argv for c in dstack[1]):
+                        elif not any(c.test_argv for c in dstack[1].test):
                             tx_refused = "the daemon has no host test planned"
                 mode = self.auto_install_mode()
                 mode = {"mixed": "mixed"}.get(mode, mode)
                 rows = [{"id": st.id, "name": st.name,
-                         "op": "+".join(sorted({plan[c.source.path][0] for c in comps})),
+                         "op": ("+".join(sorted({plan[c.source.path][0] for c in w.source}))
+                                or "system"),
                          "selected": {"version": selection[st.id]["version"],
                                       "tests": selection[st.id]["tests"],
                                       "tx": selection[st.id]["tx"]}}
-                        for st, comps in scope]
+                        for st, w in scope]
                 marker = ai_mod.new_marker(run_id, mode, src_summary, tests_summary, tx, rows)
                 if tx_refused:
                     marker["tx_phase"] = {"status": "fail",
@@ -1071,7 +1175,7 @@ class AutoInstallOpsMixin:
                 failed_stacks: set = set()
                 mutated: list = []
                 inst = self._installer()
-                for st, comps in scope:
+                for st, w in scope:
                     if _auto_install_abort.requested():
                         raise _Cancelled()                   # cooperative: stop before the next stack
                     r = row[st.id]
@@ -1083,12 +1187,33 @@ class AutoInstallOpsMixin:
                         emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
                         bw()
                         continue
+                    # GUI SKIP — decided during immutable planning (StackWork.of), applied here
+                    # before ANY source path, lock or mutation for this row. A stack whose MANDATORY
+                    # component needs an absent GUI toolkit is recorded `skipped` (an accepted
+                    # outcome, never `success`); a stack that merely loses an OPTIONAL GUI component
+                    # (meshcore-nodegui) proceeds with the rest — MeshCore stays usable via its CLI.
+                    if w.skipped:
+                        r["skipped_components"] = list(w.skipped)
+                        # IMMUTABLE: the verdict comes ONLY from the frozen plan (`w.skipped`, decided
+                        # in StackWork.of) plus the manifest's static `optional` flags. Re-probing here
+                        # would let a dependency that appeared between planning and execution turn a
+                        # planned Voice skip into an empty, falsely-successful install.
+                        skipped_ids = set(w.skipped)
+                        if any(c.id in skipped_ids and not c.optional for c in st.components):
+                            r["status"] = "skipped"
+                            r["detail"] = (f"skipped ({', '.join(w.skipped)}): " + GUI_MISSING_HINT)
+                            emit(f"==== {st.id}: SKIPPED ({r['detail']}) ====")
+                            bw()
+                            continue
+                        emit(f"  [skip] {st.id}: optional GUI component(s) not installable here: "
+                             f"{', '.join(w.skipped)} — {GUI_MISSING_HINT}")
                     # MANDATORY system-dep gate — BEFORE any source clone/adopt. A stack missing a
                     # mandatory dep of a non-optional component is skipped without touching its
                     # sources; optional missing deps only warn and fall through into the build.
                     gate = self.install_dep_gate(st.id)
                     for d in gate["warn"]:
-                        emit(f"  [warn] {st.id}: optional dep not installed: {d['what']}"
+                        _kind = "GUI-only (opt-in: --with-gui)" if d.get("gui") else "optional"
+                        emit(f"  [warn] {st.id}: {_kind} dep not installed: {d['what']}"
                              + (f" -> {d['install']}" if d.get("install") else ""))
                     if gate["block"]:
                         cmds = "; ".join(sorted({d.get("install", "") for d in gate["block"]
@@ -1099,17 +1224,29 @@ class AutoInstallOpsMixin:
                         emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
                         bw()
                         continue
-                    emit(f"==== {st.id}: sources ====")
+                    # A package-managed stack has nothing to adopt — say so once and skip the
+                    # whole source phase rather than running an empty grouping/transaction pass.
+                    if not w.source:
+                        emit(f"==== {st.id}: system-managed (no sources to adopt) ====")
+                    else:
+                        emit(f"==== {st.id}: sources ====")
                     r["status"] = "downloading"
                     bw()
                     ok = True
-                    for c in comps:
+                    for c in w.source:
                         path = c.source.path
                         if path not in processed:
                             action, reason, comp, selector, resolved = plan[path]
                             if action == "blocked":
                                 processed[path] = (False, f"blocked: {reason}")
                             else:
+                                # Announce the clone log BEFORE the (possibly minutes-long,
+                                # off-TTY-silent) adoption so the operator has a copy-pasteable
+                                # watch command while it runs. A link-strategy adoption never
+                                # clones -> no log to announce.
+                                if comp.source and comp.source.strategy != "link":
+                                    emit(f"  [log] {comp.id} -> tail -f "
+                                         f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                                 a = self._adopt_dev_fallback(
                                     inst, st, comp, selector, resolved,
                                     force=(action == "update"), locked=True)
@@ -1136,7 +1273,7 @@ class AutoInstallOpsMixin:
                     # linked stack with DECLARED build/test work that auto-install intentionally
                     # refuses to execute is NOT a success — the row is blocked and the
                     # run cannot end fully `completed`.
-                    linked_with_work = [c.id for c in comps
+                    linked_with_work = [c.id for c in w.source
                                         if (c.source.strategy or "") == "link"
                                         and (c.build_steps or c.test_argv)]
                     if linked_with_work:
@@ -1151,10 +1288,9 @@ class AutoInstallOpsMixin:
                         emit(f"  [blocked] {st.id}: {r['detail']}")
                         bw()
                         continue
-                    linked = [c.id for c in comps
+                    linked = [c.id for c in w.source
                               if (c.source.strategy or "") == "link"]
-                    buildable = [c for c in comps if c.build_steps
-                                 and (c.source.strategy or "") != "link"]
+                    buildable = [c for c in w.build if c.build_steps and not _is_linked(c)]
                     # Password-auth by DEFAULT — at the LAST safe point: sources adopted, all refusals passed,
                     # and there is an actual NON-LINKED build to perform. Enable atomically (override + xr_pw,
                     # one rollback-safe txn) so THIS build bakes the shared secret; the write reuses the
@@ -1193,8 +1329,7 @@ class AutoInstallOpsMixin:
                     elif linked:
                         r["detail"] = ("linked external tree — LHPC never builds/tests "
                                        "into it (build it in that checkout)")
-                    testable = [c for c in comps if c.test_argv
-                                and (c.source.strategy or "") != "link"]
+                    testable = [c for c in w.test if c.test_argv and not _is_linked(c)]
                     # Integration tests that need the stack RUNNING can't run in a build sweep
                     # (nothing is started) — they are DEFERRED, never failed, here.
                     auto = [c for c in testable if not c.test_requires_running]
@@ -1234,6 +1369,20 @@ class AutoInstallOpsMixin:
                         r["tests"] = {"ran": False, "ok": None,
                                       "detail": ("skipped (tests disabled)" if not st_tests
                                                  else "skipped (no host tests)")}
+                    # READINESS GATE — the run promises each stack is STARTABLE, not merely that
+                    # its artifacts built. A managed CLI that failed to provision, a missing
+                    # packaged binary, an ungranted device group or a conflicting packaged service
+                    # all leave the stack unable to start, so the row must NOT read success.
+                    # (Before the build the same requirement is "needs build", which is why this
+                    # runs only here, after provisioning had its chance.)
+                    blockers = self._auto_install_runtime_blockers(st)
+                    if blockers:
+                        r["status"] = "blocked"
+                        r["detail"] = "not startable — " + "; ".join(blockers[:3])
+                        failed_stacks.add(st.id)
+                        emit(f"==== {st.id}: BLOCKED ({r['detail']}) ====")
+                        bw()
+                        continue
                     r["status"] = "success"
                     bw()
                 # candidate retirement for updated groups BEFORE the boundary releases
@@ -1296,7 +1445,10 @@ class AutoInstallOpsMixin:
                 # TRUTHFUL terminal state: `completed` ONLY when every row is success,
                 # TX is skipped/successful, and required cleanup is complete. Blocked
                 # rows are NOT success — the run did not do everything it was asked to.
-                any_bad = (any(r2["status"] != "success" for r2 in marker["stacks"])
+                # `skipped` is an ACCEPTED outcome (GUI deps deliberately absent), so it does not
+                # make the run a failure — but the row still says `skipped`, never `success`, so it
+                # can never be read as installed. `blocked` remains a failure.
+                any_bad = (any(r2["status"] not in ("success", "skipped") for r2 in marker["stacks"])
                            or marker["tx_phase"]["status"] == "fail"
                            or bool(marker["error"]))
                 marker["state"] = ("completed-with-failures" if any_bad
@@ -1339,8 +1491,10 @@ class AutoInstallOpsMixin:
         done = sum(1 for r2 in marker["stacks"] if r2["status"] == "success")
         blocked_n = sum(1 for r2 in marker["stacks"] if r2["status"] == "blocked")
         failed_n = sum(1 for r2 in marker["stacks"] if r2["status"] == "fail")
+        skipped_n = sum(1 for r2 in marker["stacks"] if r2["status"] == "skipped")
         summary = (f"auto-install run {marker['state']}: {done}/{len(marker['stacks'])} stack(s) "
-                   f"successful, {blocked_n} blocked, {failed_n} failed."
+                   f"successful, {blocked_n} blocked, {failed_n} failed, "
+                   f"{skipped_n} skipped (GUI deps absent)."
                    + ("" if ok else " Successful stacks REMAIN installed and built."))
         if marker.get("error"):
             summary += f" ({marker['error']})"
@@ -1367,7 +1521,7 @@ class AutoInstallOpsMixin:
 
     def _auto_install_scope_edges(self) -> tuple:
         """(ordered stack ids, {stack -> set(dependency stacks)}) from the manifest graph."""
-        stacks = [st for st in self.stacks() if any(c.source for c in st.components)]
+        stacks = list(self.stacks())        # every manifest stack — see _auto_install_scope
         by_comp = {c.id: st.id for st in self.stacks() for c in st.components}
         edges = {st.id: set() for st in stacks}
         for st in stacks:
@@ -1546,15 +1700,19 @@ class AutoInstallOpsMixin:
         return {"fresh": True}
 
     def _auto_install_scope(self) -> list:
-        """(stack, [components-with-sources]) for every stack in DEPENDENCY order
-        (manifest graph: depends_on + build_requires stack edges; stable manifest order
-        among independents). OPTIONAL components are INCLUDED — the auto-install run installs and
-        builds every declared source under <root>/src (they are only excluded from
-        auto-START, which stays autostart-gated). This also keeps the boundary's lock set
-        aligned with what build()/test() cover (a stack build covers ALL its comps)."""
-        stacks = [st for st in self.stacks()
-                  if any(c.source for c in st.components)]
-        by_comp = {c.id: st.id for st in self.stacks() for c in st.components}
+        """(stack, StackWork) for EVERY stack in the manifest, in DEPENDENCY order (manifest
+        graph: depends_on + build_requires stack edges; stable manifest order among independents).
+
+        THE MANIFEST IS AUTHORITATIVE: a stack is never dropped for lacking a managed source. A
+        package-managed stack (meshtastic: apt binary + lhpc-shipped config + a managed CLI venv)
+        gets a normal row and is provisioned, validated and made startable like any other —
+        otherwise it silently disappears from a run that claims to cover every stack, which is
+        exactly how its broken start state went unnoticed. Each row carries the three DISJOINT
+        work lists (see StackWork) so source-specific machinery can never see a source-less
+        component. OPTIONAL components are INCLUDED — they are only excluded from auto-START,
+        which stays autostart-gated."""
+        stacks = list(self.stacks())
+        by_comp = {c.id: st.id for st in stacks for c in st.components}
         edges = {st.id: set() for st in stacks}
         for st in stacks:
             for c in st.components:
@@ -1573,13 +1731,8 @@ class AutoInstallOpsMixin:
         for st in stacks:
             visit(st.id)
         by_id = {st.id: st for st in stacks}
-        out = []
-        for sid in ordered:
-            st = by_id[sid]
-            comps = [c for c in st.components if c.source]
-            if comps:
-                out.append((st, comps))
-        return out
+        return [(by_id[sid], StackWork.of(by_id[sid], skip=self.gui_unavailable_components(by_id[sid])))
+                for sid in ordered]
 
     # ---- auto-install-operation boundary (M2.0) ----------------------------------
 

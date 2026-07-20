@@ -435,21 +435,55 @@ class MaintenanceOpsMixin:
         OBS repo, SPI/config.txt, group grants, service-disable). Order: controller deps, then manifest
         order. Includes SATISFIED deps too — this is a fresh-install PRE-CLONE bootstrap, not a gap
         report. Venv-level `python -m pip install` commands are EXCLUDED: the venv does not exist before
-        the clone, and install.sh provisions those into the venv it creates (never a bare/global pip)."""
-        raw: list[str] = []
+        the clone, and install.sh provisions those into the venv it creates (never a bare/global pip).
+        `provisioned` requires are EXCLUDED for the same reason one step further out: they are
+        materialised INTO the runtime root by `lhpc build`, so their remediation ("lhpc build <stack>")
+        is an lhpc command that does not exist yet at bootstrap time — emitting it would put a
+        `command not found` into a script whose whole job is to run before lhpc is installed."""
+        core, _gui = self._declared_dep_scopes()
+        return core
 
-        def _add(cmd: str) -> None:
-            if cmd and "-m pip install" not in cmd:       # venv-level, provisioned post-clone by install.sh
-                raw.append(cmd)
+    def _declared_gui_dep_commands(self) -> list[str]:
+        """The GUI-ONLY remediation commands — everything the headless-safe default bootstrap must
+        NOT run, and that `bootstrap-deps.sh --with-gui` installs instead. CORE WINS: a command also
+        declared by any non-GUI requirement is absent from this list (see `_declared_dep_scopes`)."""
+        _core, gui = self._declared_dep_scopes()
+        return gui
+
+    def _declared_dep_scopes(self) -> tuple[list[str], list[str]]:
+        """Split every declared remediation command into (core, gui-only).
+
+        A command's effective `gui_only` is the AND across ALL its declarations: one non-GUI
+        declaration is enough to keep it in the default bootstrap (and to restore normal mandatory
+        semantics elsewhere). That rule is what makes a shared package safe to mark `gui` on one
+        component without stranding another component that genuinely needs it headless."""
+        core: list[str] = []
+        gui: list[str] = []
+        gui_only: dict[str, bool] = {}
+
+        def _add(cmd: str, is_gui: bool) -> None:
+            if not cmd or "-m pip install" in cmd:    # venv-level, provisioned post-clone by install.sh
+                return
+            if cmd in gui_only:
+                gui_only[cmd] = gui_only[cmd] and is_gui        # AND-merge: core wins
+                return
+            gui_only[cmd] = is_gui
+            (gui if is_gui else core).append(cmd)
 
         for grp in self.controller_system_deps():
             for d in grp["deps"]:
-                _add(d.get("install", ""))
+                _add(d.get("install", ""), False)
         for s in self.stacks():
             for c in s.components:
                 for req in c.requires:
-                    _add(req.install)
-        return raw
+                    if getattr(req, "provisioned", False):
+                        continue
+                    _add(req.install, bool(getattr(req, "gui", False)))
+        # A command first seen as GUI and later declared core moves scope, so re-derive both lists
+        # from the merged verdict rather than trusting insertion order.
+        core = [c for c in core + gui if not gui_only[c]]
+        gui = [c for c in gui if gui_only[c]]
+        return core, gui
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -457,22 +491,37 @@ class MaintenanceOpsMixin:
         commands. The dep revision in the header fingerprints the declared command set."""
         import hashlib
         from . import deps
-        raw = self._declared_dep_commands()
-        rev = hashlib.sha256("\n".join(sorted(set(raw))).encode()).hexdigest()[:12]
-        return deps.render_bootstrap_script(raw, rev)
+        core, gui = self._declared_dep_scopes()
+        # The revision fingerprints COMMAND **and** SCOPE. Hashing the command strings alone would
+        # leave the revision unchanged when a package merely moves core -> gui, which is a genuine
+        # behaviour change (it disappears from the default bootstrap).
+        scoped = [f"core:{c}" for c in core] + [f"gui:{c}" for c in gui]
+        rev = hashlib.sha256("\n".join(sorted(set(scoped))).encode()).hexdigest()[:12]
+        return deps.render_bootstrap_script(core, rev, gui_cmds=gui)
 
     def deps_declared(self) -> ActionResult:
         """Readable preview of what `lhpc deps --script` would render — the declared system
         prerequisites, deduplicated, each marked NOT executed by LHPC."""
         from . import deps as deps_mod
         seen: set[str] = set()
+        core, gui = self._declared_dep_scopes()
         details = ["Declared system prerequisites (run `lhpc deps --script` for a runnable script):"]
-        for cmd in self._declared_dep_commands():
+        for cmd in core:
             c = (cmd or "").strip()
             if not c or c in seen:
                 continue
             seen.add(c)
             details.append("  " + c.replace("\n", "\n    "))
+        if gui:
+            # GUI-only commands are NOT in the default bootstrap — say so where they are listed, so
+            # the preview can never be mistaken for what a headless run installs.
+            details.append("  GUI-only (opt-in: --with-gui) — omitted by default on headless systems:")
+            for cmd in gui:
+                c = (cmd or "").strip()
+                if not c or c in seen:
+                    continue
+                seen.add(c)
+                details.append("    " + c.replace("\n", "\n      "))
         details.append(f"  ({deps_mod.NOT_EXECUTED_NOTE})")
         return ActionResult(True, f"{len(seen)} declared system-dependency command(s).",
                             details=details,
@@ -708,7 +757,7 @@ class MaintenanceOpsMixin:
         colour (yellow if any mandatory unmet, else green if only optional). Composes existing GET-safe
         probes only (shutil.which / fs.exists / find_spec / missing_requirements / is_dir) — no subprocess."""
         def norm(label, satisfied, mandatory, detail, install, runtime=False, note="",
-                 restart_pending=False):
+                 restart_pending=False, gui=False):
             # NARROW action parse: ONLY `lhpc install <target>` / `lhpc build <target>` where the op is a
             # real web action and the target resolves to a known stack — anything else stays copyable.
             op = target = None
@@ -716,9 +765,13 @@ class MaintenanceOpsMixin:
             if (len(parts) == 3 and parts[0] == "lhpc" and parts[1] in ("install", "build")
                     and parts[1] in self.WEB_ACTIONS and self.stack(parts[2]) is not None):
                 op, target, install = parts[1], parts[2], ""
-            return {"label": label, "satisfied": bool(satisfied), "mandatory": bool(mandatory),
+            # GUI-only deps are opt-in (--with-gui), so they are never a mandatory core miss on a
+            # headless box — but they stay visible and carry the remediation.
+            return {"label": label, "satisfied": bool(satisfied),
+                    "mandatory": bool(mandatory) and not bool(gui),
                     "detail": detail or "", "install": install or "", "op": op, "target": target,
-                    "runtime": bool(runtime), "note": note or "", "restart_pending": bool(restart_pending)}
+                    "runtime": bool(runtime), "note": note or "",
+                    "restart_pending": bool(restart_pending), "gui": bool(gui)}
 
         sections: list = []
         # LHPC + web server: controller_system_deps groups carry the explicit required flag (nginx here).
@@ -741,7 +794,7 @@ class MaintenanceOpsMixin:
                     mandatory = not (comp is not None and comp.optional)
                     deps_.append(norm(it.label, it.satisfied, mandatory, it.detail,
                                       it.install_cmd, runtime=it.runtime,
-                                      restart_pending=it.restart_pending))
+                                      restart_pending=it.restart_pending, gui=it.gui))
             sections.append({"title": s.name, "kind": "stack", "stack": s.id, "deps": deps_})
 
         # A restart-pending groups grant stays UNSATISFIED (start is still gated) but is NOT a mandatory
@@ -751,10 +804,16 @@ class MaintenanceOpsMixin:
                               if not d["satisfied"] and d.get("restart_pending"))
         mandatory_missing = sum(1 for sec in sections for d in sec["deps"]
                                 if not d["satisfied"] and d["mandatory"] and not d.get("restart_pending"))
+        # DISJOINT: a GUI-only miss is counted as GUI-only and NOT also as "optional", so the two
+        # figures can be shown side by side without double-counting the same dependency.
         optional_missing = sum(1 for sec in sections for d in sec["deps"]
-                               if not d["satisfied"] and not d["mandatory"] and not d.get("restart_pending"))
+                               if not d["satisfied"] and not d["mandatory"]
+                               and not d.get("gui") and not d.get("restart_pending"))
+        gui_missing = sum(1 for sec in sections for d in sec["deps"]
+                          if not d["satisfied"] and d.get("gui"))
         return {"sections": sections, "mandatory_missing": mandatory_missing,
-                "optional_missing": optional_missing, "restart_pending": restart_pending}
+                "optional_missing": optional_missing, "restart_pending": restart_pending,
+                "gui_missing": gui_missing}
 
     def _running_source_consumers(self, paths: set) -> list:
         """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —

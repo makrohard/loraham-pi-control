@@ -3,9 +3,11 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
+from .lifecycle import GUI_MISSING_HINT
 from .snapshot_memo import invalidates_snapshot
 from . import daemon_control
 from . import procident
@@ -704,7 +706,13 @@ class LifecycleOpsMixin:
             comp_cfg = dict(self.stack_config(comp.id, cfg_band))
             if _target_is_stack or comp.id == target:
                 comp_cfg.update(self._overrides_for_comp(target, "run", params, comp.id))
+            # ONE announcer per component (dedup within it): the start capture log, the
+            # required post-start log, and the detached post runner's log all get a
+            # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
+            announcer = self._log_announcer(comp.id, out)
             res = life.start(stack, comp, comp_cfg, band=cfg_band)
+            if res.log_path:
+                announcer(f"start-{comp.id}", res.log_path)
             if not res.ok:
                 # A launch that couldn't be owned AND couldn't be proven ceased is a
                 # typed UNVERIFIED (residual process), not a clean FAILED.
@@ -732,7 +740,8 @@ class LifecycleOpsMixin:
             # Required post-start must complete before VERIFIED; optional is scheduled.
             # `required_ok` is True (required passed), False (required failed), or None
             # (no required post-start) — explicit, no enum-attribute confusion.
-            required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band)
+            required_ok, post_summary = self._run_post_start(life, stack, comp, comp_cfg, cfg_band,
+                                                             announce=announcer)
             if required_ok is False:
                 cleanup = life.stop(comp, band=cfg_band)
                 record(comp, stack, Outcome.UNVERIFIED,
@@ -785,7 +794,8 @@ class LifecycleOpsMixin:
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
 
-    def _run_post_start(self, life, stack, comp, comp_cfg, band) -> tuple[bool | None, str]:
+    def _run_post_start(self, life, stack, comp, comp_cfg, band,
+                        announce=None, strict=False) -> tuple[bool | None, str]:
         """Run post-start steps. Returns (required_ok, summary):
           * (None, "")               — no post-start;
           * (None, "…scheduled")     — OPTIONAL steps scheduled detached (never gates);
@@ -793,11 +803,19 @@ class LifecycleOpsMixin:
           * (False, "…failed (rc N)")— REQUIRED steps FAILED → caller blocks VERIFIED
                                         and invokes verified cleanup.
         `required_ok is False` is the only blocking case (an explicit bool, not an
-        enum attribute)."""
+        enum attribute). `announce` (a `_log_announcer` callback) gets the post-start
+        log path the moment it exists — required synchronously via run_job's
+        on_log_open, detached from the schedule result — so the operator can tail the
+        (possibly minutes-long) retry window.
+
+        `strict=True` (the `poststart` verb, whose ONLY job is this work) also reports a
+        failed OPTIONAL scheduling as `False`. The START path leaves it False so a
+        scheduling failure stays visible-but-non-gating there."""
         if not comp.post_steps:
             return None, ""
         if life.has_required_post_start(comp):
-            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band)
+            jr = life.run_required_post_start(stack, comp, comp_cfg, band=band,
+                                              on_log_open=announce)
             if jr.ok:
                 return True, "required post-start completed"
             return False, f"required post-start failed (rc {jr.returncode})"
@@ -806,12 +824,110 @@ class LifecycleOpsMixin:
         # `spawn_post_start`, so no blanket catch is needed here).
         sched = life.spawn_post_start(stack, comp, comp_cfg, band=band)
         if sched.ok:
+            if announce is not None and sched.log_path:
+                announce(f"post-{comp.id}", sched.log_path)
             return None, "optional post-start scheduled"
         if getattr(sched, "unverified", False):
             # Lifecycle-INTEGRITY failure: a spawned runner we can neither own nor prove stopped.
             # This GATES the main VERIFIED result (unlike an ordinary optional transport failure).
             return False, f"post-start runner integrity failure: {sched.detail}"
-        return None, f"optional post-start could NOT be scheduled: {sched.detail}"
+        return (False if strict else None), \
+            f"optional post-start could NOT be scheduled: {sched.detail}"
+
+    @invalidates_snapshot
+    def poststart(self, target: str, apply: bool = False, band: str = "") -> ActionResult:
+        """Re-run a RUNNING stack's post-start steps WITHOUT restarting it — e.g. re-apply the
+        MeshCom callsign after the console-readiness retry window expired (a restart would cost
+        another multi-minute QEMU boot). Reuses the exact readiness-gated senders the start path
+        uses: required steps run synchronously, optional steps are re-scheduled detached. Any
+        LIVE post runner is cancelled FIRST — the guest console serves one exchange per
+        connection and must never see two concurrent senders."""
+        if (_r := self._controller_refusal(target)) is not None:
+            return _r
+        order = self._run_order(target)
+        if not order:
+            return ActionResult(False, f"Unknown stack or component '{target}'.",
+                                next_commands=["lhpc status"])
+        if not any(comp.post_steps for _stack, comp in order):
+            return ActionResult(False, f"'{target}' declares no post-start steps.",
+                                next_commands=[f"lhpc status {target}"])
+        if not apply:
+            lines = [f"  re-run post-start: {comp.id} ({len(comp.post_steps)} step(s))"
+                     for _stack, comp in order if comp.post_steps]
+            return ActionResult(True, f"Would re-run post-start for '{target}'.", details=lines,
+                                data={"changes": len(lines)})
+        try:
+            with self._admission_guard("poststart", target), self._config_stable():
+                return self._poststart_impl(target, order, band)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
+        except SourceTxnBlocked as blocked:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': {blocked}",
+                                next_commands=[f"lhpc status {target}"])
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': configuration "
+                                f"guard unavailable ({exc})",
+                                next_commands=[f"lhpc status {target}"])
+
+    def _poststart_impl(self, target: str, order, band: str) -> ActionResult:
+        life = self._lifecycle()
+        snap = self.build_snapshot()
+        st_index = {c.id: ss.components[c.id]
+                    for ss in snap.stacks for c in ss.stack.components}
+        out: list[str] = []
+        results: list[CompResult] = []
+
+        def record(comp, stack, outcome, summary):
+            results.append(CompResult(component=comp.id, stack=stack.id, action="poststart",
+                                      outcome=outcome, summary=summary))
+            out.append(f"  [{outcome.value}] {comp.id}: {summary}")
+
+        for stack, comp in order:
+            if not comp.post_steps:
+                out.append(f"  [skip] {comp.id}: no post-start steps")
+                continue
+            state = st_index[comp.id].run_state
+            if state != RunState.RUNNING:
+                record(comp, stack, Outcome.BLOCKED,
+                       f"not running ({state.value}) — start it first "
+                       f"(lhpc stack start {stack.id})")
+                continue
+            cfg_band = self.running_band(stack.id) if self.stack_bands(stack.id) else (band or "")
+            notes, unverified = life._cancel_post_runners(comp, cfg_band or None)
+            out.extend(f"    {n}" for n in notes)
+            if unverified:
+                record(comp, stack, Outcome.UNVERIFIED,
+                       "a live post-start runner could not be verified stopped — refusing to "
+                       "run a second sender against the same console")
+                continue
+            comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            required_ok, summary = self._run_post_start(
+                life, stack, comp, comp_cfg, cfg_band,
+                announce=self._log_announcer(comp.id, out), strict=True)
+            if required_ok is False:
+                record(comp, stack, Outcome.FAILED, summary)
+            elif required_ok is None:
+                # DETACHED: scheduled is NOT applied, so the typed outcome is STARTED, never
+                # VERIFIED. The runner probes a possibly-minutes-long readiness window and its
+                # terminal sidecar is the only proof of "applied" — STARTED keeps `.ok` True
+                # (the scheduling itself succeeded) while `.verified` stays False until that
+                # sidecar says otherwise.
+                record(comp, stack, Outcome.STARTED,
+                       "post-start re-scheduled — outcome will appear in "
+                       f"`lhpc status {stack.id}`")
+            else:
+                record(comp, stack, Outcome.VERIFIED, summary)   # required steps ran synchronously
+        ok = bool(results) and all(r.ok for r in results)
+        if not results:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': no component "
+                                "with post-start steps was found.", details=out,
+                                next_commands=[f"lhpc status {target}"])
+        # Never claim "applied": a detached re-run has only been SCHEDULED at this point.
+        summary = (f"Post-start re-scheduled for '{target}' — the outcome will appear in "
+                   f"`lhpc status {target}`." if ok else
+                   f"Post-start re-run for '{target}' did not fully apply.")
+        return ActionResult(ok, summary, details=out, results=tuple(results),
+                            next_commands=[f"lhpc status {target}", f"lhpc logs {target}"])
 
     def _daemon_radio_modes(self) -> list:
         """`--radio` mode of every OBSERVED daemon process (by command line). A missing/unknown
@@ -1737,6 +1853,38 @@ class LifecycleOpsMixin:
                              if c.build_steps and c.id not in have]
         life = self._lifecycle()
         buildable = [(s, c) for s, c in items if c.build_steps]
+        # GUI PREFLIGHT — the SAME predicate auto-install planning uses, applied HERE: before the
+        # index/source locks, before any build marker and before a single build step runs. A
+        # component whose GUI toolkit is absent must be refused (mandatory) or dropped (optional)
+        # by an explicit decision, never discovered by letting pkg-config or an import fail
+        # halfway through a build.
+        gui_skip: set = set()
+        for s in {s.id: s for s, _ in buildable}.values():
+            gui_skip |= set(self.gui_unavailable_components(s))
+        gui_dropped: list = []
+        if gui_skip:
+            refused = [(s, c) for s, c in buildable if c.id in gui_skip and not c.optional]
+            if refused:
+                return ActionResult(
+                    False,
+                    f"Refusing to build '{target}': {', '.join(c.id for _, c in refused)} "
+                    f"needs a GUI toolkit that is not installed.",
+                    details=[f"  {GUI_MISSING_HINT}"],
+                    next_commands=["lhpc deps --script > bootstrap-deps.sh"])
+            gui_dropped[:] = sorted(c.id for _, c in buildable if c.id in gui_skip)
+            buildable = [(s, c) for s, c in buildable if c.id not in gui_skip]
+            if not buildable:
+                # EVERY requested component was skipped (e.g. a direct `lhpc build meshcore-nodegui`
+                # on a headless box). This is NOT a build: return a typed skipped/no-work result and
+                # execute no build step, no marker mutation and no source lock. Reporting "succeeded"
+                # here would claim an artifact that was never produced.
+                return ActionResult(
+                    True,
+                    f"Nothing to build for '{target}': all requested component(s) skipped "
+                    f"({', '.join(gui_dropped)}) — GUI dependencies not installed.",
+                    details=[f"  [skip] {cid}: {GUI_MISSING_HINT}" for cid in gui_dropped],
+                    next_commands=[f"lhpc status {target}"],
+                    data={"skipped": list(gui_dropped), "built": 0, "changes": 0})
         # BUILD-DEPENDENCY order: a component's build_requires providers build FIRST
         # (fresh root: RadioLib's libRadioLib.a must exist before the daemon's build.sh
         # consumes it). Stable within equal rank (manifest order preserved).
@@ -1755,6 +1903,7 @@ class LifecycleOpsMixin:
             details = [f"  [build] {c.id}: "
                        + " ; ".join(" ".join(str(t) for t in st.get("argv", []))
                                     for st in c.build_steps) for _, c in buildable]
+            details += [f"  [skip] {cid}: {GUI_MISSING_HINT}" for cid in gui_dropped]
             return ActionResult(True, f"Build plan for '{target}': {len(buildable)} component(s).",
                                 details=details,
                                 next_commands=[f"lhpc build {target} --yes"] if buildable else [],
@@ -1816,7 +1965,18 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Build blocked for '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])
         self.prune_logs()
-        return ActionResult(ok, f"Build {'succeeded' if ok else 'FAILED'} for '{target}'.",
+        # Skips are part of the RESULT, not a discarded preflight detail: a run that built the
+        # headless components while dropping a GUI one must say so, never a bare "succeeded".
+        details = details + [f"  [skip] {cid}: {GUI_MISSING_HINT}" for cid in gui_dropped]
+        if ok:
+            summary = (f"Build succeeded with GUI skips for '{target}' "
+                       f"({', '.join(gui_dropped)} skipped)." if gui_dropped
+                       else f"Build succeeded for '{target}'.")
+        else:
+            summary = f"Build FAILED for '{target}'."
+        if gui_dropped:
+            build_meta = {**build_meta, "skipped": list(gui_dropped)}
+        return ActionResult(ok, summary,
                             details=details, next_commands=["lhpc status " + target],
                             data=build_meta)
 
@@ -2871,6 +3031,147 @@ class LifecycleOpsMixin:
                 return True
         return False
 
+    # An outcome value read off disk is interpolated into CLI/web lines — bound its shape.
+    _OUTCOME_RE = _re.compile(r"[a-z][a-z-]{0,23}")
+
+    @staticmethod
+    def _safe_label(value, fallback: str = "step") -> str:
+        """A sidecar label is data from a file, not a trusted string: keep it printable, single
+        line and short before it reaches a status line."""
+        s = "".join(c for c in str(value or "") if c.isprintable())[:32].strip()
+        return s or fallback
+
+    def _render_post_steps(self, steps, log_hint: str, stack_hint: str) -> list[str]:
+        """Render typed post-start step records into human status lines. Shared by the detached
+        and the synchronous (required) feeds so both report identically.
+
+        NOTE: the `detail` field (a bounded, sanitised excerpt of a child's stderr) is
+        DELIBERATELY never rendered — the full text lives in the post-start log, which the
+        operator opens on purpose. Nothing here can leak a traceback into the CLI or the web UI."""
+        lines: list[str] = []
+        for st in steps:
+            if not isinstance(st, dict):
+                continue
+            label = self._safe_label(st.get("label") or st.get("kind"))
+            n = st.get("attempts", "?")
+            el = st.get("elapsed_s", "?")
+            oc = st.get("outcome")
+            rc = st.get("rc")
+            if oc == "acked":
+                lines.append(f"post-start: {label} confirmed on attempt {n} after {el}s")
+            elif oc == "probe-matched":
+                lines.append(f"post-start: {label} already set "
+                             f"(probe matched on attempt {n} after {el}s)")
+            elif oc == "sent-unacked":
+                lines.append(f"post-start: {label} sent (no acknowledgement) "
+                             f"after {n} attempts/{el}s")
+            elif oc == "exhausted":
+                lines.append(f"post-start: {label} NOT applied — console never became "
+                             f"ready within {el}s ({n} attempts); re-apply with: "
+                             f"lhpc stack poststart {stack_hint}")
+            elif oc == "ok":
+                lines.append(f"post-start: {label} applied after {el}s")
+            elif oc == "failed":
+                lines.append(f"post-start: {label} FAILED "
+                             f"(exit {rc if isinstance(rc, int) else '?'}) after {el}s — see "
+                             f"{log_hint}; re-apply with: lhpc stack poststart {stack_hint}")
+            elif oc == "timeout":
+                lines.append(f"post-start: {label} timed out after {el}s (see {log_hint})")
+            elif oc == "ready":
+                lines.append(f"post-start: {label} endpoint ready after {el}s")
+            elif oc == "main-gone":
+                lines.append(f"post-start: {label} aborted — main process was "
+                             "replaced/stopped mid-window")
+            elif isinstance(oc, str) and self._OUTCOME_RE.fullmatch(oc):
+                # A future/unknown outcome must be VISIBLE, never silently dropped.
+                lines.append(f"post-start: {label} outcome '{oc}' (see {log_hint})")
+        return lines
+
+    def _required_post_outcomes(self, comp_id: str) -> list[str]:
+        """Status lines from the SYNCHRONOUS (required) post-start run — e.g. the Meshtastic region
+        push, which is required and therefore start-blocking.
+
+        That path writes a sidecar but NO ownership record, so the file is found by recomputing its
+        leaf from the CURRENT verified main binding. The binding must be looked up on the band the
+        stack is ACTUALLY running: a multi-band stack (meshtastic serves 433 or 868) records its
+        ownership band-scoped, so the band-less lookup this used to do could never match a real
+        record and the region outcome silently never rendered.
+
+        Three independent checks must all pass before anything is shown, and every one of them
+        fails soft (returns no lines, never raises into status):
+          * the sidecar's meta must name THIS component and THIS band — never another band's file;
+          * the recorded binding must equal the current verified launch — never a stale launch's;
+          * the payload must be well-formed.
+        """
+        life = self._lifecycle()
+        stack_id = self.stack_of(comp_id) or comp_id
+        # A multi-band stack persists which band it came up on; a single-band/bandless stack has
+        # no marker and correctly resolves to "" (unchanged behaviour for those).
+        band = self.running_band(stack_id) if self.stack_bands(stack_id) else ""
+        binding = life._binding_for(comp_id, band)
+        if binding is None:
+            return []
+        try:
+            path = life.paths.under("state", "post", life.required_result_leaf(binding))
+            data = json.loads(runtime_fs.read_text(life.paths, Path(path)))
+        except (OSError, ValueError, PathContainmentError):
+            return []
+        meta = data.get("meta") if isinstance(data, dict) else None
+        if not isinstance(meta, dict) or meta.get("role") != "required":
+            return []
+        # The leaf is derived from the launch id alone, so it does not by itself prove WHICH
+        # component/band wrote it — check that explicitly rather than trusting the filename.
+        if meta.get("comp") != comp_id or (meta.get("band") or "") != (band or ""):
+            return []
+        rec_binding = data.get("binding")
+        if not isinstance(rec_binding, dict) or any(
+                rec_binding.get(k) != binding.get(k)
+                for k in ("main_launch_id", "main_pid", "main_starttime")):
+            return []
+        steps = data.get("steps")
+        if not isinstance(steps, list):
+            return []
+        return self._render_post_steps(steps, "the post-start log", stack_id)
+
+    def _post_start_outcomes(self, comp_id: str) -> list[str]:
+        """Human status lines for a component's post-start work — the TERMINAL outcome of e.g.
+        the MeshCom callsign push ('confirmed on attempt N' / 'NOT applied — console never became
+        ready') or the Meshtastic region/identity pushes. Reads BOTH feeds: the uid-scoped sidecar
+        each detached runner writes, and the binding-scoped sidecar the synchronous required run
+        writes. Fail-soft everywhere: a missing/invalid sidecar degrades to 'outcome unknown',
+        never an exception into status. A render-time-skipped step (empty/N0CALL callsign)
+        produces NO line — an intentionally-unsent setting is not a failure."""
+        life = self._lifecycle()
+        lines: list[str] = []
+        for rec in life.owned_records(comp_id, role="post"):
+            # Only trust a result bound to the CURRENT verified main launch — a record whose
+            # main was replaced describes a previous run (belt-and-braces on top of the
+            # cancel-time sidecar cleanup).
+            binding = life._binding_for(comp_id, rec.get("band", ""))
+            if binding is not None and (
+                    rec.get("main_pid") != binding.get("main_pid")
+                    or rec.get("main_starttime") != binding.get("main_starttime")):
+                continue
+            log_hint = rec.get("log_path") or "the post-start log"
+            if not life._original_ceased(rec):
+                lines.append(f"post-start: applying — retry window active (log {log_hint})")
+                continue
+            rp = rec.get("result_path")
+            data = None
+            if rp:
+                try:
+                    data = json.loads(runtime_fs.read_text(life.paths, Path(rp)))
+                except (OSError, ValueError, PathContainmentError):
+                    data = None
+            steps = (data or {}).get("steps")
+            if not isinstance(steps, list):
+                lines.append(f"post-start: outcome unknown (see {log_hint})")
+                continue
+            lines.extend(self._render_post_steps(steps, log_hint,
+                                                 rec.get("stack", comp_id)))
+        lines.extend(self._required_post_outcomes(comp_id))
+        return lines
+
     def radio_overview(self) -> list[dict]:
         """Per-band view for the radio dashboard: daemon/radio config (if running),
         which stack (+ its components) is up on that band, and which stacks can be
@@ -3121,6 +3422,7 @@ class LifecycleOpsMixin:
             "restart": lambda: self.restart(target, apply=apply, params=params,
                                             stop_owners=stop_owners, band=band,
                                             file_overrides=file_overrides),
+            "poststart": lambda: self.poststart(target, apply=apply, band=band),
             "build": lambda: self.build(target, apply=apply),
             "test": lambda: self.test(target, apply=apply),
             "test-tx": lambda: self.test(target, tx=True, apply=apply),

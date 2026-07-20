@@ -50,9 +50,10 @@ def test_optional_dep_of_optional_component_only_warns(tmp_path, _socat_absent):
 
 
 def test_runtime_group_capability_is_excluded_from_the_gate(tmp_path):
-    # meshtasticd + spidev present so only the spi/gpio GROUP capability is unmet; group caps gate
-    # start, not install -> they appear in neither block nor warn.
-    svc = _svc(tmp_path, paths=("/usr/bin/meshtasticd", "/dev/spidev0.0"), groups=())
+    # Build headers + spidev present so only the spi/gpio GROUP capability is unmet; group caps gate
+    # start, not install -> they appear in neither block nor warn. (meshtasticd itself is a managed
+    # build now, so its presence is not an apt dependency at all.)
+    svc = _svc(tmp_path, paths=("/usr/include/yaml-cpp/yaml.h", "/dev/spidev0.0"), groups=())
     gate = svc.install_dep_gate("meshtastic")
     assert gate["block"] == [] and gate["warn"] == []
     assert any(d["runtime"] for d in svc.system_deps("meshtastic"))   # the group cap still surfaces
@@ -100,10 +101,10 @@ def test_cli_install_warns_on_optional_but_proceeds(tmp_path, monkeypatch, capsy
 
 # --- web per-stack confirm page ------------------------------------------------------------------
 
-def _real_app(tmp_path):
+def _real_app(tmp_path, paths=()):
     svc_holder = {}
     def factory():
-        svc = _svc(tmp_path)
+        svc = _svc(tmp_path, paths=paths)
         svc_holder["svc"] = svc
         return svc
     app = create_app(service_factory=factory)
@@ -130,6 +131,21 @@ def test_confirm_page_warns_but_allows_apply_on_optional(tmp_path, _socat_absent
     assert "Optional dependencies not installed" in cf and "socat" in cf
     assert "Missing system dependencies" not in cf           # NOT a hard block
     assert 'name="confirmed" value="yes"' in cf              # Apply form still present
+
+
+def test_confirm_page_labels_a_gui_only_warning_as_opt_in(tmp_path):
+    """A warn list that is ENTIRELY GUI-only says so — a headless operator must not be told an
+    opt-in toolkit is a plain "optional dependency" they ought to install."""
+    # Voice's CORE headers are present, GTK is not -> the warn list is purely GUI and there is no
+    # mandatory block, which is exactly the headless case this wording exists for.
+    c = _real_app(tmp_path, paths=("/usr/include/codec2/codec2.h",
+                                   "/usr/include/alsa/asoundlib.h",
+                                   "/usr/include/ncurses.h"))
+    cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                 "target": "voice"}).get_data(as_text=True)
+    assert "GUI-only dependencies not installed (opt-in: --with-gui)" in cf
+    assert "Optional dependencies not installed" not in cf
+    assert 'name="confirmed" value="yes"' in cf                # still allowed to proceed
 
 
 # --- auto-install -----------------------------------------------------------------------------------
@@ -160,8 +176,10 @@ def test_auto_install_preflight_helper_classifies_block_vs_warn(tmp_path, _socat
 @pytest.mark.needs_session
 def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
     # Stub freeze/adopt/build/test so the run reaches the per-stack loop fast — but leave the REAL
-    # dep gate in place. meshtastic is independent with mandatory deps missing -> it must be BLOCKED
-    # by the early gate, before its source phase is ever entered.
+    # dep gate in place. `chat` has sources AND a mandatory dep missing (ncurses header) -> it must
+    # be BLOCKED by the early gate, before its source phase is ever entered.
+    # (meshtastic is no longer usable here: it declares no source, so it is outside the
+    # install/build/test scope entirely — its deps surface on the Dependencies page instead.)
     from lhpc.core.install import Installer, PlanAction
     monkeypatch.setattr(ControllerService, "_frozen_ref",
                         lambda self, comp, source: (("f" * 40, "frozen: stub"), ""))
@@ -177,8 +195,8 @@ def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
     lines = []
     _svc(tmp_path).auto_install(apply=True, tests=True, emit=lines.append)
     joined = "\n".join(lines)
-    assert "==== meshtastic: BLOCKED (missing mandatory system deps" in joined
-    assert "==== meshtastic: sources ====" not in joined      # never reached the source phase
+    assert "==== chat: BLOCKED (missing mandatory system deps" in joined
+    assert "==== chat: sources ====" not in joined            # never reached the source phase
 
 
 def test_radiolib_build_deps_warn_on_a_fresh_image(tmp_path):

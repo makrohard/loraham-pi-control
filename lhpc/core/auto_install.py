@@ -38,8 +38,10 @@ PLAN = ("state", "auto-install-plan.json")
 
 RUN_STATES = ("preparing", "running", "completed", "completed-with-failures",
               "aborted", "interrupted", "unsafe")
+# `skipped` = deliberately NOT installed (its GUI dependencies are absent on this headless box).
+# It is an ACCEPTED outcome, not a failure — but it must never read as "installed".
 STACK_STATUSES = ("pending", "downloading", "building", "testing",
-                  "success", "fail", "blocked")
+                  "success", "fail", "blocked", "skipped")
 TX_STATUSES = ("skipped", "pending", "running", "success", "fail")
 
 # Terminal run states: a NEW run may start over these without acknowledgement. `aborted` is a clean

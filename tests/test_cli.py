@@ -194,6 +194,12 @@ def test_self_update_repair_and_recover_cli(capsys, monkeypatch):
 
 
 def test_self_update_apply_cli_yes(capsys, monkeypatch):
+    # DETERMINISM: `self_update_apply_operator` REFUSES inside a managed systemd unit, which it
+    # detects via INVOCATION_ID. A hosted CI runner executes under systemd and therefore has that
+    # variable set ambiently, so the refusal — not the stubbed apply — would be what this test
+    # observed. Remove it here rather than weakening the product guard, which is load-bearing: a
+    # managed process must never drive systemctl against its own unit.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     from lhpc.core.services import ControllerService, ActionResult
     seen = {}
     def fake_apply(self, *, force=False):
@@ -217,6 +223,9 @@ def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
 
 
 def test_self_update_busy_cli(capsys, monkeypatch):
+    # See test_self_update_apply_cli_yes: strip the ambient systemd INVOCATION_ID so the managed-unit
+    # refusal cannot pre-empt the busy path this test is about.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "self_update_apply", lambda self, *, force=False:
         ActionResult(False, "A self-update is already in progress — try again shortly.",
@@ -448,6 +457,26 @@ def test_stack_restart_is_a_command(tmp_path, monkeypatch, capsys):
     assert "Restart plan" in capsys.readouterr().out
 
 
+def test_stack_poststart_is_a_command(tmp_path, monkeypatch, capsys):
+    # Re-apply post-start (e.g. the MeshCom callsign) against a running stack — the
+    # dry-run plan lists what would re-run without argparse rejecting the verb.
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["stack", "poststart", "meshcom"]) == 0      # not argparse rc 2
+    assert "re-run post-start" in capsys.readouterr().out
+
+
+def test_stack_poststart_dispatches_run_action(monkeypatch, capsys):
+    from lhpc.core.services import ControllerService, ActionResult
+    calls = []
+    def cap(self, op, target, **kw):
+        calls.append((op, target, kw.get("apply")))
+        return ActionResult(True, "ok", details=["  re-run post-start: meshcom-qemu"],
+                            data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "run_action", cap)
+    assert main(["stack", "poststart", "meshcom", "--yes"]) == 0
+    assert calls[-1] == ("poststart", "meshcom", True)       # plan, then applied
+
+
 def test_source_check_and_known_working_dispatch(monkeypatch, capsys):
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "source_check",
@@ -510,3 +539,88 @@ def test_docs_cli_lists_every_command():
     doc = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "cli.md").read_text()
     missing = [c for c in subs.choices if f"### {c}" not in doc]
     assert not missing, f"docs/cli.md missing sections for: {missing}"
+
+
+# --- auto-install --recover / --status (item R: headless recovery parity) -------------------------
+# After an interrupted run the leftover reservation/lease/marker block a new run, and ack was
+# exposed ONLY in the web console. The CLI now recovers in one command, and every refusal names it.
+
+def _dead_reservation(rt):
+    # A bound-then-dead child reservation (pid that cannot be ours), as a crashed run leaves behind.
+    from lhpc.core import auto_install as ai_mod
+    from lhpc.core.paths import Paths
+    dead = {"starttime": 1, "pgid": 1, "sid": 1, "exec": "/bin/false", "argv_fp": "x", "argv_len": 1}
+    ok, _ = ai_mod.write_reservation(Paths(runtime_root=rt), "f" * 32, 999999, dead, phase="spawned")
+    assert ok
+
+
+def test_auto_install_status_reports_recovery_and_names_the_command(tmp_path, monkeypatch, capsys):
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    main(["bootstrap", "--yes"]); capsys.readouterr()
+    _dead_reservation(rt)
+    rc = main(["auto-install", "--status"])
+    out = capsys.readouterr().out
+    assert rc == 1                                             # recovery required -> nonzero
+    assert "recovery required" in out and "died holding its reservation" in out
+    assert "lhpc auto-install --recover" in out                # names the exact command
+
+
+def test_auto_install_recover_clears_all_state_in_one_action(tmp_path, monkeypatch, capsys):
+    from lhpc.core import auto_install as ai_mod
+    from lhpc.core.paths import Paths
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    main(["bootstrap", "--yes"]); capsys.readouterr()
+    _dead_reservation(rt)
+    rc = main(["auto-install", "--recover"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "acknowledged" in out.lower()
+    assert ai_mod.read_reservation(Paths(runtime_root=rt))[0] == "absent"   # reservation cleared
+    # and a fresh --status is clean again
+    assert main(["auto-install", "--status"]) == 0
+    assert "no run on record" in capsys.readouterr().out.lower()
+
+
+def test_auto_install_start_refusal_names_the_recover_command(tmp_path, monkeypatch, capsys):
+    # The field path: operator re-runs `lhpc auto-install` after a crash and is refused. The refusal
+    # itself must name the recovery command, not just "acknowledge (recover)".
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    main(["bootstrap", "--yes"]); capsys.readouterr()
+    _dead_reservation(rt)
+    rc = main(["auto-install", "--yes"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "lhpc auto-install --recover" in out
+
+
+def test_auto_install_recover_orphan_risk_needs_confirm_orphan(tmp_path, monkeypatch, capsys):
+    # The confirm_orphan path: a run whose spawned child's termination was never proven (ORPHAN
+    # RISK) must NOT be cleared by a plain --recover — a possibly-live process requires the explicit
+    # --confirm-orphan, exactly as the web checkbox does.
+    from lhpc.core import auto_install as ai_mod
+    from lhpc.core.paths import Paths
+    rt = tmp_path / "rt"
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
+    main(["bootstrap", "--yes"]); capsys.readouterr()
+    paths = Paths(runtime_root=rt)
+    dead = {"starttime": 1, "pgid": 1, "sid": 1, "exec": "/bin/false", "argv_fp": "x", "argv_len": 1}
+    ok, _ = ai_mod.write_reservation(paths, "a" * 32, 999999, dead, phase="orphan-risk")
+    assert ok
+
+    # --status surfaces the orphan risk and names the confirm variant of the command
+    assert main(["auto-install", "--status"]) == 1
+    sout = capsys.readouterr().out
+    assert "ORPHAN RISK" in sout and "lhpc auto-install --recover --confirm-orphan" in sout
+
+    # plain --recover REFUSES and clears nothing
+    assert main(["auto-install", "--recover"]) == 1
+    rout = capsys.readouterr().out
+    assert "confirmation" in rout.lower()
+    assert ai_mod.read_reservation(paths)[0] == "valid"        # untouched
+
+    # --recover --confirm-orphan acknowledges and clears it
+    assert main(["auto-install", "--recover", "--confirm-orphan"]) == 0
+    assert "acknowledged" in capsys.readouterr().out.lower()
+    assert ai_mod.read_reservation(paths)[0] == "absent"

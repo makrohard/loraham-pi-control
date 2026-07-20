@@ -19,7 +19,11 @@ def _svc(tmp_path, groups=None, *, effective=None, configured=None):
     eff = frozenset(effective if effective is not None else (groups or ()))
     cfg = frozenset(configured if configured is not None else (groups or ()))
     fake = FakeSystem(effective_group_names=eff, configured_group_names=cfg,
-                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+                      paths={"/usr/include/yaml-cpp/yaml.h", "/dev/spidev0.0",
+                             str(tmp_path / "build/tools/meshtastic-cli/.venv/bin/meshtastic")})
+    # meshtasticd is BUILT from a managed checkout now, so adopt the source and its build header:
+    # otherwise "not installed" / a missing build dep would vary alongside the group requirement.
+    (tmp_path / "src" / "meshtastic-firmware").mkdir(parents=True, exist_ok=True)
     return ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
 
 
@@ -124,8 +128,7 @@ def test_start_gate_blocked_reason_advises_restart_when_pending(tmp_path):
     # effective grant, instead of re-showing the already-run usermod.
     svc = _svc(tmp_path, effective=set(), configured={"spi", "gpio"})
     svc.bootstrap(apply=True)
-    mc = _meshtastic_comp(svc)
-    (svc._paths.runtime_root / mc.source.path).mkdir(parents=True, exist_ok=True)   # "installed"
+    # meshtastic is source-less (apt binary + lhpc-shipped config base) -> always "installed"
     r = svc.start("meshtastic", apply=True)
     blob = "\n".join(r.details) + " " + r.summary
     assert GROUP_RESTART_HINT in blob and "usermod" not in blob

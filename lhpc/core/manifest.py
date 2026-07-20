@@ -21,6 +21,7 @@ import re
 import tomllib
 from pathlib import Path
 
+from . import commands
 from .assets import asset_path
 from .model import (
     Component,
@@ -65,16 +66,23 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
     base = raw.get("base", "")
     # Static containment policy (P1): a generated-config path/base must be a `{runtime}/...`
     # destination OR a RELATIVE path under the managed source — never an arbitrary absolute
-    # path, unknown `{placeholder}`, or a `..` traversal. Runtime-`Paths` checks happen at
-    # write time; this rejects malformed manifest destinations at load.
+    # path, unknown `{placeholder}`, or a `..` traversal. A BASE may additionally be
+    # `{asset}/...` (a template shipped as lhpc package data, read-only); a generated
+    # DESTINATION may not. Runtime-`Paths` checks happen at write time; this rejects
+    # malformed manifest destinations at load.
     for label, value in (("config_file.path", path), ("config_file.base", base)):
         if not value:
             continue
         if value == "{runtime}" or value.startswith("{runtime}/"):
             continue
+        if label == "config_file.base" and value.startswith("{asset}/"):
+            if ".." in value.split("/"):
+                raise ManifestError(f"{label} must not traverse, got {value!r}")
+            continue
         if value.startswith("/") or value.startswith("{") or ".." in value.split("/"):
             raise ManifestError(
-                f"{label} must be '{{runtime}}/...' or a relative source path, got {value!r}")
+                f"{label} must be '{{runtime}}/...', '{{asset}}/...' (base only) or a relative "
+                f"source path, got {value!r}")
     return FileConfig(path=path, fmt=raw.get("fmt", "keyval"),
                       base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
@@ -115,6 +123,22 @@ _READINESS = {"process", "endpoint", "daemon-band", "manual", "external-systemd"
 _PRE_KINDS = {"mkdir", "chmod", "symlink"}
 _POST_KINDS = {"delay", "exec", "tcp_wait", "tcp_send"}
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# A require's `module` probe is a TOP-LEVEL python module name only. Dotted names are refused on
+# purpose: `importlib.util.find_spec("parent.child")` IMPORTS the parent package to locate the child,
+# and this probe runs on read-only dependency/status paths that must stay side-effect free.
+_MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _require_module(value, cid: str) -> str:
+    """Validate a require's optional `module` probe name."""
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    if not _MODULE_NAME.fullmatch(s):
+        raise ManifestError(
+            f"{cid}: require module must be a top-level python module name "
+            f"(no dots — find_spec would import the parent package), got {s!r}")
+    return s
 
 
 def _check_token(cid: str, tok: str, names: set) -> None:
@@ -205,7 +229,23 @@ def _validate_component(comp) -> None:
             tok = str(tok)
             if tok.startswith("{pkgconfig:") and tok.endswith("}"):
                 continue            # build-only placeholder (resolved via pkg-config)
+            if tok == "{asset}" or tok.startswith("{asset}/"):
+                # Build-only placeholder: a helper SHIPPED as lhpc package data, for steps whose
+                # logic cannot live in an upstream checkout. Resolved (and path-validated) by
+                # commands._asset_token; read-only by construction.
+                continue
             _check_token(cid, tok, names)
+        # Optional quiet-step preamble written into the step log at step start: a string with
+        # only {runtime}/{source} placeholders. Validated EAGERLY (dry-run substitution) so a
+        # typo'd placeholder fails at manifest load, not minutes into a build.
+        if "announce" in step:
+            ann = step["announce"]
+            if not isinstance(ann, str) or not ann.strip():
+                raise ManifestError(f"{cid}: build-step announce must be a non-empty string")
+            try:
+                commands._paths_subst(ann, "r", "s", "")
+            except commands.CommandError as exc:
+                raise ManifestError(f"{cid}: build-step announce: {exc}")
     for step in comp.pre_steps:
         if step.get("kind") not in _PRE_KINDS:
             raise ManifestError(f"{cid}: invalid pre-step kind {step.get('kind')!r}")
@@ -462,7 +502,9 @@ def _parse_component(raw: dict) -> Component:
                         check_file=r.get("check_file", ""), note=r.get("note", ""),
                         groups=tuple(r.get("groups", [])),
                         absent_file=r.get("absent_file", ""),
-                        provisioned=bool(r.get("provisioned", False)))
+                        provisioned=bool(r.get("provisioned", False)),
+                        module=_require_module(r.get("module", ""), raw.get("id", "?")),
+                        gui=bool(r.get("gui", False)))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),

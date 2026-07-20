@@ -17,9 +17,15 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
 ## Fresh-install checklist
 
 1. Flash Trixie arm64 (Imager settings incl. user / Wi-Fi / SSH; see the gotcha above).
-2. `sudo bash bootstrap-deps.sh --spi-mode soft-cs` → `sudo reboot`. **`--spi-mode` is required:**
-   - `soft-cs` — single-radio LoRaHAM Pi / Uputronics (meshtasticd software CS, `/dev/spidev0.0`).
-   - `hardware-cs` — a setup needing hardware CE0/CE1 (e.g. a **dual Uputronics**); SPI on, no overlay.
+2. `sudo bash bootstrap-deps.sh --spi-mode soft-cs` → `sudo reboot`. On a **lite (headless)** image
+   this is all you need: GUI-only dependencies are omitted by default, so a headless rig never pulls
+   the GTK/X11/Wayland dev chain. Add `--with-gui` only on a machine that already has a display —
+   without it, the Voice stack is reported *skipped* and MeshCore runs via its CLI (the optional
+   Node Manager GUI is skipped). **`--spi-mode` is required:**
+   - `soft-cs` — LoRaHAM Pi / Uputronics rigs, **single-radio AND dual Uputronics** (software CS,
+     `/dev/spidev0.0`; daemon + meshtasticd drive CS7/CS8 as GPIOs — field-verified on the dual rig).
+   - `hardware-cs` — only for boards that really use kernel-driven CE0/CE1; SPI on, no overlay.
+     **NOT for Uputronics** (kernel-claimed CE0/CE1 collides with the daemon's GPIO chip-selects).
    - `skip` — SPI already configured.
    Group grants (`spi`/`gpio`) go to the operator — `--operator-user <name>` if you run it as root,
    else `$SUDO_USER`/the invoking user; **never root**. The SPI write is idempotent and fails closed on
@@ -49,16 +55,35 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
   only 78 MiB in use, while the web stack was resident). To prevent the *hard* OOM, `bootstrap-deps.sh`
   provisions a **disk-backed** swapfile (`/var/swap.lhpc`, default 768 MB) when `MemTotal < ~600 MB`,
   at a **lower priority than zram** — zram stays the fast tier and the file is overflow that only backs
-  the peak. It is created only when there is no sufficient existing disk swap (zram is *not* counted)
-  **and** the target filesystem has ≥ 2× the size free (else it warns and skips rather than fill the
-  card); it is idempotent (a re-run detects the file/`fstab` entry and no-ops). **Trade-off:** the
-  swapfile lives on the SD card, so heavy paging adds flash wear — the cost of build reliability on a
-  512 MB box. Opt out with `--no-swapfile` (or size it with `--swap-size <MB>`); on a Pi 5 or any board
-  with ≥ 600 MB RAM it is never created. A build that pages heavily every time is a signal to stop the
-  web stack (above) or move to more RAM.
+  the peak. It is created only when there is no sufficient *other* disk swap (zram is *not* counted,
+  and neither is our own file) **and** the target filesystem has enough free space (2× the target for a
+  fresh image, 1× to rebuild an existing one) — else it refuses rather than fill the card.
+  **Success means ACTIVE *and* DECLARED:** the image is built in a same-directory temp, fsynced and
+  renamed into place (an interrupted run leaves an inert temp, never a half-formatted swapfile), and
+  the `fstab` entry is published transactionally so there is always **exactly one** canonical line.
+  A re-run therefore *repairs* whichever half is missing (active-but-undeclared, or declared-but-off)
+  instead of merely no-oping. A non-regular file at the swap path — symlink, directory, FIFO, device —
+  is **refused untouched**, as is a symlinked `/etc/fstab` (the script is privileged; following a link
+  would let it overwrite an arbitrary target). **On a low-RAM host where swap is required but cannot be
+  provisioned the bootstrap now exits 4** — the apt/SPI/group work still completes first, so you get a
+  configured machine *and* an unambiguous failure. **Trade-off:** the swapfile lives on the SD card, so
+  heavy paging adds flash wear — the cost of build reliability on a 512 MB box. Opt out with
+  `--no-swapfile` (the only supported way to proceed without it), or size it with
+  `--swap-size <MB>` (64–16384); on a Pi 5 or any board with ≥ 600 MB RAM it is never created. A build
+  that pages heavily every time is a signal to stop the web stack (above) or move to more RAM.
 - Builds are detached: they survive a web-service restart. Every job prints a copy-pasteable
   `tail -f <log>` line the moment its log is created — follow the exact file from another terminal
-  instead of guessing (`lhpc logs <comp>` resolves to the same newest file).
+  instead of guessing (`lhpc logs <comp>` resolves to the same newest file). Build output is
+  **block-buffered off a TTY**, so a `tail -f` that sits quiet for minutes is not a stalled build —
+  judge by CPU (`ps -eo pcpu,etime,cmd --sort=-pcpu | head`) and the growing object count under
+  `.pio/build/`.
+- **Recovering an interrupted `auto-install`.** If a run crashes (SSH drop under load, power blip),
+  its leftover markers block the next start. `lhpc auto-install --status` prints the reason;
+  `lhpc auto-install --recover` clears the reservation + lease + run marker in one action (the CLI
+  equivalent of the console's recover button), and `--confirm-orphan` acknowledges a child whose
+  termination could not be proven (inspect `ps` first). The state lives in
+  `state/auto-install-start.json`, `state/auto-install-lease.json`, `state/auto-install.json` and
+  `state/auto-install-plan.json` — `--recover` is the supported path; do not hand-edit them.
 
 ## MeshCom QEMU stack — managed tools
 
@@ -103,8 +128,8 @@ pinned SHA-256 verification** — a wrong file is refused.
   > above is the supported offline path for the web service.
 
 Because both tools are now provisioned by `lhpc build`, they no longer appear in `bootstrap-deps.sh`
-— only `libslirp0`, plus the download/extract utilities (`wget`, `xz-utils`) and the OBS repo's
-`curl`/`gnupg`/`ca-certificates`, remain apt-level.
+— only `libslirp0`, plus the download/extract utilities (`wget`, `xz-utils`) and
+`curl`/`ca-certificates` (used to fetch the sha256-verified Meshtastic web UI), remain apt-level.
 
 **Pinned MeshCom source.** The controller pins `makrohard/meshcom-qemu-raspi` at the commit that
 carries the transactional `fetch-qemu.sh`, the `PIO=`-honoring build scripts, and the memory-aware
@@ -130,8 +155,12 @@ carries the transactional `fetch-qemu.sh`, the `PIO=`-honoring build scripts, an
 
 ## meshtasticd YAML — `gpiochip` portability
 
-The Uputronics meshtasticd template (`LoRaHAM_Pi/meshtastic/config.yaml`) uses plain BCM pin numbers
-and **no hardcoded `gpiochip`**:
+The Uputronics meshtasticd template ships **with lhpc** as package data
+(`lhpc/data/bases/meshtasticd.yaml`) — meshtasticd itself is a managed build, so the meshtastic stack
+adopts no source at all and a fresh install clones nothing for it. `lhpc stack start meshtastic`
+regenerates `{runtime}/config/files/meshtasticd.yaml` from that base every time, so edit stack
+settings in lhpc rather than the generated file. The template uses plain BCM pin numbers and **no
+hardcoded `gpiochip`**:
 
 - **Pi Zero 2 W:** the 40-pin header is `gpiochip0` (the kernel default) — no `gpiochip` line needed.
 - **Pi 5:** the header GPIO moved to a different chip (commonly `gpiochip4`) and can shift between
@@ -156,3 +185,24 @@ does not build on Trixie's Python). Both hardware classes keep their OS GPIO def
   that shim.
 - Classic `RPi.GPIO` is **incompatible with the Pi 5's RP1** GPIO. If the current Zero 2 W rig carries
   classic `RPi.GPIO` (fine on that SoC), **restore `python3-rpi-lgpio` if the card ever moves to a Pi 5.**
+
+## Adding a third-party apt package — audit checklist
+
+The bootstrap's real package closure must be known *before* an install, not discovered on hardware.
+Two live acceptance runs were aborted because it was not.
+
+1. Run `sudo bash bootstrap-deps.sh --dry-run` **first** on a fresh image. It simulates the exact
+   default apt transaction (`apt-get install -s -y --no-install-recommends`), changes nothing, and
+   exits nonzero if the set cannot be resolved or would pull anything graphical/audio.
+2. Recommends are not optional detail — they are how the cascade arrived. `git` Recommends
+   `openssh-client`, which Recommends `xauth`, which Depends on `libX11`. The generated install runs
+   `--no-install-recommends` for exactly this reason.
+3. Before declaring a new third-party package, check what it *actually* links (`readelf -d`, `ldd`)
+   against what it *declares* (`apt-cache show <pkg>`). They differ: meshtasticd declared
+   `libsdl2-2.0-0` and never linked it, and that one overdeclared dependency was the entire
+   99-package / 308 MB desktop cascade.
+4. Record the closure size and the denylist verdict here when a package is added. A package that
+   genuinely needs a Recommends must list it explicitly, with a comment saying why.
+
+Never installed, in any mode: a desktop environment, display manager, or X/Wayland server.
+`--with-gui` is the only GUI opt-in and it installs GUI *application libraries* only.

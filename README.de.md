@@ -1,211 +1,288 @@
 # LoRaHAM Pi Control (`lhpc`) — Anleitung (Deutsch)
 
-Die LoRa-Amateurfunk-Software-Stacks auf einem Raspberry Pi von einer Stelle aus
-installieren, konfigurieren und betreiben — über eine Terminal-CLI und eine lokale Web-Konsole.
+Die LoRa-Amateurfunk-Software-Stacks auf einem Raspberry Pi von einer Stelle aus installieren,
+konfigurieren und betreiben — über eine CLI und eine lokale Web-Konsole. `lhpc` übernimmt den
+Quellcode jedes Stacks, baut ihn, startet/stoppt ihn in Abhängigkeitsreihenfolge, erzwingt einen
+Stack pro Funkband und schreibt die Konfiguration jeder App. Für Betreiber, die eine LoRaHAM- /
+Meshtastic- / MeshCom- / MeshCore-Box auf einem Pi Zero 2W oder Pi 5 aufsetzen.
 
-Die Stacks des Pi teilen sich einen Satz LoRa-Funkgeräte. `lhpc` übernimmt den Quellcode jedes
-Stacks, baut ihn, startet und stoppt ihn in Abhängigkeitsreihenfolge, sorgt dafür, dass immer nur
-ein Stack ein Funkband nutzt, schreibt die Konfiguration jeder App von einer Stelle aus und
-überwacht und tunt den LoRaHAM-Daemon live.
-
-> Diese deutsche Anleitung richtet sich an Funkamateur-Betreiber. Code, Oberflächentexte und die
-> übrigen Dokumente sind auf Englisch (siehe `README.md`).
+> Maßgeblich ist die englische [`README.md`](README.md); diese Übersetzung kann hinterherhinken.
+> Code, Oberflächentexte und die übrigen Dokumente sind auf Englisch.
 
 ## Inhalt
 
-- [Stacks](#stacks)
-- [Installation (self-hosted)](#installation-self-hosted)
-- [CLI](#cli)
-- [Web-Konsole](#web-konsole)
-- [Deployment & Selbst-Update](#deployment--selbst-update)
+- [Überblick](#überblick) — [Stacks](#stacks) · [Hardware](#hardware) · [Nicht enthalten](#nicht-enthalten)
+- [Installation](#installation) — von der frisch geflashten Karte zu laufenden Stacks (Schritte 0–7)
+- [Verwenden](#verwenden) — [CLI](#cli) · [Web-Konsole](#web-konsole) · [Aktualisieren](#aktualisieren)
+- [Fehlerbehebung](#fehlerbehebung) · [Dokumentation](#dokumentation)
 
-## Stacks
+## Überblick
 
-| Stack | Band | Was es ist |
+### Stacks
+
+| Stack | Band | Was es ist | Doku |
+|---|---|---|---|
+| `daemon` | 433 + 868 | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit | [daemon](docs/stacks/daemon.md) |
+| `chat` | 433 | APRS-/Chat-TUI (lokal oder über SSH) | [aprs](docs/stacks/aprs.md) |
+| `igate` | 433 | APRS-iGate | [aprs](docs/stacks/aprs.md) |
+| `voice` | 433 / 868 | LoRa-Sprache (GUI) | [voice](docs/stacks/voice.md) |
+| `kiss` | 433 / 868 | KISS-TNC über TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
+| `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
+| `meshcore` | 868 | MeshCore-Pi-Node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
+
+Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic steuert das Funkgerät selbst und
+kann sich kein Band mit dem Daemon teilen (`lhpc` blockiert den Konflikt).
+
+### Hardware
+
+Getestet: **LoRaHAM Pi, Uputronics (einfach und dual), Waveshare** — auf Pi **Zero 2W** und
+**Pi 5**. Andere Boards sollten funktionieren, sind aber nicht validiert. `lhpc hardware` listet den
+Katalog:
+
+<!-- test:hw-table:start -->
+| `lhpc hardware …` | Board(s) | Bänder → Daemon-Preset |
 |---|---|---|
-| `daemon` | 433 + 868 | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit. Die Basis für die App-Stacks. |
-| `chat` | 433 | APRS-/Chat-TUI (interaktiv — im Terminal ausführen). |
-| `igate` | 433 | APRS-iGate. |
-| `voice` | 433 / 868 | LoRa-Sprache (GUI). |
-| `kiss` | 433 / 868 | KISS-TNC über TCP (Port 8001). |
-| `meshtastic` | 433 / 868 | Meshtastic (rootless `meshtasticd`; Web 9443, API 4403). Nutzt das Funkgerät direkt. |
-| `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt (Web 18083, Bridge 7000). |
-| `meshcore` | 868 | MeshCore-Pi-Node (TCP 5000); optional CLI + Node-GUI. |
+| `loraham` | LoRaHAM Dual-Modul (SX1278 + RFM95) | 433 → loraham, 868 → loraham |
+| `uputronics` | Uputronics dual (CE0 433 + CE1 868) | 433 → uputronics-ce0, 868 → uputronics-ce1 |
+| `uputronics-433` | Uputronics 433 (CE0) | 433 → uputronics-ce0 |
+| `uputronics-868` | Uputronics 868 (CE1) | 868 → uputronics-ce1 |
+| `waveshare-433` | Waveshare SX1262 (433) | 433 → waveshare-sx1262 |
+| `waveshare-868` | Waveshare SX1262 (868) | 868 → waveshare-sx1262 |
+<!-- test:hw-table:end -->
 
-Daemon-gestützte Stacks (chat, igate, voice, kiss, meshcom, meshcore) starten den Daemon
-automatisch. Meshtastic steuert das Funkgerät selbst und kann daher nicht laufen, während der
-Daemon dessen Band bedient — `lhpc` blockiert den Konflikt.
+Waveshare 868 ist noch nicht On-Air-validiert; eine frische Installation ist unkonfiguriert.
+**SPI-Modus:** `soft-cs` (`dtparam=spi=on` + `dtoverlay=spi0-0cs`) deckt LoRaHAM Pi / Uputronics /
+Waveshare ab (inkl. dual Uputronics, Chip-Selects als GPIOs); `hardware-cs` nur für
+kernelgesteuerte CE0/CE1.
 
-## Installation (self-hosted)
+### Nicht enthalten
 
-Benötigt Python 3.11+. Ein Deployment ist **self-hosted**: Das Laufzeitverzeichnis
-`~/loraham-pi-control` ist ein reiner Container, und LHPCs eigener Checkout liegt *darunter* unter
-`src/loraham-pi-control` (wie die verwalteten Stacks), das venv AUSSERHALB des Checkouts unter
-`venv/lhpc`. So sind `lhpc self-update` und der laufende Code ein Baum.
+- **Keine Firewall-Verwaltung** — `lhpc` schützt nur seine eigene Konsole; von einem Stack geöffnete Ports schließt du selbst ([Firewall](docs/firewall.md)).
+- **Es wird nie ein GUI/Desktop installiert** — nur GUI-*Anwendungs*-Bibliotheken, und nur mit `--with-gui`.
+- **Lizenz & Sendebetrieb** bleiben in der Verantwortung des Betreibers — HF wird nie automatisch gesendet.
 
-**Ein-Kommando-Installation** — `install.sh` macht die komplette Neuinstallation aus dem
-kanonischen Repository (Branch `main`): Klonen → venv → Editable-Install → `bootstrap` →
-`lhpc`-Symlink nach `~/.local/bin` → Web-Konsolen-Dienst aktivieren → Controller-Identität prüfen.
-Nur für die **Erstinstallation** — verweigert einen vorhandenen Checkout, keine destruktiven
-git-Operationen; **Updates später mit `lhpc self-update`**.
+## Installation
 
-```bash
-sudo apt install -y nginx     # Voraussetzung für die HTTPS-Konsole (weglassen für nur-lokal)
-curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
-#   oder aus einem Checkout:  ./install.sh
-#   Optionen:  --target <verzeichnis>   --no-service (kein Web-Dienst)   --no-path (kein CLI-Symlink)
-```
+Von der frisch geflashten Karte zu laufenden Stacks. Die Schritte laufen der Reihe nach.
 
-**Konsole öffnen.** Ist `nginx` vorhanden, hat `install.sh` die verwaltete HTTPS-Konsole schon
-gestartet (es führt `lhpc webserver init` + `start-service` für dich aus): im Browser
-**`https://127.0.0.1:8443/`** öffnen — der Browser warnt vor der selbstsignierten CA, bis du sie
-importierst (siehe [`docs/webserver.md`](docs/webserver.md)). Ohne nginx die lokale Konsole mit
-**`lhpc web`** → `http://127.0.0.1:8770/` starten. Für den Zugriff von einem anderen Rechner die
-[mTLS-Freigabe-Anleitung](docs/webserver.md#expose-to-your-lan-with-mtls--runbook) befolgen.
+### 0. Karte vorbereiten
 
-**Stacks bereitstellen.** Rufzeichen setzen, dann alle Stacks in einem geführten Lauf
-installieren/bauen/testen:
+Im Raspberry Pi Imager: **Modell**, **Raspberry Pi OS Lite (64-bit)** wählen und **Hostname,
+Benutzer, WLAN + Land, SSH aktivieren** vor dem Flashen setzen.
+
+<details><summary>Notlösung ohne Oberfläche — falls die Erstkonfiguration des Imagers nicht greift (wiederholt beobachtet)</summary>
 
 ```bash
-lhpc config operator --callsign DL1ABC    # dein Rufzeichen (erben alle lizenzierten Stacks)
-lhpc auto-install                          # alle Stacks installieren + bauen + testen (auch --source, --no-tests, --tx)
+sudo rfkill unblock wifi
+sudo raspi-config nonint do_wifi_country DE          # dein ISO-Ländercode
+sudo nmcli device wifi connect "<SSID>" password "<PSK>"
+sudo systemctl enable --now ssh
+sudo hostnamectl set-hostname loraham                # dann /etc/hosts abgleichen:
+echo "127.0.1.1 loraham" | sudo tee -a /etc/hosts
+sudo sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && sudo locale-gen && sudo update-locale
 ```
-
-Dasselbe geht über die Seite **Stacks** der Web-Konsole. Danach starten, was du brauchst
-(`lhpc stack start <stack>` oder der Start-Button).
-
-<details><summary>Oder von Hand</summary>
-
-```bash
-# 1. LHPC in src/ des Laufzeitverzeichnisses klonen (das macht es self-hosted)
-mkdir -p ~/loraham-pi-control/src
-git clone https://github.com/makrohard/loraham-pi-control.git \
-    ~/loraham-pi-control/src/loraham-pi-control
-
-# 2. venv AUSSERHALB des Checkouts anlegen und installieren
-python3 -m venv ~/loraham-pi-control/venv/lhpc
-~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
-
-# 3. Laufzeit-Layout + Default-Config anlegen (nur Eigentümer, Modus 0700)
-~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
-
-# 4. Alle Stacks übernehmen + bauen + testen (venv/lhpc/bin in den PATH aufnehmen)
-export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
-lhpc config operator --callsign DL1ABC   # dein Rufzeichen
-lhpc auto-install                         # geführt: installieren + bauen + testen
-lhpc web                                 # http://127.0.0.1:8770/  (lokale Konsole)
-```
-Für die HTTPS-/mTLS-Konsole statt `lhpc web` nginx installieren und
-[`docs/webserver.md`](docs/webserver.md) folgen.
 </details>
 
-`lhpc status` zeigt die Controller-Zeile dann als **identity ok**. Für den Dauerbetrieb als
-User-Service siehe [`docs/deployment.md`](docs/deployment.md) (die Vorlage `deploy/lhpc-web.service`
-nutzt dieses Layout bereits). Ein One-Click-Update stoppt und startet die Konsole selbst; nur das
-manuelle `lhpc self-update --apply` erfordert, dass sie vorher gestoppt ist.
+### 1. Prüfen, was installiert wird  (~30 s, gemessen)
 
-Rufzeichen einmalig mit `lhpc config operator --callsign <RUFZEICHEN>` (oder in den **Settings**
-eines Stacks) setzen; bis dahin nutzen die Apps `N0CALL`. Geheimnisse (Passwörter, HMAC-Schlüssel)
-liegen nur in `~/loraham-pi-control/config/secrets.toml`.
-
-**Dienst steuern** — `install.sh` betreibt die Web-Konsole als systemd-User-Dienst (nicht im
-Terminal); der Installer gibt diese am Ende ebenfalls aus:
+Nur-lesender Vorab-Check — löst die Paket-Closure eines frischen Images auf und **bricht ab**, wenn
+etwas Grafisches hereingezogen würde. Ändert nichts.
 
 ```bash
-systemctl --user stop lhpc-web        # jetzt stoppen (nur vor manuellem `self-update --apply` nötig)
-systemctl --user status lhpc-web      # Status prüfen
-systemctl --user start lhpc-web       # wieder starten
-systemctl --user disable lhpc-web     # Autostart beim Booten abschalten
-journalctl --user -u lhpc-web -f      # Live-Logs
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/bootstrap-deps.sh -o bootstrap-deps.sh
+sudo bash bootstrap-deps.sh --dry-run
 ```
 
-**Deinstallieren** entfernt **LHPC selbst, nicht die verwalteten Stacks** — Daemon/Apps laufen
-weiter, bis du sie stoppst. `./uninstall.sh` entfernt Code, venv, State und den Dienst, **behält
-aber `config/`** (Einstellungen + Secrets); `./uninstall.sh --purge` löscht alles, inkl. Config.
-(`--target <verzeichnis>`, `--yes` überspringt die Rückfrage.) Die Skripte liegen im Checkout unter
-`~/loraham-pi-control/src/loraham-pi-control/`, nicht im Laufzeitverzeichnis.
-
-> An LHPC selbst arbeiten? Irgendwo klonen und `pip install -e .` in einem venv für einen
-> Dev-Checkout — diese Instanz ist absichtlich *nicht* self-hosted (die Controller-Zeile zeigt
-> „not self-hosted"). Von dort committen und pushen; self-hosted wie oben deployen.
->
-> Einen Stack hinzufügen oder pflegen? Siehe [`docs/adding-a-stack.md`](docs/adding-a-stack.md).
-
-## CLI
+### 2. Abhängigkeiten installieren  (~2,5 min kalt / 30–50 s erneut, gemessen)
 
 ```bash
-lhpc status                  # was läuft (nur lesend, begrenzt — kein Netz)
-lhpc list                    # Stacks im Manifest
-lhpc explain <stack>         # Komponenten, Startreihenfolge, Ressourcen
-
-lhpc install <stack> --yes   # Quelle übernehmen/prüfen
-lhpc build <stack>           # bauen
-lhpc config <stack> call DL1ABC  # eine Stack-Einstellung setzen (z. B. Rufzeichen) — validiert
-lhpc stack start <stack>     # starten (startet den Daemon bei Bedarf mit)
-lhpc stack stop <stack>      # stoppen
-lhpc logs <stack>            # Komponenten-Log anzeigen
-
-lhpc daemon <433|868>                       # RSSI / Stats / CAD überwachen
-lhpc daemon 433 --set TXMODE=DIRECT --yes   # Live-Einstellung setzen (Whitelist)
-lhpc test <stack> --tx --yes                # ein HF-Testframe pro Band (echtes HF — Dummy-Load!)
-
-lhpc update | uninstall <stack>
+sudo bash bootstrap-deps.sh --spi-mode soft-cs
 ```
 
-Verändernde Befehle zeigen erst einen Plan und führen erst nach Bestätigung (oder `--yes`) aus.
-**HF wird nie automatisch gesendet.** Vollständige Befehlsreferenz: [`docs/cli.md`](docs/cli.md).
+`--spi-mode` ist **erforderlich**: `soft-cs` (LoRaHAM Pi / Uputronics / Waveshare, inkl. dual) ·
+`hardware-cs` (Kernel-CE0/CE1) · `skip`. Außerdem: `--with-gui` (GUI-App-Bibliotheken) ·
+`--no-swapfile` · `--swap-size <MB>` (Standard 768) · `--operator-user <name>`, falls als root
+ausgeführt. Über apt hinaus **deaktiviert es den System-`nginx.service`** (das Paket bleibt; `lhpc`
+liefert über seine eigene rootless-Unit) und legt auf Hosts unter ~600 MB RAM `/var/swap.lhpc`
+(768 MB, unter zram) als OOM-Absicherung für die langen Builds an — auf Kosten von etwas
+SD-Karten-Verschleiß.
 
-## Web-Konsole
+<details><summary>Manuell — nur installieren, was die Stacks brauchen, die du betreibst (bootstrap-deps.sh ist die Quelle der Wahrheit; Vorschau mit <code>--dry-run</code>, neu erzeugen mit <code>lhpc deps --script</code>)</summary>
+
+<!-- test:deps-manual:start -->
+```bash
+# lhpc selbst + Fetch/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nginx ca-certificates curl wget xz-utils
+sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
+sudo apt install -y --no-install-recommends socat                                       # kiss
+sudo apt install -y --no-install-recommends libssl-dev libslirp0                        # meshcom (Bridge + QEMU)
+sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (aus Quelltext gebaut)
+sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev python3-tk           # nur mit --with-gui (Voice, MeshCore Node Manager)
+
+sudo systemctl disable --now nginx.service               # Paket behalten, den ROOT-Dienst deaktivieren
+# Boards mit wenig RAM (<600 MB): eine Disk-Swapdatei verhindert OOM bei den meshtasticd-/meshcom-Builds
+sudo fallocate -l 768M /var/swap.lhpc && sudo chmod 600 /var/swap.lhpc && sudo mkswap /var/swap.lhpc
+echo '/var/swap.lhpc none swap sw,pri=-2 0 0' | sudo tee -a /etc/fstab && sudo swapon -a
+printf 'dtparam=spi=on\ndtoverlay=spi0-0cs\n' | sudo tee -a /boot/firmware/config.txt   # SPI-Overlay
+sudo usermod -aG spi,gpio "$USER"                        # → weiter bei Schritt 3 (Neustart)
+```
+<!-- test:deps-manual:end -->
+</details>
+
+### 3. Neustart
+
+SPI-Overlay und deine neue `spi`/`gpio`-Gruppenmitgliedschaft werden mit dem Neustart wirksam.
 
 ```bash
-lhpc web                     # http://127.0.0.1:8770/  (nur lokal)
+sudo reboot
 ```
 
-- **Dashboard** — pro Band: der Daemon-Monitor (Live-RSSI/Stats), die auf diesem Band laufenden
-  Stacks und eine Steuerung, um einen weiteren zu starten.
-- **Stack-Seiten** — Install / Build / Start / Stop / Test / Update / Uninstall, jeweils mit Plan
-  und Bestätigung. Interaktive (TUI-)Apps zeigen den selbst auszuführenden Befehl; GUI-/Headless-Apps
-  starten und stoppen direkt.
-- **Settings** — Einstellungen pro Stack (Rufzeichen, Frequenzen, Presets …), in die jeweils eigene
-  Config-Datei der App geschrieben.
+### 4. lhpc installieren  (~1,5 min, gemessen)
 
-Dieser einfache `lhpc web`-Modus ist **nur lokal** (POST-Aktionen sind CSRF-geschützt,
-`Content-Security-Policy: default-src 'self'`) und wird nicht ins Netz freigegeben. Für den Zugriff
-von einem anderen Rechner das produktive HTTPS-+-mTLS-Frontend (nginx) nutzen — siehe
-[`docs/webserver.md`](docs/webserver.md).
+```bash
+curl -fsSL https://raw.githubusercontent.com/makrohard/loraham-pi-control/main/install.sh | bash
+#   oder aus einem Checkout: ./install.sh
+#   Optionen: --target <verzeichnis> · --no-service (kein Web-Dienst) · --no-path (kein CLI-Symlink)
+```
 
-## Deployment & Selbst-Update
+Alles landet unter `~/loraham-pi-control/`: LHPCs Checkout unter `src/loraham-pi-control`, das venv
+unter `venv/lhpc`, Einstellungen/Secrets/Zertifikate unter `config/`. (Ein einmaliger PyPI-Retry
+beim Laden von `cryptography` ist harmlos — pip wiederholt.)
 
-Das unterstützte Deployment ist **self-hosted**: Das Laufzeitverzeichnis `~/loraham-pi-control` ist
-ein reiner Container, LHPCs eigener Checkout liegt darunter unter `src/loraham-pi-control` (neben den
-verwalteten Stack-Quellen), das venv unter `venv/lhpc`. Die systemd-Unit setzt `LHPC_RUNTIME_ROOT`
-explizit. LHPCs Checkout ist eine **Controller-Identität** — beobachtbar und via `lhpc self-update`
-aktualisierbar, aber nie installiert/gebaut/gestartet/gelöscht usw.; jeder generische Befehl darauf
-wird verweigert und verweist auf `lhpc self-update`, und `lhpc status` zeigt eine eigene
-`[controller]`-Zeile.
+<details><summary>Manuell — Klonen / venv / bootstrap</summary>
 
-In der Web-Konsole sind die Controller-Zeile (erster Eintrag unter **Stacks**) und die
-Versionsanzeige in der Fußzeile bei jedem Seitenaufruf **nur aus dem Cache** — kein Zugriff auf den
-Checkout, `.git`, das Netz oder die Identität beim Rendern. Die Konsole prüft **automatisch im
-Hintergrund** auf Updates (Standard: alle 12 h, einstellbar über `[web] update_check_hours`, `0` =
-aus) — „Update →" erscheint von selbst in der Fußzeile; **„Check for updates"** tut dasselbe auf
-Anforderung.
+```bash
+mkdir -p ~/loraham-pi-control/src
+git clone https://github.com/makrohard/loraham-pi-control.git ~/loraham-pi-control/src/loraham-pi-control
+python3 -m venv ~/loraham-pi-control/venv/lhpc
+~/loraham-pi-control/venv/lhpc/bin/pip install -e ~/loraham-pi-control/src/loraham-pi-control
+~/loraham-pi-control/venv/lhpc/bin/lhpc bootstrap --yes
+export PATH="$HOME/loraham-pi-control/venv/lhpc/bin:$PATH"
+```
+</details>
 
-**Updaten ist ein Klick**: Nach der Bestätigung schreibt die Konsole eine Anforderungs-Markierung,
-die eine statische `lhpc-selfupdate.path`-Unit in einen Lauf der gesandboxten Helper-Unit umsetzt —
-diese stoppt die Konsole, wendet das Update an (Live-Identitätsprüfung, alle Locks), synchronisiert
-das venv und lässt systemd sie wieder starten. Die Konsole kann **kein** `systemctl` aufrufen (ihre
-Unit sperrt den Benutzer-D-Bus), und One-Click läuft nur, wenn die vier verwalteten Units byte-genau
-kanonisch sind — ein manipuliertes Frontend kann so nicht ausbrechen. Manueller Weg:
-`systemctl --user stop lhpc-web && lhpc self-update --apply`; `lhpc self-update --repair-integration`
-installiert die verwalteten Units (neu). Details: [`docs/deployment.md`](docs/deployment.md).
+### 5. Neu anmelden
 
-Die systemd-Unit des Web-Dienstes ist **least-privilege**: Dateisystem nur lesbar außer
-Laufzeitverzeichnis und `/tmp`, kein breiter Schreibzugriff auf `$HOME`/`/var`, Benutzer-D-Bus
-gesperrt, Build-/Tool-Caches laufzeit-eigen unter `build/tool-cache/` (nie `~/.platformio`,
-`~/.espressif` oder `~/.cache`). Siehe [`docs/deployment.md`](docs/deployment.md) und das
-Umzugs-Runbook in [`docs/deployment-migration.md`](docs/deployment-migration.md).
+`~/.local/bin` ist in deiner aktuellen Shell noch nicht im `PATH`. **Neu per SSH verbinden oder eine
+neue Login-Shell öffnen**, sonst schlägt der nächste Befehl mit `lhpc: command not found` fehl.
 
-**Backup:** Einstellungen, Secrets und Zertifikate liegen alle unter
-`~/loraham-pi-control/config/` (plus Known-Working-Datensätze in `profiles/`); mit einem einzigen
-`tar` sichern — siehe [`docs/operations.md`](docs/operations.md#backup--restore).
+### 6. Konfigurieren
+
+```bash
+lhpc config operator --callsign DL1ABC    # dein Rufzeichen (erben lizenzierte Stacks)
+lhpc hardware                             # Katalog anzeigen
+lhpc hardware uputronics                  # dein Funkgerät wählen (hier dual Uputronics)
+```
+
+### 7. Stacks hochfahren
+
+Die **Web-Konsole** ist der Hauptweg: lokal öffnen (Schritt 4 hat sie unter
+`https://127.0.0.1:8443/` gestartet, oder `lhpc web` → `http://127.0.0.1:8770/`) und die Seite
+**Auto-install** nutzen. Auf einem **Pi Zero 2W / RAM-armen Board besser die CLI** — ein
+mehrstündiger Build sollte nicht von einer Browser-Sitzung abhängen. Führe ihn abgekoppelt aus,
+damit eine abgebrochene SSH-Verbindung ihn nicht beendet:
+
+```bash
+sudo apt install -y tmux
+tmux
+lhpc auto-install --yes          # abkoppeln: Strg-B, dann D · wieder verbinden: tmux attach
+```
+
+Host-Tests sind **standardmäßig aus**; `--tests` aktiviert sie, `--tx` impliziert `--tests` und
+sendet **echtes HF** (Dummy-Loads). Build-Artefakte bleiben erhalten, ein erneuter Lauf setzt am
+bereits Kompilierten an. Dauer (**extrapoliert**): meshtasticd ~2,5–3,5 h, meshcom ~26 min kalt /
+~2,5 min inkrementell; Gesamtdauer **ausstehend**. Auf einer Headless-Box sind „optional deps
+missing"-Warnungen zu erwarten.
+
+**Fortschritt beobachten.** `lhpc` gibt pro Schritt eine kopierbare Zeile
+`[log] <component> -> tail -f <path>` aus — diese Pfade nutzen, nicht raten. Logs aktualisieren in
+**Schüben** (block-gepuffert ohne TTY), ein stilles `tail -f` ist also kein Stillstand — an CPU und
+Objektanzahl messen:
+
+```bash
+ps -eo pcpu,etime,cmd --sort=-pcpu | head -3          # läuft wirklich ein Compiler?
+while sleep 60; do echo "$(date +%T) objs=$(find ~/loraham-pi-control/src -path '*/.pio/build/*' -name '*.o' | wc -l)"; done
+while sleep 30; do free -m | awk '/Mem:/{print "mem",$3"/"$2} /Swap:/{print "swap",$3}'; vcgencmd measure_temp; done >> ~/watch.log
+```
+
+<details><summary>Einzeln statt alles</summary>
+
+```bash
+lhpc install <stack>
+lhpc build <stack>
+lhpc stack start <stack>
+lhpc status
+```
+</details>
+
+## Verwenden
+
+### CLI
+
+```bash
+lhpc status                        # was läuft (nur lesend)
+lhpc doctor                        # Umgebungs-/Abhängigkeits-Checks
+lhpc logs <target>                 # ein Komponenten-Log anzeigen
+lhpc stack start|stop <stack>      # starten / stoppen (Plan + Bestätigung)
+lhpc build <target>                # einen Stack bauen
+lhpc test <target> [--tx] --yes    # begrenzter HF-Test (echtes HF mit --tx)
+lhpc hardware [<setup>]            # Funk-Hardware anzeigen oder setzen
+lhpc config operator --callsign <RUFZEICHEN>
+```
+
+Verändernde Befehle zeigen einen Plan und brauchen `--yes`; volle Referenz [`docs/cli.md`](docs/cli.md).
+
+### Web-Konsole
+
+`lhpc web` liefert eine nur-lokale Konsole unter `:8770`; das produktive HTTPS-+-mTLS-Frontend
+(nginx, `:8443`) gibst du ins Netz frei:
+
+```bash
+lhpc webserver init --dns pi.local --ip 192.168.0.10
+lhpc webserver start-service
+lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+lhpc webserver cert issue laptop && lhpc webserver cert export laptop ~/laptop.p12
+lhpc webserver apply
+```
+
+Details: [`docs/webserver.md`](docs/webserver.md); Ports über Loopback hinaus zu öffnen erfordert
+eine Firewall ([`docs/firewall.md`](docs/firewall.md)).
+
+### Aktualisieren
+
+Ein Klick in der Konsole, oder aus einer Shell (vorher `config/` + `profiles/` sichern —
+[`docs/operations.md`](docs/operations.md#backup--restore)):
+
+```bash
+systemctl --user stop lhpc-web && lhpc self-update --apply
+lhpc self-update --repair-integration      # verwaltete Units neu installieren
+```
+
+Serving-Modell und der One-Click-Mechanismus: [`docs/deployment.md`](docs/deployment.md).
+
+## Fehlerbehebung
+
+| Symptom | Ursache | Was tun |
+|---|---|---|
+| `lhpc: command not found` nach der Installation | PATH nicht übernommen | neu anmelden (Schritt 5) |
+| Build-Log wirkt eingefroren / minutenlang still | Logs aktualisieren in Schüben (block-gepuffert), große Downloads auch | an CPU + Objektanzahl messen (Schritt 7); [field-notes](docs/field-notes.md) |
+| Build abgebrochen / OOM auf RAM-armen Boards | RAM-Druck | Swapdatei (Schritt 2); [field-notes](docs/field-notes.md) |
+| „optional deps missing" auf einer Headless-Box | GUI-Komponenten bewusst übersprungen | ignorieren, oder `--with-gui` |
+| Web-Konsole von einem anderen Rechner nicht erreichbar | nicht freigegeben / Firewall | [Web-Konsole](#web-konsole); [Firewall](docs/firewall.md) |
+| SSH abgebrochen, Lauf gestoppt | Orchestrator bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut (setzt an Artefakten an); tmux nutzen (Schritt 7) |
+| Board während eines langen Builds nicht erreichbar | RAM-arme Boards verlieren unter Last das Netz | Konsole prüfen, NetworkManager neu starten oder rebooten, dann erneut; [field-notes](docs/field-notes.md) |
+| `auto-install` startet nach abgebrochenem Lauf nicht | übrig gebliebene Lauf-Marker | `lhpc auto-install --status`, dann `lhpc auto-install --recover`; [field-notes](docs/field-notes.md) |
+
+## Dokumentation
+
+| Gruppe | Dokumente |
+|---|---|
+| Verstehen | [Architektur](docs/architecture.md) |
+| Verwenden | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Field notes](docs/field-notes.md) |
+| Web-Konsole & Fernzugriff | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
+| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Referenz & Richtlinien | [Hardening](docs/hardening-0.1.md) · [Provenance](docs/provenance.md) |
+
+Vollständiger Index: [`docs/README.md`](docs/README.md).

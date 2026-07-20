@@ -47,7 +47,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"lhpc" = ["data/*.toml"]
+"lhpc" = ["data/*.toml", "data/bases/*", "data/scripts/*"]
 "lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]

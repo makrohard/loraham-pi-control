@@ -679,9 +679,33 @@ class Installer:
         # candidate FD-pinned path — Git/copy never re-resolve the leaf by name.
         remote = self.config.remotes.get(comp.id) or spec.remote
         handle = txn.create_candidate(staging.name)
-        if remote and self._clone(spec, Path(handle.pinned_path()), source, remote,
-                                  expected_pin=expected_pin):
-            return f"GitHub {source}", handle
+        # Adoption is the auto-install's FIRST long phase and git is silent off-TTY — give the
+        # clone a tail-able `logs/adopt-<comp>.log` whose first content says what is happening
+        # (quiet-step preamble), with `git clone --progress` streamed below it. BEST-EFFORT:
+        # the registry/provenance machinery is the adoption's evidence, so a log failure must
+        # never fail the adoption (unlike run_job, where the log IS the job's evidence).
+        log_fh = None
+        if remote:
+            try:
+                from . import runtime_fs
+                log_path = self.paths.under("logs", f"adopt-{comp.id}.log")
+                runtime_fs.ensure_dir(self.paths, log_path.parent)
+                log_fh = runtime_fs.open_log_truncate(self.paths, log_path)
+                log_fh.write(f"[clone] {comp.id} from {remote} — git is quiet without a TTY; "
+                             "progress appears below (git clone --progress)\n")
+                log_fh.flush()
+            except (OSError, PathContainmentError):
+                log_fh = None
+        try:
+            if remote and self._clone(spec, Path(handle.pinned_path()), source, remote,
+                                      expected_pin=expected_pin, log_fh=log_fh):
+                return f"GitHub {source}", handle
+        finally:
+            if log_fh is not None:
+                try:
+                    log_fh.close()
+                except OSError:
+                    pass
         # Clone failed (or no remote) -> reset the (intact controller-owned) candidate via the
         # held FD, then try the local fallback. If the candidate was SUBSTITUTED, do NOT delete
         # the replacement and do NOT recreate a candidate through this flow — fail closed.
@@ -1760,9 +1784,20 @@ class Installer:
         return ""
 
     def _clone(self, spec, dest: Path, source: str, remote: str | None = None,
-               expected_pin: str = "") -> bool:
+               expected_pin: str = "", log_fh=None) -> bool:
         from . import validators
         run = self.system.runner.run
+        run_streaming = getattr(self.system.runner, "run_streaming", None)
+
+        def clone(argv, timeout):
+            # Stream `git clone --progress` LIVE into the adoption log when the runner supports
+            # it: git is silent off-TTY, so a multi-minute clone over slow Wi-Fi otherwise looks
+            # hung with its output buffered invisibly until completion. checkout/rev-parse/
+            # describe stay on the buffered run() — their stdout is parsed.
+            if log_fh is not None and run_streaming is not None:
+                return run_streaming(argv[:2] + ["--progress"] + argv[2:], timeout, log_fh)
+            return run(argv, timeout)
+
         remote = remote or spec.remote
         # Revalidate the remote IMMEDIATELY before Git — a hand-edited local.toml override
         # (or any runtime-supplied remote) must satisfy the safe remote-URL policy or it is
@@ -1777,7 +1812,7 @@ class Installer:
         if expected_pin:
             # FROZEN exact identity (any selector): full clone + exact checkout + verify —
             # the remote's CURRENT refs are irrelevant; no selector lookup happens here.
-            if run(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
+            if clone(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
                     and dest.exists():
                 ok = run(["git", "-C", str(dest), "checkout", expected_pin],
                          30.0).returncode == 0
@@ -1787,8 +1822,8 @@ class Installer:
         elif spec.artifact:
             # Declared artifact source: EVERY selector resolves to the same declared artifact
             # (the maintainer's default branch) — no pin/branch/tag semantics are invented.
-            ok = (run(["git", "clone", "--depth", "1", remote, str(dest)],
-                      timeout=120.0).returncode == 0 and dest.exists())
+            ok = (clone(["git", "clone", "--depth", "1", remote, str(dest)],
+                        timeout=120.0).returncode == 0 and dest.exists())
         elif source == "dev":
             # STRICT branch semantics: with a configured branch, `--branch` makes git fail
             # when it does not exist — dev NEVER silently falls back to another ref.
@@ -1796,10 +1831,10 @@ class Installer:
             if spec.branch:
                 argv += ["--branch", spec.branch]
             argv += [remote, str(dest)]
-            ok = run(argv, timeout=120.0).returncode == 0 and dest.exists()
+            ok = clone(argv, timeout=120.0).returncode == 0 and dest.exists()
         else:
             # full clone so an arbitrary tag/commit can be checked out
-            if run(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
+            if clone(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
                     and dest.exists():
                 if source == "pinned":
                     # P0.5: 'Known working' REQUIRES an exact expected commit — the newest

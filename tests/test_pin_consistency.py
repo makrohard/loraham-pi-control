@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import tomllib
 
+import pytest
+
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 _SRC_ROOT = pathlib.Path(__file__).resolve().parents[2]        # ~/src — sibling dev checkouts live here
 _TOKEN_RE = re.compile(r"^(?:scripts|tools|bin)/[\w./-]+\.(?:sh|py)$")
@@ -88,45 +90,89 @@ def test_pins_are_full_sha_and_shared_source_consumers_agree():
         assert len({c[2] for c in consumers}) == 1, f"{path}: split pin_tag {consumers}"
 
 
-def test_pinned_revision_valid_ancestor_and_has_scripts():
+def validate_pinned_components(manifest: dict, src_root: pathlib.Path) -> dict:
+    """Validate EVERY pinned component whose sibling checkout is present: the pin is a full SHA,
+    resolves, and is an ancestor of its configured branch tip. Referenced scripts are an ADDITIONAL
+    layer — a pinned repo that invokes no scripts is still fully pin-validated (keying the loop on
+    scripts silently exempted 10 of the 11 pinned repos). Raises AssertionError on any violation;
+    returns the counts so a caller can prove it did not silently validate nothing."""
     have_git = shutil.which("git") is not None
-    validated_consumers = 0
-    validated_scripts = 0
-    checkouts_present = 0
-    for st in _manifest()["stack"]:
+    counts = {"consumers": 0, "scripts": 0, "checkouts": 0}
+    for st in manifest["stack"]:
         for comp in st.get("component", []):
             src = comp.get("source") or {}
             pin, repo_name = src.get("pin_commit"), _repo_dirname(src)
-            scripts = _referenced_scripts(comp)
-            if not (have_git and pin and repo_name and scripts):
+            if not (have_git and pin and repo_name):
                 continue
-            repo = _SRC_ROOT / repo_name
+            repo = src_root / repo_name
             if not (repo / ".git").exists():
                 continue                                    # ABSENT checkout -> offline skip allowed
-            checkouts_present += 1
+            counts["checkouts"] += 1
             assert _SHA_RE.match(pin), f"{comp['id']}: pin must be a full 40-hex SHA"
             # A PRESENT checkout with a missing pinned object is the orphaned-pin signature -> HARD FAIL
             # (never treated like an absent checkout).
             assert _git_has(repo, f"{pin}^{{commit}}"), (
-                f"{comp['id']}: pinned commit {pin} is NOT present in local {repo_name} — orphaned pin? "
-                "(force-push/amend of the source branch, or a bad pin).")
+                f"{comp['id']}: pinned commit {pin} is NOT present in local {repo_name}. Either the "
+                f"pin was ORPHANED (force-push/amend of '{src.get('branch') or 'main'}', or a bad "
+                f"pin), or this sibling checkout is simply STALE — run "
+                f"`git -C {repo} fetch origin {src.get('branch') or 'main'}` and re-run. The CI "
+                "pin-validation job resolves this against the live remote.")
             branch = src.get("branch") or "main"
             tip = _branch_tip_ref(repo, branch)
             assert tip is not None, f"{comp['id']}: pinned branch '{branch}' tip not found in {repo_name}"
             assert _is_ancestor(repo, pin, tip), (
                 f"{comp['id']}: pinned commit {pin} is NOT an ancestor of {tip} in {repo_name} — "
                 "orphaned by a force-push/amend.")
-            for s in sorted(scripts):
+            for s in sorted(_referenced_scripts(comp)):
                 assert _git_has(repo, f"{pin}:{s}"), (
                     f"{comp['id']}: build/run step references {s}, MISSING at pinned "
                     f"{src.get('pin_tag') or pin[:12]} — bump the pin.")
-                validated_scripts += 1
-            validated_consumers += 1
-    # If ANY sibling checkout was present, we must have actually validated consumers AND scripts —
+                counts["scripts"] += 1
+            counts["consumers"] += 1
+    return counts
+
+
+def test_pinned_revision_valid_ancestor_and_has_scripts():
+    counts = validate_pinned_components(_manifest(), _SRC_ROOT)
+    # If ANY sibling checkout was present, we must have actually validated consumers —
     # a present checkout can never silently validate nothing.
-    if checkouts_present:
-        assert validated_consumers > 0 and validated_scripts > 0, \
-            "a sibling checkout was present but no consumer/script was validated"
+    if counts["checkouts"]:
+        assert counts["consumers"] > 0, \
+            "a sibling checkout was present but no consumer was validated"
+
+
+def test_script_less_pinned_component_is_still_ancestry_checked(tmp_path):
+    # REGRESSION: the loop used to be keyed on "references a script", so a pinned repo that
+    # invokes none (e.g. the CMake-built bridge) was never checked for an orphaned pin at all.
+    import os
+    repo = tmp_path / "solo"; repo.mkdir()
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+    def g(*a):
+        return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, env=env)
+
+    g("init", "-q", "-b", "main")
+    (repo / "README").write_text("base\n")
+    g("add", "-A"); g("commit", "-q", "-m", "base")
+    good = g("rev-parse", "HEAD").stdout.strip()
+    g("checkout", "-q", "--detach")
+    (repo / "README").write_text("orphan\n")
+    g("add", "-A"); g("commit", "-q", "-m", "orphan")
+    orphan = g("rev-parse", "HEAD").stdout.strip()
+    g("checkout", "-q", "main")                              # main tip stays at `good`
+
+    def manifest(pin):
+        # NO build_steps/run/test -> references no scripts at all (the exempted shape).
+        return {"stack": [{"id": "s", "main": "c", "component": [
+            {"id": "c", "name": "c", "kind": "service",
+             "source": {"path": "src/solo", "local_dir": "solo", "branch": "main",
+                        "pin_commit": pin}}]}]}
+
+    ok = validate_pinned_components(manifest(good), tmp_path)
+    assert ok == {"consumers": 1, "scripts": 0, "checkouts": 1}   # validated despite zero scripts
+    with pytest.raises(AssertionError, match="NOT an ancestor"):
+        validate_pinned_components(manifest(orphan), tmp_path)
 
 
 def test_orphaned_pin_is_detected_by_ancestry(tmp_path):

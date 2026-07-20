@@ -17,6 +17,40 @@ def _svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
+def _hold_lock_unpublished(root: str, key: str) -> None:
+    """Hold ONLY the flock, never publishing an owner record — the unidentifiable-holder state.
+    Module-level so `spawn` can pickle it; `spawn` (not fork) avoids the Py3.13
+    fork-in-threaded-process warning the suite gates on."""
+    import fcntl
+    import time as _t
+    from lhpc.core import reslock, runtime_fs
+    from lhpc.core.paths import Paths as _P
+    paths = _P(runtime_root=__import__("pathlib").Path(root))
+    lockfile = paths.under("state", "locks", reslock.canonical_key(key) + ".lock")
+    fh = runtime_fs.open_lock(paths, lockfile)
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    _t.sleep(60)
+
+
+def _lock_is_held(svc, key: str) -> bool:
+    """True when the flock is taken, independently of whether ownership was published."""
+    import fcntl
+    from lhpc.core import reslock, runtime_fs
+    path = svc._paths.under("state", "locks", reslock.canonical_key(key) + ".lock")
+    try:
+        fh = runtime_fs.open_lock(svc._paths, path)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        fh.close()
+
+
 # --- identity detection -------------------------------------------------------
 
 def test_identity_field_map(tmp_path):
@@ -175,17 +209,115 @@ def test_same_process_claim_waits_then_succeeds(tmp_path):
     svc = _svc(tmp_path)
     svc._SELF_LOCK_WAIT_S = 3.0
     key = "claim.loraham.daemon-socket.433"
+    held = threading.Event()
     released = threading.Event()
     def hold():
         with reslock.operation_lock(svc._paths, key, "stop", "meshcom"):
+            # Signal only once the lock is BOTH taken and its ownership PUBLISHED — a bare sleep
+            # here made the test assume a window it never verified, so under load the contender
+            # could arrive before publication and the run flaked.
+            for _ in range(500):
+                if reslock.read_owner(svc._paths, key):
+                    break
+                time.sleep(0.002)
+            held.set()
             time.sleep(0.4)
             released.set()
     t = threading.Thread(target=hold); t.start()
-    time.sleep(0.1)                                       # ensure the claim is held
+    assert held.wait(5.0), "holder never published its ownership record"
     with contextlib.ExitStack() as st:
         svc._acquire_key(st, key, "start", "kiss")        # waits for the same-process holder
         assert released.is_set()                          # proved it waited past the release
     t.join()
+
+
+def test_same_process_claim_retries_while_ownership_is_unpublished(tmp_path, monkeypatch):
+    """REGRESSION: `operation_lock` takes the flock and only THEN writes its `.owner` record. A
+    second same-process thread arriving inside that window got a ResourceBusy whose holder was
+    unidentifiable, was treated as an EXTERNAL conflict, and failed immediately instead of
+    serializing — intermittently, and most often under load (i.e. exactly when two controller
+    threads overlap). Here publication is deliberately delayed to make that window deterministic."""
+    import threading, time, contextlib
+    from lhpc.core import reslock, runtime_fs
+    svc = _svc(tmp_path)
+    svc._SELF_LOCK_WAIT_S = 3.0
+    key = "claim.loraham.daemon-socket.433"
+    flocked = threading.Event()
+    publish_now = threading.Event()
+    released = threading.Event()
+
+    real_write_marker = runtime_fs.write_marker
+
+    def slow_publish(paths, path, text, *a, **k):
+        # Only the OWNER record of this key is delayed; every other marker write is untouched.
+        if path.name.endswith(".owner"):
+            flocked.set()
+            publish_now.wait(5.0)
+        return real_write_marker(paths, path, text, *a, **k)
+
+    monkeypatch.setattr(runtime_fs, "write_marker", slow_publish)
+
+    def hold():
+        with reslock.operation_lock(svc._paths, key, "stop", "meshcom"):
+            time.sleep(0.2)
+            released.set()
+
+    t = threading.Thread(target=hold); t.start()
+    try:
+        assert flocked.wait(5.0), "holder never reached the publication window"
+        # The flock IS held and the owner record does NOT exist yet — the ambiguous state.
+        assert reslock.read_owner(svc._paths, key) is None
+        contender = {}
+        def acquire():
+            try:
+                with contextlib.ExitStack() as st:
+                    svc._acquire_key(st, key, "start", "kiss")
+                    contender["ok"] = released.is_set()      # serialized behind the holder
+            except reslock.ResourceBusy as exc:
+                contender["busy"] = str(exc)
+        c = threading.Thread(target=acquire); c.start()
+        time.sleep(0.05)                                     # contender is now inside the grace
+        publish_now.set()                                    # ownership becomes visible
+        c.join(10.0)
+    finally:
+        publish_now.set()
+        t.join(10.0)
+    assert "busy" not in contender, f"retried window still reported busy: {contender}"
+    assert contender.get("ok") is True, contender
+
+
+def test_unknown_owner_still_fails_after_the_bounded_grace(tmp_path, monkeypatch):
+    """An UNIDENTIFIABLE holder must not become a five-second stall: it is retried only for the
+    short publication grace and then surfaces the typed ResourceBusy. Proven with a lock held by a
+    real external process whose owner record never appears."""
+    import contextlib, time
+    import multiprocessing as mp
+    import pytest as _pytest
+    from lhpc.core import reslock
+    svc = _svc(tmp_path)
+    svc._SELF_LOCK_WAIT_S = 5.0
+    key = "claim.loraham.daemon-socket.433"
+    proc = mp.get_context("spawn").Process(target=_hold_lock_unpublished,
+                                           args=(str(tmp_path), key))
+    proc.start()
+    try:
+        for _ in range(500):                                 # wait for the flock, NOT the owner
+            if _lock_is_held(svc, key):
+                break
+            time.sleep(0.02)
+        assert _lock_is_held(svc, key), "external holder never took the lock"
+        assert reslock.read_owner(svc._paths, key) is None   # deliberately never published
+        started = time.monotonic()
+        with _pytest.raises(reslock.ResourceBusy):
+            with contextlib.ExitStack() as st:
+                svc._acquire_key(st, key, "start", "kiss")
+        waited = time.monotonic() - started
+        # bounded by the grace, nowhere near the same-process budget
+        assert waited < svc._SELF_LOCK_WAIT_S / 2, f"waited {waited:.2f}s — grace not bounded"
+    finally:
+        proc.terminate(); proc.join(10)
+        if proc.is_alive():
+            proc.kill(); proc.join()
 
 
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)

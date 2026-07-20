@@ -59,10 +59,17 @@ jobs:
       - name: Tests
         run: pytest -q
 
+      # The two SECURITY gates run even when the tests failed. They are the only steps ordered
+      # AFTER pytest, so a single test failure used to skip them entirely and a run could go red
+      # without ever reporting whether a high-severity finding or a vulnerable dependency had been
+      # introduced. `!cancelled()` (not `always()`) keeps a cancelled run cancellable; the job still
+      # fails overall on the pytest failure.
       - name: Bandit (high severity gate)
+        if: ${{ !cancelled() }}
         run: bandit -q -r lhpc -lll
 
       - name: pip-audit (dependency vulnerabilities)
+        if: ${{ !cancelled() }}
         run: pip-audit . --strict --progress-spinner=off
 
   # Authoritative CROSS-REPOSITORY pin gate. Catches BOTH orphaned-pin classes: a pin that predates a
@@ -84,38 +91,51 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Parse the managed-source pin contract (asserts both consumers agree)
-        run: python tools/manifest_pin.py src/meshcom-qemu-raspi | tee -a "$GITHUB_ENV"
-
-      - name: Validate the pin against the live source branch
+      - name: Validate EVERY pinned source against its live branch
         env:
           GIT_TERMINAL_PROMPT: "0"
         run: |
           set -euo pipefail
-          test -n "${PIN:-}" && test -n "${REMOTE:-}" && test -n "${BRANCH:-}" && test -n "${SCRIPTS:-}"
-          echo "validating ${CONSUMERS} consumer(s): PIN=${PIN} on ${REMOTE} (${BRANCH})"
-          git init -q ext
-          git -C ext remote add origin "$REMOTE"
-          # FULL fetch of the source branch. An ORPHANED pin (force-push/amend) is not reachable, so the
-          # object resolution below HARD-FAILS — exactly the 56dc877 -> amend signature.
-          git -C ext fetch --no-tags origin "$BRANCH"
-          git -C ext cat-file -e "${PIN}^{commit}"
-          git -C ext merge-base --is-ancestor "$PIN" "origin/${BRANCH}"
-          git -C ext checkout -q "$PIN"
-          # Every referenced script must exist AT the pinned commit; fail if we validated zero.
-          n=0
-          for s in $SCRIPTS; do
-            test -f "ext/$s" || { echo "::error::referenced script missing at ${PIN}: $s"; exit 1; }
-            n=$((n + 1))
+          # The validated set is DERIVED from the manifest: a newly pinned repo is covered the
+          # moment it is added. (This job used to hardcode src/meshcom-qemu-raspi, so ten other
+          # pinned repos could orphan their pin unnoticed.)
+          paths=$(python tools/manifest_pin.py --list)
+          test -n "$paths" || { echo "::error::no pinned sources found"; exit 1; }
+          validated=0
+          scripts_validated=0
+          for path in $paths; do
+            eval "$(python tools/manifest_pin.py --shell "$path")"
+            test -n "${PIN:-}" && test -n "${REMOTE:-}" && test -n "${BRANCH:-}"
+            echo "--- $path: ${CONSUMERS} consumer(s), PIN=${PIN} on ${REMOTE} (${BRANCH})"
+            dir="ext/$(basename "$path")"
+            rm -rf "$dir"; mkdir -p "$dir"
+            git init -q "$dir"
+            git -C "$dir" remote add origin "$REMOTE"
+            # FULL fetch of the source branch. An ORPHANED pin (force-push/amend) is not reachable,
+            # so the object resolution below HARD-FAILS — exactly the 56dc877 -> amend signature.
+            git -C "$dir" fetch --no-tags origin "$BRANCH"
+            git -C "$dir" cat-file -e "${PIN}^{commit}" \
+              || { echo "::error::$path: pinned commit ${PIN} not found on ${BRANCH} (orphaned pin?)"; exit 1; }
+            git -C "$dir" merge-base --is-ancestor "$PIN" "origin/${BRANCH}" \
+              || { echo "::error::$path: pinned commit ${PIN} is not an ancestor of origin/${BRANCH}"; exit 1; }
+            git -C "$dir" checkout -q "$PIN"
+            # Referenced scripts are an ADDITIONAL layer — a pinned repo that references none is
+            # still fully validated above (pin resolves + is an ancestor).
+            for s in ${SCRIPTS:-}; do
+              test -f "$dir/$s" || { echo "::error::$path: referenced script missing at ${PIN}: $s"; exit 1; }
+              case "$s" in *.sh) bash -n "$dir/$s" ;; esac
+              scripts_validated=$((scripts_validated + 1))
+            done
+            # Repo-specific contracts (managed PIO + runtime-owned PLATFORMIO_CORE_DIR, and the
+            # external fetch-qemu tests) apply only to the QEMU source.
+            if [ "$path" = "src/meshcom-qemu-raspi" ]; then
+              grep -qF 'PIO="${PIO:-pio}"' "$dir/scripts/build.sh"
+              grep -qF 'PIO="${PIO:-pio}"' "$dir/scripts/prepare-openeth.sh"
+              grep -qF 'PLATFORMIO_CORE_DIR' "$dir/scripts/build.sh"
+              bash "$dir/tests/test-fetch-qemu.sh"
+            fi
+            validated=$((validated + 1))
           done
-          test "$n" -gt 0 || { echo "::error::zero referenced scripts validated"; exit 1; }
-          # Managed PIO + runtime-owned PLATFORMIO_CORE_DIR contract in the pinned build scripts
-          # (fixed-string match — the pattern contains regex metacharacters).
-          grep -qF 'PIO="${PIO:-pio}"' ext/scripts/build.sh
-          grep -qF 'PIO="${PIO:-pio}"' ext/scripts/prepare-openeth.sh
-          grep -qF 'PLATFORMIO_CORE_DIR' ext/scripts/build.sh
-          # Shell syntax on the referenced *.sh scripts, then the external fetch-qemu tests (the offline
-          # publication cases skip without a real tarball; the mismatch/symlink/cleanup cases run).
-          for s in $SCRIPTS; do case "$s" in *.sh) bash -n "ext/$s" ;; esac; done
-          bash ext/tests/test-fetch-qemu.sh
-          echo "pin validation OK — ${n} script(s) present at ${PIN}, ancestor of origin/${BRANCH}"
+          test "$validated" -gt 0 || { echo "::error::zero pinned sources validated"; exit 1; }
+          test "$scripts_validated" -gt 0 || { echo "::error::zero referenced scripts validated"; exit 1; }
+          echo "pin validation OK — ${validated} pinned source(s), ${scripts_validated} script(s)"

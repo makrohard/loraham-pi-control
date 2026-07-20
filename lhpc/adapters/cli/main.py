@@ -84,7 +84,8 @@ def _print_install_dep_gate(svc, stack, check: bool = False) -> bool:
         warn += [(sid, d) for d in gate["warn"]]
     for sid, d in warn:
         hint = f"  -> {d['install']}" if d.get("install") else ""
-        print(f"WARN  optional dependency not installed for '{sid}': {d['what']}{hint}")
+        kind = "GUI-only (opt-in: --with-gui)" if d.get("gui") else "optional"
+        print(f"WARN  {kind} dependency not installed for '{sid}': {d['what']}{hint}")
     if not block:
         return False
     if check:
@@ -342,6 +343,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_ia.add_argument("--tx", action="store_true",
                       help="After the run, start the daemon TEMPORARILY and transmit ONE "
                            "bounded test frame per ready band (REAL RF — dummy loads!); implies --tests")
+    p_ia.add_argument("--status", action="store_true",
+                      help="Show the auto-install run state and any recovery required, then exit")
+    p_ia.add_argument("--recover", action="store_true",
+                      help="Acknowledge a crashed/interrupted run and clear ALL its leftover state "
+                           "(reservation + lease + run marker) in one action, so a new run can start "
+                           "— the CLI equivalent of the web console's recover button")
+    p_ia.add_argument("--confirm-orphan", action="store_true",
+                      help="With --recover: explicitly acknowledge a run whose spawned child's "
+                           "termination could NOT be proven (ORPHAN RISK) — inspect/terminate any "
+                           "such process FIRST, then confirm")
     p_ia.add_argument("--run-id", default="", help=argparse.SUPPRESS)
 
     p_hmac = sub.add_parser("hmac",
@@ -387,8 +398,12 @@ def build_parser() -> argparse.ArgumentParser:
     # Start/stop/restart a stack or component.
     p_stack = sub.add_parser("stack", help="Start/stop/restart a stack or component")
     stack_sub = p_stack.add_subparsers(dest="stack_action", metavar="<action>")
-    for action in ("start", "stop", "restart"):
-        sp = stack_sub.add_parser(action, help=f"{action.capitalize()} a stack/component")
+    for action, ahelp in (("start", "Start a stack/component"),
+                          ("stop", "Stop a stack/component"),
+                          ("restart", "Restart a stack/component"),
+                          ("poststart", "Re-run post-start steps against a RUNNING stack "
+                                        "(no restart — e.g. re-apply the MeshCom callsign)")):
+        sp = stack_sub.add_parser(action, help=ahelp)
         sp.add_argument("stack", help="Stack or component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
@@ -690,6 +705,35 @@ def _run(argv: list[str] | None = None) -> int:
                 _signal.signal(_signal.SIGTERM, prev[0])
                 _signal.signal(_signal.SIGINT, prev[1])
 
+        # RECOVER: acknowledge a crashed/interrupted run and clear ALL its leftover state in one
+        # action (reservation + lease + marker), reusing the web console's auto_install_ack UNCHANGED
+        # — including its orphan-risk gate: without --confirm-orphan a run whose child's termination
+        # was never proven is REFUSED, so a possibly-live process still requires explicit ack.
+        if args.recover:
+            return _render(svc.auto_install_ack(confirm_orphan=args.confirm_orphan))
+        # STATUS: read-only run state + any recovery-required reason (which names the exact command).
+        if args.status:
+            st = svc.auto_install_status()
+            reason = svc.auto_install_recovery_reason()
+            details: list[str] = []
+            if st is None:
+                summary = "auto-install: no run on record."
+            elif st.get("unsafe"):
+                summary = f"auto-install run state UNREADABLE: {st.get('reason', '')}"
+            else:
+                summary = "auto-install run: " + str(st.get("state", "?"))
+                if st.get("run_id"):
+                    details.append(f"  run id: {st['run_id']}")
+                if st.get("error"):
+                    details.append(f"  {st['error']}")
+            next_cmds: list[str] = []
+            if reason:
+                details.append(f"  recovery required: {reason}")
+                next_cmds.append("lhpc auto-install --recover"
+                                 + (" --confirm-orphan" if "ORPHAN RISK" in reason else ""))
+            from lhpc.core.service_base import ActionResult
+            return _render(ActionResult(not reason, summary,
+                                        details=details, next_commands=next_cmds))
         # WEB-SPAWNED child: `--run-id` is present -> the driver loads+validates the per-stack plan
         # file (claim-first); NEVER a fall-back to the global flags. This branch runs unattended.
         if args.run_id:
@@ -770,7 +814,7 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stack":
-        if args.stack_action in ("start", "stop", "restart"):
+        if args.stack_action in ("start", "stop", "restart", "poststart"):
             return _apply_flow(
                 lambda a: svc.run_action(args.stack_action, args.stack, apply=a), yes=args.yes)
         parser.parse_args(["stack", "--help"])

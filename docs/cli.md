@@ -36,23 +36,34 @@ does is available here too.
 `lhpc doctor` — bounded local health checks.
 
 ### deps
-`lhpc deps` — list every declared system prerequisite (apt packages, the meshtasticd OBS
-repository, the SPI/`config.txt` overlay, `spi`/`gpio` group grants, and disabling the OS-managed
-`meshtasticd`). These are the sudo/apt-level prerequisites only; the Python venv is provisioned by
-`install.sh` after cloning, so venv `pip install` steps are deliberately excluded.
+`lhpc deps` — list every declared system prerequisite (apt packages, the SPI/`config.txt` overlay,
+`spi`/`gpio` group grants, and disabling the OS-managed `meshtasticd`). These are the sudo/apt-level
+prerequisites only; the Python venv is provisioned by `install.sh` after cloning, so venv `pip
+install` steps are deliberately excluded. LHPC never installs system packages itself — it shows the
+exact copyable command for each missing one (the per-stack **System dependencies** view and the
+**Checks** page in the web console).
 
 `lhpc deps --script` renders them into ONE hardened, executable bootstrap script (standalone
-`apt install` lines merged into a single non-interactive `apt-get install -y` that runs FIRST, the
-OBS repo added with a dedicated keyring + `signed-by=` over HTTPS, SPI/group sections re-rendered as
-validated operator-safe logic). lhpc never runs privileged commands — you run the script yourself:
+`apt install` lines merged into a single non-interactive
+`apt-get install -y --no-install-recommends` that runs FIRST, SPI/group sections re-rendered as
+validated operator-safe logic). No third-party apt repository is configured — `meshtasticd` is built
+from a pinned upstream checkout. lhpc never runs privileged commands — you run the script yourself:
 
 ```
 lhpc deps --script > bootstrap-deps.sh
+sudo bash bootstrap-deps.sh --dry-run                 # PRE-FLIGHT: simulate only, change nothing
 sudo bash bootstrap-deps.sh --spi-mode soft-cs        # or hardware-cs | skip; --operator-user <name> if root
+sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine with a display
 ```
 
-`--spi-mode` is **required**: `soft-cs` (meshtasticd software CS — single-radio LoRaHAM Pi/Uputronics),
-`hardware-cs` (SPI on, no overlay — keeps CE0/CE1 for e.g. a dual Uputronics), or `skip`. It is
+`--dry-run` simulates the exact default apt transaction and exits 0 only when it resolves cleanly and
+pulls nothing graphical; it exits nonzero when the set is unresolved (5) or would install a
+GUI/display/audio package (6). Run it first on a fresh image.
+
+`--spi-mode` is **required**: `soft-cs` (software CS — LoRaHAM Pi/Uputronics rigs, single-radio AND
+dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs, the kernel must not claim CE0/CE1),
+`hardware-cs` (SPI on, no overlay — kernel-driven CE0/CE1, only for boards that really use them;
+NOT for Uputronics), or `skip`. It is
 idempotent and fails closed on a conflicting existing `config.txt`. Group grants go to the resolved
 operator (`--operator-user`, else `$SUDO_USER`, else the invoking user) — never root. QEMU + PlatformIO
 are provisioned later by `lhpc build`, not by this script.
@@ -73,7 +84,7 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 `lhpc install [<stack>] [--check] [--source pinned|dev|stable] [--yes]` — adopt/verify managed sources into the runtime root. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
 
 ### auto-install
-`lhpc auto-install [--source pinned|dev|stable] [--no-tests] [--tx] [--yes]` — install/update, build and test **all** stacks in one guided run. `--tx` transmits one bounded test frame per ready band (real RF — dummy loads); it requires host tests.
+`lhpc auto-install [--source pinned|dev|stable] [--tests] [--tx] [--status] [--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one guided run. Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and transmits one bounded test frame per ready band (real RF — dummy loads). `--status` prints the run state and any recovery reason, then exits. `--recover` acknowledges a crashed/interrupted run and clears all its leftover state (reservation + lease + run marker) so a new run can start — the CLI equivalent of the web console's recover button; add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect/terminate it first).
 
 ---
 
@@ -125,6 +136,12 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
 
 ### stack
 `lhpc stack {start|stop|restart} <stack> [--yes]` — start, stop or restart a stack or component.
+
+`lhpc stack poststart <stack> [--yes]` — re-run a RUNNING stack's post-start steps **without**
+restarting it, with the same readiness-gated senders the start uses (any live retry runner is
+cancelled first). Use it when a post-start setting did not land — e.g. the MeshCom callsign push
+after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` shows
+"post-start: … NOT applied"); a restart would cost another multi-minute QEMU boot.
 
 ### build
 `lhpc build <target> [--yes]` — build a stack/component.

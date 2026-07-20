@@ -134,6 +134,11 @@ def _auto_install_harness(monkeypatch, build_ok=True):
                         locked=False: PlanAction("adopt", "", f"adopt {comp.id}",
                                                  status="skipped", detail="stub"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
+    # This harness models a WORKING box (it is about HMAC, not prerequisites). Without this the
+    # post-provision readiness gate — which asks the real missing_requirements — blocks every row
+    # under a bare FakeSystem, where no packaged binary, device node or group exists.
+    monkeypatch.setattr(ControllerService, "_auto_install_runtime_blockers",
+                        lambda self, st: [])
     monkeypatch.setattr(ControllerService, "build",
                         lambda self, t, apply=False, auto_install_ctx=None, **k:
                         ActionResult(build_ok, "built" if build_ok else "boom"))

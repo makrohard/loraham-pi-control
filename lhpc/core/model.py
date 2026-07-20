@@ -151,6 +151,14 @@ class Requirement:
     provisioned: bool = False   # provisioned INTO the runtime root by the build/setup step (a managed
     #                             tool like the in-root qemu / PlatformIO venv): still checked at START,
     #                             but EXCLUDED from the INSTALL gate — it does not exist until `lhpc build`.
+    module: str = ""            # an importable TOP-LEVEL python module (e.g. "tkinter", shipped by
+    #                             python3-tk): probed in-process with importlib.util.find_spec, never a
+    #                             subprocess — this is evaluated on every dependency/status GET.
+    gui: bool = False           # a GUI-ONLY dependency (a GUI application's toolkit, e.g. GTK dev headers
+    #                             or Tk). EXCLUDED from the headless-safe default bootstrap and installed
+    #                             only by `bootstrap-deps.sh --with-gui`; still probed, still surfaced, but
+    #                             WARN-only in the install gate — a headless box is not broken for lacking
+    #                             it, it simply cannot run that component.
 
 
 @dataclass(frozen=True)

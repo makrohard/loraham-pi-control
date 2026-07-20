@@ -52,6 +52,30 @@ GROUP_RESTART_CMD = 'loginctl terminate-user "$USER"'
 # Surfaced when the operator is NOT YET a member: grant it, then re-login. State-specific so it never
 # co-appears with GROUP_RESTART_HINT (which would read as both "not granted" and "granted").
 GROUP_MISSING_HINT = "not a member — grant it, then log out/in or reboot to apply"
+# Surfaced for a GUI-ONLY dependency the headless-safe bootstrap deliberately did not install. ONE
+# wording, reused by the start gate, the dependency views, explain, auto-install and direct build, so
+# the operator reads the same sentence wherever the situation surfaces. It is NOT a defect report: a
+# headless box is working as designed; it simply cannot run that component.
+GUI_MISSING_HINT = ("GUI dependencies not installed — headless-safe default; on a machine with a "
+                    "display, run sudo bash bootstrap-deps.sh --spi-mode <mode> --with-gui")
+
+
+def module_present(name: str) -> bool:
+    """Is a TOP-LEVEL python module importable? Uses `importlib.util.find_spec`, which LOCATES
+    without importing — so this stays side-effect free and cheap enough for the read-only dependency
+    and status paths that call it on every render. Never a subprocess.
+
+    Manifest validation restricts `module` to a top-level name precisely because find_spec on a
+    DOTTED name imports the parent package. Any exception (find_spec raises ModuleNotFoundError for a
+    missing parent, ValueError for a malformed spec, and ImportError from a broken module's own
+    import machinery) is treated as absent — fail-closed, never a traceback into a GET."""
+    import importlib.util
+    if not name:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, AttributeError):
+        return False
 
 
 def req_remediation(req, pending: bool) -> str:
@@ -67,6 +91,9 @@ def req_remediation(req, pending: bool) -> str:
         # "missing" — state the conflict and the copyable command that clears it.
         return (req.note or "a conflicting service is enabled/active") \
             + (f" ({req.install})" if req.install else "")
+    if getattr(req, "gui", False):
+        # A GUI-only dep is opt-in by design, so it never reads as a plain "missing" defect.
+        return f"{label} — {GUI_MISSING_HINT}"
     return f"missing {label}" + (f" ({req.install})" if req.install else "")
 
 
@@ -96,6 +123,9 @@ class PostStartSchedule:
     ok: bool
     detail: str = ""
     unverified: bool = False
+    # Runner log path when scheduling succeeded — lets the caller announce a tail-able
+    # file for the (possibly minutes-long) detached retry window.
+    log_path: str = ""
 
 
 @dataclass
@@ -208,6 +238,12 @@ class Lifecycle:
                 if self.system.fs.exists(self._resolve_req_path(req.absent_file)):
                     missing.append(req)
                 continue
+            if req.module:
+                # In-process import PROBE (find_spec, no subprocess) — used for a toolkit that ships
+                # as a python module rather than a header/binary (e.g. tkinter from python3-tk).
+                if not module_present(req.module):
+                    missing.append(req)
+                continue
             if req.check_file or req.cmd:
                 # Satisfied if EITHER resolves: the binary is on PATH (`cmd`), OR the file exists
                 # (`check_file`, expanduser'd for a per-user tool path like the Espressif qemu under
@@ -313,13 +349,18 @@ class Lifecycle:
             try:
                 argv = commands.build_step_argv(step, self.system.runner, runtime, src)
                 env = commands.build_env(tuple((step.get("env") or {}).items()), runtime, src)
+                # Optional quiet-step preamble ({runtime}/{source} substituted like argv/env);
+                # a bad placeholder is the same typed FAILED as a bad argv token.
+                ann = (commands._paths_subst(str(step["announce"]), runtime, src, "")
+                       if step.get("announce") else None)
             except commands.CommandError as exc:
                 return JobResult(name=base, state=JobState.FAILED,
                                  returncode=1, log_path="", tail=[str(exc)])
             name = base + (f"-{i}" if len(steps) > 1 else "")
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
                            env=(env or None), logs_dir=self.logs_dir(), timeout=eff_timeout,
-                           redactor=redactor, should_cancel=should_cancel, on_log_open=on_log_open)
+                           redactor=redactor, should_cancel=should_cancel, on_log_open=on_log_open,
+                           announce=ann)
             if not last.ok:
                 return last
         if last is None:        # nothing to build
@@ -561,15 +602,19 @@ class Lifecycle:
         if binding is None:
             return PostStartSchedule(False, "no verified main launch to bind the post-start runner "
                                      "to — refusing to spawn an unbound runner", unverified=True)
-        try:
-            script = commands.render_post_launcher(comp.post_steps, comp, params, op,
-                                                   runtime, src, band, binding=binding, gated=True)
-        except (commands.CommandError, validators.ValidationError) as exc:
-            return PostStartSchedule(False, f"launcher render failed: {exc}")
         # Unique runtime-owned launcher so concurrent post-start actions never
-        # overwrite each other (written via the safe no-follow path API).
+        # overwrite each other (written via the safe no-follow path API). The uid-scoped
+        # RESULT sidecar is where the runner reports its terminal outcome (acked/exhausted/…)
+        # for the status view; its lifetime is tied to the ownership record.
         uid = self._launch_uid(comp.id)
         launcher = self.paths.under("state", "post", f"{uid}.py")
+        result = self.paths.under("state", "post", f"{uid}.result.json")
+        try:
+            script = commands.render_post_launcher(comp.post_steps, comp, params, op,
+                                                   runtime, src, band, binding=binding, gated=True,
+                                                   result_path=str(result))
+        except (commands.CommandError, validators.ValidationError) as exc:
+            return PostStartSchedule(False, f"launcher render failed: {exc}")
         try:
             runtime_fs.write_launcher(self.paths, launcher, script)
         except (OSError, PathContainmentError) as exc:
@@ -583,7 +628,9 @@ class Lifecycle:
         except (OSError, PathContainmentError) as exc:
             return PostStartSchedule(False, f"launcher spawn/log setup failed: {exc}")
         ident = self._capture_identity(pid)
-        if self.record_launch(stack, comp, pid, band, ident=ident, role="post", binding=binding):
+        if self.record_launch(stack, comp, pid, band, ident=ident, role="post", binding=binding,
+                              extra={"post_uid": uid, "result_path": str(result),
+                                     "launcher_path": str(launcher), "log_path": str(log)}):
             # Record durable -> ARM the runner with exactly one byte (it may now act for THIS launch
             # only). An arming FAILURE (exception OR a short/zero write) must NEVER be reported as
             # "scheduled": close the gate and unwind via the identity-safe SIGTERM cessation
@@ -598,7 +645,7 @@ class Lifecycle:
                 except OSError:
                     pass
             if armed:
-                return PostStartSchedule(True, "scheduled")
+                return PostStartSchedule(True, "scheduled", log_path=str(log))
             notes, unverified = self._cancel_post_runners(comp, band)
             if unverified:
                 return PostStartSchedule(False, "post-start runner could not be armed AND could not "
@@ -625,17 +672,44 @@ class Lifecycle:
     def has_required_post_start(self, comp: Component) -> bool:
         return any(s.get("required") for s in (comp.post_steps or ()))
 
+    @staticmethod
+    def required_result_leaf(binding: dict) -> str:
+        """The sidecar leaf for a SYNCHRONOUS (required) post-start run, derived from the main
+        launch it belongs to. Unique per launch — a new launch writes a NEW leaf, so nothing
+        pre-existing is ever removed and a previous launch's file is simply never looked up.
+        Hashed so an arbitrary launch id can never shape a filename."""
+        import hashlib
+        lid = str((binding or {}).get("main_launch_id", ""))
+        return f"required-{hashlib.sha256(lid.encode()).hexdigest()[:16]}.result.json"
+
     def run_required_post_start(self, stack: Stack, comp: Component,
                                 params: dict | None = None, band: str = "",
-                                timeout: float = 120.0) -> JobResult:
+                                timeout: float = 300.0, on_log_open=None) -> JobResult:
         """Run a component's REQUIRED post-start steps SYNCHRONOUSLY and bounded (no
         shell): the generated Python launcher exits non-zero if any required step
-        fails, so its return code is a typed pass/fail the caller gates VERIFIED on."""
+        fails, so its return code is a typed pass/fail the caller gates VERIFIED on.
+
+        BOUND to the verified main launch exactly like the detached path: without a binding the
+        runner's `_main_ok()` is a no-op and it would happily push settings at a main that died
+        or was replaced mid-run. It also writes the same typed result sidecar, so an OPTIONAL
+        step that failed inside an otherwise-passing required run stays visible in `lhpc status`.
+
+        The default timeout must comfortably exceed the whole declared set (a 12 s delay plus a
+        120 s per-exec cap twice over) — a shorter budget would kill the job mid-set and report a
+        failure the steps did not cause."""
         op = self.config.operator
         runtime, src = str(self.paths.runtime_root), str(self.source_dir(comp))
+        binding = self._binding_for(comp.id, band)
+        if binding is None:
+            return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
+                             log_path="", tail=["no verified main launch to bind the required "
+                                                "post-start runner to — refusing to run unbound"])
+        result = self.paths.under("state", "post", self.required_result_leaf(binding))
         try:
-            script = commands.render_post_launcher(comp.post_steps, comp, params, op,
-                                                   runtime, src, band)
+            script = commands.render_post_launcher(
+                comp.post_steps, comp, params, op, runtime, src, band, binding=binding,
+                result_path=str(result),
+                meta={"comp": comp.id, "band": band or "", "role": "required"})
         except (commands.CommandError, validators.ValidationError) as exc:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=[f"post-start build error: {exc}"])
@@ -652,7 +726,8 @@ class Lifecycle:
         try:
             return run_job(self.system.runner, name=f"post-{uid}", paths=self.paths,
                            argv=["python3", str(launcher)], cwd=src,
-                           logs_dir=self.logs_dir(), timeout=timeout)
+                           logs_dir=self.logs_dir(), timeout=timeout,
+                           on_log_open=on_log_open)
         except (OSError, PathContainmentError) as exc:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=[f"post-start runner failed to start: {exc}"])
@@ -698,7 +773,7 @@ class Lifecycle:
 
     def record_launch(self, stack: Stack, comp: Component, pid: int | None,
                       band: str = "", ident: dict | None = None, role: str = "",
-                      binding: dict | None = None) -> bool:
+                      binding: dict | None = None, extra: dict | None = None) -> bool:
         """Atomically persist an LHPC-owned launch with its full process identity, via
         the safe runtime FS (no symlink-leaf, fsync'd). Returns True ONLY when the
         record was durably written. A start must NOT be reported owned/verified unless
@@ -724,7 +799,8 @@ class Lifecycle:
         tag = f"{role}-" if role else ""
         rec = {"launch_id": f"{comp.id}__{band or 'x'}__{tag}{pid}", "stack": stack.id,
                "component": comp.id, "band": band or "", "pid": pid, "role": role,
-               "launched_at": int(time.time()), **(binding or {}), **(ident or {})}
+               "launched_at": int(time.time()), **(extra or {}),
+               **(binding or {}), **(ident or {})}
         path = self._owned_dir() / f"{rec['launch_id']}.json"
         try:
             runtime_fs.atomic_write(self.paths, path, json.dumps(rec), 0o600)
@@ -775,9 +851,20 @@ class Lifecycle:
             return False
         try:
             runtime_fs.unlink(self.paths, p)
-            return True
         except (OSError, PathContainmentError):
             return False
+        # A post-runner record owns uid-scoped sidecars (launcher + terminal-result file);
+        # their lifetime is exactly the record's, so drop them with it. Best-effort: once
+        # the record is gone the sidecars are unreachable — a leftover is disk noise, not
+        # stale ownership evidence, and must never turn a proven removal into a failure.
+        for key in ("result_path", "launcher_path"):
+            sp = rec.get(key)
+            if sp:
+                try:
+                    runtime_fs.unlink(self.paths, Path(sp))
+                except (OSError, PathContainmentError):
+                    pass
+        return True
 
     def _original_ceased(self, rec: dict) -> bool:
         """True ONLY when the originally-launched process is PROVABLY gone: its /proc is
@@ -904,6 +991,17 @@ class Lifecycle:
             else:
                 notes.append(f"post-runner pid {rec['pid']}: SIGTERM sent but NOT verified stopped")
                 unverified = True
+        # The SYNCHRONOUS (required) run leaves a sidecar but no ownership record, so
+        # `_remove_record` — which reaps the detached ones — never sees it. Drop the leaf belonging
+        # to the launch being cancelled, computed from ITS binding (never a guessed/shared name).
+        binding = self._binding_for(comp.id, band or "")
+        if binding is not None:
+            try:
+                runtime_fs.unlink(self.paths,
+                                  self.paths.under("state", "post",
+                                                   self.required_result_leaf(binding)))
+            except (OSError, PathContainmentError):
+                pass                    # best-effort: an orphan is inert, never ownership evidence
         return notes, unverified
 
     def stop(self, comp: Component, band: str | None = None) -> CompResult:
@@ -1050,10 +1148,14 @@ class Lifecycle:
         legacy = d / f"start-{comp.id}.log"
         return legacy if legacy.is_file() else None
 
-    def _newest_job_log(self, comp_id: str, kinds=("start", "build", "test")) -> Path | None:
+    def _newest_job_log(self, comp_id: str,
+                        kinds=("start", "build", "test", "post", "adopt")) -> Path | None:
         """The NEWEST (by mtime) non-symlink `<kind>-<comp_id>[-*].log` across the given job kinds —
         so `lhpc logs <comp>` names the SAME file the newest job actually wrote (a running start log,
-        or a fresh build/host-test log), never a stale unsuffixed sibling from a prior run."""
+        a fresh build/host-test log, a detached post-start runner's `post-<comp>-<pid>-<ns>.log`, or
+        a source-adoption `adopt-<comp>.log`), never a stale unsuffixed sibling from a prior run.
+        Every one of these is a file a `[log] … tail -f` line may have announced — `lhpc logs` must
+        resolve to that same newest file."""
         d = self.logs_dir()
         try:
             entries = runtime_fs.scandir_nofollow(self.paths, d)

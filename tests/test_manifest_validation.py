@@ -182,3 +182,25 @@ def test_readiness_timeout_negative_rejected():
 
 def test_readiness_timeout_in_range_ok():
     _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 45})
+
+
+def test_build_step_announce_valid_placeholders_ok():
+    _ok({"run_argv": ["./app"], "readiness": "process",
+         "build_steps": [{"argv": ["make"],
+                          "announce": "[resolve] watch {runtime}/build grow ({source})"}]})
+
+
+def test_build_step_announce_unknown_placeholder_rejected():
+    # Eager: a typo'd placeholder fails at manifest load, not minutes into a build.
+    with pytest.raises(ManifestError):
+        _ok({"run_argv": ["./app"], "readiness": "process",
+             "build_steps": [{"argv": ["make"], "announce": "watch {root}/build grow"}]})
+
+
+def test_build_step_announce_non_string_rejected():
+    with pytest.raises(ManifestError):
+        _ok({"run_argv": ["./app"], "readiness": "process",
+             "build_steps": [{"argv": ["make"], "announce": 42}]})
+    with pytest.raises(ManifestError):
+        _ok({"run_argv": ["./app"], "readiness": "process",
+             "build_steps": [{"argv": ["make"], "announce": "   "}]})

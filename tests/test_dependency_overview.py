@@ -14,6 +14,19 @@ from lhpc.core.lifecycle import GROUP_RESTART_CMD, GROUP_RESTART_HINT
 
 _MUTATING = {"start", "stop", "build", "update", "test", "uninstall", "daemon_set"}
 
+# The managed Meshtastic CLI venv (provisioned by `lhpc build meshtastic`), runtime-root-relative.
+_MT_CLI = "build/tools/meshtastic-cli/.venv/bin/meshtastic"
+# meshtasticd is BUILT from a pinned checkout now (not an apt binary), so the stack is "installed"
+# only once its source is adopted, and its build headers are an ordinary system dep.
+_MT_SRC = "src/meshtastic-firmware"
+_MT_HDR = "/usr/include/yaml-cpp/yaml.h"
+
+
+def _mt_ready(tmp_path):
+    """Adopt the meshtastic source so the stack counts as installed; return its extra dep paths."""
+    (tmp_path / _MT_SRC).mkdir(parents=True, exist_ok=True)
+    return {_MT_HDR, "/dev/spidev0.0", str(tmp_path / _MT_CLI)}
+
 
 class _Guard:
     """Fails the test if a page load calls a mutating service method."""
@@ -69,8 +82,17 @@ def test_group_capability_satisfied_when_in_groups(tmp_path):
 
 
 def test_uninstalled_stacks_are_not_listed(tmp_path):
-    ov = _svc(tmp_path, install=[]).dependency_overview()          # nothing installed
-    assert all(sec["kind"] != "stack" for sec in ov["sections"])   # only controller sections
+    svc = _svc(tmp_path, install=[])                               # nothing installed
+    ov = svc.dependency_overview()
+    listed = {sec.get("stack") for sec in ov["sections"] if sec["kind"] == "stack"}
+    # A stack that must be ADOPTED stays hidden until it is installed ...
+    sourced = {s.id for s in svc.stacks()
+               if s.main_component and s.main_component.source}
+    assert not (listed & sourced)
+    # EVERY stack is sourced now (meshtastic became a managed build), so nothing is listed until it
+    # is installed. The source-less branch still exists in the code; it simply has no occupant in
+    # the shipped manifest today.
+    assert listed == set()
 
 
 def test_nginx_is_an_optional_controller_dep(tmp_path):
@@ -104,10 +126,10 @@ def test_pending_group_grant_shows_restart_command_not_seedocs(tmp_path):
     # copyable RESTART command (never another usermod, never the "see docs" fallback).
     fake = FakeSystem(effective_group_names=frozenset(),
                       configured_group_names=frozenset(("spi", "gpio")),
-                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+                      paths=_mt_ready(tmp_path))
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    mc = svc.stack("meshtastic").main_component
-    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)
+    # the fixture adopts the source and provides the build header + managed CLI, so the ONLY unmet
+    # dep is the restart-pending group grant
     ov = svc.dependency_overview()
     d = _mt_group_dep(ov)
     assert d and d["runtime"] and not d["satisfied"]
@@ -129,10 +151,10 @@ def test_pending_only_page_is_not_all_satisfied_nor_mandatory_missing(tmp_path):
     # not "All dependencies satisfied" and not "mandatory dependencies missing".
     fake = FakeSystem(effective_group_names=frozenset(),
                       configured_group_names=frozenset(("spi", "gpio")),
-                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+                      paths=_mt_ready(tmp_path))
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    mc = svc.stack("meshtastic").main_component
-    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)
+    # the fixture adopts the source and provides the build header + managed CLI, so the ONLY unmet
+    # dep is the restart-pending group grant
     ov = svc.dependency_overview()
     mt_mandatory_missing = sum(1 for sec in ov["sections"] if sec.get("stack") == "meshtastic"
                                for dd in sec["deps"]
@@ -202,10 +224,9 @@ def test_stacks_banner_yellow_when_restart_pending(tmp_path):
     # must have its OWN branch — else a pending-only state shows no proactive top-level signal.
     fake = FakeSystem(effective_group_names=frozenset(),                       # not yet effective
                       configured_group_names=frozenset(("spi", "gpio")),       # but granted
-                      paths={"/usr/bin/meshtasticd", "/dev/spidev0.0"})
+                      paths=_mt_ready(tmp_path))                          # CLI provisioned
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    mc = svc.stack("meshtastic").main_component
-    (tmp_path / mc.source.path).mkdir(parents=True, exist_ok=True)             # "installed"
+    # the fixture adopts the source and provides the build header + managed CLI
     body = _client(svc).get("/stacks").get_data(as_text=True)
     assert "depnote depnote-warn" in body and 'href="/dependencies"' in body   # proactive yellow banner
     assert "restart pending" in body

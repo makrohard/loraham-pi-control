@@ -603,13 +603,15 @@ def test_retained_journal_blocks_every_source_op(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     svc._paths.under("src", "loraham-daemon").mkdir(parents=True)
-    svc._paths.under("src", "LoRaHAM_Pi").mkdir(parents=True)
+    svc._paths.under("src", "LoRaHAM_Daemon").mkdir(parents=True)
     d = svc._paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ retained")        # unresolved -> blocks all source ops
     assert "blocked" in svc.build("daemon", apply=True).summary.lower()
     assert "blocked" in svc.test("daemon", apply=True).summary.lower()
     assert "blocked" in svc.uninstall("daemon", apply=True).summary.lower()
-    rs = svc.start("meshtastic", apply=True)
+    # A SOURCED stack's start is blocked too (chat -> src/LoRaHAM_Daemon); meshtastic declares
+    # no source, so it has no source transaction to be blocked by.
+    rs = svc.start("chat", apply=True)
     assert not rs.ok and "unresolved" in rs.summary.lower()
 
 
