@@ -156,8 +156,8 @@ daemon socket). `depends_on` + `start_order` sequence the stack.
 lhpc install meshcom --yes   # adopt + verify every component's source (pinned)
 lhpc build meshcom           # run each component's build_steps
 lhpc test meshcom            # host tests (RX-safe) — optional
-lhpc start meshcom           # start in order; verify readiness per component
-lhpc stop meshcom            # identity-verified stop (SIGTERM only), endpoints confirmed gone
+lhpc stack start meshcom     # start in order; verify readiness per component
+lhpc stack stop meshcom      # identity-verified stop (SIGTERM only), endpoints confirmed gone
 lhpc update meshcom --yes    # refresh sources to their pinned/branch state
 ```
 
@@ -173,7 +173,7 @@ The web console exposes the same actions per stack, each with a plan + confirmat
    claims, and `depends_on` / `start_order`.
 3. Keep RF safety in mind: declare `requires_daemon_tx` and the `band`; LHPC never
    auto-enables TX.
-4. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc start <id>` and watch the typed
+4. `lhpc install <id> --check` → `lhpc build <id>` → `lhpc stack start <id>` and watch the typed
    outcomes.
 
 ## Maintain an existing stack

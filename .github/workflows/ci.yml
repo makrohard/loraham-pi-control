@@ -39,10 +39,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install package and audit tooling
+        # Lint/test tooling is PINNED to the locally-proven versions (same discipline as the
+        # SHA-pinned actions): a new ruff release changed the default rule set and turned main
+        # red with zero code changes (0.16.0, 2026-07-24 — 343 new findings). Bump the pins
+        # deliberately, together with any new-rule fixes. pip-audit deliberately FLOATS — its
+        # value is the freshest vulnerability database, and its findings gate dependencies,
+        # not our code style.
         run: |
           python -m pip install --upgrade pip
           pip install .
-          pip install pytest ruff bandit pip-audit
+          pip install pytest==9.1.1 ruff==0.15.22 bandit==1.9.4 pip-audit
 
       - name: Byte-compile production code
         run: python -m compileall -q lhpc

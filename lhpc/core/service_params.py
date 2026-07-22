@@ -1206,19 +1206,29 @@ class ParamsConfigMixin:
                 if not enforce:
                     continue
                 rec = {"comp": c.id, "name": p.name, "kind": kind, "enforce": enforce,
-                       "field": self._param_field(target, kind, c.id, p.name)}
+                       "field": self._param_field(target, kind, c.id, p.name),
+                       "default": str(getattr(p, "default", "") or "")}
                 if enforce == "licensed":
                     return rec                       # licensed wins immediately
                 found = found or rec                 # remember an unlicensed node field
         return found
 
     def _identity_config_hint(self, target: str) -> str:
-        """A copy-pasteable `lhpc config` command that sets the callsign/node param blocking a start,
-        e.g. `lhpc config chat call <YOURCALL>`. Falls back to the plain list command if the target
-        has no identity field. The token is `_param_key`, so a duplicated name is already qualified."""
+        """A copy-pasteable `lhpc config` command that sets the callsign/node param blocking a start.
+        A LICENSED param whose manifest default INHERITS the operator callsign (`{callsign}`) while no
+        operator callsign is configured hints the SUPPORTED one-time fix — `lhpc config operator
+        --callsign <CALL>` (every licensed stack inherits it) — never the per-stack param, which would
+        paper over the missing operator identity stack by stack. When the operator IS configured (the
+        refusal then means a saved per-stack value overrides it badly) or the param does not inherit,
+        the per-stack command is the right remedy, e.g. `lhpc config chat call <YOURCALL>`. Falls back
+        to the plain list command if the target has no identity field. The token is `_param_key`, so a
+        duplicated name is already qualified."""
         idf = self._identity_field(target)
         if not idf:
             return f"lhpc config {target}"
+        if (idf["enforce"] == "licensed" and "{callsign}" in idf["default"]
+                and not str(self.config().operator.callsign or "").strip()):
+            return "lhpc config operator --callsign <CALL>"
         token = self._param_key(target, idf["kind"], idf["comp"], idf["name"])
         placeholder = "<YOURCALL>" if idf["enforce"] == "licensed" else "<NODENAME>"
         return f"lhpc config {target} {token} {placeholder}"

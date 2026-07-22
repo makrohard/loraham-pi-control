@@ -140,7 +140,7 @@ def test_helper_unit_is_sandboxed_declarative_no_systemctl():
 def test_web_unit_blocks_bus_and_pulls_watcher():
     active = _active_directives((_ROOT / "deploy" / "lhpc-web.service").read_text())
     assert "InaccessiblePaths=%t/bus %t/systemd/private" in active
-    assert "Wants=network-online.target lhpc-selfupdate.path" in active
+    assert "Wants=network-online.target lhpc-selfupdate.path lhpc-nginx-restart.path" in active
     assert "ConditionPathExists=!%h/loraham-pi-control/.lhpc-uninstalling" in active
     assert not any("systemctl" in ln for ln in active)   # web never calls systemctl
 

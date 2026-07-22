@@ -7,6 +7,12 @@ from __future__ import annotations
 from .paths import PathContainmentError
 from .service_base import ActionResult
 
+# nginx-restart escape-hatch wait bounds (module-level so tests can shrink them): how long the web
+# branch of `webserver apply` waits for the path-unit watcher to claim the request and for a fresh
+# verify to prove the rebound listeners.
+_RESTART_WATCH_WAIT_S = 15.0
+_RESTART_WATCH_POLL_S = 0.5
+
 
 class WebserverOpsMixin:
 
@@ -358,6 +364,28 @@ class WebserverOpsMixin:
         pos = eligible.index(stack_id) if stack_id in eligible else 0
         return min(max(console_port, 1023) + 1 + pos, 65535)
 
+    @staticmethod
+    def _exposure_missing(plan, *, confirm, confirm_public, cidr_flag) -> list:
+        """Aggregate EVERY unmet exposure requirement into ONE list (a single refusal names them
+        all — the old serial errors cost the operator repeated round-trips): the plan's problems
+        (with the exact flag hint for the CIDR case) plus the confirmation the requested policy
+        needs. The strong `enable-remote-danger` phrase covers public CIDRs (0.0.0.0/0), no-auth,
+        AND remote plain HTTP; plain lan exposure takes `enable-remote`."""
+        missing = []
+        for p in plan["problems"]:
+            missing.append(f"{p}: {cidr_flag}" if "source CIDR" in p else p)
+        if plan["remote"]:
+            if plan["danger"] == "elevated":
+                if not confirm_public:
+                    what = ("a public source range (0.0.0.0/0)" if plan["public"]
+                            else "no client authentication" if plan["no_auth"]
+                            else "an unencrypted (http) listener")
+                    missing.append(f"elevated confirmation required ({what}): "
+                                   "--confirm-phrase enable-remote-danger")
+            elif not confirm:
+                missing.append("confirmation required: --confirm-phrase enable-remote")
+        return missing
+
     def stack_web_configure(self, stack_id: str, *, mode=None, port=None, scheme=None,
                             access_mode=None, cidrs=None, confirm=False,
                             confirm_public=False) -> "ActionResult":
@@ -379,19 +407,11 @@ class WebserverOpsMixin:
             access_mode=current.access_mode if access_mode is None else access_mode,
             allowed_cidrs=current.allowed_cidrs if cidrs is None else tuple(cidrs))
         plan = _ws.plan_stack_exposure(probe, ws.port, used)
-        if plan["problems"]:
-            return ActionResult(False, f"cannot configure '{stack_id}' web UI",
-                                details=plan["problems"])
-        if plan["remote"]:
-            if plan["danger"] == "elevated" and not confirm_public:
-                what = ("a public source range (0.0.0.0/0)" if plan["public"]
-                        else "no client authentication" if plan["no_auth"]
-                        else "an unencrypted (http) listener")
-                return ActionResult(False, f"remote exposure with {what} needs elevated confirmation",
-                                    details=["re-run with the elevated confirmation to proceed"])
-            if not confirm:
-                return ActionResult(False, "remote exposure needs explicit confirmation",
-                                    details=["re-run with confirmation to proceed"])
+        missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
+                                         cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
+        if missing:
+            return ActionResult(False, f"cannot configure '{stack_id}' web UI — unmet "
+                                "requirement(s):", details=[f"  - {m}" for m in missing])
         try:
             _config.save_stackweb_config(self._paths, stack_id, mode=mode, port=port, scheme=scheme,
                                          access_mode=access_mode, allowed_cidrs=cidrs)
@@ -431,21 +451,20 @@ class WebserverOpsMixin:
         from .config import WebserverConfig
         from .validators import ValidationError
         cidrs = list(cidrs or [])
-        mode = access_mode or self.config().webserver.access_mode
-        probe = WebserverConfig(bind="0.0.0.0", port=self.config().webserver.port,
+        ws_now = self.config().webserver
+        mode = access_mode or ws_now.access_mode
+        # BUG FIX (live find): the probe MUST carry the CURRENT CONFIGURED scheme — the dataclass
+        # default is https, so an http deployment's exposure used to be assessed as encrypted and
+        # the cleartext elevation never fired.
+        probe = WebserverConfig(bind="0.0.0.0", port=ws_now.port, scheme=ws_now.scheme,
                                 access_mode=mode, remote_exposed=True,
                                 allowed_cidrs=tuple(cidrs))
         plan = _ws.plan_exposure(probe)
-        if plan["problems"]:
-            return ActionResult(False, "cannot enable remote exposure",
-                                details=plan["problems"])
-        if plan["danger"] == "elevated" and not confirm_public:
-            what = "no client authentication" if plan.get("no_auth") else "a public source range (0.0.0.0/0)"
-            return ActionResult(False, f"remote exposure with {what} needs elevated confirmation",
-                                details=["re-run with the elevated confirmation to proceed"])
-        if not confirm:
-            return ActionResult(False, "remote exposure needs explicit confirmation",
-                                details=["re-run with confirmation to proceed"])
+        missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
+                                         cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
+        if missing:
+            return ActionResult(False, "cannot enable remote exposure — unmet requirement(s):",
+                                details=[f"  - {m}" for m in missing])
         try:
             _config.save_webserver_config(self._paths, bind="0.0.0.0", remote_exposed=True,
                                           allowed_cidrs=cidrs, access_mode=mode)
@@ -648,10 +667,11 @@ class WebserverOpsMixin:
         activate an invalid one), then reload an already-running LHPC-owned nginx master, then
         verify + persist evidence. A missing/inactive master returns a typed 'service not active /
         repair required' result — the web process performs no start and no package install. A
-        reload cannot rebind a held listen socket, so on a BIND change (loopback <-> 0.0.0.0) whose
-        effective scope does not match the desired exposure this RESTARTS the unit (`systemctl
-        --user restart lhpc-nginx.service`) and re-verifies; it never reports a bind change that did
-        not take effect (F3)."""
+        reload cannot rebind a held listen socket, so on a BIND change (loopback <-> 0.0.0.0) —
+        the CONSOLE's or any STACK-PROXY listener's (`webserver proxy <stack> --mode ...`) — whose
+        effective scope does not match the desired exposure this RESTARTS the unit automatically
+        (`systemctl --user restart lhpc-nginx.service`, no operator action) and re-verifies; it
+        never reports a bind change that did not take effect (F3)."""
         from . import webserver as _ws
         if not _ws.nginx_installed(self._system):
             return ActionResult(False, "nginx is not installed — required system dependency for "
@@ -675,22 +695,154 @@ class WebserverOpsMixin:
         if state == "failed":
             return ActionResult(False, f"nginx reload failed: {rmsg}", data=ev)
         # F3: a reload cannot rebind a held listen socket, so a bind change (loopback <-> 0.0.0.0)
-        # can leave the OLD listener in place while reload reports success. When the effective scope
-        # does not match the desired exposure, RESTART the unit (ExecStop releases the socket,
-        # ExecStart rebinds) and re-verify — never report a bind change that did not take effect.
-        if ev["checks"].get("remote_listener_matches") == "ok":
+        # can leave the OLD listener in place while reload reports success — for the CONSOLE and
+        # equally for every STACK-PROXY listener (`webserver proxy <stack> --mode public` flips the
+        # rendered listen 127.0.0.1 <-> 0.0.0.0 the same way). When ANY effective scope does not
+        # match its desired exposure, RESTART the unit automatically (ExecStop releases the sockets,
+        # ExecStart rebinds; no operator action) and re-verify — never report a bind change that did
+        # not take effect.
+        def _listeners_ok(evd) -> bool:
+            c = evd["checks"]
+            return (c.get("remote_listener_matches") == "ok"
+                    and c.get("stack_listener_matches", "ok") == "ok")
+
+        if _listeners_ok(ev):
             return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
+        # PRIVILEGE BOUNDARY (live-found): inside the managed web unit the user bus is DELIBERATELY
+        # inaccessible (`InaccessiblePaths=%t/bus %t/systemd/private` — the escape-proof updater
+        # design: a compromised console must never command systemd). A direct restart from here can
+        # only fail with a bus EPERM — so the web branch completes the bind change through the
+        # nginx-restart ESCAPE HATCH instead (request marker -> lhpc-nginx-restart.path -> a
+        # declarative Conflicts=/OnSuccess= stop/start; no bus anywhere).
+        import os as _os
+        if _os.environ.get("INVOCATION_ID"):
+            return self._apply_via_restart_watcher(cfg, _listeners_ok)
         rstate, rmsg2 = _ws.restart(self._system, self._paths)
+        if rstate != "restarted":
+            # The restart itself FAILED — never proceed to a verification that could mask it (a dead
+            # nginx yields "absent" listeners, which must not read as any kind of success).
+            ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+            return ActionResult(False, f"nginx restart failed: {rmsg2}",
+                                next_commands=["systemctl --user restart lhpc-nginx.service",
+                                               "lhpc webserver logs"], data=ev)
         ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
-        if ev["checks"].get("remote_listener_matches") == "ok":
+        if _listeners_ok(ev):
             return ActionResult(True, "webserver configuration applied; nginx restarted to rebind "
                                 "the listener (a bind change needs a restart, not a reload)", data=ev)
         scope = ev.get("effective", {}).get("listener_scope", "unknown")
+        stuck = ev["checks"].get("stack_listener_mismatch_stacks", [])
+        what = (f"the console listener is still '{scope}' (desired remote_exposed="
+                f"{cfg.remote_exposed})" if ev["checks"].get("remote_listener_matches") != "ok"
+                else f"stack proxy listener(s) did not rebind: {', '.join(stuck)}")
         return ActionResult(
-            False, f"configuration applied but the console listener is still '{scope}' "
-            f"(desired remote_exposed={cfg.remote_exposed}) — the bind change did not take effect; "
-            "restart the front-end manually", details=[rmsg2],
-            next_commands=["systemctl --user restart lhpc-nginx.service"], data=ev)
+            False, f"configuration applied but {what} — the bind change did not take effect even "
+            "after an automatic restart; inspect the nginx error log", details=[rmsg2],
+            next_commands=["systemctl --user restart lhpc-nginx.service",
+                           "lhpc webserver logs"], data=ev)
+
+    def _apply_via_restart_watcher(self, cfg, listeners_ok) -> "ActionResult":
+        """WEB-context completion of a listener BIND change via the nginx-restart escape hatch:
+        exclusively create the request marker, then wait (bounded) for the static path unit to claim
+        it and for a fresh verify to prove the listeners match. Falls back to the honest typed
+        refusal when the hatch units are not the canonical set (old deployment / tampered), and on
+        timeout SPLITS the failure by whether the request survived — an unclaimed request means the
+        WATCHER is dead (integration remedy); a claimed one means the restart RAN but nginx never
+        came good (nginx-side remedy). Never reports an unverified bind change."""
+        import time as _time
+        from . import runtime_fs, updater_units
+        from . import webserver as _ws
+        root = str(self._paths.runtime_root)
+        _, checkout, venv = updater_units.deployment_paths(root)
+        user_dir = self._user_unit_dir()
+        hatch_ok = all(
+            updater_units.verify(user_dir, k, root, checkout, venv) == updater_units.OK
+            for k in (updater_units.RESTART_UNIT, updater_units.RESTART_PATH_UNIT))
+        if not hatch_ok:
+            return ActionResult(
+                False, "configuration applied, but the bind change needs a front-end RESTART — and "
+                "the web console deliberately cannot restart services (privilege boundary). The "
+                "managed restart watcher is not installed/canonical on this deployment: run "
+                "`lhpc self-update --repair-integration` once (installs it), or apply from an "
+                "operator shell: `lhpc webserver apply`.",
+                next_commands=["lhpc self-update --repair-integration", "lhpc webserver apply"])
+        req = self._paths.under(*updater_units.NGINX_RESTART_REQUEST_REL)
+        try:
+            m = runtime_fs.open_marker_excl(self._paths, req, "restart\n")
+            m.close()
+        except FileExistsError:
+            pass                                    # a restart is already queued/in flight — ride it
+        except Exception as exc:                    # noqa: BLE001 — containment / fs error
+            return ActionResult(False, f"could not queue the front-end restart request: {exc}")
+        deadline = _time.monotonic() + _RESTART_WATCH_WAIT_S
+        ev = None
+        while _time.monotonic() < deadline:
+            _time.sleep(_RESTART_WATCH_POLL_S)
+            if req.exists():
+                continue                            # not yet claimed by the watcher
+            if not _ws.nginx_master_active(self._paths):
+                continue                            # between declarative stop and OnSuccess start
+            ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+            if listeners_ok(ev):
+                return ActionResult(
+                    True, "webserver configuration applied; nginx restarted via the managed restart "
+                    "watcher (a bind change needs a restart, not a reload)", data=ev)
+        if req.exists():
+            # The watcher never claimed the request: it is dead or not enabled. Remove OUR stale
+            # marker (nobody will consume it) and point at the integration remedy.
+            try:
+                runtime_fs.unlink(self._paths, req)
+            except OSError:
+                pass
+            return ActionResult(
+                False, "configuration applied, but the restart watcher never picked up the request "
+                "(lhpc-nginx-restart.path inactive?) — the bind change did not take effect. Run "
+                "`lhpc self-update --repair-integration`, or apply from an operator shell.",
+                next_commands=["lhpc self-update --repair-integration", "lhpc webserver apply"],
+                data=ev or {})
+        # Claimed, but nginx (or the listeners) never came good: the integration worked — the
+        # problem is on the nginx side. Nothing to remove; point at the nginx evidence.
+        return ActionResult(
+            False, "configuration applied and the restart watcher ran, but the listeners still do "
+            "not match the desired exposure — inspect logs/lhpc-nginx-restart.log and the nginx "
+            "error log (logs/nginx-error.log) / journal.",
+            next_commands=["lhpc webserver logs"], data=ev or {})
+
+    def webserver_run_restart_service(self) -> "ActionResult":
+        """`lhpc-nginx-restart.service` ExecStart body: CLAIM the restart request (atomic
+        no-overwrite rename request -> inflight; absent request = stray start -> typed no-op) and
+        consume it. NO nginx interaction in-process — systemd's declarative unit relationships
+        (Conflicts= stopped lhpc-nginx before this ran; OnSuccess= starts a fresh one after exit 0)
+        perform the restart. Unlike the self-update helper there is no multi-step transaction to
+        protect: a restart is idempotent, so a stale in-flight breadcrumb from a crashed prior run
+        is removed and the claim retried rather than demanding recovery."""
+        from . import runtime_fs, updater_units
+        req = self._paths.under(*updater_units.NGINX_RESTART_REQUEST_REL)
+        inflight = self._paths.under(*updater_units.NGINX_RESTART_INFLIGHT_REL)
+        for attempt in (1, 2):
+            try:
+                runtime_fs.rename_leaf(self._paths, req, inflight, replace=False)
+                break
+            except FileNotFoundError:
+                return ActionResult(True, "No nginx-restart request to service (stray start) — "
+                                    "nothing consumed.", data={"noop": True})
+            except FileExistsError:
+                if attempt == 2:
+                    return ActionResult(False, "Could not claim the restart request: a stale "
+                                        "in-flight record persists.", data={"claim_failed": True})
+                try:
+                    runtime_fs.unlink(self._paths, inflight)   # crashed prior run's breadcrumb
+                except OSError as exc:
+                    return ActionResult(False, f"Could not clear a stale in-flight record: {exc}",
+                                        data={"claim_failed": True})
+            except Exception as exc:                           # noqa: BLE001
+                return ActionResult(False, f"Could not claim the restart request: {exc}",
+                                    data={"claim_failed": True})
+        try:
+            runtime_fs.unlink(self._paths, inflight)
+        except OSError:
+            pass                                    # breadcrumb only; the restart still proceeds
+        return ActionResult(True, "nginx-restart request consumed — systemd now starts a fresh "
+                            "lhpc-nginx (declarative OnSuccess=).", data={"consumed": True})
 
     def webserver_start_service(self) -> "ActionResult":
         """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx

@@ -224,7 +224,7 @@ Webserver:
   # so it is fixed here rather than operator-settable (a changed port would silently break all of
   # them while only this file moved).
   Port: 9443 # Port for Webserver & Webservices
-  RootPath: /usr/share/meshtasticd/web # Root Dir of WebServer
+  RootPath: /usr/share/meshtasticd/web # placeholder — ALWAYS overridden by the web_root FileParam ({runtime}/build/tools/meshtasticd/web)
 #  SSLKey: /etc/meshtasticd/ssl/private_key.pem # Path to SSL Key, generated if not present
 #  SSLCert: /etc/meshtasticd/ssl/certificate.pem # Path to SSL Certificate, generated if not present
 

@@ -761,8 +761,19 @@ def render_build_launcher(steps: list, runtime: str, source: str,
         for k, _v in raw_env:
             if not _ENV_NAME_RE.fullmatch(k):
                 raise CommandError(f"invalid environment variable name: {k!r}")
-        argv = [_paths_subst(t, runtime, source, "") if not t.startswith("{pkgconfig:") else t
-                for t in step.get("argv", [])]
+        # `{asset}/...` resolves to a read-only packaged-data path (same as the CLI path's
+        # build_step_argv); `{pkgconfig:}` stays deferred to the launcher runtime; everything else is a
+        # controller-derived path substitution. Without the {asset} case a build step that link-gates via
+        # the shipped helper (meshcom-qemu, meshtastic) would fail the WEB/detached build with an
+        # "unresolved placeholder" while the CLI build succeeded.
+        def _launcher_tok(t: str) -> str:
+            t = str(t)
+            if t == "{asset}" or t.startswith("{asset}/"):
+                return _asset_token(t)
+            if t.startswith("{pkgconfig:"):
+                return t
+            return _paths_subst(t, runtime, source, "")
+        argv = [_launcher_tok(t) for t in step.get("argv", [])]
         entry = {"argv": argv, "env_items": raw_env}
         # Quiet-step preamble: substituted at render time (static controller text, no
         # secrets) and printed by the launcher runtime BEFORE the step's `+ argv` echo.

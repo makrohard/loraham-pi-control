@@ -54,7 +54,7 @@ def test_apply_reloads_running_master(tmp_path):
         ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
         ("nginx", "-t", "-c", _staged(paths)): CommandResult(0, "", "successful"),
         ("nginx", "-s", "reload", "-c", conf): CommandResult(0, "", ""),
-    })
+    }, listeners=[Listener("ipv4", "127.0.0.1", 8443, 1)])  # live loopback console (exact scope)
     svc = ControllerService(system=fake.system, paths=paths)
     r = svc.webserver_apply()
     assert r.ok and "reloaded" in r.summary
@@ -122,6 +122,236 @@ def test_apply_bind_change_fails_closed_when_restart_does_not_rebind(tmp_path):
     assert r.data["effective"]["remote_listener"] is False       # never a false OK
 
 
+# --- the SAME F3 rule for STACK-PROXY listeners (live report: `webserver proxy meshcom --mode
+# --- public` reloaded, nginx logged bind() 98 Address already in use, kept serving the OLD loopback
+# --- listener on the proxy port, and apply reported success) ---------------------------------
+
+class _StackRestartFlipsFake(FakeSystem):
+    """Console loopback:8443 (desired loopback, matching). The meshcom PROXY listener :8444 stays on
+    the OLD loopback bind until the nginx UNIT restarts, then flips to 0.0.0.0 — models the
+    reload-cannot-rebind-a-held-socket reality for a local -> public proxy transition."""
+    def tcp_listeners(self):
+        restarted = ["systemctl", "--user", "restart", "lhpc-nginx.service"] in self.calls
+        ip = "0.0.0.0" if restarted else "127.0.0.1"
+        return [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                Listener(family="ipv4", ip=ip, port=8444, inode=2)]
+
+
+def _seed_meshcom_public(paths):
+    from lhpc.core import config as cfgmod
+    cfgmod.save_stackweb_config(paths, "meshcom", mode="public", port=8444)
+
+
+def test_apply_stack_proxy_public_transition_restarts_automatically(tmp_path):
+    # loopback -> public on the meshcom proxy: reload leaves :8444 on loopback; apply must detect
+    # the mismatch on the PROXY listener (console matches fine), restart the unit AUTOMATICALLY (no
+    # operator action), re-verify, and only then report success.
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths                                          # console stays loopback-desired
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    fake = _StackRestartFlipsFake(commands=_apply_cmds(paths))
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert r.ok and "restarted" in r.summary, r.summary
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
+    assert r.data["checks"]["stack_listener_matches"] == "ok"
+    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
+    assert mesh["listener_scope"] == "exposed" and mesh["listener_matches"] == "ok"
+
+
+def test_apply_web_context_without_hatch_units_falls_back_typed(tmp_path, monkeypatch):
+    # Web context (INVOCATION_ID) on a deployment WITHOUT the canonical nginx-restart hatch units
+    # (old install / tampered): apply must NOT attempt a doomed bus restart NOR write a request
+    # nobody consumes — it returns the typed boundary message with both remedies.
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    monkeypatch.setenv("INVOCATION_ID", "abc123")             # we ARE the managed web unit
+    fake = FakeSystem(commands=_apply_cmds(paths),
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                                 Listener(family="ipv4", ip="127.0.0.1", port=8444, inode=2)])
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert not r.ok and "privilege boundary" in r.summary
+    assert "lhpc self-update --repair-integration" in (r.next_commands or [])
+    assert "lhpc webserver apply" in (r.next_commands or [])
+    assert not any(c[:1] == ["systemctl"] for c in fake.calls)   # the doomed restart is never tried
+    from lhpc.core import updater_units as U
+    assert not paths.under(*U.NGINX_RESTART_REQUEST_REL).exists()   # no orphan request written
+
+
+def _seed_hatch_units(tmp_path, monkeypatch, paths):
+    """A tmp HOME whose user-unit dir carries the CANONICAL nginx-restart units for THIS root —
+    the precondition for the web branch to use the escape hatch."""
+    from lhpc.core import updater_units as U
+    home = tmp_path / "home"
+    ud = home / ".config" / "systemd" / "user"
+    ud.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    root = str(paths.runtime_root)
+    _, checkout, venv = U.deployment_paths(root)
+    for k in (U.RESTART_UNIT, U.RESTART_PATH_UNIT):
+        (ud / k).write_text(U.render(k, root, checkout, venv))
+    return paths.under(*U.NGINX_RESTART_REQUEST_REL)
+
+
+def _watcher(req_path, *, claim=True, on_claim=None):
+    """A background 'path unit': waits for the request marker, optionally claims (deletes) it and
+    runs `on_claim` (e.g. flip the fake's listeners). Returns the started thread."""
+    import threading
+    import time as _t
+
+    def run():
+        for _ in range(200):                       # <= 10 s safety bound
+            if req_path.exists():
+                if claim:
+                    req_path.unlink()
+                    if on_claim:
+                        on_claim()
+                return
+            _t.sleep(0.05)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+class _FlippableFake(FakeSystem):
+    """Listeners stay loopback until `.flipped` is set (by the fake watcher's on_claim) — models
+    the declarative stop/start rebinding the proxy listener."""
+    flipped = False
+    def tcp_listeners(self):
+        ip = "0.0.0.0" if self.flipped else "127.0.0.1"
+        return [Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                Listener(family="ipv4", ip=ip, port=8444, inode=2)]
+
+
+def test_apply_web_context_completes_via_restart_watcher(tmp_path, monkeypatch):
+    # The full hatch happy path: web-context apply writes the request; the (simulated) path unit
+    # claims it and the fresh nginx rebinds; apply re-verifies and reports the watcher success —
+    # never touching systemctl.
+    from lhpc.core import service_webserver as SW
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    req = _seed_hatch_units(tmp_path, monkeypatch, paths)
+    monkeypatch.setenv("INVOCATION_ID", "abc123")
+    monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 5.0)
+    monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
+    fake = _FlippableFake(commands=_apply_cmds(paths))
+    _watcher(req, claim=True, on_claim=lambda: setattr(fake, "flipped", True))
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert r.ok, r.summary
+    assert "restart watcher" in r.summary
+    assert not req.exists()                                       # consumed
+    assert not any(c[:1] == ["systemctl"] for c in fake.calls)    # no bus, ever
+    mesh = [p for p in r.data["stack_proxies"] if p["stack_id"] == "meshcom"][0]
+    assert mesh["listener_matches"] == "ok"
+
+
+def test_apply_web_context_timeout_unclaimed_names_the_watcher(tmp_path, monkeypatch):
+    # Timeout split (a): the request is NEVER claimed -> the WATCHER is dead/not enabled. The stale
+    # request is removed and the failure points at the integration remedies, not at nginx.
+    from lhpc.core import service_webserver as SW
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    req = _seed_hatch_units(tmp_path, monkeypatch, paths)
+    monkeypatch.setenv("INVOCATION_ID", "abc123")
+    monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 0.8)
+    monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
+    fake = FakeSystem(commands=_apply_cmds(paths),
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                                 Listener(family="ipv4", ip="127.0.0.1", port=8444, inode=2)])
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert not r.ok and "never picked up the request" in r.summary
+    assert "lhpc self-update --repair-integration" in (r.next_commands or [])
+    assert not req.exists()                                       # OUR stale request was removed
+    assert "lhpc-nginx-restart.log" not in r.summary              # integration remedy, not nginx's
+
+
+def test_apply_web_context_timeout_claimed_names_nginx_evidence(tmp_path, monkeypatch):
+    # Timeout split (b): the request WAS claimed but the listeners never came good -> the
+    # integration worked; the failure points at the nginx-side evidence and removes nothing.
+    from lhpc.core import service_webserver as SW
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    req = _seed_hatch_units(tmp_path, monkeypatch, paths)
+    monkeypatch.setenv("INVOCATION_ID", "abc123")
+    monkeypatch.setattr(SW, "_RESTART_WATCH_WAIT_S", 1.0)
+    monkeypatch.setattr(SW, "_RESTART_WATCH_POLL_S", 0.05)
+    fake = FakeSystem(commands=_apply_cmds(paths),                # listeners NEVER flip
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                                 Listener(family="ipv4", ip="127.0.0.1", port=8444, inode=2)])
+    _watcher(req, claim=True)                                     # watcher claims, nginx stays bad
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert not r.ok and "lhpc-nginx-restart.log" in r.summary
+    assert "restart watcher ran" in r.summary
+    assert "repair-integration" not in " ".join(r.next_commands or [])   # NOT an integration remedy
+
+
+# --- the claim verb (lhpc webserver --run-restart-service) ------------------------------------
+
+def test_restart_claim_consumes_request_once_and_refuses_stray(tmp_path):
+    # Startup-recovery + claim discipline: a (possibly stale) request is consumed exactly once —
+    # the declarative restart then proceeds; a second start with no request is a clean stray no-op.
+    from lhpc.core import updater_units as U
+    svc = _svc(tmp_path)
+    paths = svc._paths
+    req = paths.under(*U.NGINX_RESTART_REQUEST_REL)
+    req.parent.mkdir(parents=True, exist_ok=True)
+    req.write_text("restart\n")                                   # stale request (crash survivor)
+    r = svc.webserver_run_restart_service()
+    assert r.ok and r.data.get("consumed") is True
+    assert not req.exists()
+    assert not paths.under(*U.NGINX_RESTART_INFLIGHT_REL).exists()   # breadcrumb cleaned
+    r2 = svc.webserver_run_restart_service()                      # stray start
+    assert r2.ok and r2.data.get("noop") is True
+
+
+def test_restart_claim_recovers_a_stale_inflight_breadcrumb(tmp_path):
+    # A crashed prior agent left an in-flight breadcrumb: unlike self-update (multi-step, needs
+    # recovery) a restart is idempotent — the stale breadcrumb is cleared and the claim retried.
+    from lhpc.core import updater_units as U
+    svc = _svc(tmp_path)
+    paths = svc._paths
+    req = paths.under(*U.NGINX_RESTART_REQUEST_REL)
+    inflight = paths.under(*U.NGINX_RESTART_INFLIGHT_REL)
+    req.parent.mkdir(parents=True, exist_ok=True)
+    req.write_text("restart\n")
+    inflight.write_text("crashed\n")
+    r = svc.webserver_run_restart_service()
+    assert r.ok and r.data.get("consumed") is True
+    assert not req.exists() and not inflight.exists()
+
+
+def test_apply_stack_proxy_stuck_listener_fails_closed_naming_stack(tmp_path):
+    # Even the automatic restart cannot rebind (listener pinned to loopback) -> apply must FAIL,
+    # name the stuck stack, and never report the exposure as effective.
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    _seed_meshcom_public(paths)
+    _live_master(paths)
+    fake = FakeSystem(commands=_apply_cmds(paths),
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8443, inode=1),
+                                 Listener(family="ipv4", ip="127.0.0.1", port=8444, inode=2)])
+    r = ControllerService(system=fake.system, paths=paths).webserver_apply()
+    assert not r.ok and "did not take effect" in r.summary
+    assert "meshcom" in r.summary                                # the stuck listener is NAMED
+    assert ["systemctl", "--user", "restart", "lhpc-nginx.service"] in fake.calls
+    assert r.data["checks"]["stack_listener_matches"] == "failed"
+
+
 def test_apply_no_restart_when_scope_already_matches(tmp_path):
     svc0 = _svc(tmp_path)
     svc0.webserver_init(dns_sans=["pi.local"])
@@ -143,6 +373,13 @@ def test_restart_primitive_calls_systemctl(tmp_path):
     bad = FakeSystem(commands={
         ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(1, "", "boom")})
     assert webserver.restart(bad.system, paths)[0] == "failed"
+    # Live-found: under sudo/root the user bus answers EPERM and the generic advice misled — the
+    # failure must name the actual remedy (re-run as the operator, without sudo).
+    eperm = FakeSystem(commands={
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(
+            1, "", "Failed to connect to user scope bus via local transport: Operation not permitted")})
+    state, msg = webserver.restart(eperm.system, paths)
+    assert state == "failed" and "not sudo/root, not the web console" in msg
 
 
 def test_apply_refuses_invalid_config(tmp_path):

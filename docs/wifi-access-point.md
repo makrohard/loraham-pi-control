@@ -92,9 +92,35 @@ ip addr show wlan0                 # should show 10.42.0.1
 
 ## Reach the lhpc console
 
-The AP only puts the phone on the Pi's network. The console still binds loopback by
-default, so allow the AP subnet once (see [`webserver.md`](webserver.md) for the
-full mTLS runbook):
+The AP only puts the phone on the Pi's network. **Order matters** (the same ordering as
+[firewall.md](firewall.md), scenario 4): certificates FIRST, exposure LAST — a fresh setup
+that exposes before any PKI exists applies a config with no certificates behind it.
+
+**1 — put the AP address in the server certificate.**
+
+*First install (no PKI yet):* `init` creates the CAs and the server cert together —
+
+```bash
+lhpc webserver init --ip 10.42.0.1 --dns loraham.local
+```
+
+*Existing install (CAs already present):* **never re-run `init`** — it would recreate the
+CAs and void every client certificate you have issued. Add the SANs to the existing
+server cert instead:
+
+```bash
+lhpc webserver configure --ip 10.42.0.1 --dns loraham.local
+lhpc webserver tls-renew
+```
+
+**2 — issue the phone's client certificate and move it across:**
+
+```bash
+lhpc webserver cert issue phone
+lhpc webserver cert export phone ~/phone.p12
+```
+
+**3 — expose the console to the AP subnet and activate:**
 
 ```bash
 lhpc webserver expose --cidr 10.42.0.0/24 --confirm-phrase enable-remote
@@ -102,8 +128,7 @@ lhpc webserver apply
 ```
 
 Then browse to **`https://10.42.0.1:8443`** and present the client certificate you
-imported to the phone. Tip: give the server certificate a matching name when you
-initialise it, e.g. `lhpc webserver init --ip 10.42.0.1 --dns loraham.local`.
+imported to the phone (see [`webserver.md`](webserver.md) for the full mTLS runbook).
 
 ## Troubleshooting
 

@@ -155,6 +155,14 @@ def _runner_path() -> str:
     home = os.environ.get("HOME") or os.path.expanduser("~")
     local_bin = os.path.join(home, ".local", "bin") if home and home != "~" else ""
     parts = base.split(os.pathsep)
+    # Guarantee the standard system dirs are present. A non-login ssh env, or a systemd unit without an
+    # explicit PATH, can omit /usr/sbin — where ldconfig/iw and friends live — which then breaks a
+    # stack's run/build script that calls one of them (live finding: meshcom's run.sh probes
+    # `ldconfig -p` for libslirp and falsely reported it MISSING because ldconfig was off-PATH).
+    # Appended (not prepended), so an inherited tool still wins by order.
+    for d in ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"):
+        if d not in parts:
+            parts.append(d)
     if local_bin and local_bin not in parts:
         parts.append(local_bin)
     return os.pathsep.join(parts)
@@ -165,12 +173,11 @@ _FIXED_ENV = {
     "LANG": "C",
     "LC_ALL": "C",
 }
+# NOTE: no LHPC_* override is forwarded. The managed meshcom build invokes build-qemu.sh (from-source),
+# which does NOT read LHPC_QEMU_TARBALL — that var is fetch-qemu.sh's OWN standalone interface (run it
+# directly), so forwarding it here would falsely imply `lhpc build meshcom` honors it. NEVER wildcard LHPC_*.
 for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
-           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR",
-           # ONE explicitly allowlisted LHPC_* override — the offline QEMU tarball for the managed
-           # meshcom build (fetch-qemu.sh). Forwarded here so BOTH the direct runner AND the detached
-           # build launcher (which inherits _FIXED_ENV) honor it. NEVER a wildcard LHPC_* forward.
-           "LHPC_QEMU_TARBALL"):
+           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR"):
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 
@@ -247,6 +254,28 @@ class RealCommandRunner:
                              stderr=err.decode("utf-8", "replace"), timed_out=timed_out,
                              termination=termination)
 
+    @staticmethod
+    def _nice_build_child() -> None:
+        """preexec (runs IN the child, pre-exec): CPU-deprioritize heavy build/host-test children —
+        `run_streaming` is exactly that path (detached build steps use their own launcher). Sustained
+        full-tilt compiles have killed a Pi Zero 2W's brcmfmac Wi-Fi; nice 10 is free when the box is
+        otherwise idle. Generic `run()` (git/systemd/probes/service starts) is deliberately NOT
+        niced, and run/start/post-start services never pass through here. Never blocks the exec."""
+        try:
+            os.nice(10)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _ionice_idle(pid: int) -> None:
+        """Best-effort I/O deprioritization AFTER spawn — never as a command prefix, so a missing or
+        unsupported ionice can never prevent the real command from running."""
+        try:
+            subprocess.run(["ionice", "-c", "3", "-p", str(pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:                                  # noqa: BLE001 — strictly best-effort
+            pass
+
     def run_streaming(self, argv: list[str], timeout: float, log_fh,
                       cwd: str | None = None, env: dict | None = None,
                       redactor=None, should_cancel=None) -> CommandResult:
@@ -269,12 +298,13 @@ class RealCommandRunner:
                     argv,
                     stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                     cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
-                    start_new_session=True,
+                    start_new_session=True, preexec_fn=self._nice_build_child,
                 )
             except FileNotFoundError:
                 return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
             except OSError as exc:
                 return CommandResult(returncode=126, stdout="", stderr=str(exc))
+            self._ionice_idle(proc.pid)
             from .. import proctree
             _leader_token = proctree.capture_session_token(proc.pid)
             timed_out = False
@@ -302,12 +332,13 @@ class RealCommandRunner:
                 argv,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
-                start_new_session=True,
+                start_new_session=True, preexec_fn=self._nice_build_child,
             )
         except FileNotFoundError:
             return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
         except OSError as exc:
             return CommandResult(returncode=126, stdout="", stderr=str(exc))
+        self._ionice_idle(proc.pid)
         from .. import proctree
         token = proctree.capture_session_token(proc.pid)
         drained = threading.Event()

@@ -74,6 +74,13 @@ def _bias_child_oom() -> None:
             fh.write("%d\n" % adj)
     except OSError:
         pass
+    # CPU-deprioritize the detached build child too (mirror of the streaming runner's build nice):
+    # sustained full-tilt compiles have killed a Pi Zero 2W's brcmfmac Wi-Fi. Never fatal; only
+    # build steps run through this launcher — run/start services are unaffected.
+    try:
+        os.nice(10)
+    except OSError:
+        pass
 
 
 def _flock_bounded(fd: int, tries: int) -> bool:
@@ -122,6 +129,13 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     # it before the lhpc-web controller. start_new_session already isolates the process group.
     p = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, start_new_session=True,
                          preexec_fn=_bias_child_oom)
+    # Best-effort I/O deprioritization AFTER spawn — never a command prefix, so a missing or
+    # unsupported ionice can never prevent the build step itself from running.
+    try:
+        subprocess.run(["ionice", "-c", "3", "-p", str(p.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except Exception:                                # noqa: BLE001 — strictly best-effort
+        pass
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:
         return p.wait(timeout=timeout), False

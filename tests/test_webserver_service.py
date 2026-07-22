@@ -7,7 +7,7 @@ from pathlib import Path
 
 from lhpc.core import pki, webserver
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import CommandResult, FakeSystem
+from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
 
@@ -269,7 +269,7 @@ def test_verify_uses_runner(tmp_path):
     fake = FakeSystem(commands={
         ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
         ("nginx", "-t", "-c", conf_path): CommandResult(0, "", "successful"),
-    })
+    }, listeners=[Listener("ipv4", "127.0.0.1", 8443, 1)])   # live loopback console (exact scope)
     svc = ControllerService(system=fake.system, paths=svc0._paths)
     r = svc.webserver_verify()
     assert r.ok and r.data["checks"]["nginx_config_valid"] == "ok"

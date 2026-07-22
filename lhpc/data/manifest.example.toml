@@ -249,10 +249,10 @@ main = "loraham-daemon"
     [stack.component.source]
     path = "src/RadioLib"
     # Known-working fallback only (the default 'dev' selector installs the newest branch HEAD
-    # regardless of this pin). Verified 2026-07-18 to build the daemon cleanly (hardening checks OK)
-    # against RadioLib 7.7.1-43.
-    pin_commit = "6d8934836678d8894e3d556550475b37dce3e2b6"
-    pin_tag = "7.7.1-43-g6d8934836"
+    # regardless of this pin). Verified 2026-07-24: daemon built + RF-proven on the Zero 2W
+    # acceptance runs against RadioLib 7.7.1-45.
+    pin_commit = "0795caa41c6350a2f862137cfc22528c2aaad2bc"
+    pin_tag = "7.7.1-45-g0795caa41"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -920,7 +920,7 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]
@@ -975,15 +975,15 @@ main = "meshtastic"
 
     # A NORMAL managed Git source, so Meshtastic gets the ordinary pinned / stable / dev selectors
     # and the existing Check / Update / Build flows — no bespoke update path. `pinned` (the
-    # known-good default) is the exact commit behind the OBS build we replaced
-    # (2.7.26.61~obs54e0d8d~beta), so this is a like-for-like swap rather than a version jump.
+    # known-good default) is the master commit built + run-proven on the 2026-07 Zero 2W
+    # acceptance runs (native build, uputronics dual HAT, 868 up + region applied).
     # Selecting `dev` clones and builds the configured development branch normally.
     # The config template still ships WITH lhpc (config_file.base = {asset}/…), so nothing is
     # cloned merely to read a yaml.
     [stack.component.source]
     path = "src/meshtastic-firmware"
-    pin_commit = "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb"
-    pin_tag = "v2.7.26.54e0d8d"
+    pin_commit = "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd"
+    pin_tag = "v2.7.26.54e0d8d-28-g6de6c3d6d"
     remote = "https://github.com/meshtastic/firmware.git"
     branch = "master"
     local_dir = "meshtastic-firmware"
@@ -1321,6 +1321,8 @@ main = "meshcom-qemu"
   optional = true
   start_order = 2
   run = "python3 scripts/gps-relay.py --mode fixture --fixture fixtures/gps/valid_fix.nmea --uart .run/gps-uart1.sock {rate} {loop}"
+  # MUST precede the [[…param]] sub-tables (TOML binds trailing bare keys to the LAST table).
+  note = "Optional. Start before the node: GPS init is one-shot."
 
     # Fixture-replay knobs (start-time). mode/fixture/uart stay fixed (gpsd mode
     # would need --fixture removed — switch it by editing the run line).
@@ -1336,12 +1338,11 @@ main = "meshcom-qemu"
     flag = "--loop"
     default = "on"
     label = "Replay continuously"
-  note = "Optional. Start before the node: GPS init is one-shot."
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "e47d7235da8d48fd12562cfebba745cc8b347bbb"
-    pin_tag = "e47d723"
+    pin_commit = "83a8131c419e6f5ca3481344e06e8875454c5a86"
+    pin_tag = "83a8131"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1360,7 +1361,7 @@ main = "meshcom-qemu"
   start_order = 3
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
-  start_note = "MeshCom node launched under QEMU — the firmware boots in ~1–2 min. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
+  start_note = "MeshCom node launched under QEMU — the emulated firmware boots in ~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W. Its web UI at :18083 is sluggish until then, and its callsign switches to yours once the node finishes booting."
   # The EXTERNAL_RADIO firmware bakes the bridge host/port (and optional HMAC
   # password) from the XR_* env vars — the qemu overlay's platformio.ini reads
   # ${sysenv.XR_HOST}/${sysenv.XR_PORT}. Without them set, -D EXTERNAL_RADIO_PORT=
@@ -1378,9 +1379,13 @@ main = "meshcom-qemu"
   #  * PlatformIO -> a managed venv at {root}/build/tools/platformio (retires the pipx system dep;
   #    passed to the build scripts by ABSOLUTE path via PIO=). pipx stays a documented standalone-dev
   #    alternative.
-  #  * Espressif QEMU -> fetch-qemu.sh downloads the sha256-pinned aarch64 tarball (fail-closed; offline
-  #    via LHPC_QEMU_TARBALL) into {root}/build/tool-cache; run.sh receives the resolved binary via the
-  #    `qemu` param (default below). aarch64 is correct for BOTH a Pi Zero 2W and a Pi 5.
+  #  * QEMU (qemu-system-xtensa) -> build-qemu.sh builds it FROM SOURCE at the pinned Espressif commit,
+  #    HEADLESS (no SDL/GTK/VNC/OpenGL/audio), transactionally into {root}/build/tool-cache; the produced
+  #    binary is LINK-GATED (no display/audio library) and hashed before its marker is written. run.sh
+  #    receives the resolved binary via the `qemu` param (default below). This replaces the prebuilt
+  #    Espressif tarball, which hard-links libSDL2 and cannot load on a headless box (the source build has
+  #    no such dependency). The prebuilt tarball path (scripts/fetch-qemu.sh, offline via LHPC_QEMU_TARBALL)
+  #    remains a documented MANUAL opt-in, but is no longer part of the managed build.
   # PLATFORMIO_CORE_DIR is an explicit RUNTIME-OWNED package/tool cache under the root, passed to BOTH
   # framework-install (prepare-openeth) and build (build.sh) so a CLI build and a web-service build use
   # the SAME in-root store (prepare-openeth.sh/build.sh honor `${PLATFORMIO_CORE_DIR:-$HOME/.platformio}`).
@@ -1390,27 +1395,38 @@ main = "meshcom-qemu"
   build_steps = [
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
-    { argv = ["scripts/fetch-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606"], announce = "[fetch] Espressif QEMU tarball — large download + xz unpack; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
+    { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
     { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"], announce = "[clone] MeshCom-Firmware (feature/external-radio-tcp-draft) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
   ]
   readiness = "endpoint"
+  # The emulated ESP32 boots slowly — live-measured ~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W to
+  # console-ready (run-2/3 + the 2026-07-23 debug session; the old "~190 s" figure was one lucky Zero
+  # run). The ready ENDPOINTS (net-console/web sockets) usually open much earlier, but a heavily
+  # loaded Zero can be slow even to open them — 600 s so the window never TERM-kills a boot that
+  # just needs minutes. The start path prints the component's start_note before polling.
+  readiness_timeout = 600.0
   run = "scripts/run.sh {env} {qemu}"
   # RX-safe host test (verifies the guest serves the MeshCom web UI + net-console and no radio
   # is active). SELF-SUFFICIENT: when no guest is running, test.sh boots the newest built env
   # itself and stops exactly that instance afterwards — so auto-install runs it right after the
   # build (no running stack needed). A guest that is already running is probed and left alone.
+  # The MANAGED qemu path is passed explicitly: test.sh's self-boot otherwise inherits run.sh's
+  # PATH/IDF discovery, which cannot find the in-root source build on a fresh install (live find:
+  # Pi 5 reinstall failed exactly here while every box with a legacy ~/.espressif passed).
   # MUST be a COMPONENT-level key — placed after the [[…param]] sub-tables it would bind to the
   # last param table (TOML), leaving the component with no test ("skipped (no host tests)").
-  test = "scripts/test.sh"
+  test = "scripts/test.sh --qemu {runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
   # The build artifact is the merged firmware flash image for the chosen env, NOT
   # qemu-system-xtensa (the system emulator that run.sh locates separately).
   bin = ".work/MeshCom-Firmware/.pio/build/{env}/flash.bin"
-  # Cold `pio` build is ~26 min on a Pi Zero 2W (field-measured); each provisioning/setup/build step
-  # gets this per-step budget with >2x margin so a slow step is never silently TERM-killed mid-build.
-  build_timeout = 3600.0
+  # Per-STEP budget. The heaviest step is now the from-source QEMU compile: on a Pi Zero 2W (2 cores
+  # usable at -j1 under memory pressure) a full QEMU build can run for hours, so this is sized for the
+  # Zero's first cold QEMU build with margin. The `pio` firmware build (~26 min cold on a Zero, field-
+  # measured) sits comfortably inside it. A slow step is never silently TERM-killed mid-build.
+  build_timeout = 28800.0
   # AUTHORITATIVE completion marker, co-located WITH the firmware artifact (same .pio/build/<env> dir as
   # flash.bin). build() removes it before the FIRST step and writes it ONLY after the LAST step succeeds,
   # and is_built() gates on it — so a stale flash.bin from an earlier build can NEVER read "built" after a
@@ -1451,23 +1467,64 @@ main = "meshcom-qemu"
     check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
     install = "sudo apt install -y libslirp0"
     note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. arm64/aarch64 path (this project's target)."
+    # ---- QEMU-from-source build toolchain (scripts/build-qemu.sh) -----------------------------------
+    # The managed emulator is now BUILT FROM SOURCE (headless, no display/audio) instead of fetching a
+    # prebuilt tarball, so the build toolchain + the headless QEMU library dependencies are declared
+    # here and installed by the generated bootstrap before the managed build runs. `git` replaces the
+    # tarball's wget/xz-utils. Each require is a real per-capability check; build-qemu.sh re-checks the
+    # same commands + pkg-config capabilities itself and fails closed if any is missing.
     [[stack.component.require]]
-    # fetch-qemu.sh downloads the pinned tarball (wget) and extracts it with tar -J (xz-utils). Declared
-    # so the generated bootstrap installs them before the managed build invokes fetch-qemu.sh.
-    cmd = "wget"
-    install = "sudo apt install -y wget xz-utils"
-    note = "wget + xz-utils — the managed qemu provisioning (scripts/fetch-qemu.sh) downloads and xz-extracts the pinned Espressif tarball."
+    cmd = "git"
+    install = "sudo apt install -y git"
+    note = "git — build-qemu.sh shallow-clones the pinned Espressif QEMU commit (NO submodules — the heavy roms/* firmware submodules are irrelevant to the xtensa emulator) to build from source."
     [[stack.component.require]]
-    # PROVISIONED by the managed setup step (build_steps: scripts/fetch-qemu.sh into
-    # {runtime}/build/tool-cache) — sha256-pinned + fail-closed, aarch64 (both Zero 2W and Pi 5), offline
-    # via LHPC_QEMU_TARBALL. The pre-check is satisfied when the IN-ROOT binary exists OR
-    # qemu-system-xtensa is on PATH (operator override / standalone dev). run.sh receives the resolved
-    # binary via the `qemu` param (default below); it keeps its own --qemu > PATH > IDF_TOOLS_PATH
-    # fallbacks for standalone use.
+    cmd = "gcc"
+    install = "sudo apt install -y build-essential"
+    note = "build-essential (gcc/g++/make/libc6-dev) — the C toolchain that compiles qemu-system-xtensa from source."
+    [[stack.component.require]]
+    cmd = "ninja"
+    install = "sudo apt install -y ninja-build"
+    note = "ninja-build — QEMU's build backend (meson generates ninja rules)."
+    [[stack.component.require]]
+    cmd = "meson"
+    install = "sudo apt install -y meson"
+    note = "meson — QEMU's build system. The SYSTEM meson is used deliberately: build-qemu.sh enforces a minimum SYSTEM-meson version, so a too-old meson FAILS the build rather than QEMU's mkvenv silently pip-installing one from PyPI (Trixie's meson is new enough)."
+    [[stack.component.require]]
+    cmd = "pkg-config"
+    install = "sudo apt install -y pkg-config"
+    note = "pkg-config — used by QEMU's configure (and build-qemu.sh's prerequisite probe) to locate the headless library dependencies."
+    [[stack.component.require]]
+    check_file = "/usr/include/glib-2.0/glib.h"
+    install = "sudo apt install -y libglib2.0-dev"
+    note = "libglib2.0-dev — GLib, a mandatory QEMU dependency (headless)."
+    [[stack.component.require]]
+    check_file = "/usr/include/pixman-1/pixman.h"
+    install = "sudo apt install -y libpixman-1-dev"
+    note = "libpixman-1-dev — pixman, required by the QEMU softmmu target."
+    [[stack.component.require]]
+    check_file = "/usr/include/slirp/libslirp.h"
+    install = "sudo apt install -y libslirp-dev"
+    note = "libslirp-dev — build-time libslirp for QEMU user-mode networking (--enable-slirp); the runtime libslirp0 is declared separately above."
+    [[stack.component.require]]
+    check_file = "/usr/include/zlib.h"
+    install = "sudo apt install -y zlib1g-dev"
+    note = "zlib1g-dev — zlib, a mandatory QEMU build dependency."
+    [[stack.component.require]]
+    check_file = "/usr/include/gcrypt.h"
+    install = "sudo apt install -y libgcrypt20-dev"
+    note = "libgcrypt20-dev — REQUIRED for the ESP32 machine: the fork gates its RSA/AES accelerator devices (hw/misc/esp32_rsa.c) on `if gcrypt.found()`; without it the esp32 machine aborts at init on 'missing object type misc.esp32.rsa'. build-qemu.sh configures --enable-gcrypt so a missing libgcrypt fails the build loudly."
+    [[stack.component.require]]
+    # PROVISIONED by the managed setup step (build_steps: scripts/build-qemu.sh into
+    # {runtime}/build/tool-cache) — BUILT FROM SOURCE at the pinned Espressif commit, headless (no
+    # display/audio), link-gated + hashed before its .lhpc-qemu-built marker is written. Native to this
+    # box (a Pi 5 build serves the Pi 5; the Zero builds its own). The pre-check is satisfied when the
+    # IN-ROOT binary exists OR qemu-system-xtensa is on PATH (operator override / standalone dev). run.sh
+    # receives the resolved binary via the `qemu` param (default below); it keeps its own
+    # --qemu > PATH > IDF_TOOLS_PATH fallbacks for standalone use.
     cmd = "qemu-system-xtensa"
     check_file = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
     provisioned = true
-    note = "Espressif qemu-system-xtensa (aarch64, sha256-pinned esp_develop_9.0.0_20240606) — provisioned INTO the runtime root by `lhpc build` (scripts/fetch-qemu.sh; offline via LHPC_QEMU_TARBALL). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
+    note = "qemu-system-xtensa (headless, built FROM SOURCE at the pinned Espressif commit esp-develop-9.0.0-20240606) — provisioned INTO the runtime root by `lhpc build` (scripts/build-qemu.sh; link-gated, no SDL/GTK/VNC/OpenGL/audio). Satisfied once the in-root binary exists OR qemu-system-xtensa is on PATH."
     [[stack.component.require]]
     # PROVISIONED by the managed setup step (build_steps: a venv at {runtime}/build/tools/platformio),
     # invoked by ABSOLUTE path (PIO=) from prepare-openeth.sh/build.sh — this retires the pipx system
@@ -1501,16 +1558,16 @@ main = "meshcom-qemu"
     kind = "str"
     validator = "path"
     arg = "--qemu"
-    # The MANAGED in-root binary provisioned by fetch-qemu.sh; the operator can override with a custom
-    # build. run.sh still falls back to PATH > IDF_TOOLS_PATH when invoked standalone (no --qemu).
+    # The MANAGED in-root binary provisioned by build-qemu.sh (headless source build); the operator can
+    # override with a custom build. run.sh still falls back to PATH > IDF_TOOLS_PATH standalone (no --qemu).
     default = "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa"
     label = "qemu-system-xtensa path (managed in-root; override for a custom build)"
     advanced = true
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "e47d7235da8d48fd12562cfebba745cc8b347bbb"
-    pin_tag = "e47d723"
+    pin_commit = "83a8131c419e6f5ca3481344e06e8875454c5a86"
+    pin_tag = "83a8131"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1815,6 +1872,7 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    pin_commit = "3ad12c07beaac21210ed9b4b04c1fe8438722ecb"
-    pin_tag = "v1.5.0-16-g3ad12c0"
+    pin_commit = "d6c5af7b31102393f9b93be165261e15c749aae0"
+    pin_tag = "v1.5.0-18-gd6c5af7"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
+    branch = "main"

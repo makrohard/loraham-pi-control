@@ -38,12 +38,13 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
 
 ## Build durations & memory pressure (512 MB Zero 2 W)
 
-- The MeshCom QEMU firmware is the heavy build: **~26 min cold**, ~2–3 min incremental. RadioLib +
-  daemon and the Python-venv stacks are minutes each. Its per-step build timeout is **3600 s** (>2×
-  the measured cold build) so a slow step is never silently TERM-killed. A completion marker
-  co-located with `flash.bin` (`.pio/build/<env>/.lhpc-build-complete`) is the authoritative
-  built-state signal — a stale `flash.bin` from an earlier build never reads "built" after a
-  failed/interrupted rebuild, and cleaning the firmware removes the marker with it.
+- The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at `-j1`) and
+  the MeshCom firmware (**~26 min cold**, ~2–3 min incremental); RadioLib + daemon and the Python-venv
+  stacks are minutes each. The per-step build timeout is **28800 s** (8 h), sized for the Zero's cold QEMU
+  compile so a slow step is never silently TERM-killed. A completion marker co-located with `flash.bin`
+  (`.pio/build/<env>/.lhpc-build-complete`) is the authoritative built-state signal — a stale `flash.bin`
+  from an earlier build never reads "built" after a failed/interrupted rebuild, and cleaning the firmware
+  removes the marker with it.
 - **Stop the web stack for heavy builds** on a 512 MB board — the controller and a `-j`-parallel
   compile competing for RAM is what triggers the OOM killer. lhpc already biases build children toward
   the OOM killer so the controller survives, and the QEMU build defaults to a memory-aware `-j`
@@ -94,53 +95,103 @@ needs neither pipx nor a `~/.espressif` download:
   (the build scripts honor `PIO=…`). The pipx system dependency is retired. *Standalone-dev
   alternative:* `pipx install platformio` (then `pipx ensurepath`) — the build scripts fall back to
   `pio` on `PATH` when `PIO` is unset.
-- **Espressif QEMU** → `scripts/fetch-qemu.sh` **transactionally** provisions the aarch64 tarball
-  (`esp_develop_9.0.0_20240606`): it downloads/copies to a temp file, verifies the pinned **sha256
-  BEFORE extraction**, extracts to a temp dir, checks the binary + version, then atomically publishes
-  and writes a completion marker — a re-run skips only when that marker proves the pin, and a
-  partial/failed provision never corrupts a previously verified install. It lands in
-  `{root}/build/tool-cache/qemu-xtensa/…`; `run.sh` receives the resolved binary via the `qemu` stack
-  parameter (and keeps `--qemu > PATH > IDF_TOOLS_PATH` fallbacks for standalone dev). aarch64 is
-  correct for **both** a Zero 2 W and a Pi 5.
+- **qemu-system-xtensa** → `scripts/build-qemu.sh` builds it **from source, HEADLESS**, at the pinned
+  Espressif commit (`esp-develop-9.0.0-20240606`). It shallow-clones the pinned tag (**no submodules** —
+  the emulator links only system glib/pixman/slirp/zlib/gcrypt, so the heavy `roms/*` firmware submodules are
+  never pulled), configures with every display/audio back-end disabled (`--disable-sdl/gtk/vnc/opengl/
+  curses/alsa/oss/pa/jack --audio-drv-list= --disable-werror`) and **`--enable-gcrypt`** — the esp32
+  machine's RSA/AES accelerator devices (`hw/misc/esp32_rsa.c`, gated on `if gcrypt.found()`) call
+  libgcrypt, and without it the esp32 machine ABORTS at init on "missing object type 'misc.esp32.rsa'"
+  (proven live). QEMU 9.0 detects libgcrypt via the legacy `libgcrypt-config` tool, which Debian TRIXIE's
+  `libgcrypt20-dev` no longer ships (1.11 moved to pkg-config), so build-qemu.sh synthesizes a
+  `libgcrypt-config→pkg-config` compat shim when the tool is absent. `--disable-werror` is needed because a
+  PINNED 9.0 tree tripped `-Werror` on Trixie's newer gcc. QEMU's normal feature set is otherwise kept
+  (`--without-default-features` would drop the crypto backend the esp32 needs). It builds and
+  installs through a DESTDIR staging tree at the FINAL prefix, **strips** the binary, then **link-gates**
+  it (readelf + ldd must show no SDL/X11/Wayland/Mesa/GL/PulseAudio/ALSA library) and hashes it BEFORE
+  the `.lhpc-qemu-built` marker is written. Publication is transactional (the shared `lib-publish.sh`:
+  per-destination flock, backup container, atomic rename, rollback, startup-recovery) and idempotent (a
+  valid marker + matching binary/config hashes short-circuits). A bounded smoke launch of
+  `-machine esp32 -nic user,model=open_eth` on the PUBLISHED binary proves the machine, NIC and loader
+  before the marker lands. It builds from its own pinned QEMU meson subprojects (keycodemapdb, berkeley
+  softfloat/testfloat) fetched by git from QEMU's mirror; the genuine reproducibility danger —
+  QEMU pip-installing meson from PyPI when the SYSTEM meson is too old — is refused up front by a
+  system-meson version gate (Trixie's meson keeps QEMU's mkvenv offline). `run.sh` receives the resolved
+  binary via the `qemu` stack parameter (and keeps `--qemu > PATH > IDF_TOOLS_PATH` fallbacks). The build
+  is **native to the box** — a Pi 5 build serves the Pi 5, a Zero 2 W builds its own.
 
-**Offline QEMU.** Provide the pinned tarball locally and set **`LHPC_QEMU_TARBALL=/absolute/path/…tar.xz`**
-— it is the ONE allowlisted `LHPC_*` override forwarded through lhpc's sanitized command environment, so
-a detached/web build honors it too (no other `LHPC_*` variables are forwarded). The path must be
-**absolute** and **readable by the operator / web-service user**, and the file is subject to the **same
-pinned SHA-256 verification** — a wrong file is refused.
+**Why from source.** The prebuilt Espressif tarball hard-links **libSDL2**; on a headless box it fails to
+load, and `fetch-qemu.sh` used to refuse with a MISLEADING "not the pinned build" (the sha256 had
+actually matched — the binary simply couldn't `dlopen` libSDL2). Satisfying libSDL2 pulls a ~35-package
+X11/GPU/audio cascade onto an appliance with no display. A source build configured without the
+display/audio back-ends has **no such dependency**, and the link gate proves it on the final stripped
+binary. `fetch-qemu.sh` now reports the missing library honestly and remains a **manual, opt-in**
+prebuilt fallback — no longer part of the managed build.
 
-- *CLI build:* a one-command assignment is enough —
-  `LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz lhpc build meshcom` (or `export` it first).
-- *Managed web-service build:* set it as a **temporary user-manager environment**, restart the service,
-  build, then remove it — do **NOT** add a systemd drop-in (see the warning below):
+**Offline / prebuilt QEMU (manual, standalone — not via lhpc).** The managed build no longer needs a
+tarball. If you instead want the **manual** `scripts/fetch-qemu.sh` prebuilt path (to reuse a cached
+Espressif binary on a box that DOES carry a display stack), run that script **directly** with the pinned
+tarball. `LHPC_QEMU_TARBALL` is fetch-qemu.sh's **own** environment variable, read only when you invoke
+the script yourself — it is **not** forwarded through lhpc, so `lhpc build meshcom` (which builds from
+source via `build-qemu.sh`) neither reads nor honors it. Two equivalent standalone forms:
 
-  ```bash
-  systemctl --user set-environment "LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz"
-  systemctl --user restart lhpc-web.service
-  # ... run the web/detached build ...
-  systemctl --user unset-environment LHPC_QEMU_TARBALL     # cleanup is required
-  systemctl --user restart lhpc-web.service
-  ```
+```bash
+scripts/fetch-qemu.sh <dest-dir> --from-file /absolute/path/qemu-...tar.xz
+# equivalently, via fetch-qemu.sh's own env var:
+LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz scripts/fetch-qemu.sh <dest-dir>
+```
 
-  > **Do not** add a permanent systemd `Environment=` drop-in for this variable. lhpc's canonical-unit
-  > integrity contract classifies ANY drop-in as an override, and integration repair then refuses to
-  > proceed. Permanent drop-ins are intentionally unsupported; the temporary user-manager environment
-  > above is the supported offline path for the web service.
+The path must be **absolute** and **readable**, and the file is subject to the **same pinned SHA-256
+verification** — a wrong file is refused.
 
-Because both tools are now provisioned by `lhpc build`, they no longer appear in `bootstrap-deps.sh`
-— only `libslirp0`, plus the download/extract utilities (`wget`, `xz-utils`) and
-`curl`/`ca-certificates` (used to fetch the sha256-verified Meshtastic web UI), remain apt-level.
+Because PlatformIO and the emulator are provisioned by `lhpc build`, they do not appear in
+`bootstrap-deps.sh` as tools. The from-source emulator instead adds its **build toolchain** to the apt
+layer — `git`, `build-essential`, `meson`, `ninja-build`, `pkg-config`, and the headless QEMU library
+headers `libglib2.0-dev`, `libpixman-1-dev`, `libslirp-dev`, `zlib1g-dev`, `libgcrypt20-dev` (the esp32
+RSA device) — alongside the runtime `libslirp0` and `curl`/`ca-certificates` (used to fetch the
+sha256-verified Meshtastic web UI). The old prebuilt-tarball utilities (`wget`, `xz-utils`) are gone.
+
+**Build cost (measured).** A cold from-source QEMU build is **~5 min on a Pi 5** (`-j3`) and **~68 min on
+a Pi Zero 2 W** (`-j1`; ~500 MiB peak build footprint either way, ~18 MB stripped binary) — a one-time
+step per box, cached by the `.lhpc-qemu-built` marker thereafter. The heavy `roms/*` firmware submodules
+are never fetched and only the `qemu-system-xtensa` target is built (not the qtest suite). The memory-
+aware `-j` (`min(nproc, max(1, floor(MemTotal_GB)))`) drops a 415 MB Zero to `-j1`: a live Zero build
+held ~42 MB min-available with **no OOM** and never touched swap heavily, so **binary distribution is not
+required** — a Zero builds its own emulator.
+
+**Wi-Fi drops on a Pi Zero 2 W under build load (bootstrap disables power-save by default).** Live
+finding: during the long `-j1` QEMU/firmware build the Zero's **brcmfmac Wi-Fi firmware crashed** — the
+`wlan0` interface *vanished entirely* (`ip link` showed only `lo`; a `modprobe -r/+ brcmfmac` did NOT
+bring it back — the SDIO chip was wedged and needed a **reboot** to power-cycle). Proven cause (not a
+guess): `brcmf_cfg80211_set_power_mgmt: power save enabled` in the kernel log and `vcgencmd
+get_throttled = 0x0` (so it was **power-save**, not under-voltage). The durable fix is to disable Wi-Fi
+power-save. `bootstrap-deps.sh` now does this **by default when the install actually runs over Wi-Fi** —
+the default route's device is classified via `nmcli` (`TYPE=wifi`, never an interface-name glob, so
+`wlp2s0`/`wlx…` naming still counts as Wi-Fi; an absent or unclassifiable route falls back to disabling,
+since a mis-detection must never remove the protection). It writes one NetworkManager drop-in
+(`wifi.powersave = 2`), sets it live, prints a WARNING that it changed a system setting plus the exact
+revert, and takes **`--keep-wifi-powersave`** to opt out entirely (with a warning about the drop risk).
+A **LAN-carried install leaves Wi-Fi untouched** and prints the manual one-liner instead. Accepted
+boundary: on a dual-link box whose default route is wired but whose SSH session rides the wlan address,
+the gate skips — a long build can still drop that session; the printed one-liner is the remedy.
+`bootstrap-deps.sh` enables a persistent journal (`/var/log/journal`, effective after the reboot) so a
+future drop or spontaneous reboot is actually captured. NOTE: the build tmux
+survives a Wi-Fi drop; `lhpc build` is idempotent (the QEMU marker + platformio caches make a re-run
+resume), so a drop mid-build costs a reconnect, not the build.
 
 **Pinned MeshCom source.** The controller pins `makrohard/meshcom-qemu-raspi` at the commit that
-carries the transactional `fetch-qemu.sh`, the `PIO=`-honoring build scripts, and the memory-aware
-`-j` (see the manifest `[stack.component.source] pin_commit`). Both consumers of that source
-(`meshcom-qemu` + `meshcom-gps-relay`) share the identical full SHA, enforced by
-`tests/test_managed_tool_contract.py` and `tests/test_pin_consistency.py`.
+carries `scripts/build-qemu.sh` (+ the shared `scripts/lib-publish.sh` transaction), the `PIO=`-honoring
+build scripts, and the memory-aware `-j` (see the manifest `[stack.component.source] pin_commit`). Both
+consumers of that source (`meshcom-qemu` + `meshcom-gps-relay`) share the identical full SHA, enforced
+by `tests/test_pin_consistency.py` — which additionally fails closed if a build/run step references a
+script (like `build-qemu.sh`) that is not present at the pinned commit, so the pin must be bumped in
+lock-step with the shipped scripts.
 
 ## MeshCom QEMU stack — what "normal" looks like
 
-- The web UI at `:18083` returns **HTTP 502 until the firmware finishes booting** (~1–2 min) — that is
-  expected, not a failure. It is **sluggish for the first minutes** while the emulated node settles.
+- The web UI at `:18083` returns **HTTP 502 until the firmware finishes booting** — **~1 min on a
+  Pi 5, ~5–6 min on a Pi Zero 2W** — that is expected, not a failure (two live "meshcom is broken"
+  reports were exactly this wait). It is **sluggish for the first minutes** while the node settles.
 - **~50 % steady-state CPU** for the QEMU process is normal on a Pi; don't mistake it for a hang.
 - The node's callsign switches from the placeholder to yours once it finishes booting and the
   post-start net-console step lands (see the callsign note above).
@@ -206,3 +257,10 @@ Two live acceptance runs were aborted because it was not.
 
 Never installed, in any mode: a desktop environment, display manager, or X/Wayland server.
 `--with-gui` is the only GUI opt-in and it installs GUI *application libraries* only.
+
+**Running the test suite on a Pi.** Always give pytest a dedicated basetemp and remove exactly that
+path afterwards: `--basetemp="$HOME/pt-lhpc"` then `rm -rf -- "$HOME/pt-lhpc"`. On a Zero 2W the
+default basetemp lands on the 208 MB `/tmp` tmpfs and the full suite fills it (ENOSPC); on any box,
+leaked basetemps accumulate (a Pi 5 once held 19 GB of stray `lpt-*` dirs under `/var/tmp`). For such
+legacy leftovers: stop pytest, list with `find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name
+'lpt-*'`, review, then remove explicitly — never a broad glob.

@@ -26,6 +26,8 @@ def _install(tmp_path, **units) -> Path:
     (U.HELPER_UNIT, "lhpc-selfupdate.service"),
     (U.PATH_UNIT, "lhpc-selfupdate.path"),
     (U.NGINX_UNIT, "lhpc-nginx.service"),
+    (U.RESTART_UNIT, "lhpc-nginx-restart.service"),
+    (U.RESTART_PATH_UNIT, "lhpc-nginx-restart.path"),
 ])
 def test_deploy_templates_are_exact_renders(kind, fname):
     r = "%h/loraham-pi-control"
@@ -194,7 +196,12 @@ def _pct_units(tail="loraham-pi-control"):
     path = f"[Path]\nPathExists=%h/{tail}/state/selfupdate.request\nUnit=lhpc-selfupdate.service\n"
     nginx = (f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/{tail}\n"
              f"ExecStart=/usr/sbin/nginx -c %h/{tail}/config/nginx/lhpc.conf\n")
-    return {U.WEB_UNIT: web, U.HELPER_UNIT: helper, U.PATH_UNIT: path, U.NGINX_UNIT: nginx}
+    restart = (f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/{tail}\n"
+               f"ExecStart=%h/{tail}/venv/lhpc/bin/lhpc webserver --run-restart-service\n")
+    restart_path = (f"[Path]\nPathExists=%h/{tail}/state/nginx-restart.request\n"
+                    f"Unit=lhpc-nginx-restart.service\n")
+    return {U.WEB_UNIT: web, U.HELPER_UNIT: helper, U.PATH_UNIT: path, U.NGINX_UNIT: nginx,
+            U.RESTART_UNIT: restart, U.RESTART_PATH_UNIT: restart_path}
 
 
 def test_verify_pct_h_same_root_is_modified_ours(tmp_path):
@@ -260,3 +267,49 @@ def test_nginx_classify_ours_vs_foreign(tmp_path):
     assert U.verify(ud, U.NGINX_UNIT, root, co, venv) == U.MODIFIED_OURS
     ud2 = _install(tmp_path / "b", **{U.NGINX_UNIT: foreign})
     assert U.verify(ud2, U.NGINX_UNIT, root, co, venv) == U.FOREIGN
+
+
+# --- nginx-restart escape hatch units ---------------------------------------------------------
+
+def test_restart_agent_is_declarative_and_sandboxed():
+    # The restart agent must perform the restart via unit RELATIONSHIPS (Conflicts= stops nginx,
+    # OnSuccess/OnFailure start a fresh one) — never systemctl — and stays bus-blind + rate-limited.
+    t = U.render(U.RESTART_UNIT, "/r", "/c", "/v")
+    assert "Conflicts=lhpc-nginx.service" in t
+    assert "OnSuccess=lhpc-nginx.service" in t and "OnFailure=lhpc-nginx.service" in t
+    assert "RefuseManualStart=yes" in t
+    assert "ConditionPathExists=/r/state/nginx-restart.request" in t
+    assert "StartLimitBurst=3" in t and "StartLimitIntervalSec=60" in t
+    assert "InaccessiblePaths=%t/bus %t/systemd/private" in t     # the agent needs no bus either
+    assert "ExecStart=/v/bin/lhpc webserver --run-restart-service" in t
+    # no systemctl in ANY active directive (comments may mention it) — same rule as the helper
+    assert not any("systemctl" in ln for ln in t.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_restart_path_unit_watches_the_request_and_documents_startup_recovery():
+    t = U.render(U.RESTART_PATH_UNIT, "/r", "/c", "/v")
+    assert "PathExists=/r/state/nginx-restart.request" in t
+    assert "Unit=lhpc-nginx-restart.service" in t
+    assert "startup-recovery" in t                                 # the chosen-on-purpose semantics
+    assert "WantedBy=default.target" in t
+
+
+def test_web_unit_pulls_up_the_restart_watcher():
+    t = U.render(U.WEB_UNIT, "/r", "/c", "/v")
+    assert "lhpc-nginx-restart.path" in t                          # Wants= pull-up
+
+
+def test_verify_and_integration_cover_the_restart_units(tmp_path):
+    # Canonical -> OK for both; a missing restart unit degrades integration to `incomplete`;
+    # a drop-in on the agent -> `overridden` (same contract as every other managed unit).
+    ud = _canon(tmp_path)                                          # all six canonical
+    assert U.verify(ud, U.RESTART_UNIT, ROOT, CO, VENV) == U.OK
+    assert U.verify(ud, U.RESTART_PATH_UNIT, ROOT, CO, VENV) == U.OK
+    assert U.integration(ud, ROOT)["status"] == "ok"
+    (ud / U.RESTART_PATH_UNIT).unlink()
+    assert U.integration(ud, ROOT)["status"] == "incomplete"
+    (ud / U.RESTART_PATH_UNIT).write_text(U.render(U.RESTART_PATH_UNIT, ROOT, CO, VENV))
+    dropin = ud / f"{U.RESTART_UNIT}.d"; dropin.mkdir()
+    (dropin / "evil.conf").write_text("[Service]\nExecStart=\n")
+    assert U.verify(ud, U.RESTART_UNIT, ROOT, CO, VENV) == U.OVERRIDDEN
+    assert U.integration(ud, ROOT)["status"] == "overridden"

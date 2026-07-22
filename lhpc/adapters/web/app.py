@@ -1463,6 +1463,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.errorhandler(405)
     def _method_not_allowed(_err):  # noqa: ANN001, ANN202
+        # A GET can only 405 on a POST-only ACTION URL — i.e. a browser stranded on the form
+        # target after the response was lost (an apply that restarts nginx drops the redirect
+        # mid-flight; reload then GETs the action URL). Same contract as /self-update/apply's
+        # stray-GET note: never dead-end that reload, send it to the overview. A non-GET 405
+        # (a stray POST to a page URL) stays a real error page.
+        if request.method == "GET":
+            return redirect(url_for("stacks_overview"))
         return render_template("error.html", code=405, message="Method not allowed"), 405
 
     @app.errorhandler(Exception)
@@ -1582,16 +1589,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         r = service.webserver_verify()
         flash(r.summary, "ok" if r.ok else "warn")
-        return _ws_back()
-
-    @app.route("/webserver/apply", methods=["POST"])
-    def webserver_apply():  # noqa: ANN202
-        if not _csrf_ok():
-            abort(400)
-        r = service.webserver_apply()
-        flash(r.summary, "ok" if r.ok else "err")
-        for d in r.details:
-            flash(d, "warn")
         return _ws_back()
 
     @app.route("/webserver/init", methods=["POST"])

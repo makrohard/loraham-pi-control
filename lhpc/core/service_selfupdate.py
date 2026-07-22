@@ -177,8 +177,13 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, f"Could not reach upstream: {view.get('upstream_error', '')}.",
                                 data=view)
         if view["update_available"]:
-            return ActionResult(True, f"Update available — upstream {view['upstream_head_short']}"
-                                f" (v{view['upstream_version'] or '?'}).", data=view)
+            msg = (f"Update available — upstream {view['upstream_head_short']}"
+                   f" (v{view['upstream_version'] or '?'}).")
+            if view.get("ff_blocked"):
+                msg += (" — local HEAD is not an ancestor of the current upstream; a normal "
+                        "fast-forward update will be REFUSED. Review the divergence, then use "
+                        "`--overwrite` (or the web confirmation) to reset onto upstream.")
+            return ActionResult(True, msg, data=view)
         return ActionResult(True, "Up to date.", data=view)
 
     def self_update_apply(self, *, force: bool = False) -> ActionResult:
@@ -806,9 +811,79 @@ class SelfUpdateOpsMixin:
         return "absent"
 
     def self_update_recover_request(self) -> ActionResult:
-        """OPERATOR: clear a stuck request/in-flight record SAFELY. A pending (unclaimed) request
-        is cleared. An in-flight record is cleared ONLY when its recorded helper identity is
-        proven ceased (never age-based); a missing/malformed identity stays recovery-required."""
+        """OPERATOR: one invocation inspects BOTH recoverable states — the update request/in-flight
+        record AND the uninstall guard — never returning early after handling only one; a partial
+        recovery (one cleared, the other still blocked) is reported truthfully. Request semantics
+        are unchanged: pending is cleared; in-flight only when the recorded helper identity is
+        proven ceased (never age-based). The uninstall guard is released ONLY when its recorded
+        pid + process start time PROVE the owner ceased (a refused/interrupted uninstall leaves a
+        guard whose owner is dead — this is the documented escape for a kept guard)."""
+        # HALF-ISOLATION: an unexpected exception in one half (e.g. a corrupt in-flight record
+        # raising out of json.loads, or an unlink OSError) must NEVER prevent the other half from
+        # being attempted — each converts to a typed failed result instead of propagating.
+        try:
+            req_res = self._recover_update_state()
+        except Exception as exc:                    # noqa: BLE001 — isolate; the guard half still runs
+            req_res = ActionResult(False, f"Update-state recovery failed unexpectedly: {exc}",
+                                   data={"request_recovery_error": True})
+        try:
+            guard_res = self._recover_uninstall_guard()
+        except Exception as exc:                    # noqa: BLE001 — isolate; report truthfully
+            guard_res = ActionResult(False, f"Uninstall-guard recovery failed unexpectedly: {exc}",
+                                     data={"guard": "error"})
+        if guard_res is None:
+            return req_res                          # no guard: exact legacy behavior + wording
+        ok = req_res.ok and guard_res.ok
+        return ActionResult(ok, f"{req_res.summary} {guard_res.summary}",
+                            data={**req_res.data, **guard_res.data})
+
+    def _recover_uninstall_guard(self):
+        """Release a STALE uninstall guard, identity-proven: accepts the controller schema
+        (`start_time`), the legacy shell-fallback field (`started`), and legacy DECIMAL strings;
+        REJECTS booleans, non-decimal values, and non-positive pid/start times (strict
+        `_guard_owner_ints`) — malformed/unprovable keeps the guard with its path named. The whole
+        read -> prove -> unlink sequence runs under the ONE per-root guard lock that also serializes
+        claim/reclaim/release, so the guard proven stale is GUARANTEED to be the same guard removed —
+        recovery can never delete a replacement guard a concurrent uninstall just claimed. Returns
+        None when no guard exists (callers keep legacy request-only wording)."""
+        from . import reslock, runtime_fs, updater_units
+        from .paths import PathContainmentError
+        from .service_base import _guard_owner_ints
+        path = self._paths.under(updater_units.UNINSTALL_GUARD)
+        try:
+            with reslock.operation_lock(self._paths, "uninstall.guard", "guard-recover"):
+                try:
+                    raw = runtime_fs.read_text_regular(self._paths, path, max_bytes=4096)
+                except FileNotFoundError:
+                    return None
+                except (OSError, PathContainmentError):
+                    return ActionResult(False, f"An uninstall guard exists but is unreadable/unsafe "
+                                        f"— NOT removing it ({path}).", data={"guard": "unsafe"})
+                try:
+                    rec = json.loads(raw)
+                    pid, start = _guard_owner_ints(rec)
+                except (ValueError, TypeError, KeyError):
+                    return ActionResult(False, f"An uninstall guard exists but its owner record is "
+                                        f"malformed — cannot prove the owner ceased; verify no "
+                                        f"uninstall is running, then remove {path} by hand.",
+                                        data={"guard": "malformed"})
+                if not _proc_ceased(pid, start):
+                    return ActionResult(False, "An uninstall guard is held by a LIVE process (an "
+                                        "uninstall may be running) — not removing it.",
+                                        data={"guard": "live"})
+                try:
+                    runtime_fs.unlink(self._paths, path)
+                except (OSError, PathContainmentError) as exc:
+                    return ActionResult(False, f"Could not remove the stale uninstall guard: {exc}",
+                                        data={"guard": "unlink_failed"})
+                return ActionResult(True, f"Cleared a stale uninstall guard (pid {pid} proven "
+                                    "ceased).", data={"guard": "cleared"})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
+                                "retry.", data={"guard": "contended"})
+
+    def _recover_update_state(self) -> ActionResult:
+        """The request/in-flight half of recovery (legacy semantics + wording, unchanged)."""
         from . import runtime_fs, updater_units
         state = self.classify_request()
         if state == "absent":
@@ -914,6 +989,16 @@ class SelfUpdateOpsMixin:
                                 "watcher (lhpc-selfupdate.path) — not proceeding. Check "
                                 "`systemctl --user status lhpc-selfupdate.path`.",
                                 data={"path_watcher_failed": True})
+        # Same for the nginx-restart watcher (the web console's bind-change escape hatch). NOTE the
+        # deliberate startup-recovery semantics: `--now` with a stale request present fires ONE
+        # restart immediately — marker consumed, fresh nginx (rate-limited; chosen, not accidental).
+        ren = self._system.runner.run(["systemctl", "--user", "enable", "--now",
+                                       updater_units.RESTART_PATH_UNIT], timeout=S)
+        if ren.returncode != 0:
+            return ActionResult(False, "Installed the units but could not enable/start the "
+                                "nginx-restart watcher (lhpc-nginx-restart.path) — not proceeding. "
+                                "Check `systemctl --user status lhpc-nginx-restart.path`.",
+                                data={"restart_watcher_failed": True})
         web_en = self._system.runner.run(["systemctl", "--user", "enable", updater_units.WEB_UNIT],
                                          timeout=S)
         if web_en.returncode != 0:
@@ -929,6 +1014,13 @@ class SelfUpdateOpsMixin:
                                 "after enable --now — not proceeding. Check "
                                 "`systemctl --user status lhpc-selfupdate.path`.",
                                 data={"path_watcher_failed": True})
+        ract = self._system.runner.run(["systemctl", "--user", "is-active", "--quiet",
+                                        updater_units.RESTART_PATH_UNIT], timeout=S)
+        if ract.returncode != 0:
+            return ActionResult(False, "The nginx-restart watcher (lhpc-nginx-restart.path) is not "
+                                "active after enable --now — not proceeding. Check "
+                                "`systemctl --user status lhpc-nginx-restart.path`.",
+                                data={"restart_watcher_failed": True})
         if restart:
             rst = self._system.runner.run(["systemctl", "--user", "restart", updater_units.WEB_UNIT],
                                           timeout=S)

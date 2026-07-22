@@ -433,10 +433,12 @@ def _repair_env(tmp_path, monkeypatch, *, linger_ok=True):
     ud = home / ".config" / "systemd" / "user"
     cmds = {("systemctl", "--user", "daemon-reload"): CR(0, "", ""),
             ("systemctl", "--user", "enable", "--now", U.PATH_UNIT): CR(0, "", ""),
+            ("systemctl", "--user", "enable", "--now", U.RESTART_PATH_UNIT): CR(0, "", ""),
             ("systemctl", "--user", "enable", U.WEB_UNIT): CR(0, "", ""),
             ("systemctl", "--user", "restart", U.WEB_UNIT): CR(0, "", ""),
-            # restart=False (the web self-repair bridge) additionally proves the watcher is live
-            ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT): CR(0, "", "")}
+            # restart=False (the web self-repair bridge) additionally proves the watchers are live
+            ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT): CR(0, "", ""),
+            ("systemctl", "--user", "is-active", "--quiet", U.RESTART_PATH_UNIT): CR(0, "", "")}
     for kind in U.ALL_UNITS:
         cmds[("systemctl", "--user", "show", "-p", "FragmentPath", "-p", "DropInPaths", kind)] = \
             CR(0, f"FragmentPath={ud / kind}\nDropInPaths=\n", "")
@@ -2053,8 +2055,10 @@ def _repair_svc(tmp_path, monkeypatch, show_for):
     # (individual tests override a specific one to exercise a failure).
     for argv in (("systemctl", "--user", "daemon-reload"),
                  ("systemctl", "--user", "enable", "--now", U.PATH_UNIT),
+                 ("systemctl", "--user", "enable", "--now", U.RESTART_PATH_UNIT),
                  ("systemctl", "--user", "enable", U.WEB_UNIT),
                  ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT),
+                 ("systemctl", "--user", "is-active", "--quiet", U.RESTART_PATH_UNIT),
                  ("systemctl", "--user", "restart", U.WEB_UNIT)):
         svc._fake.commands[argv] = CommandResult(returncode=0, stdout="", stderr="")
     return svc
@@ -2118,8 +2122,10 @@ def _legacy_svc(tmp_path, monkeypatch, *, seed_show=True):
         # enables, the watcher is-active probe, and the web restart); a test overrides one to fail.
         for argv in (("systemctl", "--user", "daemon-reload"),
                      ("systemctl", "--user", "enable", "--now", "lhpc-selfupdate.path"),
+                     ("systemctl", "--user", "enable", "--now", "lhpc-nginx-restart.path"),
                      ("systemctl", "--user", "enable", U.WEB_UNIT),
                      ("systemctl", "--user", "is-active", "--quiet", "lhpc-selfupdate.path"),
+                     ("systemctl", "--user", "is-active", "--quiet", "lhpc-nginx-restart.path"),
                      ("systemctl", "--user", "restart", U.WEB_UNIT)):
             svc._fake.commands[argv] = CommandResult(returncode=0, stdout="", stderr="")
     return svc

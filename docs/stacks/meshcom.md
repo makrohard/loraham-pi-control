@@ -3,6 +3,10 @@
 Runs unmodified MeshCom firmware headless under QEMU, bridged to the LoRaHAM daemon
 on 433 MHz. The daemon must be in **DIRECT** mode (MeshCom does its own CSMA).
 
+**Boot time:** the emulated node needs **~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W** after
+`stack start` before it is usable — the web UI answers 502 and the callsign stays a placeholder
+until the firmware finishes booting. Expected, not a failure.
+
 Start order: daemon → bridge → GPS relay → QEMU.
 
 | | |

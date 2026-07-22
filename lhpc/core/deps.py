@@ -252,11 +252,15 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         (f"# Source manifest dependency revision: {revision}" if revision else "#"),
         "#",
         "# Run ONCE on a fresh Raspberry Pi OS Trixie (arm64) image, BEFORE cloning/installing",
-        "# loraham-pi-control. Works BOTH as an ordinary user (it calls sudo internally) AND via",
-        "# `sudo bash bootstrap-deps.sh`. lhpc itself never runs privileged commands.",
+        "# loraham-pi-control. MUST run as root: `sudo bash bootstrap-deps.sh` (the documented call).",
+        "# The script itself never invokes sudo — once root, every privileged command runs directly, so",
+        "# it works where sudo is absent, unconfigured, or cannot prompt (unattended runs). A non-root",
+        "# invocation refuses up front (exit 10) — EXCEPT `--dry-run` and -h/--help, which stay",
+        "# unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted",
+        "# BEFORE the script is ever granted root. lhpc itself never runs privileged commands.",
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
-        " [--no-swapfile] [--swap-size <MB>] [--with-gui]",
+        " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--keep-wifi-powersave]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics:"
@@ -272,7 +276,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
         " stopped ·",
         "#             9 systemd unit files could not be inspected (fail-closed — a competing service",
-        "#             may be active). Steps that can legitimately fail on a CLEAN",
+        "#             may be active) · 10 not running as root (run: sudo bash bootstrap-deps.sh ...).",
+        "#             Steps that can legitimately fail on a CLEAN",
         "#             image (no packaged meshtasticd unit) are GUARDED — the script runs under",
         "#             `set -e`, so an unguarded one would abort before this summary.",
         "#     --dry-run          simulate the DEFAULT apt transaction and exit WITHOUT touching the",
@@ -284,6 +289,16 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         " components need. OMITTED BY DEFAULT: this script must never pull a graphical stack onto a"
         " headless image. It installs GUI application LIBRARIES only — never a desktop environment,"
         " display manager or X/Wayland server — and assumes you already run a graphical session.",
+        "#     --keep-wifi-powersave  Do NOT touch Wi-Fi settings. BY DEFAULT — but ONLY when the install"
+        " actually runs over Wi-Fi (the default route's device is a NetworkManager TYPE=wifi device, or"
+        " no route/type is determinable); a LAN-carried install leaves Wi-Fi untouched automatically —"
+        " this script DISABLES Wi-Fi"
+        " power-save on a NetworkManager-managed wlan interface, because on a Pi Zero 2W the brcmfmac"
+        " Wi-Fi firmware drops (the interface can vanish until reboot) under a long build's sustained"
+        " CPU load — which breaks a headless install over Wi-Fi. It writes ONE NetworkManager drop-in"
+        " (revert: rm /etc/NetworkManager/conf.d/wifi-nopowersave.conf && systemctl restart"
+        " NetworkManager). Pass this flag to leave Wi-Fi untouched (e.g. Ethernet, or you manage it"
+        " yourself); a warning then explains the risk.",
         "#",
         "# The apt package set is IDENTICAL on a Pi Zero 2W and a Pi 5; only the SPI mode is hardware-",
         "# specific. QEMU + PlatformIO are provisioned later by the MANAGED build (`lhpc build`), not here.",
@@ -292,7 +307,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
 
     out("usage() {",
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
-        ' [--no-swapfile] [--swap-size <MB>] [--with-gui]" >&2',
+        ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--keep-wifi-powersave]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -302,6 +317,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         'NO_SWAPFILE=""',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
+        'KEEP_WIFI=""',
         'DRY_RUN=""',
         "while [ $# -gt 0 ]; do",
         '\tcase "$1" in',
@@ -309,6 +325,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         '\t\t--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;',
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
+        '\t\t--keep-wifi-powersave) KEEP_WIFI=1; shift ;;',
         '\t\t--dry-run) DRY_RUN=1; shift ;;',
         '\t\t--swap-size) SWAP_SIZE_MB="${2:?--swap-size needs a value (MB)}"; shift 2 ;;',
         "\t\t-h|--help) usage; exit 0 ;;",
@@ -367,6 +384,24 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
             "	exit 0",
             "fi",
             "")
+
+    out("# ROOT REQUIRED (exit 10) for everything EXCEPT -h/--help and --dry-run, which are answered",
+        "# above: the pre-flight is deliberately READ-ONLY and ZERO-TRUST — an operator vets what the",
+        "# script would install BEFORE ever granting it root. Every mutating path below runs as root:",
+        "# the documented call is `sudo bash bootstrap-deps.sh`, and the script never invokes sudo",
+        "# itself (internal sudo prefixes used to fail where sudo is absent, unconfigured, or cannot",
+        "# prompt — unattended runs). Operator resolution below is UNCHANGED: $OP comes from SUDO_USER",
+        "# (or --operator-user) and uid-0 operators are refused — root never receives group grants.",
+        'if [ "$(id -u)" -ne 0 ]; then',
+        '\techo "ERROR: bootstrap-deps.sh must run as root — run: sudo bash bootstrap-deps.sh ${SPI_MODE:+--spi-mode $SPI_MODE}" >&2',
+        '\techo "       (only --dry-run and -h/--help work unprivileged)" >&2',
+        "\texit 10",
+        "fi",
+        "# Historic call sites below carry a `sudo` prefix; the script is root (checked above), so route",
+        "# them through a no-op. A shell FUNCTION shadows PATH lookup, so this also works on systems",
+        "# with no sudo binary at all.",
+        'sudo() { "$@"; }',
+        "")
 
     out("# Validate ALL options up front — BEFORE any apt / repository / boot-config / group mutation.",
         'case "$SPI_MODE" in',
@@ -446,10 +481,6 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
             "fi",
             "")
 
-    out('if [ "$(id -u)" -ne 0 ] && ! sudo -n true 2>/dev/null; then',
-        '\techo "[bootstrap-deps] you may be prompted for sudo (system packages + boot config)." >&2',
-        "fi",
-        "")
 
     # TRI-STATE, FAIL-CLOSED unit-file presence. Two hazards are handled here:
     #
@@ -776,6 +807,98 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         "\t\t\t;;",
         "\tesac",
         "fi",
+        "")
+
+    # --- Wi-Fi power-save: default-DISABLE only when the install runs over Wi-Fi -------------------
+    # Live finding on a Pi Zero 2W: the brcmfmac Wi-Fi firmware drops (the wlan interface can vanish
+    # until reboot) under a long build's sustained -j1 CPU load with power-save ON — which stalls a
+    # headless install over Wi-Fi. Default: disable power-save via ONE NetworkManager drop-in — but
+    # ONLY when Wi-Fi actually carries the install: a default route classified TYPE!=wifi means LAN is
+    # used and Wi-Fi is LEFT UNTOUCHED (a note gives the manual command). Classification is TYPE-based
+    # via nmcli, never a wlan* name glob (wlp2s0/wlx... must classify as Wi-Fi); an absent route or
+    # unclassifiable device falls back to disabling — a mis-detection must never REMOVE the protection
+    # this feature exists for. --keep-wifi-powersave leaves Wi-Fi untouched in EVERY case. Accepted
+    # residual (documented in field-notes): a dual-link box with a wired default route but an SSH
+    # session over the wlan address gets the skip. Idempotent; a no-op without a Wi-Fi device.
+    out("# --- Wi-Fi power-save (default: DISABLE when the install runs over Wi-Fi; LAN install: leave",
+        "# --- untouched; --keep-wifi-powersave: never touch) ------------------------------------------",
+        'WIFI_PSAVE_CONF="${WIFI_PSAVE_CONF:-/etc/NetworkManager/conf.d/wifi-nopowersave.conf}"',
+        "# ONE nmcli call feeds presence, device pick AND default-route classification — all TYPE-based,",
+        "# never a wlan* name glob (predictable-naming Wi-Fi like wlp2s0 must not be mis-read as LAN).",
+        '_NM_DEVS="$(nmcli -t -f DEVICE,TYPE device 2>/dev/null || true)"',
+        'WIFI_DEV="$(printf \'%s\\n\' "$_NM_DEVS" | awk -F: \'$2=="wifi"{print $1; exit}\')"',
+        'WIFI_DEFROUTE_DEV="$(ip -o route show default 2>/dev/null | awk \'{for(i=1;i<NF;i++) if ($i=="dev") {print $(i+1); exit}}\' || true)"',
+        'WIFI_DEFROUTE_TYPE="$(printf \'%s\\n\' "$_NM_DEVS" | awk -F: -v d="$WIFI_DEFROUTE_DEV" \'$1==d{print $2; exit}\')"',
+        'if [ -n "$KEEP_WIFI" ]; then',
+        '\techo "[bootstrap-deps] Wi-Fi: left untouched (--keep-wifi-powersave)."',
+        '\techo "[bootstrap-deps]   WARNING: with power-save ON, a Pi Zero 2W can DROP Wi-Fi (the wlan"',
+        '\techo "[bootstrap-deps]   interface may vanish until reboot) during a long build — a headless"',
+        '\techo "[bootstrap-deps]   install over Wi-Fi may stall. Omit this flag to let bootstrap disable it."',
+        'elif [ -z "$WIFI_DEV" ]; then',
+        '\techo "[bootstrap-deps] Wi-Fi: no NetworkManager-managed wlan interface — nothing to do (wired/other)."',
+        'elif [ -n "$WIFI_DEFROUTE_DEV" ] && [ -n "$WIFI_DEFROUTE_TYPE" ] && [ "$WIFI_DEFROUTE_TYPE" != "wifi" ]; then',
+        "\t# LAN carries the install (default route classified non-wifi): the drop-protection rationale",
+        "\t# does not apply — do NOT mutate an unrelated Wi-Fi setting. An absent route or an",
+        "\t# unclassifiable device falls through to the disable path instead: mis-detection must never",
+        "\t# REMOVE protection.",
+        '\techo "[bootstrap-deps] Wi-Fi: left untouched — the install runs over LAN (default route via $WIFI_DEFROUTE_DEV, type $WIFI_DEFROUTE_TYPE)."',
+        '\techo "[bootstrap-deps]   If this box will later run headless over Wi-Fi, disable power-save manually:"',
+        "\techo \"[bootstrap-deps]   printf '[connection]\\nwifi.powersave = 2\\n' | sudo tee $WIFI_PSAVE_CONF && sudo systemctl restart NetworkManager\"",
+        "else",
+        '\techo "[bootstrap-deps] Wi-Fi: DISABLING power-save on $WIFI_DEV (default)."',
+        '\techo "[bootstrap-deps]   Reason: brcmfmac Wi-Fi on a Pi Zero 2W crashes/drops under a long build"',
+        '\techo "[bootstrap-deps]   with power-save on; --keep-wifi-powersave leaves Wi-Fi untouched."',
+        '\t# Persistent config, fail-closed: refuse a symlink/non-regular leaf (never write THROUGH it under',
+        '\t# sudo); write a ROOT-OWNED same-dir temp (sudo mktemp), chmod 0644, atomically rename into place,',
+        '\t# and clean the temp up on ANY failure after creation. _persisted tracks success so the live-apply',
+        '\t# report below never promises "after reboot" when nothing was actually written.',
+        '\t_persisted=0',
+        '\tif [ -L "$WIFI_PSAVE_CONF" ] || { [ -e "$WIFI_PSAVE_CONF" ] && [ ! -f "$WIFI_PSAVE_CONF" ]; }; then',
+        '\t\techo "[bootstrap-deps]   WARNING: $WIFI_PSAVE_CONF is a symlink or non-regular file - NOT touching it; power-save config left as-is." >&2',
+        "\telse",
+        '\t\tsudo mkdir -p "$(dirname "$WIFI_PSAVE_CONF")" 2>/dev/null || true',
+        '\t\tif _wtmp="$(sudo mktemp "$(dirname "$WIFI_PSAVE_CONF")/.wifi-nopowersave.XXXXXX")" \\',
+        '\t\t\t\t&& printf \'[connection]\\nwifi.powersave = 2\\n\' | sudo tee "$_wtmp" >/dev/null \\',
+        '\t\t\t\t&& sudo chmod 0644 "$_wtmp" \\',
+        '\t\t\t\t&& sudo mv -- "$_wtmp" "$WIFI_PSAVE_CONF"; then',
+        '\t\t\t_persisted=1',
+        '\t\t\techo "[bootstrap-deps]   persistent config written: $WIFI_PSAVE_CONF (wifi.powersave=2)"',
+        '\t\t\techo "[bootstrap-deps]   REVERT: sudo rm $WIFI_PSAVE_CONF && sudo systemctl restart NetworkManager"',
+        "\t\telse",
+        '\t\t\t[ -n "${_wtmp:-}" ] && sudo rm -f -- "$_wtmp"',
+        '\t\t\techo "[bootstrap-deps]   WARNING: could not write $WIFI_PSAVE_CONF - power-save NOT persisted." >&2',
+        "\t\tfi",
+        "\tfi",
+        '\t# Live apply (best-effort), reported SEPARATELY. "after reboot" is promised ONLY when the config',
+        '\t# was actually persisted; if neither persistence nor the live op succeeded, say so honestly.',
+        '\t_live_ok=1',
+        '\t_wcon="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${WIFI_DEV}$" | cut -d: -f1 | head -1 || true)"',
+        '\tif [ -n "$_wcon" ]; then sudo nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 || _live_ok=0; fi',
+        '\tif command -v iw >/dev/null 2>&1; then sudo iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 || _live_ok=0; fi',
+        '\tif [ "$_live_ok" = 1 ]; then',
+        '\t\techo "[bootstrap-deps]   Wi-Fi power-save disabled now (live)."',
+        '\telif [ "$_persisted" = 1 ]; then',
+        '\t\techo "[bootstrap-deps]   Wi-Fi power-save NOT applied live - takes effect after the next reboot."',
+        "\telse",
+        '\t\techo "[bootstrap-deps]   Wi-Fi power-save NOT applied live and NOT persisted - power-save is UNCHANGED (fix $WIFI_PSAVE_CONF, then re-run)." >&2',
+        "\tfi",
+        "fi",
+        "")
+
+    # --- persistent journal ------------------------------------------------------------------
+    # Live-found (twice): spontaneous-reboot forensics died because Raspberry Pi OS's default
+    # VOLATILE journal loses the previous boot's kernel evidence. journald ships Storage=auto,
+    # which becomes persistent once /var/log/journal exists — so bootstrap creates it. Directory
+    # creation is FATAL on failure (no dir = no persistence — never claim it); only the tmpfiles
+    # ACL adjustment is warning-only. JOURNAL_DIR is a test seam (like CONFIG_TXT/WIFI_PSAVE_CONF).
+    out("# --- persistent journal (crash forensics survive reboots; Storage=auto honours the dir) ------",
+        'JOURNAL_DIR="${JOURNAL_DIR:-/var/log/journal}"',
+        'if [ ! -d "$JOURNAL_DIR" ]; then',
+        '\tsudo mkdir -p "$JOURNAL_DIR" || { echo "ERROR: could not create $JOURNAL_DIR — persistent journal NOT enabled." >&2; exit 1; }',
+        "fi",
+        "# ACL fixup is best-effort: the directory alone already makes Storage=auto persistent.",
+        'sudo systemd-tmpfiles --create --prefix="$JOURNAL_DIR" 2>/dev/null || echo "[bootstrap-deps] WARNING: systemd-tmpfiles ACL adjustment failed — the journal is persistent but may carry default permissions." >&2',
+        'echo "[bootstrap-deps] persistent journal enabled (takes effect after the reboot)."',
         "")
 
     if groups_csv:

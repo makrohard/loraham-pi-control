@@ -220,6 +220,20 @@ def test_build_launcher_pkgconfig_failure_exits_nonzero(tmp_path):
     assert rc.returncode != 0 and "pkg-config failed" in rc.stderr
 
 
+def test_build_launcher_resolves_asset_token(tmp_path):
+    # A build step that link-gates via the shipped helper (`{asset}/scripts/...`) must resolve in the
+    # WEB/detached launcher exactly like the CLI path (build_step_argv) — else the detached build fails
+    # with "unresolved placeholder" while the CLI build succeeds. meshcom-qemu + meshtastic both rely on
+    # this for their link-gate step.
+    from lhpc.core import commands
+    from lhpc.core.assets import asset_path
+    steps = [{"argv": ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/bin/x"]}]
+    script = commands.render_build_launcher(steps, str(tmp_path), str(tmp_path))
+    resolved = str(asset_path("scripts/meshtastic-link-gate.sh"))
+    assert resolved in script                      # {asset} resolved to the packaged path
+    assert "{asset}" not in script                 # no unresolved placeholder carried into the launcher
+
+
 # --- readiness-gated, ack-aware tcp_send (MeshCom setcall live finding) -----------------------
 
 def _mk_comp_with_post(post):

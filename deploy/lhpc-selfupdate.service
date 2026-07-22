@@ -23,6 +23,15 @@ Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
 WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
 ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc self-update --run-service
 TimeoutStartSec=900
+# A Zero 2W's SDIO Wi-Fi firmware (brcmfmac) can drop the interface when CPU and wireless I/O
+# spike together — exactly an update's profile (git fetch over Wi-Fi + pip reinstall at full
+# tilt), which takes the box off the very network the update was requested over. Run the helper
+# below interactive priority and cap it to ~1.5 cores; the update runs slower, the link stays
+# up. (`cpu` is delegated to user units on the target images, so CPUQuota= is enforced.)
+Nice=10
+CPUQuota=150%
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 StandardOutput=append:%h/loraham-pi-control/logs/lhpc-selfupdate.log
 StandardError=append:%h/loraham-pi-control/logs/lhpc-selfupdate.log
 SyslogIdentifier=lhpc-selfupdate

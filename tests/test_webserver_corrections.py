@@ -10,7 +10,7 @@ from lhpc.adapters.web.app import create_app
 from lhpc.core import pki, runtime_fs, webserver
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult as CR
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
 
@@ -50,7 +50,8 @@ def test_apply_valid_promotes_staged(tmp_path):
     live = str(paths.under(*webserver.NGINX_CONF))
     fake = FakeSystem(commands={("nginx", "-v"): CR(0, "", ""),
                                 ("nginx", "-t", "-c", _staged(paths)): CR(0, "", "ok"),
-                                ("nginx", "-s", "reload", "-c", live): CR(0, "", "")})
+                                ("nginx", "-s", "reload", "-c", live): CR(0, "", "")},
+                      listeners=[Listener("ipv4", "127.0.0.1", 8443, 1)])
     svc = ControllerService(system=fake.system, paths=paths)
     assert svc.webserver_apply().ok
     assert _live(tmp_path).exists() and "server unix:" in _live(tmp_path).read_text()

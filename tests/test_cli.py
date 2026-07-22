@@ -212,6 +212,22 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch):
     assert "Update applied" in out and "lhpc web" in out and seen["force"] is True
 
 
+def test_self_update_overwrite_implies_apply(capsys, monkeypatch):
+    """`--overwrite --yes` without `--apply` must APPLY (force), never silently degrade to the
+    read-only check — an operator typing it believes they updated."""
+    monkeypatch.delenv("INVOCATION_ID", raising=False)  # see test_self_update_apply_cli_yes
+    from lhpc.core.services import ControllerService, ActionResult
+    seen = {}
+    def fake_apply(self, *, force=False):
+        seen["force"] = force
+        return ActionResult(True, "Update applied — restart the web console to load it.")
+    monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    monkeypatch.setattr(ControllerService, "self_update_check",
+                        lambda self: (_ for _ in ()).throw(AssertionError("check must not run")))
+    assert main(["self-update", "--overwrite", "--yes"]) == 0
+    assert "Update applied" in capsys.readouterr().out and seen["force"] is True
+
+
 def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
     # non-interactive stdin -> _confirm returns False -> aborts, never calls apply
     from lhpc.core.services import ControllerService
@@ -491,16 +507,29 @@ def test_source_check_and_known_working_dispatch(monkeypatch, capsys):
 
 def test_identity_hint_points_at_a_real_command(tmp_path, monkeypatch):
     # The reported bug: the callsign-failure hint pointed at `lhpc config <stack>`, which argparse
-    # rejected. The fixed hint must be a copy-pasteable, PARSEABLE command.
+    # rejected. The fixed hint must be a copy-pasteable, PARSEABLE command — in BOTH regimes: with no
+    # operator callsign the licensed hint is the SUPPORTED one-time fix (`lhpc config operator
+    # --callsign <CALL>`, inherited by every licensed stack); with the operator configured the
+    # per-stack command returns (a refusal then means a bad saved per-stack value).
     import shlex
     _ = monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     main(["bootstrap", "--yes"])
     from lhpc.core.services import ControllerService
+    from lhpc.core.config import save_operator_config
     from lhpc.adapters.cli.main import build_parser
-    hint = ControllerService()._identity_config_hint("chat")
-    assert hint.startswith("lhpc config chat ")
-    toks = [("W1ABC" if t.startswith("<") else t) for t in shlex.split(hint)[1:]]
-    build_parser().parse_args(toks)                          # must NOT SystemExit
+
+    def parses(hint):
+        toks = [("W1ABC" if t.startswith("<") else t) for t in shlex.split(hint)[1:]]
+        build_parser().parse_args(toks)                      # must NOT SystemExit
+
+    svc = ControllerService()
+    hint = svc._identity_config_hint("chat")                 # operator UNSET -> operator command
+    assert hint == "lhpc config operator --callsign <CALL>"
+    parses(hint)
+    save_operator_config(svc._paths, "DJ0CHE"); svc._invalidate_config()
+    hint2 = svc._identity_config_hint("chat")                # operator SET -> per-stack command
+    assert hint2.startswith("lhpc config chat ")
+    parses(hint2)
 
 
 def test_all_cli_hints_reference_real_commands():

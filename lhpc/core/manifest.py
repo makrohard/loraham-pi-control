@@ -508,28 +508,46 @@ def _parse_component(raw: dict) -> Component:
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),
-        run_params=tuple(
-            RunParam(
-                name=p["name"], kind=p.get("kind", "enum"),
-                choices=tuple(str(c) for c in p.get("choices", [])),
-                choice_labels=tuple((str(pair[0]), str(pair[1]))
-                                    for pair in p.get("choice_labels", []) if len(pair) == 2),
-                default=str(p.get("default", "")),
-                flag=p.get("flag", ""), label=p.get("label", ""),
-                min=p.get("min"), max=p.get("max"),
-                advanced=p.get("advanced", False),
-                arg=p.get("arg", ""), apply_mode=p.get("apply_mode", "restart"),
-                band_defaults=tuple((str(k), str(v))
-                                    for k, v in p.get("band_defaults", {}).items()),
-                validator=p.get("validator", ""),
-                group=p.get("group", ""),
-            )
-            for p in raw.get("param", [])
-        ),
+        run_params=tuple(_parse_param(p, raw.get("id", "?"))
+                         for p in raw.get("param", [])),
         requires_daemon_tx=raw.get("requires_daemon_tx", ""),
         interactive=raw.get("interactive", False),
         bands=tuple(str(b) for b in raw.get("bands", [])),
         config_file=_parse_file_config(raw.get("config_file")),
+    )
+
+
+_PARAM_KEYS = frozenset((
+    "name", "kind", "choices", "choice_labels", "default", "flag", "label",
+    "min", "max", "advanced", "arg", "apply_mode", "band_defaults",
+    "validator", "group",
+))
+
+
+def _parse_param(p: dict, cid: str) -> RunParam:
+    # FAIL CLOSED on stray keys: a bare key placed AFTER a [[…param]] table binds to that
+    # table in TOML, so a misplaced component scalar (note, test, …) would otherwise be
+    # silently swallowed here — exactly the trap that lost a component note once.
+    stray = set(p) - _PARAM_KEYS
+    if stray:
+        raise ManifestError(
+            f"{cid}: param {p.get('name', '?')!r} has unknown key(s) "
+            f"{sorted(stray)} — a component-level key placed after a [[…param]] table "
+            f"binds to that table; move it above the param tables.")
+    return RunParam(
+        name=p["name"], kind=p.get("kind", "enum"),
+        choices=tuple(str(c) for c in p.get("choices", [])),
+        choice_labels=tuple((str(pair[0]), str(pair[1]))
+                            for pair in p.get("choice_labels", []) if len(pair) == 2),
+        default=str(p.get("default", "")),
+        flag=p.get("flag", ""), label=p.get("label", ""),
+        min=p.get("min"), max=p.get("max"),
+        advanced=p.get("advanced", False),
+        arg=p.get("arg", ""), apply_mode=p.get("apply_mode", "restart"),
+        band_defaults=tuple((str(k), str(v))
+                            for k, v in p.get("band_defaults", {}).items()),
+        validator=p.get("validator", ""),
+        group=p.get("group", ""),
     )
 
 

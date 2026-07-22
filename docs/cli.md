@@ -187,6 +187,7 @@ lhpc webserver init [--dns D ...] [--ip I ...] [--confirm-recreate]   # bootstra
 lhpc webserver configure [--bind B] [--port P] [--access-mode M] [--dns D ...] [--ip I ...]
 lhpc webserver expose [--cidr C ...] [--access-mode M] [--confirm-phrase P]   # remote exposure (opt-in)
 lhpc webserver proxy <stack> [--mode local|lan|public] [--port P] [--scheme https|http] [--access-mode M] [--cidr C ...] [--confirm-phrase P]
+# --auth is an alias for --access-mode on configure / expose / proxy
 lhpc webserver disable-remote          # bind back to loopback
 lhpc webserver reset-defaults          # reset desired config to safe defaults
 lhpc webserver tls-renew               # renew the HTTPS server certificate
@@ -208,7 +209,7 @@ lhpc webserver cert discard-export <label>
 `lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` — check for, or apply, lhpc's own update. `--apply` fast-forwards and restarts the console; `--overwrite` resets a diverged/dirty checkout; `--repair-integration` reinstalls the managed console + updater units.
 
 ### hmac
-`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — MeshCom HMAC (bridge↔firmware) password. `status` prints enabled/disabled (default stack: meshcom). `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes) — without `--yes` they warn and print the confirm hint; with `--yes` they apply, streaming each step (secret → firmware → bridge → node). The secret value is never printed. Password-auth is on by default at install. `abort` cooperatively cancels a running apply (SIGTERM to the driver, which stops the build and writes the terminal state). `recover` clears a blocking `unsafe` state left when a cancelled/timed-out build could not be proven stopped — auto for a `session-unverified` scope once the session is proven gone, or as your explicit acknowledgement (after inspecting `ps`) for an `escaped-or-output-unverified` scope.
+`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — MeshCom HMAC (bridge↔firmware) password. `status` prints enabled/disabled (default stack: meshcom). `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes) — without `--yes` they warn and print the confirm hint; with `--yes` they apply, streaming each step (secret → firmware → bridge → node). `disable` additionally requires `--confirm-phrase disable-hmac-auth` (it downgrades the link to unauthenticated). The secret value is never printed. Password-auth is on by default at install. `abort` cooperatively cancels a running apply (SIGTERM to the driver, which stops the build and writes the terminal state). `recover` clears a blocking `unsafe` state left when a cancelled/timed-out build could not be proven stopped — auto for a `session-unverified` scope once the session is proven gone, or as your explicit acknowledgement (after inspecting `ps`) for an `escaped-or-output-unverified` scope.
 
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.

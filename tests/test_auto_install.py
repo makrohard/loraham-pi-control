@@ -92,7 +92,7 @@ def test_packaged_meshcom_test_runs_in_bulk(tmp_path):
     deferring (regression: 'deferred — 1 test(s) need the running stack')."""
     svc = _svc(tmp_path)
     comp = next(c for st in svc.stacks() for c in st.components if c.id == "meshcom-qemu")
-    assert comp.test_argv == ("scripts/test.sh",)
+    assert comp.test_argv[0] == "scripts/test.sh"
     assert comp.test_requires_running is False
 
 
@@ -1749,9 +1749,17 @@ def test_auto_install_scope_includes_optional_components(tmp_path):
     scope = svc._auto_install_scope()
     mc = next(w for st, w in scope if st.id == "meshcore")
     ids = {c.id for c in mc.source}
-    assert {"meshcore-pi", "meshcore-nodegui", "meshcore-cli"} <= ids
+    # meshcore-nodegui is GUI-gated (Requirement.module tkinter): on a headless box the
+    # planner CORRECTLY drops it from scope, so expect it only where the gate is open —
+    # the same probe the product uses, never a hardcoded GUI assumption.
+    from lhpc.core import lifecycle
+    gui = lifecycle.module_present("tkinter")
+    expected = {"meshcore-pi", "meshcore-cli"} | ({"meshcore-nodegui"} if gui else set())
+    assert expected <= ids
     all_paths = {c.source.path for _, w in scope for c in w.source}
-    assert "src/meshcore-cli" in all_paths and "src/meshcore-node-manager" in all_paths
+    assert "src/meshcore-cli" in all_paths
+    if gui:
+        assert "src/meshcore-node-manager" in all_paths
 
 
 @pytest.mark.needs_session

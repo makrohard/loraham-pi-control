@@ -83,6 +83,38 @@ def test_licensed_default_uses_operator_callsign(tmp_path):
     assert svc.enforce_identity("igate")[0] is True       # default {callsign} -> DJ0CHE
 
 
+def test_identity_hint_names_operator_command_when_operator_unset(tmp_path):
+    # Run-2 deferred finding: a licensed stack whose identity param INHERITS the operator callsign
+    # (manifest default "{callsign}") must hint the SUPPORTED one-time fix while no operator callsign
+    # is configured — `lhpc config operator --callsign <CALL>` — never the per-stack param (the old
+    # hint named `lhpc config meshcom mc_callsign <YOURCALL>`, papering over the missing operator
+    # identity stack by stack). Every licensed stack inherits, so the source fix covers them all.
+    svc = _svc(tmp_path)
+    for target in ("meshcom", "chat", "igate", "voice"):
+        assert svc._identity_config_hint(target) == "lhpc config operator --callsign <CALL>", target
+
+
+def test_identity_hint_names_stack_param_when_operator_configured(tmp_path):
+    # With the operator CONFIGURED, an identity refusal means a saved per-stack value overrides it
+    # badly — there the per-stack command is the right remedy and must remain the hint.
+    svc = set_call(_svc(tmp_path))
+    assert svc._identity_config_hint("meshcom") == "lhpc config meshcom mc_callsign <YOURCALL>"
+    # Unlicensed node identity has no operator-command equivalent — per-stack hint regardless.
+    svc2 = _svc(tmp_path / "u")
+    (tmp_path / "u" / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    assert "<NODENAME>" in svc2._identity_config_hint("meshtastic")
+
+
+def test_start_refusal_text_carries_the_operator_command(tmp_path):
+    # End-to-end: the START refusal (licensed stack, no operator callsign) must carry the exact
+    # supported command in its next_commands — what the CLI prints under "Next:".
+    svc = _svc(tmp_path)
+    res = svc.run_action("start", "meshcom", apply=True)
+    assert not res.ok
+    assert "lhpc config operator --callsign <CALL>" in (res.next_commands or []), \
+        (res.summary, res.next_commands)
+
+
 def test_unlicensed_requires_nonempty_but_accepts_default(tmp_path):
     svc = _svc(tmp_path)
     # meshtastic node_name default "LoRaHAM Pi" (non-empty) -> accepted even with no callsign

@@ -1,26 +1,42 @@
-"""Item 3 regression: the offline web-build docs must NOT recommend a systemd drop-in for the QEMU
-tarball (it violates the canonical-unit integrity contract — integration repair refuses to proceed on
-any override drop-in), and MUST document the supported temporary user-manager environment instead.
+"""Offline / prebuilt QEMU docs regression.
+
+`LHPC_QEMU_TARBALL` is fetch-qemu.sh's OWN standalone interface; it is NOT forwarded through lhpc, so the
+managed `lhpc build meshcom` (which builds from source via build-qemu.sh) does not read it. The docs must
+therefore describe ONLY the direct standalone fetch-qemu.sh forms — never a via-lhpc build or a
+user-manager / systemd-drop-in web flow for this variable (all of which implied a forwarding that no
+longer exists).
 """
 
 import pathlib
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 _DOCS = [_REPO / "docs" / "field-notes.md", _REPO / "README.md", _REPO / "docs" / "cli.md"]
+_BACKENDS = _REPO / "lhpc" / "core" / "probes" / "backends.py"
 
 
 def _all_docs_text() -> str:
     return "\n".join(p.read_text() for p in _DOCS if p.exists())
 
 
-def test_no_forbidden_qemu_tarball_systemd_dropin_recommendation():
-    text = _all_docs_text()
-    # The exact drop-in assignment must never appear anywhere in the docs (recommendation or example).
-    assert "Environment=LHPC_QEMU_TARBALL" not in text, \
-        "docs must not carry a permanent systemd Environment=LHPC_QEMU_TARBALL drop-in"
+def test_backends_does_not_forward_the_qemu_tarball_var():
+    # The forwarding is gone: the var must not appear as a QUOTED allowlist element (the explanatory NOTE
+    # may still name it unquoted to say WHY it is not forwarded), so it cannot masquerade as an
+    # lhpc-honored override for the managed (build-qemu.sh) build.
+    assert '"LHPC_QEMU_TARBALL"' not in _BACKENDS.read_text(), \
+        "backends.py must not forward LHPC_QEMU_TARBALL (managed build uses build-qemu.sh, not fetch-qemu.sh)"
 
 
-def test_offline_web_build_documents_the_supported_user_manager_env():
+def test_offline_docs_document_the_direct_standalone_fetch_forms():
     text = _all_docs_text()
-    assert "systemctl --user set-environment" in text and "LHPC_QEMU_TARBALL" in text
-    assert "systemctl --user unset-environment LHPC_QEMU_TARBALL" in text   # cleanup documented
+    # Both equivalent standalone forms are documented (flag + fetch-qemu's own env var), run directly.
+    assert "scripts/fetch-qemu.sh <dest-dir> --from-file" in text
+    assert "LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz scripts/fetch-qemu.sh <dest-dir>" in text
+
+
+def test_offline_docs_do_not_tie_the_tarball_to_lhpc_or_a_service_env():
+    text = _all_docs_text()
+    # No via-lhpc build, no user-manager env, no systemd drop-in — every one implied a forwarding that
+    # the managed build never had.
+    assert "LHPC_QEMU_TARBALL=/absolute/path/qemu-...tar.xz lhpc build meshcom" not in text
+    assert "systemctl --user set-environment" not in text
+    assert "Environment=LHPC_QEMU_TARBALL" not in text

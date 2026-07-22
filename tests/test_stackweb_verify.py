@@ -95,7 +95,11 @@ def test_a_bypassable_upstream_alone_still_verifies_ok(tmp_path):
     p = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
-    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1}])
+    # A RUNNING deployment: console + proxy listeners bound loopback (exact-scope matching now
+    # fails an absent listener — a dead front-end is not a successful local bind).
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 1},
+                          {"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 2},
+                          {"family": "ipv4", "ip": "127.0.0.1", "port": 8445, "inode": 3}])
     svc.stack_web_configure("meshtastic", mode="local", port=8445,
                             scheme="http", access_mode="no-auth")
     res = svc.webserver_verify()
@@ -146,7 +150,8 @@ def test_all_http_config_verifies_without_any_pki(tmp_path):
     p = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     cfgmod.save_webserver_config(p, scheme="http", access_mode="no-auth")
-    svc = _svc(tmp_path)
+    # console listener bound loopback (exact-scope matching fails an absent listener)
+    svc = _svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 1}])
     res = svc.webserver_verify()
     checks = res.data["checks"]
     assert checks["tls_required"] == "no"
