@@ -736,7 +736,14 @@ def restart(system, paths: Paths) -> tuple:
         return "failed", "systemctl not found"
     if r.returncode == 0:
         return "restarted", "nginx restarted"
-    return "failed", ((r.stderr or r.stdout or "restart failed").strip().splitlines() or ["restart failed"])[-1]
+    msg = ((r.stderr or r.stdout or "restart failed").strip().splitlines() or ["restart failed"])[-1]
+    # Live-found misleading failure: this bus EPERM means the CALLER cannot reach the operator's
+    # user manager — either it runs as root/sudo, or inside the managed web unit (whose sandbox
+    # deliberately blocks %t/bus). The generic advice pointed at the nginx log; name the remedy.
+    if "user scope bus" in msg or "Operation not permitted" in msg:
+        msg += (" — `systemctl --user` needs the operator's own session: re-run `lhpc webserver "
+                "apply` from an operator shell (not sudo/root, not the web console)")
+    return "failed", msg
 
 
 # --------------------------------------------------------------------------- effective evidence (M9)
@@ -956,15 +963,31 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
         except (IndexError, ValueError):
             up_port = 0
         scope = listener_scope(system, up_port) if up_port else "absent"
+        # The proxy's OWN listener, same F3 rule as the console below: a bind change (local <->
+        # lan/public flips the rendered listen between 127.0.0.1 and 0.0.0.0) applied via
+        # `nginx -s reload` cannot rebind the held socket, so the old listener can survive a
+        # successful-looking reload. Desired exposure is exactly `swc.remote` (what the render
+        # binds); absent counts as not-exposed, mirroring the console check.
+        own_scope = listener_scope(system, p.swc.port)
         proxies.append({
             "stack_id": p.swc.stack_id, "port": p.swc.port, "mode": p.swc.mode,
             "scheme": p.swc.scheme, "access_mode": p.swc.access_mode,
             "allowed_cidrs": list(p.swc.allowed_cidrs),
             "upstream": p.upstream_address, "upstream_scheme": p.upstream_scheme,
             "upstream_scope": scope, "bypassable": scope == "exposed",
+            "listener_scope": own_scope,
+            # EXACT scope required: local ⇒ "loopback", lan/public ⇒ "exposed". ABSENT always FAILS —
+            # an enabled proxy with no listener is a dead front-end, not a successful local bind
+            # (a failed restart used to slip through as desired-local "success" with no frontend).
+            "listener_matches": ("ok" if own_scope == ("exposed" if p.swc.remote else "loopback")
+                                 else "failed"),
         })
     if proxies:
         checks["stack_proxies"] = "ok"
+    _mismatched = [p["stack_id"] for p in proxies if p["listener_matches"] == "failed"]
+    checks["stack_listener_matches"] = "failed" if _mismatched else "ok"
+    if _mismatched:
+        checks["stack_listener_mismatch_stacks"] = _mismatched
     bypassed = [p["stack_id"] for p in proxies if p["bypassable"]]
     if bypassed:
         checks["upstream_bypass"] = "warn"        # not "failed": LHPC cannot close those ports
@@ -975,13 +998,15 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
     # HTTPS-cert presentation / mTLS behaviour / revocation enforcement still need a real client
     # handshake, so those stay null (honestly unproven without opt-in integration).
     console_scope = listener_scope(system, cfg.port)         # "exposed" | "loopback" | "absent"
-    # F3: the DESIRED remote-exposure MUST match the EFFECTIVE listener. A bind change applied via
-    # `nginx -s reload` cannot rebind a socket the old worker still holds, so the master can keep the
-    # old (loopback) listener while reload returns success — this makes that never verify as OK.
-    # Both directions fail: exposed-desired but not exposed (silent exposure failure, the F3 incident)
-    # AND loopback-desired but still exposed (residual exposure). Absent == not exposed.
+    # F3: the DESIRED remote-exposure MUST match the EFFECTIVE listener EXACTLY. A bind change
+    # applied via `nginx -s reload` cannot rebind a socket the old worker still holds, so the master
+    # can keep the old (loopback) listener while reload returns success — this makes that never
+    # verify as OK. ALL THREE mismatches fail: exposed-desired but not exposed (silent exposure
+    # failure, the F3 incident), loopback-desired but exposed (residual exposure), and ABSENT in
+    # either direction — no listener at all is a dead front-end (a failed restart), never a
+    # "successful local bind".
     checks["remote_listener_matches"] = (
-        "ok" if cfg.remote_exposed == (console_scope == "exposed") else "failed")
+        "ok" if console_scope == ("exposed" if cfg.remote_exposed else "loopback") else "failed")
     effective = {
         "remote_listener": console_scope == "exposed",       # bound off-loopback == remotely reachable
         "listener_scope": console_scope,

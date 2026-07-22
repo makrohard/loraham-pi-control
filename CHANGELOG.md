@@ -1,6 +1,10 @@
 # Changelog
 
 ## unreleased
+
+## 0.1.5
+- 0.1.5 stabilization pass (2026-07-24): `self-update --overwrite` now implies apply (it silently degraded to the read-only check); GUI-unavailable optional components read `not-applicable` instead of rolling a healthy stack's badge to "not-installed" on headless boxes; manifest loader fails closed on stray keys in `[[…param]]` tables (the TOML last-table trap that silently swallowed the gps-relay component note); meshcore-cli source declares its `branch`; dead `/webserver/apply` web route removed; docs: `lhpc stack start/stop` forms, `source-check` reference, `--auth` alias + hmac `--confirm-phrase` documented
+- Known-good pins refreshed to the run-proven set: RadioLib 7.7.1-45, meshtastic-firmware v2.7.26-…-g6de6c3d6d, meshcore-cli v1.5.0-18 (Zero 2W + Pi 5 acceptance runs)
 - Live-test run 2026-07-14: known-good pins refreshed to today's proven set (daemon, radiolib, meshcom-qemu/gps, meshcore-cli); docs: secrets layout, expose-runbook rebind note; test evidence in docs/live-test-2026-07-14.md
 - Known-working confirm for manual-start stacks (F4): a stack LHPC cannot start itself (chat) can now be confirmed while the probe shows it running — composition synthesized from the ownership registry, same handle-bound verification; offer stays GET-safe
 - Snapshot memo invalidated on every public mutating service entry (entry+exit via @invalidates_snapshot) — closes the stale-read window in owner-stop starts and same-process CLI sequences (audit A-1)
@@ -8,8 +12,6 @@
 - Bind validator refuses bare 0.0.0.0 with guidance (use 0.0.0.0/0 or 127.0.0.1); dashboard port rows show a "restart pending" pill when the saved allow-list is not applied to the running service yet (audit A-3)
 - Stacks page: lazily-loaded bodies get the sub-panel accordion wired (lhpc:bodyloaded); an explicit ?open/?cfg/?dp/?inst target suppresses cookie-restored rows so only one main row opens (audit A-4)
 - stackparams.js modal built via DOM construction — the "never innerHTML" invariant is grep-clean again (audit A-5, style only)
-
-## 0.1.5
 - Dependency overview + Checks
 - daemon params per stack and frequency
 - consistent webserver controls

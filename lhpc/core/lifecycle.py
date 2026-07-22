@@ -410,7 +410,17 @@ class Lifecycle:
             cwd = commands._paths_subst(comp.run_cwd, runtime, src, band) if comp.run_cwd else src
         except (commands.CommandError, validators.ValidationError) as exc:
             return StartLaunch(False, str(log), f"invalid configuration: {exc}")
-        env = {**os.environ, **extra} if extra else None
+        env = {**os.environ, **(extra or {})}
+        # Guarantee the standard system dirs on the run PATH. A non-login ssh env, or a systemd unit
+        # without an explicit PATH, can omit /usr/sbin — where ldconfig/iw live — which breaks a run
+        # script that legitimately probes them (live finding: meshcom's run.sh runs `ldconfig -p` to
+        # check libslirp and falsely reported it MISSING because ldconfig was off-PATH). Appended, so
+        # an inherited tool still wins by order.
+        _pp = [p for p in (env.get("PATH") or "").split(os.pathsep) if p]
+        for _d in ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"):
+            if _d not in _pp:
+                _pp.append(_d)
+        env["PATH"] = os.pathsep.join(_pp)
         # PREFLIGHT: cancel/clean any stale post-start runner bound to a PRIOR launch of this
         # component+band BEFORE launching a new one (clean verified-ceased records, cancel live
         # stale runners). A runner that can't be verified stopped BLOCKS the new launch with typed

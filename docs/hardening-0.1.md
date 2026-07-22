@@ -94,7 +94,7 @@ are the current rules.
 
 ## GET no-network guarantee
 - No GET route runs a network or git-remote command. Update freshness is an explicit
-  action (`lhpc update --check`). A recording-runner spy hits every GET route and
+  action (`lhpc source-check`). A recording-runner spy hits every GET route and
   asserts no network command runs: `tests/test_web.py::test_get_routes_make_no_network_calls`.
 
 ## Web path safety & confirmation

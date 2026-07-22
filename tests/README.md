@@ -63,3 +63,24 @@ genuine duplicates; never delete a distinct guard. `docs/hardening-0.1.md` is th
 .venv/bin/python -m pytest -q -p no:cacheprovider          # whole suite
 .venv/bin/python -m pytest -q tests/test_web.py -p no:cacheprovider
 ```
+
+### Basetemp discipline (a Pi5 once held 19 GB of stray pytest dirs)
+
+Run the suite with a **dedicated, fixed basetemp** and remove exactly that path afterwards — never a
+broad glob:
+
+```
+.venv/bin/python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"
+rm -rf -- "$HOME/pt-lhpc"
+```
+
+On a Pi Zero 2W this is mandatory anyway: the default basetemp lands on the 208 MB `/tmp` tmpfs and
+the full suite fills it (ENOSPC). For legacy leftovers under `/var/tmp` (`lpt-*` from older runs):
+stop all pytest processes first, then LIST before removing —
+
+```
+find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name 'lpt-*'
+```
+
+review the output, then remove those directories explicitly. Do not delete unrelated `$HOME/pt-*`
+paths.

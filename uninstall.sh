@@ -88,6 +88,8 @@ readonly WEB_UNIT="${UNIT_DIR}/lhpc-web.service"
 readonly HELPER_UNIT="${UNIT_DIR}/lhpc-selfupdate.service"
 readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
 readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
+readonly RESTART_UNIT="${UNIT_DIR}/lhpc-nginx-restart.service"
+readonly RESTART_PATH_UNIT="${UNIT_DIR}/lhpc-nginx-restart.path"
 GUARD="${TARGET_DIR}/.lhpc-uninstalling"
 
 # --------------------------------------------------------------------------- identity proof
@@ -156,6 +158,24 @@ guard_release() {   # remove ONLY the guard this invocation owns (never a pre-ex
 	fi
 }
 
+abort_die() {   # a refusal BEFORE any teardown mutation: release the guard THIS run owns, then die.
+	# An aborted uninstall means "not uninstalling" — the web console must be startable again. After
+	# the FIRST stop/disable/stage mutation, refusals must use plain `die` instead (guard RETAINED: a
+	# partially dismantled install must keep the console blocked); the recorded owner pid is then
+	# dead, so `lhpc self-update --recover-request` is the documented escape for a kept guard.
+	# The release goes through the nonce-checked controller op; a release FAILURE is reported
+	# truthfully instead of silently leaving a stranded guard behind a clean-looking abort.
+	local _rel_note=""
+	if [ -x "${VENV}/bin/lhpc" ]; then
+		if ! "${VENV}/bin/lhpc" _uninstall-guard-release --root "$TARGET_DIR" --nonce "$NONCE" >/dev/null 2>&1; then
+			_rel_note=" NOTE: the uninstall guard could not be released — clear it with \`lhpc self-update --recover-request\` (or verify no uninstall runs, then remove ${GUARD})."
+		fi
+	else
+		rm -f "$GUARD" 2>/dev/null || _rel_note=" NOTE: could not remove ${GUARD} — remove it by hand."
+	fi
+	die "$1${_rel_note}"
+}
+
 # ATOMIC, EXCLUSIVE, NO-FOLLOW guard claim — NEVER truncates/follows/replaces a pre-existing guard of
 # any type, and a live concurrent uninstall is refused. Descriptor-based controller op for a real
 # deployment; a `set -C` (noclobber) create as the fallback for a config-only remainder with no lhpc.
@@ -163,7 +183,7 @@ if [ -x "${VENV}/bin/lhpc" ]; then
 	"${VENV}/bin/lhpc" _uninstall-guard-claim --root "$TARGET_DIR" --pid "$$" --nonce "$NONCE" --start "$GUARD_START" \
 		|| die "could not claim the uninstall guard — a concurrent/interrupted uninstall may own it, or ${GUARD} is unsafe. Recover it (verify no uninstall is running, then remove ${GUARD}), and re-run."
 else
-	( set -C; printf '{"pid": %s, "nonce": "%s", "started": %s}\n' "$$" "$NONCE" "$GUARD_START" > "$GUARD" ) 2>/dev/null \
+	( set -C; printf '{"pid": %s, "nonce": "%s", "start_time": %s}\n' "$$" "$NONCE" "$GUARD_START" > "$GUARD" ) 2>/dev/null \
 		|| die "an uninstall guard already exists at ${GUARD} — refusing (a concurrent or interrupted uninstall). Remove it once you are sure none is running, then re-run."
 fi
 
@@ -177,10 +197,9 @@ fi
 if [ -x "${VENV}/bin/lhpc" ]; then
 	step "Prepare uninstall — stop managed stacks and verify cessation"
 	if ! "${VENV}/bin/lhpc" _controller-uninstall-prep --root "$TARGET_DIR"; then
-		# Preparation safely REFUSED before teardown began — remove the guard THIS run owns, retain
+		# Preparation safely REFUSED before teardown began — release the guard (truthfully), retain
 		# everything else, and exit nonzero.
-		guard_release
-		die "Uninstall preparation could not prove the managed stacks are stopped (see the message above) — aborting. Nothing was removed; the checkout, state, and units are untouched."
+		abort_die "Uninstall preparation could not prove the managed stacks are stopped (see the message above) — aborting. Nothing was removed; the checkout, state, and units are untouched."
 	fi
 elif [ "$CONFIG_ONLY" -eq 1 ]; then
 	# The ONLY case that skips workload prep: a legacy config-only remainder with no executable/state
@@ -189,8 +208,7 @@ elif [ "$CONFIG_ONLY" -eq 1 ]; then
 else
 	# A normal deployment whose controller command is missing/broken — we cannot prove quiescence, so
 	# we must NOT delete anything. Release the guard THIS run owns and abort.
-	guard_release
-	die "the controller command ${VENV}/bin/lhpc is missing, but $TARGET_DIR is not a config-only remainder — cannot prove the managed stacks are stopped. Aborting without removing anything (reinstall/repair, then retry)."
+	abort_die "the controller command ${VENV}/bin/lhpc is missing, but $TARGET_DIR is not a config-only remainder — cannot prove the managed stacks are stopped. Aborting without removing anything (reinstall/repair, then retry)."
 fi
 
 sysctl_ok() { command -v systemctl >/dev/null 2>&1; }
@@ -203,7 +221,8 @@ is_canonical() {                          # $1=kind $2=file — byte-exact match
 owns_root() {                             # $1=file — provenance names THIS root (noncanonical but ours)
 	[ -f "$1" ] || return 1
 	grep -qxF "Environment=LHPC_RUNTIME_ROOT=${TARGET_DIR}" "$1" \
-		|| grep -qF "PathExists=${TARGET_DIR}/state/selfupdate.request" "$1"
+		|| grep -qF "PathExists=${TARGET_DIR}/state/selfupdate.request" "$1" \
+		|| grep -qF "PathExists=${TARGET_DIR}/state/nginx-restart.request" "$1"
 }
 
 # --------------------------------------------------------------------------- units (ordered)
@@ -214,6 +233,8 @@ step "Managed systemd units"
 UNITS_REMOVED=0
 # The canonical units, kind:path, in teardown order (used identically by PASS 0/1/2 below).
 UNIT_SPECS=(
+	"lhpc-nginx-restart.path:${RESTART_PATH_UNIT}"
+	"lhpc-nginx-restart.service:${RESTART_UNIT}"
 	"lhpc-nginx.service:${NGINX_UNIT}"
 	"lhpc-selfupdate.path:${PATH_UNIT}"
 	"lhpc-selfupdate.service:${HELPER_UNIT}"
@@ -244,26 +265,38 @@ if [ "$RECOVERED" -eq 1 ]; then
 	systemctl --user daemon-reload 2>/dev/null || die "recovered leftover units but systemctl --user daemon-reload FAILED — the units are restored; retaining all controller code, state and the uninstall guard. Re-run to retry."
 fi
 
-# PASS 1 — PROVE every canonical unit STOPPED (fail-safe). A stop failure, an unavailable systemctl
-# while a canonical unit exists, or a CUSTOMIZED same-root unit ABORTS the uninstall: `die` exits
-# nonzero BEFORE any controller code/state is removed and BEFORE the guard is cleared, so everything is
-# retained. A foreign unit (another deployment) is left untouched and does NOT block.
+# PASS 1a — READ-ONLY PREFLIGHT over EVERY unit BEFORE any systemd mutation. Every refusal here uses
+# `abort_die` (nothing has been touched, so the guard is RELEASED — an aborted uninstall must leave
+# the console startable): an unavailable systemctl while a canonical unit exists, or a CUSTOMIZED
+# same-root unit. A foreign unit (another deployment) is left untouched and does NOT block. A fully
+# completed PASS-0 restoration + successful daemon-reload above is a COHERENT state again, so these
+# releases are safe; PASS-0's own dies (ambiguous/partial restore) deliberately retain the guard.
 for spec in "${UNIT_SPECS[@]}"; do
 	kind="${spec%%:*}"; file="${spec#*:}"
 	if is_canonical "$kind" "$file"; then
-		sysctl_ok || die "systemctl is unavailable but a canonical ${kind} exists — cannot prove it is stopped. Retaining all controller code, state and the uninstall guard."
-		systemctl --user stop "$kind" 2>/dev/null || die "could not stop ${kind} — retaining all controller code, state and the uninstall guard. Resolve it, then re-run uninstall."
-		systemctl --user disable "$kind" 2>/dev/null || true
+		sysctl_ok || abort_die "systemctl is unavailable but a canonical ${kind} exists — cannot prove it can be stopped. Nothing was removed."
 	elif [ -e "$file" ] || [ -L "$file" ]; then
 		if owns_root "$file"; then
-			die "${kind} is a CUSTOMIZED unit that references THIS runtime root (${file}) — refusing to delete a root its unit still points at. Remove or repoint it by hand, then re-run uninstall. Nothing was removed."
+			abort_die "${kind} is a CUSTOMIZED unit that references THIS runtime root (${file}) — refusing to delete a root its unit still points at. Run \`lhpc self-update --repair-integration\` to restore the canonical managed units, then retry uninstall (or remove/repoint it by hand). Nothing was removed."
 		else
 			note "${kind} belongs to a different deployment — left untouched"
 		fi
 	fi
 done
-# The watcher + helper are now PROVEN stopped -> safe to clear any pending/in-flight request.
-rm -f "${TARGET_DIR}/state/selfupdate.request" "${TARGET_DIR}/state/selfupdate.inflight" 2>/dev/null || true
+# PASS 1b — the MUTATING stop/disable phase. From the FIRST stop onward a refusal RETAINS the guard
+# (plain `die`): a partially dismantled install must keep the console blocked, and the recorded owner
+# pid is dead after the abort, so `lhpc self-update --recover-request` is the documented escape.
+for spec in "${UNIT_SPECS[@]}"; do
+	kind="${spec%%:*}"; file="${spec#*:}"
+	if is_canonical "$kind" "$file"; then
+		systemctl --user stop "$kind" 2>/dev/null || die "could not stop ${kind} — retaining all controller code, state and the uninstall guard. Resolve it, then re-run uninstall."
+		systemctl --user disable "$kind" 2>/dev/null || true
+	fi
+done
+# The watchers + helper are now PROVEN stopped -> safe to clear any pending/in-flight requests
+# (self-update AND the nginx-restart escape hatch — explicit, never assumed covered by a dir wipe).
+rm -f "${TARGET_DIR}/state/selfupdate.request" "${TARGET_DIR}/state/selfupdate.inflight" \
+      "${TARGET_DIR}/state/nginx-restart.request" "${TARGET_DIR}/state/nginx-restart.inflight" 2>/dev/null || true
 # PASS 2 — TRANSACTIONAL unit removal. STAGE each canonical unit ASIDE (a rename, NOT a delete), then
 # daemon-reload. If reload FAILS (or systemctl is gone), RESTORE the staged units so systemd still sees
 # the still-installed units, and abort — retaining ALL controller code, state and the guard. A retry

@@ -27,7 +27,10 @@ def test_packaged_meshcom_host_test_is_recognized_at_component_level():
     last param table and the stack reported 'skipped (no host tests)'.)"""
     stacks = {s.id: s for s in load_manifest(default_manifest_path())}
     qemu = next(c for c in stacks["meshcom"].components if c.id == "meshcom-qemu")
-    assert qemu.test_argv == ("scripts/test.sh",), qemu.test_argv
+    assert qemu.test_argv[0] == "scripts/test.sh", qemu.test_argv
+    # The managed-qemu path is FORWARDED so the self-boot finds the in-root source build
+    # (fresh install: clean PATH, no ~/.espressif — live find on the Pi 5 reinstall).
+    assert qemu.test_argv[1] == "--qemu" and "tool-cache/qemu-xtensa" in qemu.test_argv[2]
     testable = [c for c in stacks["meshcom"].components
                 if c.test_argv and (getattr(c.source, "strategy", "") or "") != "link"]
     assert testable, "meshcom must have at least one testable component"
@@ -204,3 +207,21 @@ def test_build_step_announce_non_string_rejected():
     with pytest.raises(ManifestError):
         _ok({"run_argv": ["./app"], "readiness": "process",
              "build_steps": [{"argv": ["make"], "announce": "   "}]})
+
+
+def test_param_stray_key_rejected():
+    # FAIL CLOSED on the TOML last-table trap: a component-level key (note/test/…) placed AFTER
+    # a [[…param]] table binds to that table and used to be silently swallowed — a shipped
+    # component note was lost exactly this way. The loader must reject it loudly instead.
+    with pytest.raises(ManifestError, match="unknown key"):
+        _ok({"run_argv": ["./app", "{param:rate}"], "readiness": "process",
+             "param": [{"name": "rate", "kind": "str", "arg": "--rate",
+                        "note": "I belong to the component, not this param"}]})
+
+
+def test_param_known_keys_ok():
+    stacks = _ok({"run_argv": ["./app", "{param:rate}"], "readiness": "process",
+                  "param": [{"name": "rate", "kind": "str", "arg": "--rate",
+                             "default": "5", "label": "Rate", "advanced": True}]})
+    comp = stacks[0].components[0]
+    assert comp.run_params[0].name == "rate"

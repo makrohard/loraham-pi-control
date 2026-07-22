@@ -294,7 +294,10 @@ def check_upstream(system: System, branch: str = "") -> dict:
     head = h.stdout.strip()
     return {"ok": True, "branch": br, "upstream_head": head, "upstream_head_short": head[:9],
             "upstream_version": _version_at(system, root, ref),
-            "deps_changed": _deps_changed(system, root, ref)}
+            "deps_changed": _deps_changed(system, root, ref),
+            # Ancestry against the ref THIS fetch just updated (fresh by construction): True means a
+            # normal --ff-only apply will REFUSE — proves divergence only, never a force-push.
+            "ff_blocked": ff_blocked(system, br)}
 
 
 # ---- cached marker (the ONLY thing GET pages read) --------------------------------------------
@@ -356,7 +359,8 @@ _LOCAL_FIELDS = {"head": _is_str, "head_short": _is_str, "branch": _is_str,
                  "version": _is_str, "root": _is_str, "dirty": _is_bool, "is_git": _is_bool}
 _UPSTREAM_FIELDS = {"ok": _is_bool, "deps_changed": _is_bool, "error": _is_str,
                     "branch": _is_str, "upstream_head": _is_str,
-                    "upstream_head_short": _is_str, "upstream_version": _is_str}
+                    "upstream_head_short": _is_str, "upstream_version": _is_str,
+                    "ff_blocked": _is_bool}     # absent in old caches -> defaulted False on read
 _IDENTITY_FIELDS = {"ok": _is_bool, "status": _is_str, "reason": _is_str, "checked_at": _is_int}
 # Outcome of the LAST service-mediated apply (the one-click web update) — shown once the
 # console is back so the operator sees what happened while it was down.
@@ -719,6 +723,9 @@ def status_view(paths: Paths) -> dict:
         "have_upstream": have_up, "upstream_error": _cstr(up.get("error")),
         "upstream_version": up_ver, "upstream_head_short": _cstr(up.get("upstream_head_short")),
         "deps_changed": bool(up.get("deps_changed") is True),
+        # Divergence flag from the last check's fetch (False for old caches without the field):
+        # a normal --ff-only apply will REFUSE; proves divergence only, never a force-push.
+        "ff_blocked": bool(up.get("ff_blocked") is True),
         "checked_at": _cint(cache.get("checked_at")),
         "ver_color": ver_color, "commit_color": commit_color,
         "update_available": update_available,

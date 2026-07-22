@@ -1,0 +1,79 @@
+===== meshtastic build log mtimes (cold-build start->end duration) =====
+-rw-r--r-- 1 makro makro     0 2026-07-21 01:04:18.265729704 +0100 /home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-0.log
+-rw-r--r-- 1 makro makro  4035 2026-07-21 01:04:36.234895843 +0100 /home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-1.log
+-rw-r--r-- 1 makro makro 13812 2026-07-21 01:05:32.394824714 +0100 /home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-2.log
+-rw-r--r-- 1 makro makro 24786 2026-07-21 01:57:24.328409841 +0100 /home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log
+-rw-r--r-- 1 makro makro     0 2026-07-21 06:29:47.096386816 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-0.log
+-rw-r--r-- 1 makro makro  4035 2026-07-21 06:30:05.505391739 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-1.log
+-rw-r--r-- 1 makro makro 13812 2026-07-21 06:30:59.505360440 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-2.log
+-rw-r--r-- 1 makro makro 57907 2026-07-21 08:14:05.037570174 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log
+-rw-r--r-- 1 makro makro     0 2026-07-21 08:14:05.113570144 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-4.log
+-rw-r--r-- 1 makro makro   159 2026-07-21 08:14:10.077568178 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-5.log
+-rw-r--r-- 1 makro makro   608 2026-07-21 08:14:13.397566866 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-6.log
+-rw-r--r-- 1 makro makro     0 2026-07-21 08:14:13.464060537 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-7.log
+-rw-r--r-- 1 makro makro  4772 2026-07-21 08:15:10.469544626 +0100 /home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-8.log
+-rw-r--r-- 1 makro makro     0 2026-07-20 23:40:56.118877201 +0100 /home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-0.log
+-rw-r--r-- 1 makro makro  6376 2026-07-20 23:41:48.506031334 +0100 /home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-1.log
+-rw-r--r-- 1 makro makro 17606 2026-07-20 23:44:46.549788610 +0100 /home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-2.log
+-rw-r--r-- 1 makro makro 24786 2026-07-21 00:27:49.102053541 +0100 /home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log
+===== tail of the main build log (native meshtasticd) =====
+Compiling .pio/build/native/lib46f/WiFi/WiFiClient.cpp.o
+Compiling .pio/build/native/lib46f/WiFi/WiFiServer.cpp.o
+Compiling .pio/build/native/lib46f/WiFi/WiFiUdp.cpp.o
+Archiving .pio/build/native/lib46f/libWiFi.a
+Indexing .pio/build/native/lib46f/libWiFi.a
+Compiling .pio/build/native/FrameworkArduino/arduino/api/Common.cpp.o
+Compiling .pio/build/native/FrameworkArduino/arduino/api/IPAddress.cpp.o
+Compiling .pio/build/native/FrameworkArduino/arduino/api/PluggableUSB.cpp.o
+Compiling .pio/build/native/FrameworkArduino/arduino/api/Print.cpp.o
+Compiling .pio/build/native/FrameworkArduino/arduino/api/Stream.cpp.o
+Compiling .pio/build/native/FrameworkArduino/arduino/api/String.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/AsyncUDP.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/FS/FS.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/FS/PortduinoFS.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/FS/vfs_api.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/PortduinoGPIO.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/PortduinoPrint.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/Utility.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/dtostrf.c.o
+Compiling .pio/build/native/FrameworkArduino/portduino/itoa.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/LinuxCommon.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/LinuxHardwareI2C.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/LinuxHardwareSPI.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/LinuxSerial.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/gpio/LinuxGPIOPin.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/linux/millis.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/logging.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/main.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/simulated/SimCommon.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/simulated/SimHardwareI2C.cpp.o
+Compiling .pio/build/native/FrameworkArduino/portduino/simulated/SimHardwareSPI.cpp.o
+Archiving .pio/build/native/libFrameworkArduino.a
+Indexing .pio/build/native/libFrameworkArduino.a
+Linking .pio/build/native/meshtasticd
+======================== [SUCCESS] Took 6173.95 seconds ========================
+
+Environment    Status    Duration
+-------------  --------  ------------
+native         SUCCESS   01:42:53.950
+========================= 1 succeeded in 01:42:53.950 =========================
+===== LINK-GATE / readelf / ldd verdict (verbatim) =====
+/home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log:[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch /home/makro/loraham-pi-control/src/meshtastic-firmware/.pio/build/native grow
+/home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log:PROGNAME: meshtasticd
+/home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/Panel_sdl.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/common.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-1dcfe754e3da4f508f50aa06ebb0585d-build-meshtastic-3.log:Compiling .pio/build/native/src/graphics/Panel_sdl.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch /home/makro/loraham-pi-control/src/meshtastic-firmware/.pio/build/native grow
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:PROGNAME: meshtasticd
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/Panel_sdl.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/common.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:Compiling .pio/build/native/src/graphics/Panel_sdl.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:Linking .pio/build/native/meshtasticd
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-3.log:======================== [SUCCESS] Took 6173.95 seconds ========================
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-5.log:[meshtastic] link gate OK — no SDL/X11/Wayland/Mesa/LLVM/PulseAudio/libinput/xkbcommon in /home/makro/loraham-pi-control/build/tools/meshtasticd/meshtasticd
+/home/makro/loraham-pi-control/logs/auto-install-5ac573b6bec44080a54cf8d1f83595bd-build-meshtastic-6.log:[meshtastic] web UI v2.6.7 installed at /home/makro/loraham-pi-control/build/tools/meshtasticd/web
+/home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log:[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch /home/makro/loraham-pi-control/src/meshtastic-firmware/.pio/build/native grow
+/home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log:PROGNAME: meshtasticd
+/home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/Panel_sdl.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log:Compiling .pio/build/native/libf2f/LovyanGFX/lgfx/v1/platforms/sdl/common.cpp.o
+/home/makro/loraham-pi-control/logs/auto-install-ac6ebbb455ff441eb185121cc7e6d118-build-meshtastic-3.log:Compiling .pio/build/native/src/graphics/Panel_sdl.cpp.o

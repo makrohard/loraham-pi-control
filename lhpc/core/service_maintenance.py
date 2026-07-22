@@ -1436,66 +1436,79 @@ class MaintenanceOpsMixin:
         already owns it => refused. Records the CALLER's (the shell's) pid + nonce + /proc start time so a
         live owner is distinguishable from PID reuse."""
         import json
-        from . import runtime_fs, updater_units
-        from .service_base import _proc_ceased
+        from . import reslock, runtime_fs, updater_units
+        from .service_base import _guard_owner_ints, _proc_ceased
         guard = self._paths.under(updater_units.UNINSTALL_GUARD)
         payload = json.dumps({"pid": pid, "nonce": nonce, "start_time": start_time})
+        # ONE per-root lock serializes EVERY guard operation (claim/reclaim/release/recovery): the
+        # prove-stale-then-remove sequences below must act on the SAME guard they inspected — without
+        # the lock a concurrent claim could replace the guard between the proof and the unlink.
         try:
-            m = runtime_fs.open_marker_excl(self._paths, guard, payload)
-            m.close()
-            return ActionResult(True, "uninstall guard claimed.", data={"nonce": nonce})
-        except FileExistsError:
-            pass                                          # a guard exists — decide below
-        except Exception as exc:                          # noqa: BLE001 — containment/fs error
-            return ActionResult(False, f"Could not claim the uninstall guard: {exc}",
-                                data={"claim_failed": True})
-        # A guard already exists. RECLAIM it ONLY if its recorded owner is PROVEN DEAD (an interrupted
-        # uninstall — preserving a safe retry path); a LIVE owner is a real concurrent uninstall (refuse);
-        # a malformed/unreadable/foreign-typed guard is refused (never blindly replaced).
-        try:
-            rec = json.loads(runtime_fs.read_text_regular(self._paths, guard, max_bytes=4096))
-            owner_pid, owner_start = int(rec["pid"]), int(rec["start_time"])
-        except Exception:                                 # noqa: BLE001 — cannot prove -> refuse
-            return ActionResult(False, "An uninstall guard already exists and is unreadable/malformed "
-                                "— refusing (verify no uninstall runs, then remove it).",
-                                data={"guard_unsafe": True})
-        if not _proc_ceased(owner_pid, owner_start):
-            return ActionResult(False, "An uninstall is already in progress (its guard owner is alive) "
-                                "— refusing.", data={"guard_live": True})
-        try:
-            runtime_fs.unlink(self._paths, guard)         # descriptor-safe, no-follow
-            m = runtime_fs.open_marker_excl(self._paths, guard, payload)
-            m.close()
-        except Exception as exc:                          # noqa: BLE001
-            return ActionResult(False, f"could not reclaim the stale uninstall guard: {exc}",
-                                data={"reclaim_failed": True})
-        return ActionResult(True, "reclaimed a STALE uninstall guard (a previous uninstall was "
-                            "interrupted).", data={"nonce": nonce, "reclaimed": True})
+            with reslock.operation_lock(self._paths, "uninstall.guard", "guard-claim"):
+                try:
+                    m = runtime_fs.open_marker_excl(self._paths, guard, payload)
+                    m.close()
+                    return ActionResult(True, "uninstall guard claimed.", data={"nonce": nonce})
+                except FileExistsError:
+                    pass                                  # a guard exists — decide below
+                except Exception as exc:                  # noqa: BLE001 — containment/fs error
+                    return ActionResult(False, f"Could not claim the uninstall guard: {exc}",
+                                        data={"claim_failed": True})
+                # A guard already exists. RECLAIM it ONLY if its recorded owner is PROVEN DEAD (an
+                # interrupted uninstall — preserving a safe retry path); a LIVE owner is a real
+                # concurrent uninstall (refuse); malformed/unreadable is refused (never replaced).
+                try:
+                    rec = json.loads(runtime_fs.read_text_regular(self._paths, guard, max_bytes=4096))
+                    owner_pid, owner_start = _guard_owner_ints(rec)
+                except Exception:                         # noqa: BLE001 — cannot prove -> refuse
+                    return ActionResult(False, "An uninstall guard already exists and is "
+                                        "unreadable/malformed — refusing (verify no uninstall runs, "
+                                        "then remove it).", data={"guard_unsafe": True})
+                if not _proc_ceased(owner_pid, owner_start):
+                    return ActionResult(False, "An uninstall is already in progress (its guard owner "
+                                        "is alive) — refusing.", data={"guard_live": True})
+                try:
+                    runtime_fs.unlink(self._paths, guard)     # descriptor-safe, no-follow
+                    m = runtime_fs.open_marker_excl(self._paths, guard, payload)
+                    m.close()
+                except Exception as exc:                  # noqa: BLE001
+                    return ActionResult(False, f"could not reclaim the stale uninstall guard: {exc}",
+                                        data={"reclaim_failed": True})
+                return ActionResult(True, "reclaimed a STALE uninstall guard (a previous uninstall "
+                                    "was interrupted).", data={"nonce": nonce, "reclaimed": True})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
+                                "retry.", data={"guard_contended": True})
 
     def controller_uninstall_guard_release(self, nonce: str) -> ActionResult:
         """Remove the uninstall guard ONLY if it is the one this invocation owns (its recorded `nonce`
         matches). Strict no-follow, regular-only, bounded read + nonce compare, then a descriptor-safe
         unlink. NEVER removes a pre-existing / foreign / replaced / unreadable guard. Absent = no-op."""
         import json
-        from . import runtime_fs, updater_units
+        from . import reslock, runtime_fs, updater_units
         from .paths import PathContainmentError
         path = self._paths.under(updater_units.UNINSTALL_GUARD)
         try:
-            rec = json.loads(runtime_fs.read_text_regular(self._paths, path, max_bytes=4096))
-        except FileNotFoundError:
-            return ActionResult(True, "no uninstall guard to release.", data={"absent": True})
-        except (OSError, PathContainmentError, ValueError):
-            return ActionResult(False, "uninstall guard is unreadable/unsafe — NOT removing it "
-                                "(foreign or tampered).", data={"unsafe": True})
-        if not (isinstance(rec, dict) and rec.get("nonce") == nonce):
-            return ActionResult(False, "uninstall guard is owned by a different invocation — NOT "
-                                "removing it.", data={"foreign": True})
-        try:
-            runtime_fs.unlink(self._paths, path)
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"could not remove the uninstall guard: {exc}",
-                                data={"unlink_failed": True})
-        return ActionResult(True, "uninstall guard released.", data={"released": True})
+            with reslock.operation_lock(self._paths, "uninstall.guard", "guard-release"):
+                try:
+                    rec = json.loads(runtime_fs.read_text_regular(self._paths, path, max_bytes=4096))
+                except FileNotFoundError:
+                    return ActionResult(True, "no uninstall guard to release.", data={"absent": True})
+                except (OSError, PathContainmentError, ValueError):
+                    return ActionResult(False, "uninstall guard is unreadable/unsafe — NOT removing "
+                                        "it (foreign or tampered).", data={"unsafe": True})
+                if not (isinstance(rec, dict) and rec.get("nonce") == nonce):
+                    return ActionResult(False, "uninstall guard is owned by a different invocation — "
+                                        "NOT removing it.", data={"foreign": True})
+                try:
+                    runtime_fs.unlink(self._paths, path)
+                except (OSError, PathContainmentError) as exc:
+                    return ActionResult(False, f"could not remove the uninstall guard: {exc}",
+                                        data={"unlink_failed": True})
+                return ActionResult(True, "uninstall guard released.", data={"released": True})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"another uninstall-guard operation is in progress ({busy}) — "
+                                "retry.", data={"guard_contended": True})
 
     def uninstall(self, target: str, apply: bool = False) -> ActionResult:
         """Remove managed runtime sources for `target`. Refuses if a target

@@ -5,7 +5,7 @@
 Description=LoRaHAM Pi Control web console (loopback-only)
 Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
 After=network-online.target
-Wants=network-online.target lhpc-selfupdate.path
+Wants=network-online.target lhpc-selfupdate.path lhpc-nginx-restart.path
 # Refuse to (re)start mid-uninstall — the updater's OnFailure= must not resurrect the console
 # while a teardown is removing this deployment.
 ConditionPathExists=!%h/loraham-pi-control/.lhpc-uninstalling

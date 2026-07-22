@@ -135,10 +135,14 @@ web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` wi
    lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
    lhpc webserver apply                                    # validate + reload nginx
    ```
-   > **Known limitation:** a bind change (loopback → `0.0.0.0`) does not take effect through
-   > the nginx *reload* that `apply` performs. Check `lhpc webserver status` — if it still shows
-   > `remote_listener=False`, restart the front-end once: `systemctl --user restart lhpc-nginx`,
-   > then re-run `lhpc webserver verify`.
+   > **Bind changes restart the front-end automatically.** A bind change (loopback → `0.0.0.0`,
+   > console or a stack proxy) cannot take effect through a *reload* (nginx cannot rebind a held
+   > socket), so `apply` verifies the effective listeners and restarts `lhpc-nginx` when needed:
+   > from an operator shell directly, from the **web console** via the managed restart watcher
+   > (`lhpc-nginx-restart.path` — the console itself is deliberately unable to command systemd;
+   > it writes a request marker that systemd consumes with a declarative stop/start). `apply`
+   > reports success only after the listeners actually match. Deployments installed before the
+   > watcher existed need one `lhpc self-update --repair-integration` to gain it.
 3. **Issue a device certificate** and get its bundle off the Pi:
    ```
    lhpc webserver cert issue laptop        # prints a ONE-TIME passphrase — record it now

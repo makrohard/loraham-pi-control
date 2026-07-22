@@ -15,14 +15,30 @@ _BOOTSTRAP = _REPO / "bootstrap-deps.sh"
 _USER = getpass.getuser()
 
 
-def _fakebin(tmp_path, *, fake_root=False):
+def _fakebin(tmp_path, *, no_sudo=False):
     b = tmp_path / "fb"; b.mkdir(exist_ok=True)
     apt = tmp_path / "apt.log"; um = tmp_path / "usermod.log"
 
     def w(name, body):
         p = b / name; p.write_text("#!/usr/bin/env bash\n" + body); p.chmod(0o755)
 
-    w("sudo", 'exec "$@"\n')                                   # transparent (no privilege in the test)
+    # POISON sudo: the script must NEVER invoke a sudo binary — it requires root and routes its
+    # historic `sudo` prefixes through an in-script no-op function (which shadows PATH lookup). Any
+    # call site that escaped the function would hit this poison and fail the test loudly. This is a
+    # stronger guarantee than removing sudo from PATH (/usr/bin, with the real sudo, stays on it).
+    # no_sudo=True removes it entirely for the explicit sudo-less-environment test.
+    if no_sudo:
+        (b / "sudo").unlink(missing_ok=True)
+    else:
+        w("sudo", 'echo "POISON: a sudo BINARY was invoked — the script must never need one" >&2; exit 97\n')
+    # Root-required script: the fake `id` reports uid 0 by default, so every test runs the documented
+    # `sudo bash` scenario. FAKE_UID overrides it for the non-root refusal test. Other invocations
+    # (`id -u <user>` operator validation, `id -nG`, ...) pass through to the real binary.
+    w("id", 'if [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then echo "${FAKE_UID:-0}"; exit 0; fi\n'
+            'if [ "$#" -eq 1 ] && [ "$1" = "-un" ]; then\n'
+            '  if [ "${FAKE_UID:-0}" = "0" ]; then echo root; exit 0; else exec /usr/bin/id -un; fi\n'
+            'fi\n'
+            'exec /usr/bin/id "$@"\n')
     w("apt-get", f'echo "apt-get $*" >> "{apt}"; exit 0\n')
     w("apt", f'echo "apt $*" >> "{apt}"; exit 0\n')
     w("usermod", f'echo "usermod $*" >> "{um}"; exit 0\n')
@@ -72,19 +88,42 @@ def _fakebin(tmp_path, *, fake_root=False):
     # tee: /etc/* writes are sandboxed to nothing; CONFIG_TXT / FSTAB (temp files) are written for real.
     w("tee", 'last=""; for a in "$@"; do case "$a" in -*) ;; *) last="$a";; esac; done\n'
              'case "$last" in /etc/*) cat >/dev/null ;; *) exec /usr/bin/tee "$@" ;; esac\n')
-    if fake_root:
-        # invoker looks like root; `id -u <user>` still resolves the real (non-root) uid.
-        w("id", 'if [ "$#" -eq 1 ] && [ "$1" = "-un" ]; then echo root; exit 0; fi\n'
-                'if [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then echo 0; exit 0; fi\n'
-                'exec /usr/bin/id "$@"\n')
+    # Wi-Fi: the section derives presence, device pick AND default-route classification from ONE
+    # `nmcli -t -f DEVICE,TYPE device` call plus `ip -o route show default`. The fakes make BOTH fully
+    # deterministic on any host: FAKE_NM_DEVS is the whole device table ("dev:type" lines), and
+    # FAKE_DEFROUTE_DEV names the default-route device (unset -> NO default route). Other nmcli calls
+    # keep the old no-op (no active connection -> `connection modify` skipped); other `ip` calls pass
+    # through to the real binary. iw is a no-op unless FAKE_IW_FAIL (drives the live-apply failure
+    # path). The section's file write is redirected by WIFI_PSAVE_CONF (set in _run) to a temp path;
+    # the persistent write goes through a same-dir temp (sudo mktemp) that the fake tee writes for real
+    # (the temp is NOT under /etc, so tee does not sandbox it).
+    w("nmcli", 'if [ "$1" = "-t" ] && [ "$2" = "-f" ] && [ "$3" = "DEVICE,TYPE" ] && [ "$4" = "device" ]; then\n'
+               '  [ -n "${FAKE_NM_DEVS:-}" ] && printf "%s\\n" "$FAKE_NM_DEVS"\n'
+               '  exit 0\n'
+               'fi\n'
+               'exit 0\n')
+    w("ip", 'if [ "$1" = "-o" ] && [ "$2" = "route" ] && [ "$3" = "show" ] && [ "$4" = "default" ]; then\n'
+            '  [ -n "${FAKE_DEFROUTE_DEV:-}" ] && echo "default via 192.168.1.1 dev $FAKE_DEFROUTE_DEV proto dhcp metric 100"\n'
+            '  exit 0\n'
+            'fi\n'
+            'for p in /usr/sbin/ip /sbin/ip /usr/bin/ip /bin/ip; do [ -x "$p" ] && exec "$p" "$@"; done\n'
+            'exit 1\n')
+    w("iw", '[ -n "${FAKE_IW_FAIL:-}" ] && exit 1\nexit 0\n')
+    # journal section: tmpfiles ACL fixup is a no-op fake; the journal dir itself is redirected to a
+    # temp path via the JOURNAL_DIR seam (set in _run), so nothing touches the real /var/log.
+    w("systemd-tmpfiles", 'exit 0\n')
     return b, apt, um
 
 
-def _run(tmp_path, args, *, fake_root=False, sudo_user=None, config_seed=None,
+_SUDO_BASH = object()   # sentinel: the default `sudo bash bootstrap-deps.sh` scenario (SUDO_USER set)
+
+
+def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, config_seed=None,
          meminfo=None, swaps=None, swapfile=None, fstab=None, free_kb=None,
          swapon_fail=False, swapoff_fail=False, systemctl_units="", systemctl_fail="",
-         systemctl_broken=False, systemctl_disabled=""):
-    fb, apt, um = _fakebin(tmp_path, fake_root=fake_root)
+         systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
+         nm_devs=None, defroute_dev=None):
+    fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     config = tmp_path / "config.txt"
     if config_seed is not None:
         config.write_text(config_seed)
@@ -98,51 +137,91 @@ def _run(tmp_path, args, *, fake_root=False, sudo_user=None, config_seed=None,
     env = {**os.environ, "PATH": f"{fb}:/usr/bin:/bin", "CONFIG_TXT": str(config),
            "MEMINFO": str(meminfo), "SWAPS": str(swaps),
            "LHPC_SWAPFILE": str(swapfile or (tmp_path / "swap.lhpc")),
-           "FSTAB": str(fstab or (tmp_path / "fstab"))}
+           "FSTAB": str(fstab or (tmp_path / "fstab")),
+           "WIFI_PSAVE_CONF": str(tmp_path / "wifi-nopowersave.conf"),   # redirect the Wi-Fi write to a temp
+           "JOURNAL_DIR": str(tmp_path / "journal")}      # redirect the persistent-journal dir to a temp
     if free_kb is not None:
         env["FAKE_DF_FREE_KB"] = str(free_kb)
     if swapon_fail:
         env["FAKE_SWAPON_FAIL"] = "1"
     if swapoff_fail:
         env["FAKE_SWAPOFF_FAIL"] = "1"
+    if wifi_iw_fail:
+        env["FAKE_IW_FAIL"] = "1"                      # force the live `iw` apply to fail (-> "after reboot")
+    if nm_devs is not None:
+        env["FAKE_NM_DEVS"] = nm_devs                  # nmcli device table, "dev:type" lines (Wi-Fi seam)
+    if defroute_dev is not None:
+        env["FAKE_DEFROUTE_DEV"] = defroute_dev        # default-route device; omit -> NO default route
     env["FAKE_SYSTEMCTL_UNITS"] = systemctl_units      # "" = clean image, no packaged units
     env["FAKE_SYSTEMCTL_FAIL"] = systemctl_fail        # units whose disable/enable must FAIL
     if systemctl_broken:
         env["FAKE_SYSTEMCTL_BROKEN"] = "1"             # systemd unqueryable — inspection fails
     env["FAKE_SYSTEMCTL_DISABLED"] = systemctl_disabled  # units that are already disabled+inactive
     env.pop("SUDO_USER", None)
-    if sudo_user is not None:
-        env["SUDO_USER"] = sudo_user
+    if sudo_user is _SUDO_BASH:
+        env["SUDO_USER"] = _USER            # the documented `sudo bash` invocation (default scenario)
+    elif sudo_user is not None:
+        env["SUDO_USER"] = sudo_user        # explicit None = a TRUE root login (no SUDO_USER at all)
+    if nonroot:
+        env["FAKE_UID"] = "1000"            # fake id reports a non-root uid -> the exit-10 refusal
     r = subprocess.run(["bash", str(_BOOTSTRAP), *args], env=env, capture_output=True, text=True, timeout=90)
     return r, config, (apt.read_text() if apt.exists() else ""), (um.read_text() if um.exists() else "")
 
 
 # --- operator identity ----------------------------------------------------------------------------
 
-def test_normal_user_grants_groups_to_invoking_user(tmp_path):
-    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"])
-    assert r.returncode == 0, r.stderr
-    assert f"usermod -aG spi,gpio {_USER}" in um and "root" not in um
-    assert "apt-get install" in apt                            # mutation happened (validation passed)
+def test_non_root_invocation_refused_before_any_mutation(tmp_path):
+    # The script REQUIRES root (`sudo bash bootstrap-deps.sh`): a plain-user invocation refuses with
+    # the documented exit 10 and the exact remedy, BEFORE any apt/config/group mutation.
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], nonroot=True)
+    assert r.returncode == 10, (r.returncode, r.stderr)
+    assert "must run as root" in r.stderr and "sudo bash bootstrap-deps.sh" in r.stderr
+    assert apt == "" and um == ""                              # nothing touched
+
+
+def test_dry_run_stays_unprivileged(tmp_path):
+    # DELIBERATE exception to the root gate: --dry-run is the read-only zero-trust pre-flight, meant
+    # to be vetted BEFORE the script is ever granted root — it must fully work as a plain user.
+    r, _cfg, apt, um = _run(tmp_path, ["--dry-run"], nonroot=True)
+    assert r.returncode == 0, (r.returncode, r.stderr, r.stdout)
+    assert "dry run OK" in r.stdout
+    assert "must run as root" not in r.stderr
+    assert um == ""                                            # simulation only, no grants
 
 
 def test_sudo_bash_grants_groups_to_sudo_user_not_root(tmp_path):
-    # `sudo bash` -> invoker is root but SUDO_USER names the operator; grants go to the operator.
-    r, _cfg, _apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], fake_root=True, sudo_user=_USER)
+    # `sudo bash` (the default harness scenario) -> invoker is root but SUDO_USER names the operator;
+    # grants go to the operator, and the run works WITHOUT any usable sudo binary on PATH (the poison
+    # sudo would fail the run if the script ever PATH-invoked one).
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"])
     assert r.returncode == 0, r.stderr
     assert f"usermod -aG spi,gpio {_USER}" in um
     assert "usermod -aG spi,gpio root" not in um
+    assert "apt-get install" in apt                            # mutation happened (validation passed)
+    assert "POISON" not in r.stdout + r.stderr                 # no sudo binary was ever invoked
+
+
+def test_root_without_sudo_binary_full_run_succeeds(tmp_path):
+    # The explicit no-sudo environment (unattended runs; this exact gap blocked Phase C/D): no sudo
+    # binary in the fake PATH dir at all — the in-script no-op function must cover every privileged
+    # call site, so the full run succeeds where sudo is absent/unconfigured.
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], no_sudo=True)
+    assert not (tmp_path / "fb" / "sudo").exists()
+    assert r.returncode == 0, r.stderr
+    assert "apt-get install" in apt                            # full mutation path ran as root
+    assert f"usermod -aG spi,gpio {_USER}" in um
 
 
 def test_root_without_operator_fails_before_any_mutation(tmp_path):
-    # Direct root, no SUDO_USER, no --operator-user -> refuse BEFORE apt/usermod.
-    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], fake_root=True)
+    # TRUE root login: no SUDO_USER, no --operator-user -> refuse BEFORE apt/usermod (unchanged).
+    r, _cfg, apt, um = _run(tmp_path, ["--spi-mode", "soft-cs"], sudo_user=None)
     assert r.returncode != 0 and "non-root operator" in r.stderr
     assert apt == "" and um == ""                              # no mutation attempted
 
 
 def test_explicit_operator_user_is_used(tmp_path):
-    r, _cfg, _apt, um = _run(tmp_path, ["--spi-mode", "soft-cs", "--operator-user", _USER], fake_root=True)
+    r, _cfg, _apt, um = _run(tmp_path, ["--spi-mode", "soft-cs", "--operator-user", _USER],
+                             sudo_user=None)
     assert r.returncode == 0, r.stderr
     assert f"usermod -aG spi,gpio {_USER}" in um
 
@@ -379,12 +458,147 @@ def test_swap_size_must_be_numeric(tmp_path):
 
 def test_apt_block_carries_the_tools_later_sections_need():
     # The merged apt block is the FIRST thing installed, so the utilities the later sections and the
-    # managed builds rely on (HTTPS fetch of the web UI, tarball unpack) are present by then.
+    # managed builds rely on (HTTPS fetch of the web UI; the from-source QEMU build's git+toolchain)
+    # are present by then. The prebuilt-tarball fetch (wget/xz-utils) is gone — QEMU is built from
+    # source now, so git + meson + ninja-build replace it.
     text = _BOOTSTRAP.read_text()
     apt_i = text.index("sudo apt-get install -y")
     apt_block = text[apt_i:text.index("\n\n", apt_i)]
-    for pkg in ("ca-certificates", "curl", "wget", "xz-utils"):
+    for pkg in ("ca-certificates", "curl", "git", "meson", "ninja-build"):
         assert f"\n    {pkg}" in apt_block, pkg
+
+
+# --- Wi-Fi power-save (default-disable + opt-out; Pi Zero 2W brcmfmac drops under build load) -------
+
+def test_wifi_keep_flag_leaves_wifi_untouched(tmp_path):
+    # --keep-wifi-powersave opts out: no NetworkManager write, and a warning explains the drop risk.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--keep-wifi-powersave"])
+    assert r.returncode == 0, r.stderr
+    assert "Wi-Fi: left untouched (--keep-wifi-powersave)" in r.stdout
+    assert "can DROP Wi-Fi" in r.stdout                                  # the warning is shown
+    assert not (tmp_path / "wifi-nopowersave.conf").exists()             # nothing written
+
+
+# The Wi-Fi cases below are DETERMINISTIC on any host: presence + default-route classification come
+# from the harness seams (FAKE_NM_DEVS device table + FAKE_DEFROUTE_DEV), never from the runner's
+# real interfaces. `_WIFI_ON` is the standard "install runs over Wi-Fi" fixture.
+_WIFI_ON = dict(nm_devs="wlan0:wifi\neth0:ethernet", defroute_dev="wlan0")
+
+
+def test_wifi_default_disables_powersave_with_warning_and_revert(tmp_path):
+    # DEFAULT (no flag), install over Wi-Fi (default route via a TYPE=wifi device): disable power-save
+    # via one NetworkManager drop-in, report the write on its own, and print the exact revert.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], **_WIFI_ON)
+    assert r.returncode == 0, r.stderr
+    conf = tmp_path / "wifi-nopowersave.conf"
+    assert "Wi-Fi: DISABLING power-save on wlan0" in r.stdout
+    assert "persistent config written" in r.stdout                       # write reported on its own
+    assert "REVERT:" in r.stdout and "systemctl restart NetworkManager" in r.stdout
+    assert conf.exists() and "wifi.powersave = 2" in conf.read_text()
+    # the same-dir temp is atomically renamed away, never left behind
+    assert not list(tmp_path.glob(".wifi-nopowersave.*"))
+
+
+def test_wifi_no_wifi_device_nothing_to_do(tmp_path):
+    # No TYPE=wifi device in the nmcli table (wired-only box) -> nothing to do, nothing written.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              nm_devs="eth0:ethernet", defroute_dev="eth0")
+    assert r.returncode == 0, r.stderr
+    assert "no NetworkManager-managed wlan interface" in r.stdout
+    assert not (tmp_path / "wifi-nopowersave.conf").exists()
+
+
+def test_wifi_lan_install_leaves_wifi_untouched(tmp_path):
+    # THE GATE: a Wi-Fi device exists, but the default route is classified non-wifi (LAN carries the
+    # install) -> Wi-Fi is left untouched, and the note explains why + gives the manual one-liner.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              nm_devs="wlan0:wifi\neth0:ethernet", defroute_dev="eth0")
+    assert r.returncode == 0, r.stderr
+    assert "left untouched — the install runs over LAN" in r.stdout
+    assert "default route via eth0, type ethernet" in r.stdout
+    assert "sudo tee" in r.stdout and "wifi-nopowersave.conf" in r.stdout   # manual remedy printed
+    assert "DISABLING power-save" not in r.stdout                        # disable path never entered
+    assert "disabled now (live)" not in r.stdout
+    assert not (tmp_path / "wifi-nopowersave.conf").exists()             # nothing written
+
+
+def test_wifi_no_default_route_still_disables(tmp_path):
+    # NO default route detectable -> conservative fallback: disable (a mis-detection must never remove
+    # the protection the feature exists for — the fresh-Zero case).
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], nm_devs="wlan0:wifi")
+    assert r.returncode == 0, r.stderr
+    assert "Wi-Fi: DISABLING power-save on wlan0" in r.stdout
+    assert (tmp_path / "wifi-nopowersave.conf").exists()
+
+
+def test_wifi_non_wlan_named_wifi_still_protected(tmp_path):
+    # Predictable interface naming (wlp2s0): classification is TYPE-based, never a wlan* name glob —
+    # at BOTH spots (presence/device pick AND the route gate). The box installs over Wi-Fi -> protected.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              nm_devs="wlp2s0:wifi\neth0:ethernet", defroute_dev="wlp2s0")
+    assert r.returncode == 0, r.stderr
+    assert "Wi-Fi: DISABLING power-save on wlp2s0" in r.stdout
+    assert (tmp_path / "wifi-nopowersave.conf").exists()
+
+
+def test_wifi_unclassifiable_route_dev_still_disables(tmp_path):
+    # Default-route device not in the nmcli table (unclassifiable) -> conservative fallback: disable.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              nm_devs="wlan0:wifi", defroute_dev="usb9")
+    assert r.returncode == 0, r.stderr
+    assert "Wi-Fi: DISABLING power-save on wlan0" in r.stdout
+    assert (tmp_path / "wifi-nopowersave.conf").exists()
+
+
+def test_wifi_symlink_leaf_refused_untouched(tmp_path):
+    # Fail-closed: a symlink (or non-regular) WIFI_PSAVE_CONF leaf is refused WITHOUT being written
+    # through under sudo — the symlink and its target are left exactly as they were.
+    import pathlib
+    target = tmp_path / "real-target"; target.write_text("ORIGINAL")
+    conf = tmp_path / "wifi-nopowersave.conf"
+    conf.symlink_to(target)                                              # plant a symlink at the leaf
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], **_WIFI_ON)
+    assert r.returncode == 0, r.stderr
+    assert conf.is_symlink() and pathlib.Path(conf).resolve() == target.resolve()
+    assert target.read_text() == "ORIGINAL"                             # target untouched
+    assert "is a symlink or non-regular file - NOT touching it" in r.stderr   # warning goes to stderr
+
+
+def test_wifi_live_apply_failure_says_after_reboot(tmp_path):
+    # The persistent write and the live apply are reported separately: when the live `iw` apply fails,
+    # the section says it takes effect after reboot — never that power-save is disabled now.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], wifi_iw_fail=True, **_WIFI_ON)
+    assert r.returncode == 0, r.stderr
+    conf = tmp_path / "wifi-nopowersave.conf"
+    assert conf.exists() and "wifi.powersave = 2" in conf.read_text()   # persistent write still succeeds
+    assert "takes effect after the next reboot" in r.stdout
+    assert "disabled now (live)" not in r.stdout
+
+
+def test_wifi_combined_persist_and_live_failure_reports_unchanged(tmp_path):
+    # Finding B: when persistence is REFUSED (symlink leaf) AND the live apply also fails, the section must
+    # NOT falsely promise "after reboot" — nothing was persisted — it reports power-save is UNCHANGED.
+    target = tmp_path / "real-target"; target.write_text("ORIGINAL")
+    conf = tmp_path / "wifi-nopowersave.conf"
+    conf.symlink_to(target)                                             # persistence refused (symlink leaf)
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"],
+                              wifi_iw_fail=True, **_WIFI_ON)             # live apply also fails
+    assert r.returncode == 0, r.stderr
+    combined = r.stdout + r.stderr
+    assert "DISABLING power-save on wlan0" in combined                  # the seam forced the branch
+    assert "is a symlink or non-regular file - NOT touching it" in combined   # persistent write REFUSED
+    assert "NOT applied live and NOT persisted" in combined            # honest combined-failure report
+    assert "power-save is UNCHANGED" in combined
+    assert "takes effect after the next reboot" not in combined        # the false promise is gone
+    assert conf.is_symlink() and target.read_text() == "ORIGINAL"      # symlink still untouched
+
+
+def test_wifi_flag_and_disable_logic_present_in_generated_script():
+    # Deterministic source check: the flag, the default-disable drop-in and the revert all ship.
+    text = _BOOTSTRAP.read_text()
+    assert "--keep-wifi-powersave" in text
+    assert "wifi.powersave = 2" in text
+    assert "REVERT:" in text and "wifi-nopowersave.conf" in text
 
 
 def test_no_third_party_apt_repository_is_configured():

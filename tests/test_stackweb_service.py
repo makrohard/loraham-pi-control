@@ -91,7 +91,9 @@ def test_local_needs_no_confirmation(tmp_path):
 def test_lan_needs_the_phrase(tmp_path):
     svc = _svc(tmp_path)
     r = svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"])
-    assert not r.ok and "explicit confirmation" in r.summary
+    combined = r.summary + " ".join(r.details)                     # aggregated refusal: reasons in details
+    assert not r.ok and "confirmation required" in combined
+    assert "--confirm-phrase enable-remote" in combined            # the exact flag is named
     assert svc.config().stackweb.get("meshcom") is None            # nothing written
 
     r = svc.stack_web_configure("meshcom", mode="lan", port=8444, cidrs=["192.168.0.0/24"],
@@ -107,7 +109,9 @@ def test_lan_needs_the_phrase(tmp_path):
 def test_elevated_cases_reject_the_weak_phrase(tmp_path, kw):
     svc = _svc(tmp_path)
     r = svc.stack_web_configure("meshcom", port=8444, confirm=True, **kw)
-    assert not r.ok and "elevated confirmation" in r.summary
+    combined = r.summary + " ".join(r.details)                     # aggregated refusal: reasons in details
+    assert not r.ok and "elevated confirmation" in combined
+    assert "--confirm-phrase enable-remote-danger" in combined     # the exact strong phrase is named
     assert svc.config().stackweb.get("meshcom") is None
 
     r = svc.stack_web_configure("meshcom", port=8444, confirm=True, confirm_public=True, **kw)

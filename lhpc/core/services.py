@@ -491,8 +491,57 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     if entry.get("commit"):
                         confirmed.setdefault(cid, set()).add(entry["commit"])
         snap = StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
+        self._overlay_runtime_bands(snap)
+        self._overlay_gui_unavailable(snap)
         self._snapshot_state.cache = snap
         return snap
+
+    def _overlay_gui_unavailable(self, snap) -> None:
+        """A component that CANNOT work here because a GUI-only dependency is absent (headless box,
+        bootstrap without `--with-gui`) reads NOT_APPLICABLE, not "not-installed" — "not-installed"
+        invites an install that would refuse, and one skipped-by-design GUI helper must not roll an
+        otherwise-healthy stack's badge to not-installed. Uses the SAME predicate as the planning
+        skip (`gui_unavailable_components`), probed only for stacks that declare a gui requirement,
+        so the state self-corrects once the GUI dependencies appear."""
+        from .model import RunState
+        for ss in snap.stacks:
+            if not any(getattr(r, "gui", False)
+                       for c in ss.stack.components for r in c.requires):
+                continue
+            try:
+                skip = set(self.gui_unavailable_components(ss.stack))
+            except Exception:  # noqa: BLE001 — presentation garnish only: if the requirement
+                continue      # probe layer is unavailable, show the un-overlaid truth instead
+                              # of failing the snapshot (and every caller composing it).
+            for c in ss.stack.components:
+                st = ss.components.get(c.id)
+                if c.id in skip and st and st.run_state is RunState.NOT_INSTALLED:
+                    st.run_state = RunState.NOT_APPLICABLE
+
+    def _overlay_runtime_bands(self, snap) -> None:
+        """Stamp the ACTUAL runtime band onto RUNNING components (dual-radio truth). The prober only
+        knows the manifest default (`comp.band`), but a daemon-client stack can be started on 433 OR
+        868 — the stack's running-band marker records which. Overlay it onto every RUNNING/DEGRADED
+        single-band component of that stack, then rewrite each DependencyObservation's band from the
+        referenced component's overlaid value, so "depends on X: running on N MHz" states the band X
+        is ACTUALLY running on. STOPPED components keep the manifest label (the overlay is gated on
+        run_state, so a stale marker never leaks)."""
+        from .model import RunState
+        live = (RunState.RUNNING, RunState.DEGRADED)
+        for ss in snap.stacks:
+            marker = self.running_band(ss.stack.id)
+            if not marker:
+                continue
+            for comp in ss.stack.components:
+                st = ss.components.get(comp.id)
+                if st is not None and comp.band and st.run_state in live:
+                    st.band = marker
+        band_of = {cid: st.band for ss in snap.stacks for cid, st in ss.components.items() if st.band}
+        for ss in snap.stacks:
+            for st in ss.components.values():
+                for dep in st.dependencies:
+                    if band_of.get(dep.component_id):
+                        dep.band = band_of[dep.component_id]
 
     def invalidate_snapshot(self) -> None:
         """Drop the memoized snapshot so the next `build_snapshot()` recomputes from scratch. Called once
@@ -1517,7 +1566,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
 
 def _render_component(comp, status) -> list[str]:
-    band = f"band {comp.band}" if comp.band else "band -"
+    eff_band = status.band or comp.band       # runtime-actual band wins over the manifest default
+    band = f"band {eff_band}" if eff_band else "band -"
     line = (
         f"  {comp.id:24s} {status.run_state.value:14s} "
         f"[{comp.kind.value}] {band}  tx {status.tx_state.value}  "

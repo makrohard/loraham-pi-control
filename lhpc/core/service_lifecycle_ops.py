@@ -720,6 +720,22 @@ class LifecycleOpsMixin:
                        Outcome.UNVERIFIED if res.unverified else Outcome.FAILED,
                        f"start failed: {res.detail} (log {res.log_path})")
                 continue
+            # Live pre-readiness note (run-2/3 finding: two "not working" misdiagnoses while the
+            # emulated MeshCom node was simply booting): surface the component's start_note BEFORE
+            # the readiness poll, so the operator sees the expected wait AS IT BEGINS — clearly a
+            # heads-up, never presented as readiness. The line goes into the component's OWN start
+            # log too (descriptor-safe append + flush) so a `tail -f` watcher sees it live, and the
+            # same text still appears in the eventual result details / post-success notes as before.
+            if comp.start_note and comp.readiness == "endpoint":
+                note_line = f"  [note] {comp.id}: {comp.start_note}"
+                out.append(note_line)
+                if res.log_path:
+                    try:
+                        with runtime_fs.open_log_append(self._paths, Path(res.log_path)) as fh:
+                            fh.write((note_line.strip() + "\n").encode("utf-8"))
+                            fh.flush()
+                    except (OSError, PathContainmentError):
+                        pass        # best-effort live line; the result detail above already has it
             # readiness="endpoint": VERIFIED only once every ready=true endpoint is up;
             # otherwise SIGTERM the just-launched owned session (verified cleanup) and
             # report UNVERIFIED — no post-start work runs.
@@ -2638,8 +2654,10 @@ class LifecycleOpsMixin:
         bands = [b for b in wanted if self.daemon_view(b).ready]
         if not bands:
             return ActionResult(
-                False, f"Cannot TX-test '{target}': the daemon isn't serving a READY radio on "
-                f"{' or '.join(wanted)} MHz — start the daemon and wait for RADIO=READY first.",
+                False, f"Cannot TX-test '{target}': no daemon-served radio is READY on "
+                f"{' or '.join(wanted)} MHz. A daemon stack (chat/igate/kiss/meshcom/meshcore) needs the "
+                f"daemon started + RADIO=READY first; a stack that drives its OWN radio (e.g. meshtastic) "
+                f"is not daemon-TX-testable — verify its TX from its own app/logs instead.",
                 next_commands=[f"lhpc status {target}"])
         op = self.config().operator
         payload = f"LHPC TX TEST{(' DE ' + op.callsign) if op.configured else ''}"

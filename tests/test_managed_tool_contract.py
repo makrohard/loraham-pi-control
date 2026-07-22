@@ -2,10 +2,10 @@
 
 Guards the exact failure classes this batch repaired:
   * every consumer of a SHARED source must pin ONE identical full commit SHA (a split pin shipped a
-    fresh install against a commit missing scripts/fetch-qemu.sh);
+    fresh install against a commit missing the managed build scripts);
   * the managed-tool provisioning steps + their in-root PIO / PLATFORMIO_CORE_DIR environment must be
-    present, so a fresh/pinned build provisions PlatformIO + QEMU inside the runtime root by absolute
-    path (CLI and web builds share the same in-root cache).
+    present, so a fresh/pinned build provisions PlatformIO + the source-built QEMU inside the runtime
+    root by absolute path (CLI and web builds share the same in-root cache).
 """
 
 import tomllib
@@ -50,10 +50,10 @@ def test_meshcom_qemu_provisions_managed_tools_by_absolute_path():
     steps = comp["build_steps"]
     argv0 = [s["argv"][0] for s in steps]
     joined = [" ".join(str(t) for t in s.get("argv", [])) for s in steps]
-    # managed PlatformIO venv, pinned pio, and the sha256-verified qemu fetch — all in-root
+    # managed PlatformIO venv, pinned pio, and the source-built (link-gated) qemu — all in-root
     assert argv0[0] == "python3" and "build/tools/platformio/.venv" in joined[0]
     assert any("platformio==" in a and "/pip" in a for a in joined), "PlatformIO must be pinned into the venv"
-    assert any("scripts/fetch-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in joined)
+    assert any("scripts/build-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in joined)
     # prepare-openeth + build carry the in-root PIO (absolute .venv/bin/pio) and a runtime-owned
     # PLATFORMIO_CORE_DIR, so a CLI build and a web-service build share the same in-root package cache.
     for name in ("scripts/prepare-openeth.sh", "scripts/build.sh"):

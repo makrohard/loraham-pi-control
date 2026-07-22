@@ -187,13 +187,15 @@ def test_verify_remote_listener_matches_both_directions(tmp_path):
         return webserver.verify(sys, paths, cfg)["checks"]["remote_listener_matches"]
     loop = {"family": "ipv4", "ip": "127.0.0.1", "port": 8443, "inode": 1}
     wild = {"family": "ipv4", "ip": "0.0.0.0", "port": 8443, "inode": 2}
-    # loopback desired: loopback OR absent effective is a MATCH (no false failure)
+    # EXACT scope required. loopback desired: only a LOOPBACK listener matches — ABSENT is a dead
+    # front-end (a failed restart), never a "successful local bind".
     assert scope_check(WebserverConfig(), loop) == "ok"
-    assert scope_check(WebserverConfig()) == "ok"               # absent
+    assert scope_check(WebserverConfig()) == "failed"           # absent = no frontend at all
     # loopback desired but still exposed -> residual exposure FAILS
     assert scope_check(WebserverConfig(), wild) == "failed"
-    # exposed desired + exposed effective -> MATCH
+    # exposed desired + exposed effective -> MATCH; absent fails this direction too
     assert scope_check(_exposed_cfg(), wild) == "ok"
+    assert scope_check(_exposed_cfg()) == "failed"
 
 
 # --- verify() ----------------------------------------------------------------

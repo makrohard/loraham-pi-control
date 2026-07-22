@@ -1,0 +1,46 @@
+# LoRaHAM Pi Control nginx front-end restart agent — CANONICAL managed unit (generated).
+# Started ONLY by lhpc-nginx-restart.path when the (bus-blind) web console writes a restart request:
+# a listener BIND change needs a stop/start (reload cannot rebind a held socket), and the console's
+# sandbox deliberately denies it the user bus. The restart is DECLARATIVE — no systemctl anywhere:
+# Conflicts= stops lhpc-nginx when this oneshot starts; OnSuccess/OnFailure start a FRESH lhpc-nginx
+# afterwards, which rebinds the already-validated, already-promoted config.
+[Unit]
+Description=LoRaHAM Pi Control nginx front-end restart agent
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/webserver.md
+# Only the .path may start this; a manual `systemctl start` is refused.
+RefuseManualStart=yes
+Conflicts=lhpc-nginx.service
+After=lhpc-nginx.service
+OnSuccess=lhpc-nginx.service
+OnFailure=lhpc-nginx.service
+# Belt-and-braces: never run without a request present (the ExecStart claim is the braces).
+ConditionPathExists=%h/loraham-pi-control/state/nginx-restart.request
+# Rate-limit restart storms: a compromised console can at worst bounce nginx a few times a minute.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc webserver --run-restart-service
+TimeoutStartSec=30
+StandardOutput=append:%h/loraham-pi-control/logs/lhpc-nginx-restart.log
+StandardError=append:%h/loraham-pi-control/logs/lhpc-nginx-restart.log
+SyslogIdentifier=lhpc-nginx-restart
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/loraham-pi-control /tmp
+# This agent needs NO bus either — systemd's unit relationships above perform the restart.
+InaccessiblePaths=%t/bus %t/systemd/private
+PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# Only CPython runs here — W^X memory is enforced.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native

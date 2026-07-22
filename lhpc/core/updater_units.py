@@ -26,7 +26,9 @@ WEB_UNIT = "lhpc-web.service"
 HELPER_UNIT = "lhpc-selfupdate.service"
 PATH_UNIT = "lhpc-selfupdate.path"
 NGINX_UNIT = "lhpc-nginx.service"
-ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT)
+RESTART_UNIT = "lhpc-nginx-restart.service"
+RESTART_PATH_UNIT = "lhpc-nginx-restart.path"
+ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT, RESTART_UNIT, RESTART_PATH_UNIT)
 
 # On-disk log files the controller units append to (StandardOutput/StandardError below). These are
 # the controller's OWN process logs — read by the GUI controller-logs page (the box's user journal
@@ -37,6 +39,11 @@ HELPER_LOG_REL = ("logs", "lhpc-selfupdate.log")
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")
 INFLIGHT_REL = ("state", "selfupdate.inflight")
+# nginx-restart escape hatch: the web console (bus-blind by design) requests a front-end restart by
+# creating this marker; lhpc-nginx-restart.path consumes it. Same claim discipline as self-update.
+NGINX_RESTART_REQUEST_REL = ("state", "nginx-restart.request")
+NGINX_RESTART_INFLIGHT_REL = ("state", "nginx-restart.inflight")
+RESTART_LOG_REL = ("logs", "lhpc-nginx-restart.log")
 UNINSTALL_GUARD = ".lhpc-uninstalling"
 ROOT_MARKER = ".lhpc-root"
 
@@ -55,7 +62,7 @@ _WEB = """\
 Description=LoRaHAM Pi Control web console (loopback-only)
 Documentation=file://{checkout}/docs/deployment.md
 After=network-online.target
-Wants=network-online.target {path_unit}
+Wants=network-online.target {path_unit} {restart_path_unit}
 # Refuse to (re)start mid-uninstall — the updater's OnFailure= must not resurrect the console
 # while a teardown is removing this deployment.
 ConditionPathExists=!{root}/{guard}
@@ -135,6 +142,15 @@ Environment=LHPC_RUNTIME_ROOT={root}
 WorkingDirectory={checkout}
 ExecStart={venv}/bin/lhpc self-update --run-service
 TimeoutStartSec=900
+# A Zero 2W's SDIO Wi-Fi firmware (brcmfmac) can drop the interface when CPU and wireless I/O
+# spike together — exactly an update's profile (git fetch over Wi-Fi + pip reinstall at full
+# tilt), which takes the box off the very network the update was requested over. Run the helper
+# below interactive priority and cap it to ~1.5 cores; the update runs slower, the link stays
+# up. (`cpu` is delegated to user units on the target images, so CPUQuota= is enforced.)
+Nice=10
+CPUQuota=150%
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 StandardOutput=append:{root}/logs/lhpc-selfupdate.log
 StandardError=append:{root}/logs/lhpc-selfupdate.log
 SyslogIdentifier=lhpc-selfupdate
@@ -214,7 +230,76 @@ SystemCallArchitectures=native
 WantedBy=default.target
 """
 
-_TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT: _NGINX}
+_NGINX_RESTART = """\
+# LoRaHAM Pi Control nginx front-end restart agent — CANONICAL managed unit (generated).
+# Started ONLY by lhpc-nginx-restart.path when the (bus-blind) web console writes a restart request:
+# a listener BIND change needs a stop/start (reload cannot rebind a held socket), and the console's
+# sandbox deliberately denies it the user bus. The restart is DECLARATIVE — no systemctl anywhere:
+# Conflicts= stops lhpc-nginx when this oneshot starts; OnSuccess/OnFailure start a FRESH lhpc-nginx
+# afterwards, which rebinds the already-validated, already-promoted config.
+[Unit]
+Description=LoRaHAM Pi Control nginx front-end restart agent
+Documentation=file://{checkout}/docs/webserver.md
+# Only the .path may start this; a manual `systemctl start` is refused.
+RefuseManualStart=yes
+Conflicts=lhpc-nginx.service
+After=lhpc-nginx.service
+OnSuccess=lhpc-nginx.service
+OnFailure=lhpc-nginx.service
+# Belt-and-braces: never run without a request present (the ExecStart claim is the braces).
+ConditionPathExists={root}/state/nginx-restart.request
+# Rate-limit restart storms: a compromised console can at worst bounce nginx a few times a minute.
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=LHPC_RUNTIME_ROOT={root}
+WorkingDirectory={checkout}
+ExecStart={venv}/bin/lhpc webserver --run-restart-service
+TimeoutStartSec=30
+StandardOutput=append:{root}/logs/lhpc-nginx-restart.log
+StandardError=append:{root}/logs/lhpc-nginx-restart.log
+SyslogIdentifier=lhpc-nginx-restart
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths={root} /tmp
+# This agent needs NO bus either — systemd's unit relationships above perform the restart.
+InaccessiblePaths=%t/bus %t/systemd/private
+PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# Only CPython runs here — W^X memory is enforced.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+"""
+
+_NGINX_RESTART_PATH = """\
+# LoRaHAM Pi Control nginx restart request watcher — CANONICAL managed unit (generated).
+# Pulled up by lhpc-web.service (Wants=), so a running console always has an active watcher.
+# DELIBERATE startup-recovery semantics: PathExists= fires the moment this unit is enabled, so a
+# stale request surviving a crash (or a failed apply) triggers ONE nginx restart at boot/enable —
+# marker consumed, fresh nginx serving the validated config: self-healing, chosen on purpose. The
+# service's rate limit bounds the pathological case.
+[Unit]
+Description=LoRaHAM Pi Control nginx restart request watcher
+Documentation=file://{checkout}/docs/webserver.md
+
+[Path]
+PathExists={root}/state/nginx-restart.request
+Unit=lhpc-nginx-restart.service
+
+[Install]
+WantedBy=default.target
+"""
+
+_TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT: _NGINX,
+              RESTART_UNIT: _NGINX_RESTART, RESTART_PATH_UNIT: _NGINX_RESTART_PATH}
 
 
 def render(kind: str, root: str, checkout: str, venv: str) -> str:
@@ -224,7 +309,8 @@ def render(kind: str, root: str, checkout: str, venv: str) -> str:
     if tmpl is None:
         raise ValueError(f"unknown unit kind {kind!r}")
     return tmpl.format(root=root, checkout=checkout, venv=venv,
-                       path_unit=PATH_UNIT, guard=UNINSTALL_GUARD)
+                       path_unit=PATH_UNIT, restart_path_unit=RESTART_PATH_UNIT,
+                       guard=UNINSTALL_GUARD)
 
 
 def deployment_paths(root: str) -> tuple[str, str, str]:
@@ -300,11 +386,16 @@ def _classify_mismatch(kind: str, text: str, root: str) -> str:
     `PathExists=.../state/selfupdate.request` — the rest of the unit is matched literally."""
     home = os.path.expanduser("~")
     lines = text.splitlines()
-    _SUF = "/state/selfupdate.request"
-    if kind == PATH_UNIT:
+    # BOTH path units carry their provenance in the watched request path; each has its own request
+    # suffix + target unit (selfupdate vs the nginx-restart escape hatch).
+    _PATH_PROVENANCE = {PATH_UNIT: ("/state/selfupdate.request", "Unit=lhpc-selfupdate.service"),
+                        RESTART_PATH_UNIT: ("/state/nginx-restart.request",
+                                            "Unit=lhpc-nginx-restart.service")}
+    if kind in _PATH_PROVENANCE:
+        _SUF, _unit_line = _PATH_PROVENANCE[kind]
         watched = [ln[len("PathExists="):] for ln in lines
                    if ln.startswith("PathExists=") and ln.endswith(_SUF)]
-        ours = ("Unit=lhpc-selfupdate.service" in lines
+        ours = (_unit_line in lines
                 and any(_expand_h(v[:-len(_SUF)], home) == root for v in watched))
         if ours:
             return MODIFIED_OURS

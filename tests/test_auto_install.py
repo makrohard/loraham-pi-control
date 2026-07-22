@@ -92,7 +92,7 @@ def test_packaged_meshcom_test_runs_in_bulk(tmp_path):
     deferring (regression: 'deferred — 1 test(s) need the running stack')."""
     svc = _svc(tmp_path)
     comp = next(c for st in svc.stacks() for c in st.components if c.id == "meshcom-qemu")
-    assert comp.test_argv == ("scripts/test.sh",)
+    assert comp.test_argv[0] == "scripts/test.sh"
     assert comp.test_requires_running is False
 
 

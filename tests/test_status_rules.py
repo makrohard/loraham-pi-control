@@ -155,3 +155,99 @@ def test_path_endpoint_lenient_still_rejects_dotdot_escape(tmp_path):
     prober = StatusProber(RealSystem(), Paths(runtime_root=tmp_path))
     resolved = prober._resolve_addr("../evil", lenient=True)
     assert resolved.endswith(".unresolved-endpoint")     # refused -> absent sentinel
+
+
+# --- runtime-band overlay (dual-radio truth: status must show the ACTUAL band) ----------------
+
+def _kiss_snapshot(svc, run_state):
+    """A snapshot shaped like the prober's output for the real manifest kiss stack: both components
+    at `run_state`, kiss-serial's dependency band prefilled with the MANIFEST default (what the
+    prober records before the service-layer overlay)."""
+    from lhpc.core.model import ComponentStatus, DependencyObservation
+    from lhpc.core.status import Snapshot, StackStatus
+    kiss = next(s for s in svc.stacks() if s.id == "kiss")
+    snap = Snapshot(runtime_root_exists=True)
+    ss = StackStatus(stack=kiss)
+    for comp in kiss.components:
+        ss.components[comp.id] = ComponentStatus(component_id=comp.id, run_state=run_state)
+    tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
+    ss.components["loraham-kiss-serial"].dependencies.append(
+        DependencyObservation(component_id="loraham-kiss-tnc", run_state=run_state, band=tnc.band))
+    snap.stacks.append(ss)
+    return snap, kiss, ss
+
+
+def test_runtime_band_overlay_shows_actual_band_not_manifest_default(tmp_path):
+    # Live dual-radio find: kiss STARTED ON 868 (lhpc even named the log
+    # start-loraham-kiss-tnc-868.log) but `lhpc status` said "band 433" and "running on 433 MHz" —
+    # the manifest default. The overlay must stamp the running-band marker onto RUNNING components
+    # AND rewrite the dependency line to the band the dependency ACTUALLY runs on.
+    from lhpc.core.services import ControllerService, _render_component
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc._set_running_band("kiss", "868")           # the marker lifecycle writes at start
+    snap, kiss, ss = _kiss_snapshot(svc, RunState.RUNNING)
+    svc._overlay_runtime_bands(snap)
+    tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
+    serial = next(c for c in kiss.components if c.id == "loraham-kiss-serial")
+    assert ss.components["loraham-kiss-tnc"].band == "868"
+    assert "band 868" in _render_component(tnc, ss.components["loraham-kiss-tnc"])[0]
+    rendered = _render_component(serial, ss.components["loraham-kiss-serial"])
+    assert any("depends on loraham-kiss-tnc" in ln and "on 868 MHz" in ln for ln in rendered), rendered
+
+
+def test_runtime_band_overlay_stopped_keeps_manifest_default(tmp_path):
+    # STOPPED components keep the manifest label even when a stale marker exists — the overlay is
+    # gated on run_state, so the single-radio rendering is unchanged.
+    from lhpc.core.services import ControllerService, _render_component
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc._set_running_band("kiss", "868")           # stale marker from an earlier run
+    snap, kiss, ss = _kiss_snapshot(svc, RunState.STOPPED)
+    svc._overlay_runtime_bands(snap)
+    tnc = next(c for c in kiss.components if c.id == "loraham-kiss-tnc")
+    assert ss.components["loraham-kiss-tnc"].band == ""    # no overlay
+    assert f"band {tnc.band}" in _render_component(tnc, ss.components["loraham-kiss-tnc"])[0]
+
+
+# --- GUI-unavailable overlay (headless truth: skipped-by-design is not "not-installed") -------
+
+def _meshcore_snapshot(svc):
+    """Prober-shaped snapshot for the real manifest meshcore stack: core installed-but-stopped,
+    the OPTIONAL Tk GUI helper not-installed (headless box that never cloned it)."""
+    from lhpc.core.model import ComponentStatus
+    from lhpc.core.status import Snapshot, StackStatus
+    mc = next(s for s in svc.stacks() if s.id == "meshcore")
+    snap = Snapshot(runtime_root_exists=True)
+    ss = StackStatus(stack=mc)
+    for comp in mc.components:
+        state = RunState.NOT_INSTALLED if comp.id == "meshcore-nodegui" else RunState.STOPPED
+        ss.components[comp.id] = ComponentStatus(component_id=comp.id, run_state=state)
+    snap.stacks.append(ss)
+    return snap, ss
+
+
+def test_gui_unavailable_overlay_marks_component_not_applicable(tmp_path, monkeypatch):
+    # Live headless find (Zero): the whole meshcore stack rolled up "(not-installed)" although
+    # meshcore-pi was installed and merely stopped — only the deliberately skipped Tk GUI helper
+    # was missing. The overlay must read it NOT_APPLICABLE so the badge tells the truth.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.status import rollup_states
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "gui_unavailable_components",
+                        lambda self, stack: ("meshcore-nodegui",))
+    snap, ss = _meshcore_snapshot(svc)
+    svc._overlay_gui_unavailable(snap)
+    assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_APPLICABLE
+    assert ss.components["meshcore-pi"].run_state is RunState.STOPPED     # untouched
+    assert rollup_states(snap)["meshcore"] == "stopped"
+
+
+def test_gui_unavailable_overlay_leaves_gui_capable_box_alone(tmp_path, monkeypatch):
+    # With the GUI dependency PRESENT the predicate returns nothing and not-installed stays
+    # not-installed — the overlay never hides a genuinely missing install.
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(ControllerService, "gui_unavailable_components",
+                        lambda self, stack: ())
+    snap, ss = _meshcore_snapshot(svc)
+    svc._overlay_gui_unavailable(snap)
+    assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_INSTALLED

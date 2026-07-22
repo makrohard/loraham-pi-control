@@ -1584,16 +1584,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(r.summary, "ok" if r.ok else "warn")
         return _ws_back()
 
-    @app.route("/webserver/apply", methods=["POST"])
-    def webserver_apply():  # noqa: ANN202
-        if not _csrf_ok():
-            abort(400)
-        r = service.webserver_apply()
-        flash(r.summary, "ok" if r.ok else "err")
-        for d in r.details:
-            flash(d, "warn")
-        return _ws_back()
-
     @app.route("/webserver/init", methods=["POST"])
     def webserver_init():  # noqa: ANN202
         if not _csrf_ok():

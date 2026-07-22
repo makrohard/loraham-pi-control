@@ -95,6 +95,8 @@ readonly WEB_UNIT="${UNIT_DIR}/lhpc-web.service"
 readonly HELPER_UNIT="${UNIT_DIR}/lhpc-selfupdate.service"
 readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
 readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
+readonly RESTART_UNIT="${UNIT_DIR}/lhpc-nginx-restart.service"
+readonly RESTART_PATH_UNIT="${UNIT_DIR}/lhpc-nginx-restart.path"
 
 # --------------------------------------------------------------------------- target safety
 step "Target safety"
@@ -207,7 +209,9 @@ mkdir -p "$(dirname "$VENV")"
 # installs system packages itself (see docs/webserver.md, lhpc.core.deps) — detect + instruct
 # in operator context. Absence does NOT abort the base install (the loopback console + radio
 # stacks run without it); the production webserver is gated on it at `lhpc webserver apply`.
-if command -v nginx >/dev/null 2>&1; then
+if command -v nginx >/dev/null 2>&1 || [ -x /usr/sbin/nginx ] || [ -x /usr/bin/nginx ]; then
+	# nginx is a system daemon in /usr/sbin, which a non-login shell's PATH omits — probe the
+	# canonical locations too so `curl … | bash` (or any non-login run) doesn't false-negative.
 	HAVE_NGINX=1
 else
 	HAVE_NGINX=0
@@ -265,15 +269,18 @@ if [ "$WITH_SERVICE" -eq 1 ]; then
 		# proof expects); no heredoc duplication. The web unit blocks the user-systemd bus and
 		# Wants= the .path watcher; the helper is sandboxed + declarative (no systemctl).
 		render_unit() { "${VENV}/bin/python" -m lhpc.core.updater_units render "$1" "$TARGET_DIR" "$CHECKOUT" "$VENV"; }
-		render_unit lhpc-web.service        > "$WEB_UNIT"
-		render_unit lhpc-selfupdate.service > "$HELPER_UNIT"
-		render_unit lhpc-selfupdate.path    > "$PATH_UNIT"
-		render_unit lhpc-nginx.service      > "$NGINX_UNIT"
-		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT"
+		render_unit lhpc-web.service           > "$WEB_UNIT"
+		render_unit lhpc-selfupdate.service    > "$HELPER_UNIT"
+		render_unit lhpc-selfupdate.path       > "$PATH_UNIT"
+		render_unit lhpc-nginx.service         > "$NGINX_UNIT"
+		render_unit lhpc-nginx-restart.service > "$RESTART_UNIT"
+		render_unit lhpc-nginx-restart.path    > "$RESTART_PATH_UNIT"
+		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT $RESTART_UNIT $RESTART_PATH_UNIT"
 		systemctl --user daemon-reload 2>/dev/null || true
-		# Enable the request watcher + the console (the .path is also pulled up by the web unit's
-		# Wants=, but enabling it makes it survive a manual `systemctl stop lhpc-web`).
+		# Enable the request watchers + the console (the .paths are also pulled up by the web unit's
+		# Wants=, but enabling them makes them survive a manual `systemctl stop lhpc-web`).
 		systemctl --user enable lhpc-selfupdate.path >/dev/null 2>&1 || true
+		systemctl --user enable lhpc-nginx-restart.path >/dev/null 2>&1 || true
 		# Enable the nginx TLS front-end ONLY when nginx is installed (NOT --now: it starts once
 		# LHPC has generated a proxy config via `lhpc webserver init && lhpc webserver start-service`; a
 		# ConditionPathExists gates it until then). If nginx is absent the unit file is still

@@ -453,6 +453,10 @@ class ComponentStatus:
     """A read-only status assessment for a single component."""
 
     component_id: str
+    band: str = ""               # ACTUAL runtime band (from the stack's running-band marker) when
+    #                              RUNNING/DEGRADED; "" = fall back to the manifest default at render
+    #                              time. Dual-radio truth: a kiss-tnc started on 868 must not be
+    #                              labelled with its manifest-default 433.
     run_state: RunState = RunState.UNKNOWN
     source_state: SourceState = SourceState.UNKNOWN
     source_version: str = ""     # git describe of the installed source

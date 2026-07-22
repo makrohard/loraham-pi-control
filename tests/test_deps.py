@@ -376,12 +376,13 @@ def test_qemu_param_default_points_at_the_in_root_binary(tmp_path):
 
 def test_build_steps_provision_managed_tools_in_root(tmp_path):
     # Item 2: the build's setup steps provision BOTH tools INSIDE the runtime root — a PlatformIO venv
-    # and the sha256-verified qemu — and hand the managed pio to the build scripts by absolute path.
+    # and the source-built (headless, link-gated) qemu — and hand the managed pio to the build scripts
+    # by absolute path.
     svc = _svc(tmp_path)
     comp = next(c for s in svc.stacks() for c in s.components if c.id == "meshcom-qemu")
     argvs = [" ".join(str(t) for t in st.get("argv", [])) for st in comp.build_steps]
     assert any("venv" in a and "build/tools/platformio" in a for a in argvs)                    # managed pio venv
-    assert any("fetch-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in argvs)      # managed qemu
+    assert any("build-qemu.sh" in a and "build/tool-cache/qemu-xtensa" in a for a in argvs)     # managed qemu (source build)
     envs = [st.get("env", {}) for st in comp.build_steps]
     assert any(e.get("PIO", "").endswith("platformio/.venv/bin/pio") for e in envs)              # PIO by abs path
 
@@ -898,6 +899,92 @@ def test_link_gate_catches_a_transitively_pulled_library(tmp_path):
     r = _run_gate(tmp_path, ["libc.so.6"], ldd_out=["libc.so.6", "libpulse.so.0"])
     assert r.returncode == 3
     assert "transitive closure" in r.stderr
+
+
+# --- generalized link gate (now also gates the source-built qemu-system-xtensa) --------------------
+def _run_gate_ex(tmp_path, needed, ldd_out=None, label=None, readelf_fail=False, notfound=()):
+    """Flexible gate driver: optional label arg, a forced readelf failure, `=> not found` closure lines."""
+    import os
+    import subprocess
+    fb = tmp_path / "fbx"; fb.mkdir(exist_ok=True)
+    if readelf_fail:
+        (fb / "readelf").write_text("#!/usr/bin/env bash\necho 'readelf: Error: Not an ELF file' >&2\nexit 1\n")
+    else:
+        lines = "".join(f"Shared library: [{n}]\n" for n in needed)
+        (fb / "readelf").write_text(f"#!/usr/bin/env bash\ncat <<'E'\n{lines}E\n")
+    ldd_lines = "".join(f"{n} => /lib/{n} (0x0)\n" for n in (ldd_out or needed))
+    ldd_lines += "".join(f"{n} => not found\n" for n in notfound)
+    (fb / "ldd").write_text("#!/usr/bin/env bash\ncat <<'E'\n" + ldd_lines + "E\n")
+    for f in ("readelf", "ldd"):
+        (fb / f).chmod(0o755)
+    binary = tmp_path / "artifact"; binary.write_text("x")
+    argv = ["bash", str(_scripts() / "meshtastic-link-gate.sh"), str(binary)]
+    if label is not None:
+        argv.append(label)
+    return subprocess.run(argv, env={**os.environ, "PATH": f"{fb}:/usr/bin:/bin"},
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_link_gate_labeled_failure_names_the_artifact_not_meshtasticd(tmp_path):
+    # With a label the generic message is used — never the meshtasticd-specific remediation.
+    r = _run_gate_ex(tmp_path, ["libc.so.6", "libGL.so.1"], label="qemu-system-xtensa (headless)")
+    assert r.returncode == 3
+    assert "qemu-system-xtensa (headless)" in r.stderr
+    assert "meshtasticd" not in r.stderr
+
+
+def test_link_gate_fails_closed_on_unresolved_library(tmp_path):
+    # A `=> not found` in the closure is fatal — an unproven closure is not a pass.
+    r = _run_gate_ex(tmp_path, ["libc.so.6"], notfound=["libfoo.so.1"])
+    assert r.returncode == 2
+    assert "unresolved shared libraries" in r.stderr and "libfoo.so.1" in r.stderr
+
+
+def test_link_gate_fails_closed_when_readelf_cannot_inspect(tmp_path):
+    # readelf that cannot inspect the binary is a failure, not a silent pass.
+    r = _run_gate_ex(tmp_path, ["libc.so.6"], readelf_fail=True)
+    assert r.returncode == 2
+    assert "readelf could not inspect" in r.stderr
+
+
+# --- meshcom-qemu now BUILDS the emulator from source (headless) ------------------------------------
+def _meshcom_qemu(svc):
+    return svc.stack("meshcom").component("meshcom-qemu")
+
+
+def test_meshcom_qemu_builds_the_emulator_from_source_with_the_link_gate(tmp_path):
+    c = _meshcom_qemu(_svc(tmp_path))
+    argvs = [list(s.get("argv", [])) for s in c.build_steps]
+    build = [a for a in argvs if any("build-qemu.sh" in t for t in a)]
+    assert build, "meshcom-qemu must provision qemu via build-qemu.sh"
+    b = build[0]
+    assert "--link-gate" in b
+    gate = b[b.index("--link-gate") + 1]
+    assert gate.endswith("meshtastic-link-gate.sh") and "{asset}" in gate
+    # The managed build must NOT fetch the prebuilt (libSDL2) tarball.
+    assert not any("fetch-qemu.sh" in t for a in argvs for t in a)
+
+
+def test_meshcom_qemu_step_budget_covers_a_from_source_build(tmp_path):
+    # The from-source QEMU compile is the heaviest step; the per-step budget must clear the cold Zero
+    # firmware build (~1560 s) AND leave room for a multi-hour QEMU build.
+    c = _meshcom_qemu(_svc(tmp_path))
+    assert c.build_timeout >= 3600.0 and c.build_timeout >= 7200.0
+
+
+def test_meshcom_qemu_declares_the_source_build_toolchain_deps(tmp_path):
+    # The generated bootstrap installs the headless QEMU build toolchain and drops the tarball's
+    # wget/xz-utils; the runtime libslirp0 stays.
+    import re
+    script = _svc(tmp_path).deps_script()
+    m = re.search(r'DRY_PKGS="([^"]+)"', script)
+    assert m, "generated bootstrap must carry a DRY_PKGS dry-run set"
+    pkgs = set(m.group(1).split())
+    for pkg in ("meson", "ninja-build", "libglib2.0-dev", "libpixman-1-dev", "libslirp-dev",
+                "zlib1g-dev", "git"):
+        assert pkg in pkgs, f"{pkg} missing from generated bootstrap"
+    assert "wget" not in pkgs and "xz-utils" not in pkgs
+    assert "libslirp0" in pkgs
 
 
 def test_meshtastic_never_needs_root_to_build_start_or_configure(tmp_path):

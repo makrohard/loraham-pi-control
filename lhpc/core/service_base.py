@@ -53,6 +53,28 @@ def _proc_start_time(pid: int) -> int:
         return 0
 
 
+def _guard_owner_ints(rec: dict) -> tuple[int, int]:
+    """STRICT (pid, start_time) extraction from an uninstall-guard owner record. Accepts ints and
+    legacy DECIMAL strings, and the legacy `started` key alongside `start_time`; REJECTS booleans
+    (json true would int() to 1), any non-decimal value, and non-positive pid/start times (the shell
+    fallback writes start 0 when /proc/$$/stat was unreadable — that is UNPROVABLE, not pid-reuse-
+    safe evidence). Raises ValueError on anything rejected — callers keep the guard."""
+    def _strict(v) -> int:
+        if isinstance(v, bool):
+            raise ValueError("boolean is not an identity value")
+        if isinstance(v, int):
+            i = v
+        elif isinstance(v, str) and v.strip().isdigit():
+            i = int(v.strip())
+        else:
+            raise ValueError(f"non-decimal identity value: {v!r}")
+        if i <= 0:
+            raise ValueError("non-positive identity value")
+        return i
+    start_raw = rec["start_time"] if "start_time" in rec else rec["started"]
+    return _strict(rec["pid"]), _strict(start_raw)
+
+
 def _proc_ceased(pid, start_time) -> bool:
     """True when the recorded (pid, start_time) process no longer exists (dead, or the PID was
     reused by a different process). Conservative: unknown/malformed identity → NOT ceased."""

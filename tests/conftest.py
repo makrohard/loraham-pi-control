@@ -40,6 +40,17 @@ from lhpc.core.lifecycle import Lifecycle
 
 
 @pytest.fixture(autouse=True)
+def _isolated_runtime_root(monkeypatch, tmp_path_factory):
+    """HERMETIC: never let a test resolve the operator's REAL deployment root. Tests that call the
+    CLI `main()` without constructing Paths themselves fall back to the LHPC_RUNTIME_ROOT /
+    ~/loraham-pi-control default — on a developer box that is a LIVE deployment, and its state (a
+    running auto-install's admission markers, update requests, …) leaked straight into assertions
+    (live find: the whole suite went red while an auto-install ran on the same machine). Point the
+    env default at a fresh per-test directory; tests that pass explicit Paths are unaffected."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path_factory.mktemp("ambient-root")))
+
+
+@pytest.fixture(autouse=True)
 def _default_hardware(request, monkeypatch):
     """A fresh install has NO radio hardware configured (the daemon refuses to start), but nearly every
     test exercises a working box. So the test BASELINE defaults to the LoRaHAM dual-radio setup — i.e.

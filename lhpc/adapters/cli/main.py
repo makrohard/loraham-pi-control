@@ -507,6 +507,8 @@ def build_parser() -> argparse.ArgumentParser:
     _STACKWEB_MODES = ["local", "lan", "public"]
     _WS_SCHEMES = ["https", "http"]
     p_ws = sub.add_parser("webserver", help="Production webserver (HTTPS/mTLS) control")
+    # Hidden: the lhpc-nginx-restart.service ExecStart body (mirror of `self-update --run-service`).
+    p_ws.add_argument("--run-restart-service", action="store_true", help=argparse.SUPPRESS)
     ws_sub = p_ws.add_subparsers(dest="ws_cmd")
     ws_sub.add_parser("status", help="Cached webserver status (read-only)")
     ws_sub.add_parser("verify", help="Verify effective state + persist evidence")
@@ -526,13 +528,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws_cfg = ws_sub.add_parser("configure", help="Set desired webserver config")
     p_ws_cfg.add_argument("--bind", help="Listen address: 127.0.0.1 (loopback) or 0.0.0.0 (remote)")
     p_ws_cfg.add_argument("--port", type=int, help="HTTPS port (default 8443)")
-    p_ws_cfg.add_argument("--access-mode", choices=_WS_MODES,
+    p_ws_cfg.add_argument("--access-mode", "--auth", choices=_WS_MODES,
                           help="Client-certificate policy: " + " | ".join(_WS_MODES))
     p_ws_cfg.add_argument("--dns", action="append", help="DNS SAN for the server cert (repeatable)")
     p_ws_cfg.add_argument("--ip", action="append", help="IP SAN for the server cert (repeatable)")
     p_ws_exp = ws_sub.add_parser("expose", help="Enable remote exposure (opt-in)")
     p_ws_exp.add_argument("--cidr", action="append", default=[], help="Allowed source CIDR (repeatable)")
-    p_ws_exp.add_argument("--access-mode", choices=_WS_MODES,
+    p_ws_exp.add_argument("--access-mode", "--auth", choices=_WS_MODES,
                           help="Client-certificate policy: " + " | ".join(_WS_MODES))
     p_ws_exp.add_argument("--confirm-phrase", default="",
                           help="Type 'enable-remote' to confirm; 'enable-remote-danger' for the "
@@ -546,7 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  "public = 0.0.0.0/0 (elevated)")
     p_ws_proxy.add_argument("--port", type=int, help="Public listener port (0 = not proxied)")
     p_ws_proxy.add_argument("--scheme", choices=_WS_SCHEMES, help="Public listener scheme")
-    p_ws_proxy.add_argument("--access-mode", choices=_WS_MODES,
+    p_ws_proxy.add_argument("--access-mode", "--auth", choices=_WS_MODES,
                             help="Client-certificate policy: " + " | ".join(_WS_MODES))
     p_ws_proxy.add_argument("--cidr", action="append", default=[],
                             help="Allowed source CIDR for lan mode (repeatable)")
@@ -862,11 +864,16 @@ def _run(argv: list[str] | None = None) -> int:
             return _render(svc.self_update_repair_integration())
         if args.recover_request:
             return _render(svc.self_update_recover_request())
-        if not args.apply:
+        if not args.apply and not args.overwrite:
             return _render(svc.self_update_check())          # explicit upstream check + status
-        if not args.yes and not _confirm(
-                "This fast-forwards lhpc to the upstream version. If the web console is running it "
-                "will be STOPPED, updated, and STARTED again automatically. Proceed? [y/N] "):
+        _su_prompt = (
+            "This RESETS lhpc to the upstream version and DISCARDS local changes in the checkout. "
+            "If the web console is running it will be STOPPED, updated, and STARTED again "
+            "automatically. Proceed? [y/N] "
+            if args.overwrite else
+            "This fast-forwards lhpc to the upstream version. If the web console is running it "
+            "will be STOPPED, updated, and STARTED again automatically. Proceed? [y/N] ")
+        if not args.yes and not _confirm(_su_prompt):
             print("Aborted.")
             return 0
         return _render(svc.self_update_apply_operator(force=args.overwrite))
@@ -877,6 +884,8 @@ def _run(argv: list[str] | None = None) -> int:
 
     if args.command == "webserver":
         import secrets as _secrets
+        if getattr(args, "run_restart_service", False):
+            return _render(svc.webserver_run_restart_service())
         cmd = getattr(args, "ws_cmd", None)
         if cmd == "status":
             d = svc.webserver_monitor().data
