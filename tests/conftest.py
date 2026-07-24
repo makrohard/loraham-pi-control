@@ -48,6 +48,11 @@ def _isolated_runtime_root(monkeypatch, tmp_path_factory):
     (live find: the whole suite went red while an auto-install ran on the same machine). Point the
     env default at a fresh per-test directory; tests that pass explicit Paths are unaffected."""
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path_factory.mktemp("ambient-root")))
+    # HERMETIC too: GitHub's hosted runners execute under systemd, which sets INVOCATION_ID
+    # ambiently — flipping every CLI-context test into the managed-unit/web branches (live find:
+    # four webserver-apply failures on every CI leg while the same suite was green on the Pi).
+    # Tests that exercise the managed context set INVOCATION_ID explicitly and are unaffected.
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
 
 
 @pytest.fixture(autouse=True)

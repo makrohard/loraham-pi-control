@@ -502,12 +502,21 @@ else
 			echo "[bootstrap-deps]   WARNING: could not write $WIFI_PSAVE_CONF - power-save NOT persisted." >&2
 		fi
 	fi
-	# Live apply (best-effort), reported SEPARATELY. "after reboot" is promised ONLY when the config
-	# was actually persisted; if neither persistence nor the live op succeeded, say so honestly.
-	_live_ok=1
+	# Live apply (best-effort), reported SEPARATELY. "live" is claimed ONLY when a live operation
+	# PROVABLY succeeded (a reapplied NM profile or an iw set): _live_ok starts FALSE, so the
+	# no-op path (no active profile, no iw) never reads as success. `nmcli connection modify`
+	# alone only edits the PROFILE — the active device needs `nmcli device reapply` to change.
+	_live_ok=0
 	_wcon="$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep ":${WIFI_DEV}$" | cut -d: -f1 | head -1 || true)"
-	if [ -n "$_wcon" ]; then sudo nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 || _live_ok=0; fi
-	if command -v iw >/dev/null 2>&1; then sudo iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 || _live_ok=0; fi
+	if [ -n "$_wcon" ]; then
+		if sudo nmcli connection modify "$_wcon" wifi.powersave 2 >/dev/null 2>&1 \
+				&& sudo nmcli device reapply "$WIFI_DEV" >/dev/null 2>&1; then
+			_live_ok=1
+		fi
+	fi
+	if command -v iw >/dev/null 2>&1; then
+		sudo iw dev "$WIFI_DEV" set power_save off >/dev/null 2>&1 && _live_ok=1
+	fi
 	if [ "$_live_ok" = 1 ]; then
 		echo "[bootstrap-deps]   Wi-Fi power-save disabled now (live)."
 	elif [ "$_persisted" = 1 ]; then

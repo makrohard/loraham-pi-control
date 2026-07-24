@@ -420,7 +420,7 @@ class LifecycleOpsMixin:
             return ActionResult(False, "Runtime root not bootstrapped.",
                                 next_commands=["lhpc bootstrap"])
         # Hardware not configured: a fresh box has no radio board selected, so the daemon (and any
-        # radio stack) must refuse to start until the operator picks one. Checked BEFORE radio-mode.
+        # radio stack) must refuse to start until the operator picks one. Checked BEFORE band checks.
         hw_block = self.hardware_block(target)
         if hw_block:
             return ActionResult(False, f"Cannot start '{target}': {hw_block}",
@@ -1286,8 +1286,8 @@ class LifecycleOpsMixin:
 
     def daemon_start_panels(self, target: str, params: dict | None = None, band: str = "",
                             display_overrides: dict | None = None) -> list:
-        """Start-confirm panel view(s): ONE per band THIS launch will serve — two in radio-mode `both`
-        (the daemon runs one process per band), one for a single band or a client start. Each panel
+        """Start-confirm panel view(s): ONE per band THIS launch will serve — two on a dual-band
+        hardware setup (the daemon runs one process per band), one for a single band or a client start. Each panel
         carries its own band, source defaults + saved overrides, and (via the template) band-scoped
         input names `dp_<band>_<PARAM>`, so a 433 value never reaches 868. The served band(s) come from
         `params` (the daemon's `p_radio`) clamped to the active mode. `display_overrides` ({band: {PARAM: value}})

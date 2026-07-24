@@ -278,11 +278,17 @@ class RealCommandRunner:
 
     def run_streaming(self, argv: list[str], timeout: float, log_fh,
                       cwd: str | None = None, env: dict | None = None,
-                      redactor=None, should_cancel=None) -> CommandResult:
+                      redactor=None, should_cancel=None,
+                      low_priority: bool = False) -> CommandResult:
         """Like run(), but the child's output streams LIVE into `log_fh`. Two paths:
 
         * FAST (default, `redactor` and `should_cancel` both None): kernel-level fd redirect
           (stdout+stderr straight into `log_fh`, no in-process copy) — unchanged behaviour.
+
+        `low_priority=True` CPU/IO-deprioritizes the child (nice + best-effort ionice idle) —
+        for BUILD and HOST-TEST work only, so a long compile can't starve the box (or its
+        Wi-Fi firmware). Service starts, post-start launchers and streamed clones run at
+        normal priority: they are the operator-facing latency path.
         * CONTROLLED (a `redactor` and/or `should_cancel` given): a PIPE + one drain thread that
           continuously reads bounded chunks, passes them through the STATEFUL cross-chunk `redactor`
           (a duck-typed object with `.feed(bytes)->bytes` and `.flush()->bytes`; None = passthrough)
@@ -298,13 +304,15 @@ class RealCommandRunner:
                     argv,
                     stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                     cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
-                    start_new_session=True, preexec_fn=self._nice_build_child,
+                    start_new_session=True,
+                    preexec_fn=self._nice_build_child if low_priority else None,
                 )
             except FileNotFoundError:
                 return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
             except OSError as exc:
                 return CommandResult(returncode=126, stdout="", stderr=str(exc))
-            self._ionice_idle(proc.pid)
+            if low_priority:
+                self._ionice_idle(proc.pid)
             from .. import proctree
             _leader_token = proctree.capture_session_token(proc.pid)
             timed_out = False
@@ -321,9 +329,11 @@ class RealCommandRunner:
             rc = 124 if timed_out else (proc.returncode if proc.returncode is not None else -1)
             return CommandResult(returncode=rc, stdout="", stderr="", timed_out=timed_out,
                                  termination=termination)
-        return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel)
+        return self._run_controlled(argv, timeout, log_fh, cwd, env, redactor, should_cancel,
+                                    low_priority)
 
-    def _run_controlled(self, argv, timeout, log_fh, cwd, env, redactor, should_cancel) -> CommandResult:
+    def _run_controlled(self, argv, timeout, log_fh, cwd, env, redactor, should_cancel,
+                        low_priority: bool = False) -> CommandResult:
         import os
         import threading
         import time as _t
@@ -332,13 +342,15 @@ class RealCommandRunner:
                 argv,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                 cwd=cwd, env={**_FIXED_ENV, **(env or {})}, shell=False,
-                start_new_session=True, preexec_fn=self._nice_build_child,
+                start_new_session=True,
+                preexec_fn=self._nice_build_child if low_priority else None,
             )
         except FileNotFoundError:
             return CommandResult(returncode=127, stdout="", stderr="", not_found=True)
         except OSError as exc:
             return CommandResult(returncode=126, stdout="", stderr=str(exc))
-        self._ionice_idle(proc.pid)
+        if low_priority:
+            self._ionice_idle(proc.pid)
         from .. import proctree
         token = proctree.capture_session_token(proc.pid)
         drained = threading.Event()

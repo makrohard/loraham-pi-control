@@ -1341,8 +1341,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "83a8131c419e6f5ca3481344e06e8875454c5a86"
-    pin_tag = "83a8131"
+    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
+    pin_tag = "39ffb33"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1427,6 +1427,10 @@ main = "meshcom-qemu"
   # Zero's first cold QEMU build with margin. The `pio` firmware build (~26 min cold on a Zero, field-
   # measured) sits comfortably inside it. A slow step is never silently TERM-killed mid-build.
   build_timeout = 28800.0
+  # Host-test budget: the emulated node needs ~5-6 min to BOOT on a Zero 2W before test.sh can even
+  # see its boot marker (external boot window: 600 s), so the 600 s outer default would kill the
+  # test mid-boot. 900 s = the external window plus start/diagnostics margin.
+  test_timeout = 900.0
   # AUTHORITATIVE completion marker, co-located WITH the firmware artifact (same .pio/build/<env> dir as
   # flash.bin). build() removes it before the FIRST step and writes it ONLY after the LAST step succeeds,
   # and is_built() gates on it — so a stale flash.bin from an earlier build can NEVER read "built" after a
@@ -1566,8 +1570,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "83a8131c419e6f5ca3481344e06e8875454c5a86"
-    pin_tag = "83a8131"
+    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
+    pin_tag = "39ffb33"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 

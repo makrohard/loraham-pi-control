@@ -388,8 +388,8 @@ def test_build_steps_provision_managed_tools_in_root(tmp_path):
 
 
 # --- Item K: GUI-only dependency taxonomy ----------------------------------------------------------
-# This box HAS GTK and tkinter, so absence is SIMULATED (FakeSystem / monkeypatched find_spec) —
-# never inferred from the host, which would make these tests pass for the wrong reason.
+# GUI availability is always SIMULATED here (FakeSystem / monkeypatched find_spec) — never inferred
+# from the host, which would make these tests pass for the wrong reason on either kind of box.
 
 def _scopes(tmp_path):
     return _svc(tmp_path)._declared_dep_scopes()

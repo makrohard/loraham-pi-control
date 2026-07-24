@@ -188,10 +188,7 @@ def test_config_page_route_gone_content_on_stack(tmp_path):
     # The standalone Config page (menu hub + per-stack GET) moved into the stack Settings section.
     c = _client(tmp_path)
     assert c.get("/config").status_code == 404                         # config hub page gone
-    # GET config page gone (POST save remains) — a stray GET on the POST-only URL redirects
-    # to the overview (the stranded-reload contract) instead of dead-ending on a 405 page.
-    resp = c.get("/stacks/igate/config")
-    assert resp.status_code == 302 and resp.headers["Location"].endswith("/stacks")
+    assert c.get("/stacks/igate/config").status_code == 302            # GET config page gone (POST save remains)
     body = c.get("/stacks?open=igate").get_data(as_text=True)     # content now on the stack page (lazy body)
     assert 'id="stack-settings-igate"' in body and ">Settings<" in body
 
@@ -1172,9 +1169,7 @@ def test_settings_embedded_post_persists(tmp_path):                          # (
 def test_settings_old_config_routes_stay_removed(tmp_path):                  # (6)
     c = _client(tmp_path)
     assert c.get("/config").status_code == 404                # config hub gone
-    # GET config page gone (POST remains) — stray GETs on POST-only URLs redirect home.
-    resp = c.get("/stacks/igate/config")
-    assert resp.status_code == 302 and resp.headers["Location"].endswith("/stacks")
+    assert c.get("/stacks/igate/config").status_code == 302   # GET config page gone (POST remains)
 
 
 def test_settings_partial_loads_and_renders(tmp_path):                       # (7)

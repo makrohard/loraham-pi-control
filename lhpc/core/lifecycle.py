@@ -360,7 +360,7 @@ class Lifecycle:
             last = run_job(self.system.runner, name=name, argv=argv, cwd=src, paths=self.paths,
                            env=(env or None), logs_dir=self.logs_dir(), timeout=eff_timeout,
                            redactor=redactor, should_cancel=should_cancel, on_log_open=on_log_open,
-                           announce=ann)
+                           announce=ann, low_priority=True)
             if not last.ok:
                 return last
         if last is None:        # nothing to build
@@ -1256,7 +1256,8 @@ class Lifecycle:
                              returncode=1, log_path="", tail=[str(exc)])
         return run_job(self.system.runner, name=base, argv=argv, paths=self.paths,
                        cwd=src, logs_dir=self.logs_dir(), timeout=eff_timeout,
-                       should_cancel=should_cancel, on_log_open=on_log_open)
+                       should_cancel=should_cancel, on_log_open=on_log_open,
+                       low_priority=True)
 
     # -- daemon readiness + bounded TX test --------------------------------
 

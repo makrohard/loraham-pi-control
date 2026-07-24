@@ -65,6 +65,7 @@ def run_job(
     should_cancel=None,
     on_log_open=None,
     announce: str | None = None,
+    low_priority: bool = False,
 ) -> JobResult:
     """Run one bounded command (structured argv, shell=False), persist its output,
     return a compact result. `cwd`/`env` are passed to the runner directly — no shell.
@@ -123,7 +124,8 @@ def run_job(
             # (fd redirect); only the tools' own block buffering remains.
             result = run_streaming(argv, timeout=timeout, log_fh=log_fh,
                                    cwd=cwd, env={**(env or {}), "PYTHONUNBUFFERED": "1"},
-                                   redactor=redactor, should_cancel=should_cancel)
+                                   redactor=redactor, should_cancel=should_cancel,
+                                   low_priority=low_priority)
             try:
                 log_fh.flush()
                 os.fsync(log_fh.fileno())

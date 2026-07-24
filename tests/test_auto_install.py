@@ -1740,26 +1740,31 @@ def test_frozen_artifact_provenance_text_is_truthful(tmp_path):
 
 # --- live-finding fixes: optional comps in scope; starting card; dev default -----------------
 
-def test_auto_install_scope_includes_optional_components(tmp_path):
+def test_auto_install_scope_includes_optional_components(tmp_path, monkeypatch):
     # USER GOAL: every declared source lives and builds under <root>/src — optional
     # components (meshcore-cli, node-manager, firmwares, kiss-serial) are IN scope, and
     # the boundary's lock set therefore covers everything build()/test() touch (live
     # finding: 'auto-install operation context does not cover src/meshcore-cli ...').
-    svc = _svc(tmp_path)
-    scope = svc._auto_install_scope()
-    mc = next(w for st, w in scope if st.id == "meshcore")
-    ids = {c.id for c in mc.source}
-    # meshcore-nodegui is GUI-gated (Requirement.module tkinter): on a headless box the
-    # planner CORRECTLY drops it from scope, so expect it only where the gate is open —
-    # the same probe the product uses, never a hardcoded GUI assumption.
-    from lhpc.core import lifecycle
-    gui = lifecycle.module_present("tkinter")
-    expected = {"meshcore-pi", "meshcore-cli"} | ({"meshcore-nodegui"} if gui else set())
-    assert expected <= ids
-    all_paths = {c.source.path for _, w in scope for c in w.source}
-    assert "src/meshcore-cli" in all_paths
-    if gui:
-        assert "src/meshcore-node-manager" in all_paths
+    # meshcore-nodegui is GUI-gated (tkinter). BOTH gate states are SIMULATED via find_spec —
+    # the suite discipline (see the Item-K note in test_deps.py): never inferred from the host,
+    # so every box (GUI or headless) asserts both branches deterministically.
+    import importlib.util
+    real = importlib.util.find_spec
+    for gui in (True, False):
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, real=real, gui=gui:
+                ((real(name) or real("json")) if gui else None)
+                if name == "tkinter" else real(name))
+        svc = _svc(tmp_path)
+        scope = svc._auto_install_scope()
+        mc = next(w for st, w in scope if st.id == "meshcore")
+        ids = {c.id for c in mc.source}
+        assert {"meshcore-pi", "meshcore-cli"} <= ids
+        assert ("meshcore-nodegui" in ids) is gui
+        all_paths = {c.source.path for _, w in scope for c in w.source}
+        assert "src/meshcore-cli" in all_paths
+        assert ("src/meshcore-node-manager" in all_paths) is gui
 
 
 @pytest.mark.needs_session

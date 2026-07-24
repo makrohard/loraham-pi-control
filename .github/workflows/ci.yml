@@ -37,18 +37,18 @@ jobs:
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install package and audit tooling
-        # Lint/test tooling is PINNED to the locally-proven versions (same discipline as the
-        # SHA-pinned actions): a new ruff release changed the default rule set and turned main
-        # red with zero code changes (0.16.0, 2026-07-24 — 343 new findings). Bump the pins
-        # deliberately, together with any new-rule fixes. pip-audit deliberately FLOATS — its
-        # value is the freshest vulnerability database, and its findings gate dependencies,
-        # not our code style.
+        # Lint/test tooling comes PINNED from pyproject's [dev] extra (same discipline as the
+        # SHA-pinned actions, and the SAME versions a local `pip install .[dev]` gets): a new
+        # ruff release changed the default rule set and turned main red with zero code changes
+        # (0.16.0, 2026-07-24). pip-audit deliberately FLOATS — its value is the freshest
+        # vulnerability database, and its findings gate dependencies, not our code style.
         run: |
           python -m pip install --upgrade pip
-          pip install .
-          pip install pytest==9.1.1 ruff==0.15.22 bandit==1.9.4 pip-audit
+          pip install .[dev] pip-audit
 
       - name: Byte-compile production code
         run: python -m compileall -q lhpc

@@ -124,7 +124,7 @@ def test_run_job_output_unverified_alone_is_unsafe(tmp_path):
     # when the DIRECT child exited 0 — a SUCCEEDED direct process does NOT prove a descendant stopped.
     class _Runner:
         def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
-                          redactor=None, should_cancel=None):
+                          redactor=None, should_cancel=None, low_priority=False):
             log_fh.write("built ok\n")
             return CommandResult(0, "", "", output_unverified=True)   # clean exit, pipe NOT proven drained
 
@@ -134,12 +134,47 @@ def test_run_job_output_unverified_alone_is_unsafe(tmp_path):
     assert res.unsafe is True and res.unsafe_scope == "escaped-or-output-unverified"
 
 
+def test_run_streaming_low_priority_two_directions(tmp_path):
+    # MECHANISM: build/host-test work runs niced (+10, ionice best-effort); everything else —
+    # service starts, post-start launchers, streamed clones — keeps the caller's priority.
+    import os
+
+    from lhpc.core.probes.backends import RealCommandRunner
+    runner = RealCommandRunner()
+    base = os.nice(0)
+    for low, expected in ((True, base + 10), (False, base)):
+        log = tmp_path / f"nice-{low}.log"
+        with open(log, "w") as fh:
+            r = runner.run_streaming(["python3", "-c", "import os; print(os.nice(0))"],
+                                     timeout=30.0, log_fh=fh, low_priority=low)
+        assert r.returncode == 0
+        assert int(log.read_text().strip()) == expected, f"low_priority={low}"
+
+
+def test_run_job_threads_low_priority_only_when_asked(tmp_path):
+    # WIRING: run_job forwards the flag verbatim and DEFAULTS to normal priority, so only the
+    # build/host-test call sites (which pass low_priority=True) get deprioritized — post-start
+    # and adoption work must never inherit it implicitly.
+    seen = []
+
+    class _Runner:
+        def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
+                          redactor=None, should_cancel=None, low_priority=False):
+            seen.append(low_priority)
+            return CommandResult(0, "", "")
+
+    for kw in ({"low_priority": True}, {}):
+        run_job(_Runner(), name="j", argv=["true"], cwd=None,
+                logs_dir=tmp_path / "logs", paths=Paths(runtime_root=tmp_path), **kw)
+    assert seen == [True, False]
+
+
 def test_run_job_log_write_failure_is_not_success(tmp_path):
     # P2: a clean-exiting, fully-drained build whose LOG could not be persisted must NOT be SUCCEEDED — the
     # recorded evidence is incomplete (but it is not `unsafe`: cessation/draining were proven).
     class _Runner:
         def run_streaming(self, argv, timeout, log_fh, cwd=None, env=None,
-                          redactor=None, should_cancel=None):
+                          redactor=None, should_cancel=None, low_priority=False):
             return CommandResult(0, "", "", log_write_failed=True)
 
     res = run_job(_Runner(), name="build-x", argv=["true"], cwd=None,

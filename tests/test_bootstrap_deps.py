@@ -122,8 +122,10 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          meminfo=None, swaps=None, swapfile=None, fstab=None, free_kb=None,
          swapon_fail=False, swapoff_fail=False, systemctl_units="", systemctl_fail="",
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
-         nm_devs=None, defroute_dev=None):
+         wifi_iw_absent=False, nm_devs=None, defroute_dev=None):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
+    if wifi_iw_absent:
+        (fb / "iw").unlink()                           # box without iw: `command -v iw` fails
     config = tmp_path / "config.txt"
     if config_seed is not None:
         config.write_text(config_seed)
@@ -593,12 +595,28 @@ def test_wifi_combined_persist_and_live_failure_reports_unchanged(tmp_path):
     assert conf.is_symlink() and target.read_text() == "ORIGINAL"      # symlink still untouched
 
 
+def test_wifi_no_live_op_available_reports_after_reboot_not_live(tmp_path):
+    # HONESTY regression: with no active NM profile (the fake returns none) and NO iw on the box,
+    # no live operation ran at all — the old script still claimed "disabled now (live)" because
+    # _live_ok started TRUE. Persisted-only must be reported as taking effect after reboot.
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], wifi_iw_absent=True, **_WIFI_ON)
+    assert r.returncode == 0, r.stderr
+    conf = tmp_path / "wifi-nopowersave.conf"
+    assert conf.exists() and "wifi.powersave = 2" in conf.read_text()   # persisted fine
+    assert "disabled now (live)" not in r.stdout                        # never a false live claim
+    assert "takes effect after the next reboot" in r.stdout
+
+
 def test_wifi_flag_and_disable_logic_present_in_generated_script():
     # Deterministic source check: the flag, the default-disable drop-in and the revert all ship.
     text = _BOOTSTRAP.read_text()
     assert "--keep-wifi-powersave" in text
     assert "wifi.powersave = 2" in text
     assert "REVERT:" in text and "wifi-nopowersave.conf" in text
+    # Live-claim honesty: starts unproven, and the NM path must REAPPLY the device — a profile
+    # modify alone does not change the active connection.
+    assert "_live_ok=0" in text and "_live_ok=1" not in text.split("_live_ok=0")[0]
+    assert 'nmcli device reapply "$WIFI_DEV"' in text
 
 
 def test_no_third_party_apt_repository_is_configured():
