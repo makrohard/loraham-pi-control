@@ -443,6 +443,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
 
+    p_fw = sub.add_parser("firewall",
+                          help="Managed firewall status + render the apply/reset scripts")
+    p_fw.add_argument("--script", action="store_true",
+                      help="Print the apply script to stdout (run it yourself with sudo)")
+    p_fw.add_argument("--reset-script", action="store_true",
+                      help="Print the reset script to stdout")
+
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
     p_daemon.add_argument("--set", metavar="KEY=VALUE", dest="set_kv",
@@ -509,6 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ws = sub.add_parser("webserver", help="Production webserver (HTTPS/mTLS) control")
     # Hidden: the lhpc-nginx-restart.service ExecStart body (mirror of `self-update --run-service`).
     p_ws.add_argument("--run-restart-service", action="store_true", help=argparse.SUPPRESS)
+    p_ws.add_argument("--firewall-boot-gate", action="store_true", help=argparse.SUPPRESS)
     ws_sub = p_ws.add_subparsers(dest="ws_cmd")
     ws_sub.add_parser("status", help="Cached webserver status (read-only)")
     ws_sub.add_parser("verify", help="Verify effective state + persist evidence")
@@ -825,6 +833,30 @@ def _run(argv: list[str] | None = None) -> int:
         return _cmd_config(svc, args)
     if args.command == "hardware":
         return _render(svc.set_hardware_setup(args.setup))
+    if args.command == "firewall":
+        import json as _json
+        from lhpc.core import firewall as _fw_mod
+        if args.script:
+            print(_fw_mod.render_apply_script(_json.dumps(svc.firewall_candidate(),
+                                                          sort_keys=True)), end="")
+            return 0
+        if args.reset_script:
+            print(_fw_mod.render_reset_script(), end="")
+            return 0
+        st = svc.firewall_status()
+        print(f"OK    {st['line']}")
+        print(f"  mode: {st['mode']}  installed: {st['installed']}")
+        print(f"  Config {'ok' if st['config_ok'] else 'pending'} · "
+              f"Boot {'ok' if st['boot_ok'] else 'off'} · "
+              f"Live {'verified' if st['live_ok'] else 'unverified'}")
+        if st["foreign"]:
+            print(f"  foreign firewall tables present: {', '.join(st['foreign'])} "
+                  f"(an lhpc allow does not guarantee reachability — a foreign chain may drop)")
+        if not st["live_ok"]:
+            paths = svc._fw_script_paths()     # paths only — `status` must not write files
+            print(f"\nApply:\n  sudo bash {paths['firewall-apply.sh']}"
+                  f"\n  sudo systemctl start lhpc-firewall-check.service")
+        return 0
     if args.command == "build":
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)
     if args.command == "logs":
@@ -886,6 +918,14 @@ def _run(argv: list[str] | None = None) -> int:
         import secrets as _secrets
         if getattr(args, "run_restart_service", False):
             return _render(svc.webserver_run_restart_service())
+        if getattr(args, "firewall_boot_gate", False):
+            # nginx ExecStartPre hook. Exit 0 when nginx may start (firewall verified, or the
+            # config was made safely loopback-only); NON-ZERO fails ExecStartPre so nginx does
+            # NOT start when the loopback fallback could not be established (never bind the
+            # promoted remote config ahead of a verified firewall).
+            r = svc.firewall_boot_gate()
+            _render(r)
+            return 0 if r.ok else 1
         cmd = getattr(args, "ws_cmd", None)
         if cmd == "status":
             d = svc.webserver_monitor().data

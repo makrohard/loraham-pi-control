@@ -268,9 +268,25 @@
   {# Webserver box: LHCP console (always), then per RUNNING stack its web-UI line and a line per other
      open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured
      IP:Port·label pill (green local / yellow LAN / red public) + a per-service logs link. #}
-  <div class="card">
-    <header><h2>Webserver</h2><a class="logslink" href="{{ url_for('webserver_logs') }}">logs</a></header>
+  <div class="card wsbox">
+    <details id="wsbox">
+      <summary>
+        <h2>Webserver</h2>
+        {% if security_pill %}<span class="pill pill-{{ security_pill.level }}" title="{{ security_pill.title }}">{{ security_pill.label }}</span>{% endif %}
+        <a class="logslink hdrlogs" href="{{ url_for('webserver_logs') }}">logs</a>
+      </summary>
     <div class="body">
+      {% if firewall %}
+      <div class="wsline fwline">
+        <a class="wsname" href="{{ url_for('stacks_overview') ~ '#firewall-row' }}">Firewall</a>
+        <span class="pill pill-{{ firewall.level }}" title="Managed firewall — declared/persistent/live are independent; green needs a verified current-boot live check">{{ firewall.line | replace('Firewall: ', '') }}</span>
+        {% if firewall.foreign %}<span class="pill pill-warn" title="Foreign firewall tables are present — an lhpc allow does not guarantee reachability; a foreign chain may still drop.">foreign rules present</span>{% endif %}
+        {% if firewall.has_log %}<a class="logslink hdrlogs" href="{{ url_for('firewall_logs') }}">logs</a>{% endif %}
+      </div>
+      {% if not firewall.live_ok and firewall.installed %}
+        {{ cmdbox('fw-apply', 'sudo bash ' ~ runtime_root ~ '/config/files/firewall/firewall-apply.sh') }}
+      {% endif %}
+      {% endif %}
       {% for w in webservers %}
         <div class="wsline">
           {% if w.kind == 'console' %}
@@ -288,6 +304,7 @@
         </div>
       {% endfor %}
     </div>
+    </details>
   </div>
 
   {# System box: live host metrics. COLLAPSED BY DEFAULT and fully static markup — the server

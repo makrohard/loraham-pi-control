@@ -1,233 +1,252 @@
 # Firewalling the Pi
 
-`lhpc` gates its **own** console (bind + source CIDR + client certificate). It never
-edits your firewall, and it cannot gate the stacks — some open ports on **all
-interfaces** with no authentication at all. That is what a host firewall is for.
+`lhpc` gates its **own** console (bind + source CIDR + client certificate). It cannot gate the
+stacks — some open ports on **all interfaces** with no authentication at all. Two answers:
 
-This page uses **ufw**, the friendly front end to the kernel's packet filter. Setting
-the baseline below once makes every stack local-only; each scenario then opens exactly
-what it needs.
+1. **The managed firewall** (this page's focus) — `lhpc` renders an nftables ruleset and you
+   apply it with **one sudo command**. It lives in its own `table inet lhpc`, never edits your
+   own firewall configuration, and its dashboard status is honest about what it has and has not
+   verified.
+2. **Do it yourself** — the raw `nft` commands are shown throughout so you can integrate them
+   into an existing firewall instead.
 
-## Contents
+Raspberry Pi OS trixie ships **nftables** (no `ufw`, no extra packages). `lhpc` uses native
+nftables.
 
 - [What actually listens](#what-actually-listens)
-- [Baseline — close everything](#baseline--close-everything)
-- [Scenario 1: local only](#scenario-1-local-only)
-- [Scenario 2: your LAN](#scenario-2-your-lan)
-- [Scenario 3: public internet](#scenario-3-public-internet)
-- [Scenario 4: Pi WiFi AP + phone](#scenario-4-pi-wifi-ap--phone)
-- [Stack web UIs — proxy, don't open](#stack-web-uis--proxy-dont-open)
-- [Persistence, IPv6, and undo](#persistence-ipv6-and-undo)
+- [Strategy: default-deny vs close-what-we-open](#strategy)
+- [The managed firewall — one command](#the-managed-firewall)
+- [How it protects your existing configuration](#how-it-protects-your-existing-configuration)
+- [Modes: secure-default vs compatibility](#modes)
+- [The three status dimensions (and why green is strict)](#status)
+- [Scenarios](#scenarios)
+- [Reset / undo](#reset)
+- [Doing it entirely by hand](#by-hand)
 
 ## What actually listens
 
-| Port | Who | Bind | Auth | Controlled by `lhpc`? |
+| Port | Who | Bind | Auth | Managed-firewall row |
 |---|---|---|---|---|
-| **4403** | meshtasticd API | **all interfaces** | **none** | **no — no upstream option** |
-| **9443** | meshtasticd web UI | **all interfaces** | **none** | **no — no upstream option** |
-| 8001 | KISS/TCP TNC | loopback by default | none (source allow-list) | yes — `--bind` |
-| 5000 | MeshCore companion | loopback by default | none (source allow-list) | yes — `wifi.allow` |
-| 7000 | MeshCom bridge | loopback by default | password | yes — `--bind` |
-| 18083 / 12323 | MeshCom QEMU | loopback (hardcoded) | — | already safe |
-| 8443 | `lhpc` console (nginx) | loopback until exposed | **mTLS** | yes — `webserver expose` |
-| 8444 / 8445 | stack proxies (meshcom / meshtastic) | loopback until exposed | **mTLS** | yes — `webserver proxy` |
+| 4403 | meshtasticd API | all interfaces | **none** | **deny-default** (checkbox to allow, with warning) |
+| 9443 | meshtasticd web UI | all interfaces | **none** | **deny-default** (reach it via the `:8445` proxy) |
+| 8001 | KISS/TCP TNC | loopback default | source allow-list | direct-access row |
+| 5000 | MeshCore companion | loopback default | source allow-list | direct-access row |
+| 7000 | MeshCom bridge | loopback default | password | direct-access row |
+| 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
+| 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
+| 8444/8445 | stack proxies | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 
-The daemon, chat, iGate and voice components use Unix sockets and open no ports.
+**meshtastic 4403/9443 are the reason this feature exists**: reachable from anywhere on your
+network the moment the stack starts, with no upstream option to bind them to loopback. The
+managed firewall blocks them by default; the mTLS-gated `:8445` proxy is the sanctioned path to
+the web UI.
 
-**meshtastic is the one you cannot fix in `lhpc`.** Its 4403 and 9443 are reachable
-from anywhere on your network the moment the stack starts. The dashboard marks them
-red rather than pretending otherwise. Only a firewall closes them.
+<a id="strategy"></a>
+## Strategy: default-deny vs close-what-we-open
 
-> On kiss and meshcore, `--bind` / `wifi.allow` is a **source allow-list**, not a listen
-> address. Widening it really does put the socket on `0.0.0.0` — connections are then
-> filtered as they arrive. Useful, but it is not a substitute for a firewall.
+**Close-what-we-open** (allow everything, add targeted drops for the known-bad ports) fails
+*open*: every future stack, package or misconfiguration that opens a port is exposed until
+someone notices — the meshtasticd problem recurs forever.
 
-## Baseline — close everything
+**Default-deny** (block everything, allow only what is wanted) fails *closed*: a new listener is
+unreachable until deliberately allowed, the ruleset *is* the inventory of intended exposure, and
+a stale ruleset errs toward too-closed (an availability bug you notice) rather than too-open (a
+security hole you don't). The cost is that you must enumerate wants — which `lhpc` already does,
+because every wanted port comes from its own configuration, and the essential plumbing (loopback,
+conntrack, ICMPv6/NDP, DHCP client, mDNS, SSH) is always allowed.
 
-Do this once. It blocks all inbound traffic, including meshtasticd's open ports.
+`lhpc`'s **secure-default** mode is default-deny. Its **compatibility** mode is the narrower
+close-what-we-open form, for boxes that already run a custom firewall.
 
-```bash
-sudo apt install -y ufw
+<a id="the-managed-firewall"></a>
+## The managed firewall — one command
 
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow 22/tcp        # SSH FIRST — skip this and you lock yourself out
-sudo ufw enable
-sudo ufw status verbose
-```
-
-**Nothing stops working.** The stacks talk to each other over Unix sockets and make
-outbound connections (APRS-IS, MQTT) freely — only *inbound* traffic is refused. You
-can still reach every service from the Pi itself.
-
-Confirm what is left listening:
+On the dashboard, open **Webserver → Firewall** (also `lhpc firewall`). Pick a mode, tick any
+direct-access exceptions, then run the shown command:
 
 ```bash
-ss -ltnp
+sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
 ```
 
-## Scenario 1: local only
-
-You browse the console on the Pi, or reach it over an SSH tunnel from your laptop.
-
-**The baseline is the entire answer** — no further rules. The console stays on
-`127.0.0.1:8443`, which is its default.
-
-From a laptop, forward the port over SSH instead of opening anything:
+That script (rendered by `lhpc`, executed by you) installs a small **root-owned** helper and
+three systemd units, then applies the ruleset and runs an immediate live check. `lhpc` itself
+never runs a privileged command. To verify on demand:
 
 ```bash
-ssh -N -L 8443:127.0.0.1:8443 pi@raspberrypi.local
+sudo systemctl start lhpc-firewall-check.service
 ```
 
-Then browse `https://127.0.0.1:8443/` on the laptop. Loopback access needs no client
-certificate by default.
+The dashboard's Firewall line then reads one of:
 
-## Scenario 2: your LAN
+- `Firewall: Active — Secure default · Config ✓ · Boot ✓ · Live ✓`
+- `Firewall: Active — Compatibility · unwanted stack ports blocked · Live ✓`
+- `Firewall: Changes pending · Config ✗ · Boot ✓ · Live ?`
+- `Firewall: Verification unavailable — setup required`
+- `Firewall: Live rules missing or mismatched — LHPC protection unverified · Live ✗`
 
-Everyone on your home network can reach the console; the internet cannot.
+## How it protects your existing configuration
 
-**1 — open the port to your subnet only** (use your real subnet):
+`lhpc` **never edits, overwrites, renames or deletes** your `/etc/nftables.conf`, any file under
+`/etc/nftables.d/`, foreign tables/chains, or their service enabled-state. It confines itself to:
+
+- a dedicated `table inet lhpc` (nftables tables are namespaced — applying, flushing or deleting
+  ours can never modify rules in yours);
+- root-owned artifacts under `/etc/lhpc/` with an explicit ownership record (a random
+  installation ID stored in metadata **and** embedded as the table's comment). Before it ever
+  replaces, rolls back or deletes the live table it reads that comment back — a table it cannot
+  prove is lhpc's is refused (`not-owned`), untouched;
+- its own `lhpc-firewall.service` loader, ordered **after** any existing `nftables.service`
+  (your `flush ruleset`, if you have one, runs first) — it never enables or modifies that unit.
+
+One honest interaction remains: **any base chain's `drop` beats another table's `accept`**. In
+secure-default mode our input chain has `policy drop`, so it adds an effective default-deny over
+the whole box — an accept rule in *your* table cannot open a port ours does not allow. If you run
+a custom firewall, prefer **compatibility** mode (no default-drop; only lhpc-owned drops for the
+unwanted stack ports). The apply script lists any foreign tables it detects and names this
+semantic; it changes none of them.
+
+And the converse honesty: an lhpc **allow** never *guarantees* reachability — a later foreign
+base chain may still drop the packet.
+
+<a id="modes"></a>
+## Modes
+
+- **Secure-default** (recommended for a dedicated box): `policy drop` input chain in the lhpc
+  table. Automatically allows actual SSH ports, the external console/proxy ingress you exposed,
+  the endpoints you ticked, plus the baseline (loopback, conntrack, ICMP/ICMPv6, DHCPv4 **and**
+  DHCPv6 client replies, mDNS). Everything else is dropped.
+- **Compatibility** (recommended when a foreign firewall exists): no default-drop policy — only
+  lhpc-owned **non-loopback drops for every unselected direct stack listener**. Ticking an
+  endpoint suppresses its drop. Your own rules keep authority.
+
+**DHCP client traffic is always allowed in secure-default** (both IPv4 `67→68` and, when IPv6 is
+enabled, DHCPv6 `547→546`) — independent of AP mode — so ordinary Ethernet/Wi-Fi lease
+acquisition and renewal never break. **Access-Point** server rules (DHCP `68→67` interface-scoped,
+DNS on UDP+TCP 53) are opt-in and require an explicit interface and CIDR.
+
+<a id="status"></a>
+## The three status dimensions (and why green is strict)
+
+`lhpc` runs unprivileged, so it cannot read the live nftables ruleset directly. Instead a
+root-owned checker (a ~1-minute timer, plus an immediate run after apply and after boot) compares
+the **live** `table inet lhpc` against the accepted model — a normalized semantic comparison, not
+a copied hash — and writes a receipt to `/run/lhpc-firewall/check.json`. The dashboard reads that
+receipt (verifying it is root-owned and unforgeable) and reports three **independent** things:
+
+- **Config** — your saved firewall intent matches what was applied.
+- **Boot** — the loader + check timer are installed and enabled (survives reboot).
+- **Live** — the checker verified the actual kernel table **this boot**, recently.
+
+**Green requires Live.** Declared-and-persistent is *not* enough — after a reboot or a config
+change the live state is unverified until the next check attests it, and the dashboard says so.
+Freshness uses the boot id plus `CLOCK_BOOTTIME`, so a clock change or a suspend/resume cannot
+fake a fresh result.
+
+Because a valid current-boot receipt is required before `lhpc` binds a remote listener, exposing
+the console/proxy is gated: if you change the webserver exposure but have not applied the firewall,
+the webserver Apply is refused with *Firewall changes pending* and the exact command to run. At
+boot, nginx will not bind a remote port until the firewall is verified — on failure it starts
+**loopback-only** (recover over an SSH tunnel), and you re-apply.
+
+<a id="scenarios"></a>
+## Scenarios
+
+Each is a configuration choice in the Firewall panel that regenerates the ruleset; the equivalent
+raw `nft` is shown for the by-hand path.
+
+**Local only** — the default. Nothing exposed; the console is loopback. Reach it with an SSH
+tunnel: `ssh -N -L 8443:127.0.0.1:8443 pi@raspberrypi.local`.
+
+**Your LAN** — expose the console to a CIDR: `lhpc webserver expose --cidr 192.168.0.0/24
+--confirm-phrase enable-remote` then apply the firewall. The managed rule mirrors the CIDR:
+`ip saddr 192.168.0.0/24 tcp dport 8443 accept`.
+
+**Public internet** — forward only 8443 at your router; expose with `--cidr 0.0.0.0/0
+--confirm-phrase enable-remote-danger`. Never forward 4403/9443/8001/5000/7000.
+
+**Pi Wi-Fi AP + phone** — enable AP mode in the Firewall panel with the interface and CIDR (e.g.
+`wlan0`, `10.42.0.0/24`). It allows AP DHCP (`68→67` on that interface) and DNS (UDP+TCP 53), plus
+the console. Issue the phone certificate **before** exposing (see
+[wifi-access-point.md](wifi-access-point.md)).
+
+<a id="reset"></a>
+## Reset / undo
 
 ```bash
-sudo ufw allow from 192.168.0.0/24 to any port 8443 proto tcp
+sudo bash ~/loraham-pi-control/config/files/firewall/firewall-reset.sh
 ```
 
-**2 — tell `lhpc` to listen off-loopback:**
+Removes **only** lhpc-owned artifacts (the `table inet lhpc`, the three units, the known files
+under `/etc/lhpc/`), restores the prior `nftables.service` enabled-state, and leaves every foreign
+file, table and unit exactly as it was. It removes named lhpc files and then `rmdir`s `/etc/lhpc`,
+which succeeds only if the directory is empty — so any unexpected file left there is preserved,
+never recursively deleted. All ownership and table checks live in the trusted root helper: if the
+installed helper is missing, a symlink, not root-owned, or not executable, the reset **refuses**
+(exit 13) and asks you to reinstall the current helper (re-run `firewall-apply.sh`) first — so a
+live owned table is only ever removed by the proven code path, never stranded. Controller uninstall
+refuses while any firewall residual (helper, candidate, metadata, snapshot, journal, or a unit)
+remains and points you here first.
 
-```bash
-lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver apply
+<a id="by-hand"></a>
+## Doing it entirely by hand
+
+If you would rather integrate the rules into your own firewall, `lhpc firewall --script` prints
+the apply script (and `--reset-script` the undo) to stdout — read them, lift the `nft` rules you
+want, and manage them yourself. The essential shape of the lhpc table (secure-default) is:
+
+```
+table inet lhpc {
+    chain input {
+        type filter hook input priority filter; policy drop;
+        iif "lo" accept
+        meta nfproto ipv4 tcp dport 4403 drop      # meshtasticd — unauthenticated
+        meta nfproto ipv4 tcp dport 9443 drop
+        ct state invalid drop
+        ct state established,related accept
+        meta l4proto ipv6-icmp accept              # NDP — mandatory for IPv6
+        ip protocol icmp accept
+        udp sport 67 udp dport 68 accept           # DHCPv4 client
+        udp sport 547 udp dport 546 accept         # DHCPv6 client
+        ip daddr 224.0.0.251 udp dport 5353 accept # mDNS (v4)
+        ip6 daddr ff02::fb udp dport 5353 accept   # mDNS (v6)
+        tcp dport 22 accept                        # SSH (or your configured ports)
+        # ... your exposed console/proxy/endpoint allows ...
+    }
+}
 ```
 
-**3 — issue a client certificate** (remote access always requires one):
+`lhpc` never edits your firewall configuration; this is the raw material, yours to place.
 
-```bash
-lhpc webserver cert issue laptop
-lhpc webserver cert export laptop ~/laptop.p12
-```
+## Scope and deliberate limitations
 
-`issue` prints a **one-time passphrase — record it now**, it is never stored. Copy the
-`.p12` to the device, import it into the browser or OS keychain, then browse
-`https://192.168.0.10:8443/` and pick the certificate when prompted.
+The managed firewall gates every path that can bind an externally reachable listener — the web
+console, each stack proxy, **and stack starts/restarts**. A start is allowed only when the listener's
+**complete scope** (protocol, address family, bind address, port, band and source CIDRs) exactly
+matches a modeled candidate scope the live receipt vouches for; an ephemeral bind/port/CIDR change or
+a non-default-band scope that isn't modeled is refused with *"Save the setting permanently, apply the
+firewall, then start."* A TCP listener with no firewall metadata is treated as exposed and gated
+(fail-closed), so a newly added listener can never slip out unprotected.
 
-**4 — verify:**
+**Verified across updates.** The installed root helper stamps a revision (a hash of its own source)
+into every receipt; after an lhpc update replaces the helper, the old attestation no longer matches,
+so the dashboard shows *setup/update required* (never a stale green) until you re-apply. The operator
+scripts and the lhpc-owned nginx unit that carries the boot gate are refreshed with the **new**
+version's templates automatically — but by the freshly-restarted console *after* the update, not by
+the pre-update process (which still holds the old code in memory and would otherwise emit the previous
+version). If a self-update would advance into a state where remote web could come up ungated — a
+foreign nginx unit while remote access is configured — it stops first and directs you to
+`lhpc self-update --repair-integration`.
 
-```bash
-lhpc webserver verify
-sudo ufw status
-```
+A few things are intentionally **out of scope** — they add complexity without materially improving
+safety:
 
-## Scenario 3: public internet
+- **SSH scope is widened, not narrowed.** Automatically preserved SSH access resolves to a wildcard
+  allow rather than an exact bind address/family. This can only ever allow *more* SSH access, never
+  lock you out — the safe direction. Use `[firewall] ssh_ports` to pin specific ports.
+- **Hostname binds** are treated as wildcard rather than resolved to addresses.
+- **DHCP client replies** are accepted on any interface, not scoped per-interface.
+- **Foreign-firewall detection** happens after the first apply (via the root receipt), so the
+  "Compatibility recommended" hint appears once the firewall has run at least once.
 
-Reachable from anywhere, protected by mTLS. The risk is real but bounded: an attacker
-without a valid client certificate gets a TLS rejection.
-
-**Forward only 8443** in your router — never 4403, 9443, 8001, 5000 or 7000. None of
-them have authentication.
-
-```bash
-sudo ufw allow 8443/tcp
-
-lhpc webserver expose --cidr 0.0.0.0/0 --confirm-phrase enable-remote-danger
-lhpc webserver apply
-```
-
-Then issue a certificate per device as in scenario 2. Two things worth doing:
-
-- Set access mode to `auth-everywhere` so even loopback needs a certificate.
-- Revoke promptly when a device is lost: `lhpc webserver cert revoke phone --confirm-label phone`.
-
-## Scenario 4: Pi WiFi AP + phone
-
-The Pi is its own WiFi network (see [WiFi access point](wifi-access-point.md)) and your
-phone joins it. Nothing else must get in.
-
-**1 — open the AP interface only** (the wired/uplink side stays closed). In shared mode
-NetworkManager runs a DHCP + DNS server on `wlan0`; the phone cannot get an address or
-resolve names unless you also allow those, so open all three:
-
-```bash
-sudo ufw allow in on wlan0 to any port 67 proto udp    # DHCP — hands the phone an address
-sudo ufw allow in on wlan0 to any port 53              # DNS  — udp + tcp
-sudo ufw allow in on wlan0 to any port 8443 proto tcp  # the console
-```
-
-**2 — put the AP address in the server certificate** so the browser's name check
-matches. **Order matters — do this before issuing the phone certificate.**
-
-*First install (no PKI yet):* `init` creates the CAs and the server cert together —
-
-```bash
-lhpc webserver init --ip 10.42.0.1 --dns loraham.local
-```
-
-*Existing install (CAs already present):* **never re-`init`** — `--confirm-recreate`
-would replace the CAs and void every certificate you have issued. Add the SANs to the
-existing server cert instead:
-
-```bash
-lhpc webserver configure --ip 10.42.0.1 --dns loraham.local
-lhpc webserver tls-renew
-lhpc webserver apply
-```
-
-**3 — issue the phone certificate and move it across:**
-
-```bash
-lhpc webserver cert issue phone
-lhpc webserver cert export phone ~/phone.p12
-```
-
-**4 — expose the console to the AP subnet:**
-
-```bash
-lhpc webserver expose --cidr 10.42.0.0/24 --confirm-phrase enable-remote
-lhpc webserver apply
-```
-
-Transfer the `.p12` (USB, or `scp` while still on your LAN — not over the open air),
-import it in the phone's settings, then browse **`https://10.42.0.1:8443/`**.
-
-## Stack web UIs — proxy, don't open
-
-meshtasticd's `:9443` and MeshCom's `:18083` have **no authentication**. Do not open
-them in the firewall.
-
-Instead put them behind the `lhpc` proxy, which fronts them with the same mTLS and CIDR
-gate as the console:
-
-```bash
-lhpc webserver proxy meshtastic --mode lan --port 8445 \
-     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver apply
-
-sudo ufw allow from 192.168.0.0/24 to any port 8445 proto tcp
-```
-
-`--port` is required — a stack with no port set is simply not proxied. The web console
-suggests **8444** for meshcom and **8445** for meshtastic; any free port above 1023
-works. Use `--mode local` to reach the UI only from the Pi, in which case no firewall
-rule is needed at all.
-
-The native ports stay firewalled; you reach the UI through the proxy port instead. Only
-these two stacks can be proxied — kiss, meshcore and the daemon speak non-HTTP
-protocols.
-
-## Persistence, IPv6, and undo
-
-`ufw enable` survives reboot — there is nothing else to install or enable.
-
-Leave `IPV6=yes` in `/etc/default/ufw` (the default). `lhpc` refuses IPv6 *exposure*,
-but the stack ports still exist on IPv6, and the baseline should close them too.
-
-Inspect, remove a rule, or turn the firewall off:
-
-```bash
-sudo ufw status numbered
-sudo ufw delete 3           # by number, from the listing above
-sudo ufw disable
-```
-
-Optional, unrelated to `lhpc`: a stock Raspberry Pi OS also runs `rpcbind` on `:111`
-and often nginx's default site on `:80`. The baseline firewalls both. If you use
-neither, `sudo systemctl disable --now rpcbind rpcbind.socket` removes the service too.
+None of these weakens the core guarantee: no lhpc-managed non-loopback listener comes up without a
+current-boot, live-verified firewall receipt.

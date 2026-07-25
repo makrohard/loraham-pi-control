@@ -125,6 +125,38 @@ else
 	die "$TARGET_DIR does not prove it is an LHPC controller root (need a valid .lhpc-root or config/local.toml + venv/lhpc + src/loraham-pi-control). Refusing."
 fi
 
+# ----------------------------------------------------- managed firewall integration (fail closed)
+# A boot-persistent, root-owned firewall must NEVER be orphaned by removing the controller. If
+# lhpc firewall integration is installed, refuse until it has been removed by its own root-owned
+# reset (ownership-proven; it touches no foreign config). Missing/unreadable/unsafe ownership
+# metadata BLOCKS too — we must not leave a live table + boot loader with no way to prove it ours.
+FW_HELPER="/etc/lhpc/firewall-helper"
+FW_META="/etc/lhpc/firewall.meta.json"
+# Detect ANY firewall residual — the helper, the three units, AND every root state file
+# (candidate, metadata, snapshot, journal, transition). A PARTIAL install containing only, say,
+# a leftover snapshot or journal must never be orphaned by removing the controller.
+FW_PRESENT=0
+for _fwart in "$FW_HELPER" \
+	/etc/lhpc/firewall.candidate.json \
+	"$FW_META" \
+	/etc/lhpc/firewall.snapshot.json \
+	/etc/lhpc/firewall.journal.json \
+	/etc/lhpc/firewall.transition.json \
+	/etc/systemd/system/lhpc-firewall.service \
+	/etc/systemd/system/lhpc-firewall-check.service \
+	/etc/systemd/system/lhpc-firewall-check.timer; do
+	[ -e "$_fwart" ] && FW_PRESENT=1
+done
+if [ "$FW_PRESENT" -eq 1 ]; then
+	reset_hint="sudo bash ${TARGET_DIR}/config/files/firewall/firewall-reset.sh"
+	if [ ! -f "$FW_META" ] || [ ! -r "$FW_META" ]; then
+		die "managed firewall integration is installed but its ownership metadata ($FW_META) is missing/unreadable — refusing to orphan a boot-persistent firewall. Resolve it, then remove the integration: $reset_hint"
+	fi
+	die "managed firewall integration is still installed. Remove it FIRST (root-owned reset — removes only lhpc's own table/units/artifacts, foreign config untouched), then re-run controller uninstall:
+  $reset_hint
+  sudo systemctl daemon-reload"
+fi
+
 # --------------------------------------------------------------------------- plan + confirm
 if [ "$PURGE" -eq 1 ]; then
 	printf '\nCOMPLETE removal of the runtime root and ALL its contents (config + secrets included):\n\n  %s\n\nThis cannot be undone.\n' "$TARGET_DIR"

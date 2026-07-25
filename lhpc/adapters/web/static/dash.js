@@ -119,4 +119,18 @@
         .catch(function () { /* transient */ });
     }, pending ? 2000 : 4000);
   }
+
+  // Webserver box open-state persists across ORDINARY reloads too (the id-keyed sessionStorage
+  // restore above only survives dash.js's own signature reloads). Server renders it collapsed;
+  // we reopen if the operator left it open. Mirrors the System box's localStorage contract.
+  (function () {
+    var box = document.getElementById("wsbox");
+    if (!box) return;
+    var KEY = "lhpc:wsbox";
+    try { if (localStorage.getItem(KEY) === "1" && !box.open) box.open = true; }
+    catch (e) { /* private mode */ }
+    box.addEventListener("toggle", function () {
+      try { localStorage.setItem(KEY, box.open ? "1" : "0"); } catch (e) { /* private mode */ }
+    });
+  })();
 })();

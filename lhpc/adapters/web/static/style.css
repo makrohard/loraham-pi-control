@@ -627,6 +627,20 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .sysbox > details[open] > summary::before { content: "▾"; }
 .sysbox > details > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
 .sysbox > details[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
+/* --- Webserver box: same collapsible chrome as the System box (collapsed by default). The
+   summary carries ONE consolidated security pill so posture stays visible while collapsed. --- */
+.wsbox > details > summary { cursor: pointer; padding: .8rem 1rem; color: var(--ink);
+                             display: flex; align-items: baseline; gap: .5rem; }
+.wsbox > details > summary::-webkit-details-marker { display: none; }
+.wsbox > details > summary::before { content: "▸"; color: var(--muted); }
+.wsbox > details[open] > summary::before { content: "▾"; }
+.wsbox > details > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
+.wsbox > details[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
+.wsbox .fwline { display: flex; align-items: baseline; gap: .5rem; }
+.wsbox .fwline .wsname { font-weight: 600; }
+/* logs link pushed to the right edge of the summary header / the firewall line */
+.wsbox > details > summary .hdrlogs,
+.wsbox .fwline .hdrlogs { margin-left: auto; }
 .systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
              padding: .3rem .4rem .3rem 0; }

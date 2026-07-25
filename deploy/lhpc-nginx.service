@@ -16,6 +16,12 @@ Type=forking
 Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
 PIDFile=%h/loraham-pi-control/state/run/nginx.pid
 ExecStartPre=/usr/sbin/nginx -t -c %h/loraham-pi-control/config/nginx/lhpc.conf
+# Managed-firewall boot gate: when the firewall is installed and the desired config exposes a
+# remote listener, this refuses to bind that listener ahead of a verified current-boot firewall
+# receipt — regenerating the active config LOOPBACK-ONLY instead (recovery via SSH tunnel; the
+# desired remote intent in local.toml is untouched and never marked applied). No-op when the
+# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.
+ExecStartPre=%h/loraham-pi-control/venv/lhpc/bin/lhpc webserver --firewall-boot-gate
 ExecStart=/usr/sbin/nginx -c %h/loraham-pi-control/config/nginx/lhpc.conf
 ExecReload=/usr/sbin/nginx -s reload -c %h/loraham-pi-control/config/nginx/lhpc.conf
 ExecStop=/usr/sbin/nginx -s quit -c %h/loraham-pi-control/config/nginx/lhpc.conf

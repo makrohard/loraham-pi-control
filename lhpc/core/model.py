@@ -184,6 +184,28 @@ class ProcessSpec:
 
 
 @dataclass(frozen=True)
+class FirewallMeta:
+    """EXPLICIT firewall semantics of a TCP listener endpoint (Managed Firewall).
+
+    Inference from validator names or default addresses is forbidden by design — a
+    listener the firewall should manage DECLARES it. `port_param`/`bind_param`/
+    `allow_param` name the component run/file params whose RESOLVED values supply the
+    current port, bind address and source allow-list ("" = fixed by the endpoint
+    address). `auth` states what protects the port ("none"|"password"|"mtls"|"token") —
+    the UI's warnings key off it. `deny=True` marks a default-blocked endpoint
+    (meshtasticd 4403/9443): openable ONLY via its own direct-access checkbox, never via
+    extra_allow. A TCP listener endpoint WITHOUT firewall metadata is fail-closed:
+    no allow is ever derived for it and the console flags it unmapped.
+    """
+
+    port_param: str = ""
+    bind_param: str = ""
+    allow_param: str = ""
+    auth: str = "none"
+    deny: bool = False
+
+
+@dataclass(frozen=True)
 class EndpointSpec:
     """A local endpoint a component exposes that can be probed read-only."""
 
@@ -198,6 +220,8 @@ class EndpointSpec:
     # PTY) — shown on the dashboard. False for internal transport (daemon sockets).
     client: bool = False
     scheme: str = ""             # "http"|"kiss"|"tcp"|"serial"… (http renders a link)
+    # Managed-Firewall semantics; None on non-firewall-relevant endpoints (unix, external).
+    firewall: "FirewallMeta | None" = None
 
 
 @dataclass(frozen=True)

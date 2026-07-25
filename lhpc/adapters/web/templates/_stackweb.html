@@ -22,8 +22,8 @@
     {% if sw.bypassable %}
       <p class="depnote depnote-bad"><strong>This app's own port {{ sw.upstream_port }} is listening on all interfaces.</strong>
         It is reachable directly on the LAN, bypassing this proxy — the access mode does
-        <strong>not</strong> protect it. Firewall that port or accept the exposure; LHPC cannot close
-        it (the app exposes no bind option).</p>
+        <strong>not</strong> protect it. The managed firewall can close it (Dashboard →
+        Webserver → Firewall), or accept the exposure.</p>
     {% endif %}
 
     {# ===== Settings ===== #}

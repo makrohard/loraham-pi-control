@@ -206,6 +206,12 @@ Type=forking
 Environment=LHPC_RUNTIME_ROOT={root}
 PIDFile={root}/state/run/nginx.pid
 ExecStartPre=/usr/sbin/nginx -t -c {root}/config/nginx/lhpc.conf
+# Managed-firewall boot gate: when the firewall is installed and the desired config exposes a
+# remote listener, this refuses to bind that listener ahead of a verified current-boot firewall
+# receipt — regenerating the active config LOOPBACK-ONLY instead (recovery via SSH tunnel; the
+# desired remote intent in local.toml is untouched and never marked applied). No-op when the
+# firewall is absent or nothing remote is desired. Always exits 0 so nginx still starts.
+ExecStartPre={venv}/bin/lhpc webserver --firewall-boot-gate
 ExecStart=/usr/sbin/nginx -c {root}/config/nginx/lhpc.conf
 ExecReload=/usr/sbin/nginx -s reload -c {root}/config/nginx/lhpc.conf
 ExecStop=/usr/sbin/nginx -s quit -c {root}/config/nginx/lhpc.conf

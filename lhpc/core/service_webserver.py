@@ -424,7 +424,8 @@ class WebserverOpsMixin:
             details.append(
                 f"  WARNING: {stack_id}'s upstream port {view['upstream_port']} is listening on all "
                 f"interfaces — it is reachable directly, bypassing this proxy's authentication.")
-            details.append("  Firewall that port or accept the exposure; LHPC cannot close it.")
+            details.append("  The managed firewall can close this port (Dashboard -> Webserver "
+                           "-> Firewall), or accept the exposure.")
         if probe.enabled:
             details += [f"  {u}" for u in _ws.stack_ui_urls(probe)]
         details.append("lhpc webserver apply           # render + validate + reload nginx")
@@ -678,6 +679,15 @@ class WebserverOpsMixin:
                                 "the production webserver", details=[_ws.NGINX_INSTALL_CMD],
                                 next_commands=[_ws.NGINX_INSTALL_CMD])
         cfg = self.config().webserver
+        # FW-6 exposure gate: never activate a NEW/WIDENED non-loopback listener before the
+        # managed firewall verifiably protects it. No-op when firewall integration is absent
+        # (behavior preserved) or when nothing new is exposed (exposure-reducing applies still
+        # proceed). The config was already saved by the caller; only ACTIVATION is gated.
+        allowed, gate_msg, gate_cmds = self.firewall_gate_activation(
+            self._prospective_nginx_ports())
+        if not allowed:
+            return ActionResult(False, gate_msg, next_commands=gate_cmds,
+                                data={"firewall_gate": "pending"})
         # Stage + validate BEFORE touching the live config; promote atomically only on success
         # (a failed nginx -t leaves the previous proven live config byte-for-byte intact).
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg,
@@ -868,6 +878,11 @@ class WebserverOpsMixin:
                 self._paths)["server_cert"].get("present"):
             return ActionResult(False, "no HTTPS server certificate — run `lhpc webserver init` "
                                 "first", next_commands=["lhpc webserver init"])
+        allowed, gate_msg, gate_cmds = self.firewall_gate_activation(
+            self._prospective_nginx_ports())
+        if not allowed:
+            return ActionResult(False, gate_msg, next_commands=gate_cmds,
+                                data={"firewall_gate": "pending"})
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg, proxies)
         if not ok:
             return ActionResult(False, f"nginx config invalid — not starting ({msg})")

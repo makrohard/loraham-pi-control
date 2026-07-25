@@ -52,7 +52,7 @@ Waveshare ab (inkl. dual, Chip-Selects als GPIOs); `hardware-cs` nur für kernel
 
 ### Nicht enthalten
 
-- **Keine Firewall-Verwaltung** — `lhpc` schützt nur seine eigene Konsole; von einem Stack geöffnete Ports schließt du selbst ([Firewall](docs/firewall.md)).
+- **Verwaltete Firewall (optional)** — ein nftables-Default-Deny-Regelwerk, das `lhpc` erzeugt und das du mit einem einzigen sudo-Befehl anwendest; es schließt Stack-Ports, die `lhpc` sonst nicht absichern kann (meshtasticd 4403/9443), und bearbeitet niemals deine eigene Firewall-Konfiguration ([Firewall](docs/firewall.md)).
 - **Es wird nie ein GUI/Desktop installiert** — nur GUI-*Anwendungs*-Bibliotheken, und nur mit `--with-gui`.
 - **Lizenz & Sendebetrieb** bleiben in der Verantwortung des Betreibers — HF wird nie automatisch gesendet.
 
@@ -132,7 +132,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 <!-- test:deps-manual:start -->
 ```bash
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
-sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nginx ca-certificates curl
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
 sudo apt install -y --no-install-recommends socat                                       # kiss

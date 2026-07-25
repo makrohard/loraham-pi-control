@@ -28,6 +28,7 @@ from .model import (
     ComponentKind,
     ControllerSpec,
     EndpointSpec,
+    FirewallMeta,
     FileConfig,
     FileParam,
     ProcessSpec,
@@ -587,7 +588,35 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         description=raw.get("description", ""),
         client=raw.get("client", False),
         scheme=raw.get("scheme", ""),
+        firewall=_parse_firewall_meta(raw.get("firewall")),
     )
+
+
+_FIREWALL_KEYS = {"port_param", "bind_param", "allow_param", "auth", "deny"}
+_FIREWALL_AUTH = ("none", "password", "mtls", "token")
+
+
+def _parse_firewall_meta(raw) -> FirewallMeta | None:
+    """FAIL-CLOSED firewall metadata: unknown keys are a load error (the stray-key policy —
+    a typo must never silently weaken firewall semantics), auth is enumerated, deny is a
+    real boolean."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ManifestError("endpoint firewall metadata must be a table")
+    unknown = set(raw) - _FIREWALL_KEYS
+    if unknown:
+        raise ManifestError(f"endpoint firewall metadata: unknown key(s) {sorted(unknown)}")
+    auth = raw.get("auth", "none")
+    if auth not in _FIREWALL_AUTH:
+        raise ManifestError(f"endpoint firewall metadata: auth must be one of {_FIREWALL_AUTH}")
+    deny = raw.get("deny", False)
+    if not isinstance(deny, bool):
+        raise ManifestError("endpoint firewall metadata: deny must be a boolean")
+    return FirewallMeta(port_param=str(raw.get("port_param", "")),
+                        bind_param=str(raw.get("bind_param", "")),
+                        allow_param=str(raw.get("allow_param", "")),
+                        auth=auth, deny=deny)
 
 
 def _parse_source(raw: dict | None) -> SourceSpec | None:

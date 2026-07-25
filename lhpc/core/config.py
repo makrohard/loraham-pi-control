@@ -268,6 +268,27 @@ def _split_stackweb_key(key: str):
     return None
 
 
+FIREWALL_MODES = ("secure-default", "compatibility")
+
+
+@dataclass(frozen=True)
+class FirewallConfig:
+    """DESIRED managed-firewall configuration (`[firewall]` in local.toml). Intent only —
+    the live/persistent truth lives in the root-written receipt, never here. `mode` picks the
+    strategy; `allow_endpoints` are the stable endpoint IDs the operator ticked
+    "Allow direct access"; AP is strictly opt-in with an explicit interface + CIDR;
+    `extra_allow`/`ssh_ports` are advanced escape hatches. Persisted as flat scalars
+    (comma-joined lists) like the other sections."""
+
+    mode: str = "secure-default"
+    allow_endpoints: tuple = ()
+    ssh_ports: tuple = ()
+    ap_enabled: bool = False
+    ap_interface: str = ""
+    ap_cidr: str = ""
+    extra_allow: tuple = ()          # tuple of dicts: {proto,family,addr,port,cidr}
+
+
 @dataclass
 class Config:
     """Effective configuration after merging defaults + local overrides."""
@@ -277,6 +298,7 @@ class Config:
     radio: RadioConfig = field(default_factory=RadioConfig)
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
+    firewall: FirewallConfig = field(default_factory=FirewallConfig)
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -439,6 +461,57 @@ def _parse_webserver(merged: dict, diagnostics: list) -> "WebserverConfig":
         client_cert_days=_days("client_cert_days", d.client_cert_days))
 
 
+def _parse_firewall(merged: dict, diagnostics: list) -> "FirewallConfig":
+    """Parse [firewall]; a wrong-typed section falls back to safe defaults (a hand-edit must
+    never crash config load). AP stays disabled unless BOTH interface and cidr are present."""
+    raw = merged.get("firewall", {})
+    if not isinstance(raw, dict):
+        diagnostics.append(f"ignored non-table [firewall] ({type(raw).__name__})")
+        return FirewallConfig()
+    mode = raw.get("mode", "secure-default")
+    if mode not in FIREWALL_MODES:
+        if "mode" in raw:
+            diagnostics.append(f"invalid [firewall] mode {mode!r}; using secure-default")
+        mode = "secure-default"
+
+    def _csv(key):
+        v = raw.get(key, "")
+        if isinstance(v, (list, tuple)):
+            return tuple(str(x).strip() for x in v if str(x).strip())
+        return tuple(p.strip() for p in str(v).split(",") if p.strip())
+
+    ssh = []
+    for tok in _csv("ssh_ports"):
+        try:
+            n = int(tok)
+            if 1 <= n <= 65535:
+                ssh.append(n)
+        except ValueError:
+            diagnostics.append(f"ignored non-numeric [firewall] ssh_port {tok!r}")
+    # STRICT boolean: a hand-edited scalar like `ap_enabled = "false"` is truthy under bool()
+    # and would silently ENABLE the AP rules. Accept a real bool only; any other type stays
+    # disabled with a diagnostic (never fail-open on a mistyped flag).
+    ap_raw = raw.get("ap_enabled", False)
+    if not isinstance(ap_raw, bool):
+        if "ap_enabled" in raw:
+            diagnostics.append(f"ignored non-boolean [firewall] ap_enabled {ap_raw!r}; "
+                               "AP stays disabled")
+        ap_raw = False
+    ap_en = ap_raw and bool(raw.get("ap_interface")) and bool(raw.get("ap_cidr"))
+    extra = raw.get("extra_allow", ())
+    if isinstance(extra, str) and extra.strip():        # flat-scalar JSON round-trip
+        try:
+            import json as _json
+            extra = _json.loads(extra)
+        except ValueError:
+            extra = ()
+    extra = tuple(e for e in extra if isinstance(e, dict)) if isinstance(extra, (list, tuple)) else ()
+    return FirewallConfig(mode=mode, allow_endpoints=_csv("allow_endpoints"),
+                          ssh_ports=tuple(ssh), ap_enabled=ap_en,
+                          ap_interface=str(raw.get("ap_interface", "")),
+                          ap_cidr=str(raw.get("ap_cidr", "")), extra_allow=extra)
+
+
 def _parse_stackweb(merged: dict, diagnostics: list) -> dict:
     """Structure-validate `[stackweb]` into `{stack_id: StackWebConfig}`.
 
@@ -577,6 +650,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 
     webserver = _parse_webserver(merged, diagnostics)
     stackweb = _parse_stackweb(merged, diagnostics)
+    firewall = _parse_firewall(merged, diagnostics)
 
     return Config(
         values=merged,
@@ -584,6 +658,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         radio=radio,
         webserver=webserver,
         stackweb=stackweb,
+        firewall=firewall,
         sources=sources,
         remotes=remotes,
         local_path=local_path,
@@ -875,6 +950,46 @@ def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=Non
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"webserver": patch})
+
+
+def save_firewall_config(paths: Paths, *, mode=None, allow_endpoints=None, ssh_ports=None,
+                         ap_enabled=None, ap_interface=None, ap_cidr=None,
+                         extra_allow=None, hold_lock=True) -> Path:
+    """Persist `[firewall]` intent to local.toml (flat scalars; lists comma-joined). AP is
+    only meaningfully enabled when interface + cidr are both present (the parser re-checks).
+    `hold_lock=False` skips the internal config_lock — the CALLER already holds it (so
+    `firewall_configure` can validate, render scripts and commit config under ONE lock)."""
+    from . import validators
+    patch: dict = {}
+    if mode is not None:
+        if mode not in FIREWALL_MODES:
+            raise ConfigError(f"invalid firewall mode {mode!r}")
+        patch["mode"] = mode
+    if allow_endpoints is not None:
+        patch["allow_endpoints"] = ",".join(dict.fromkeys(
+            str(e).strip() for e in allow_endpoints if str(e).strip()))
+    if ssh_ports is not None:
+        ports = []
+        for p in ssh_ports:
+            ports.append(str(int(validators.port(p, field="firewall.ssh_ports"))))
+        patch["ssh_ports"] = ",".join(dict.fromkeys(ports))
+    if ap_enabled is not None:
+        patch["ap_enabled"] = bool(ap_enabled)
+    if ap_interface is not None:
+        patch["ap_interface"] = str(ap_interface).strip()
+    if ap_cidr is not None:
+        patch["ap_cidr"] = (validators.cidr(ap_cidr, field="firewall.ap_cidr")
+                            if str(ap_cidr).strip() else "")
+    if extra_allow is not None:
+        # Stored as a JSON string in a flat scalar (local.toml is flat); the parser tolerates a
+        # non-list and the candidate validator re-checks each entry's full scope.
+        import json as _json
+        patch["extra_allow"] = _json.dumps(list(extra_allow))
+    path = paths.runtime_root / "config" / "local.toml"
+    if not hold_lock:                                    # caller already holds the config lock
+        return _write_local_tables(paths, path, {"firewall": patch})
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"firewall": patch})
 
 
 def _reject_http_with_cert_auth(paths: Paths, patch: dict, what: str,

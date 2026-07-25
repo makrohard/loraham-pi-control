@@ -98,6 +98,14 @@ class SelfUpdateOpsMixin:
                  "install": _ws.NGINX_INSTALL_CMD,
                  "purpose": "HTTPS + mTLS front-end — the console runs over loopback without it; "
                             "exposed/HTTPS access needs it"},
+                {"what": "nftables", "required": False,
+                 "satisfied": have_cmd("nft", "/usr/sbin/nft", "/sbin/nft"),
+                 "install": "sudo apt install -y nftables",
+                 # OPTIONAL controller capability: absence degrades ONLY the managed firewall
+                 # feature (its dashboard row reads "nftables not present"); no unrelated lhpc
+                 # operation depends on it. Preinstalled on Raspberry Pi OS trixie.
+                 "purpose": "managed firewall — closes stack ports lhpc cannot gate "
+                            "(meshtasticd 4403/9443); the feature is unavailable without it"},
                 {"what": "systemd (systemctl, loginctl)", "required": False,
                  "satisfied": (have_cmd("systemctl", "/usr/bin/systemctl", "/bin/systemctl")
                                and have_cmd("loginctl", "/usr/bin/loginctl", "/bin/loginctl")),
@@ -378,7 +386,17 @@ class SelfUpdateOpsMixin:
         new_candidates = self._migration_candidates()
         hook = {"written": False, "from": "", "to": "", "branch": "", "intent": [], "txid": ""}
 
+        class _FWAbort(Exception):
+            def __init__(self, result):
+                self.result = result
+
         def _before_mutation(from_head, to_head, branch, _deps):
+            # FW P1-2C: BEFORE the checkout advances, refuse if the managed firewall is installed,
+            # remote web is exposed, and the nginx unit carrying the boot gate cannot be brought
+            # current this run — otherwise a reboot could start remote nginx ungated.
+            fw_abort = self.firewall_update_nginx_preflight()
+            if fw_abort is not None:
+                raise _FWAbort(fw_abort)
             intent = self._stamp(new_candidates, from_head)
             hook.update(**{"from": from_head, "to": to_head, "branch": branch, "intent": intent})
             if not intent:
@@ -396,6 +414,8 @@ class SelfUpdateOpsMixin:
         try:
             res = selfupdate.apply_update(self._system, self._paths, force=force,
                                           before_mutation=_before_mutation)
+        except _FWAbort as abort:                            # firewall preflight refused the advance
+            return abort.result
         except selfupdate.JournalPersistError:
             return ActionResult(False, "Refusing to self-update: could not durably record the config-"
                                 "migration intent before changing source. No changes were made.",
@@ -418,6 +438,17 @@ class SelfUpdateOpsMixin:
         elif not res.get("ok") and hook["written"]:          # git failed after prepare -> drop anchor+journal
             if selfupdate.clear_migration_journal(self._paths):
                 selfupdate.delete_anchor(self._system, hook["txid"])
+
+        # FW P1-2 B/C: on a real advance, the firewall scripts + LHPC-owned nginx unit must be
+        # regenerated with the NEW templates. This process imported the old modules BEFORE the
+        # update, so it must NOT do that here (it would emit the previous version) — instead mark
+        # it, and the freshly-restarted (new-code) console reconciles on startup.
+        fw_notes = []
+        if res.get("ok") and not res.get("already"):
+            self._fw_mark_post_update()
+            if self._fw_integration_state() != "absent":
+                fw_notes = ["Firewall integration will be refreshed automatically when the "
+                            "console restarts under the new version."]
 
         instr = selfupdate.restart_instructions(res.get("deps_changed", False),
                                                 self._controller_deps_sync_cmd())
@@ -447,6 +478,7 @@ class SelfUpdateOpsMixin:
         details += ["Restart the web console to load the new version:"]
         details += ["  " + c for c in instr["commands"]]
         details += [n for n in (migrated_note, pending_note) if n]
+        details += list(fw_notes)
         return ActionResult(True, res["message"], data=data, details=tuple(details),
                             next_commands=list(instr["commands"]))
 

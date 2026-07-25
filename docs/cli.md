@@ -15,7 +15,7 @@ does is available here too.
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware)
+- [config](#config) · [hardware](#hardware) · [firewall](#firewall)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -131,6 +131,25 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
 - Also settable in the web console under the loraham daemon stack's **Hardware** settings section,
   which additionally offers a **Detect** probe (spawns the daemon briefly per candidate board and
   reports whether the chip responds — the board's LED lights during init).
+
+---
+
+### firewall
+Managed **nftables firewall** status and script rendering. `lhpc` renders the ruleset; you apply
+it with one sudo command. It never edits your own firewall configuration. See
+[Firewalling the Pi](firewall.md) for the full model (modes, the three status dimensions, and how
+your existing configuration is preserved).
+
+```
+lhpc firewall                 # status: mode + Config/Boot/Live dimensions + foreign-table note
+lhpc firewall --script        # print the apply script (run it yourself with sudo)
+lhpc firewall --reset-script  # print the reset script (removes only lhpc-owned artifacts)
+```
+
+- **Config/Boot/Live** are independent: the dashboard turns the firewall green ONLY with a
+  verified current-boot live check — declared-and-persistent alone is never green.
+- Also configurable in the web console under **Webserver → Firewall** (mode, per-listener
+  direct-access exceptions, AP controls, and the copyable apply/check/reset commands).
 
 ---
 

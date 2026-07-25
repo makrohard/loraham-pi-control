@@ -322,9 +322,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 webservers.append({**w, "addr": addr})
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
+        try:
+            firewall = service.firewall_status()
+            firewall["has_log"] = service.firewall_has_log()
+            security_pill = service.security_pill(webservers)
+        except Exception:
+            firewall, security_pill = None, {"level": "warn", "label": "unknown", "title": ""}
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive, webservers=webservers,
+            firewall=firewall, security_pill=security_pill,
             # The host the browser used to reach the console — a proxied web-UI link points here on
             # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
             req_host=_url_host(request.host or ""),
@@ -780,6 +787,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         groups.sort(key=lambda g: (not g["running"], len(g["dep_stacks"]), g["stack"].id))
         return groups, snapshot
 
+    def _firewall_view_safe(svc):
+        try:
+            return svc.firewall_settings_view()
+        except Exception:
+            return None                    # fail-safe: never break the Apps page over firewall
+
     def _stacks_context(band="", *, hw_probe=None, only_sid=None):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
@@ -808,6 +821,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             controller_system_deps=service.controller_system_deps(),
             ws_mon=_ws, ws_certs=(_ws or {}).get("pki", {}).get("clients", []),
             ws_modes=list(_WS_MODES), ws_loopback=peer_is_loopback(),
+            firewall_view=_firewall_view_safe(service),
             st=service.self_update_status(), jobs=service.active_jobs(),
             updater=service.updater_integration(),
             dep_summary=service.dependency_overview(),
@@ -1506,6 +1520,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template("webserver_logs.html", version=__version__,
                                runtime_root=_runtime_root(), src=src, path=path, lines=lines)
 
+    @app.get("/firewall/logs")
+    def firewall_logs():  # noqa: ANN202
+        # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
+        # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
+        path, lines = service.firewall_log_tail(300)
+        return render_template("webserver_logs.html", version=__version__,
+                               runtime_root=_runtime_root(), src="firewall", path=path,
+                               lines=lines)
+
     @app.get("/controller/logs")
     def controller_logs():  # noqa: ANN202
         # The controller's OWN process logs — on-disk files under logs/ (StandardOutput=append:).
@@ -1595,6 +1618,50 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         r = service.webserver_verify()
         flash(r.summary, "ok" if r.ok else "warn")
         return _ws_back()
+
+    def _fw_back():
+        return redirect(url_for("stacks_overview") + "#firewall-row")
+
+    @app.route("/firewall/configure", methods=["GET", "POST"])
+    def firewall_configure():  # noqa: ANN202
+        if request.method == "GET":
+            return redirect(url_for("stacks_overview") + "#firewall-row")
+        if not _csrf_ok():
+            abort(400)
+        f = request.form
+        if f.get("recommended") == "yes":
+            r = service.firewall_configure(recommended=True)
+        else:
+            allow = [k[len("allow_"):] for k in f if k.startswith("allow_")
+                     and f.get(k) in ("on", "yes", "1")]
+            ssh = [p.strip() for p in f.get("ssh_ports", "").replace(",", " ").split()
+                   if p.strip()]
+            # The firewall form ALWAYS submits ssh_ports; a blank field means "clear the
+            # override back to automatic detection" (an empty list saves as ""), so pass the
+            # list whenever the field is present — never coerce blank to None (unchanged).
+            r = service.firewall_configure(
+                mode=(f.get("mode") or None),
+                allow_endpoints=allow,
+                ssh_ports=ssh if "ssh_ports" in f else None,
+                ap_enabled=(f.get("ap_enabled") in ("on", "yes", "1")),
+                ap_interface=(f.get("ap_interface") or ""),
+                ap_cidr=(f.get("ap_cidr") or ""))
+        flash(r.summary, "ok" if r.ok else "err")
+        for d in r.details:
+            flash(d, "warn")
+        return _fw_back()
+
+    @app.route("/firewall/refresh", methods=["POST"])
+    def firewall_refresh():  # noqa: ANN202
+        # READ-ONLY: re-render the cached status from the root-written receipt. It cannot
+        # inspect live nftables (unprivileged) — the immediate-check sudo command is shown
+        # in the panel for that.
+        if not _csrf_ok():
+            abort(400)
+        st = service.firewall_status()
+        flash(st.get("line", "firewall status refreshed"),
+              "ok" if st.get("live_ok") else "warn")
+        return _fw_back()
 
     @app.route("/webserver/init", methods=["POST"])
     def webserver_init():  # noqa: ANN202
@@ -1731,6 +1798,14 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
         return 1
     try:
         app = create_app()
+        # Post-update firewall reconcile: this is the FRESH (new-code) process after a self-update
+        # restart, so it can safely regenerate the firewall scripts + migrate the LHPC-owned nginx
+        # unit with the CURRENT templates (the update itself only left a marker). Best-effort.
+        try:
+            for _fw_note in ControllerService().firewall_post_update_reconcile():
+                print(f"INFO firewall: {_fw_note}")
+        except Exception:                                    # noqa: BLE001 — never block startup
+            pass
         if socket:
             # PRODUCTIVE mode (behind nginx). Two separate facts, deliberately not one flag:
             #   * the trusted-host policy must be enforced whenever we serve through nginx;

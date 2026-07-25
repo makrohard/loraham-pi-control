@@ -2,6 +2,7 @@
 
 ## unreleased
 
+- Firewall
 - System monitor
 
 ## 0.1.5

@@ -820,6 +820,9 @@ main = "loraham-kiss-tnc"
     description = "KISS over TCP"
     client = true
     scheme = "kiss"
+    # Managed Firewall: port/bind/allow all operator-configurable; NO auth by design
+    # (--bind is the only gate) -> this listener gets a direct-access row in the console.
+    firewall = { port_param = "kiss_port", bind_param = "kiss_host", allow_param = "kiss_bind", auth = "none" }
 
     [[stack.component.resource]]
     key = "tcp.port.8001"
@@ -1158,12 +1161,18 @@ main = "meshtastic"
     address = "127.0.0.1:4403"
     ready = true
     role = "listener"
+    # Managed Firewall DENY-DEFAULT: binds 0.0.0.0 unconditionally with NO auth and no
+    # upstream knob — blocked by default; openable ONLY via its own direct-access checkbox
+    # (prominent unauthenticated-exposure warning), never via extra_allow.
+    firewall = { auth = "none", deny = true }
     description = "Meshtastic API"
     client = true
     scheme = "tcp"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:9443"
+    # Managed Firewall DENY-DEFAULT (see 4403): the proxy (:8445) is the sanctioned path.
+    firewall = { auth = "none", deny = true }
     role = "listener"
     description = "Meshtastic web GUI"
     client = true
@@ -1296,6 +1305,9 @@ main = "meshcom-qemu"
     ready = true
     role = "listener"
     description = "MeshCom firmware client port."
+    # Managed Firewall: runtime --port/--bind override the static address (the manifest
+    # address is NOT authoritative for exposure); password-authenticated.
+    firewall = { port_param = "port", bind_param = "bind", auth = "password" }
 
     [[stack.component.resource]]
     key = "tcp.port.7000"
@@ -1581,6 +1593,7 @@ main = "meshcom-qemu"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:18083"
+    firewall = { auth = "none" }
     role = "listener"
     description = "MeshCom web UI"
     client = true
@@ -1588,6 +1601,7 @@ main = "meshcom-qemu"
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:12323"
+    firewall = { auth = "none" }
     ready = true
     role = "listener"
     description = "net-console."
@@ -1762,6 +1776,8 @@ main = "meshcore-pi"
     description = "MeshCore companion TCP"
     client = true
     scheme = "tcp"
+    # Managed Firewall: fixed port; wifi.allow is a source allow-list; no auth.
+    firewall = { allow_param = "meshcore_allow", auth = "none" }
 
     [[stack.component.resource]]
     key = "tcp.port.5000"

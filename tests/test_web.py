@@ -2199,3 +2199,27 @@ def test_stacks_originated_action_returns_to_its_stack_row(tmp_path):
     assert r.status_code == 302
     loc = r.headers["Location"]
     assert "/stacks" in loc and "open=igate" in loc
+
+
+def test_dashboard_wsbox_collapsed_with_firewall_line(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    assert 'id="wsbox"' in body                                  # collapsible webserver box
+    assert 'id="wsbox" open' not in body                         # collapsed by default
+    assert 'class="pill pill-' in body                           # a consolidated security pill
+    assert "Firewall" in body and "#firewall-row" in body        # linked firewall line
+
+
+def test_firewall_settings_section_present(tmp_path):
+    body = _client(tmp_path).get("/stacks?open=kiss").get_data(as_text=True)
+    assert 'id="firewall-row"' in body
+    assert 'name="mode" value="secure-default"' in body
+    assert 'name="mode" value="compatibility"' in body
+    assert "Use recommended settings" in body
+    assert "Refresh status" in body
+    # deny-default endpoints render their unauthenticated-exposure warning
+    assert "unauthenticated" in body
+
+
+def test_firewall_configure_get_redirects(tmp_path):
+    resp = _client(tmp_path).get("/firewall/configure")
+    assert resp.status_code == 302 and resp.headers["Location"].endswith("#firewall-row")

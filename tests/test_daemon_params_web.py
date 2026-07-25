@@ -526,3 +526,17 @@ def test_daemon_params_band_chooser_rendered(tmp_path):
     # dual-band stack (kiss): both bands are links, none disabled.
     ks = dp_seg("kiss")
     assert "band=433" in ks and "band=868" in ks and '<span class="disabled"' not in ks
+
+
+def test_bandless_component_start_ignores_daemon_overrides(tmp_path):
+    # A band-less component (meshcom-gps-relay feeds the QEMU UART, serves no radio band): the
+    # Start-confirm form carries the meshcom daemon panel's 433 values, but the start does not
+    # (re)launch the daemon — the override must be IGNORED, never rejected as "not part of this
+    # start". Regression for the operator-reported gps-relay start failure.
+    svc = _daemon_svc(tmp_path)
+    r = svc.run_action("start", "meshcom-gps-relay", apply=False,
+                       daemon_overrides={"433": {"CADIDLE": "40"}})
+    assert "not part of this start" not in (r.summary or "")
+    # a REAL daemon-serving start still validates the band (unchanged):
+    r2 = svc.run_action("start", "meshcom", apply=True, daemon_overrides={"868": {"CADIDLE": "40"}})
+    assert not r2.ok and "not part of this start" in r2.summary

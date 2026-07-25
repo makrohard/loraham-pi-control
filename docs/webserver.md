@@ -110,8 +110,11 @@ lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
   `--confirm-phrase enable-remote-danger`.
 - **IPv6 remote exposure is not supported in this release** — IPv6 bind/CIDR values are
   rejected; `::1` is honoured for local access only.
-- LHPC never edits UFW/nftables/router/DNS. Opening the port at your firewall/router is your
-  responsibility — see [Firewalling the Pi](firewall.md) for `ufw` recipes per scenario.
+- LHPC never edits YOUR firewall configuration. The optional MANAGED firewall (Dashboard ->
+  Webserver -> Firewall) renders an nftables ruleset you apply with one sudo command — it lives
+  in its own `table inet lhpc` and never touches foreign rules. Opening a port at your own
+  firewall/router is otherwise your
+  responsibility — see [Firewalling the Pi](firewall.md) — the opt-in managed nftables firewall, or by-hand recipes per scenario.
 
 `no-auth` + remote means **anyone in the allowed range reaches the console with no client
 authentication**. The Monitor and Configuration views show a persistent red warning while
@@ -155,7 +158,7 @@ web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` wi
    certificate (`config/tls/` on the Pi) so the browser trusts the server.
 5. **Install both in the remote browser** — import the server CA (clears the TLS warning) and the
    `.p12` (supplies the client credential). See [below](#install-the-client-certificate-in-a-browser).
-6. **Open the port at your firewall/router** — LHPC never touches UFW/nftables/router/DNS; this
+6. **Open the port at your firewall/router** — LHPC never edits YOUR firewall config (the managed firewall is opt-in and self-contained); this
    step is yours.
 7. **Prove it:** `lhpc webserver verify`, then browse to `https://192.168.0.10:8443/` from the
    remote machine and pick the `laptop` certificate when prompted.

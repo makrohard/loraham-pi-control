@@ -78,7 +78,7 @@ def test_configure_discloses_the_bypass_in_its_details(tmp_path):
     res = svc.stack_web_configure("meshtastic", mode="local", port=8445)
     assert res.ok
     assert any("bypassing this proxy" in d for d in res.details)
-    assert any("LHPC cannot close it" in d for d in res.details)
+    assert any("managed firewall can close" in d for d in res.details)
 
 
 # --- confirmation matrix ---------------------------------------------------------------------------

@@ -525,6 +525,19 @@ class LifecycleOpsMixin:
                     details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
                     results=tuple(_hres), next_commands=[f"lhpc status {target}"])
 
+        # FW-R8 exposure gate: if the managed firewall is installed and this start would bind a
+        # non-loopback listener whose containment is not live-verified against the current saved
+        # intent, REFUSE before stopping owners, launching, or writing config — otherwise an
+        # externally reachable stack listener could come up with no verified firewall protecting
+        # it (the compatibility-mode hole). No-op when firewall integration is absent or nothing
+        # non-loopback is exposed; resolved from the ACTUAL launch plan (saved config + these
+        # ephemeral overrides).
+        _fw_ok, _fw_msg, _fw_cmds = self.firewall_gate_stack_start(
+            target, params=params, band=band, file_overrides=file_over)
+        if not _fw_ok:
+            return ActionResult(False, f"Cannot start '{target}': {_fw_msg}",
+                                next_commands=_fw_cmds, data={"firewall_gate": "pending"})
+
         # A component about to start must never SILENTLY inherit an AMBIGUOUS flat legacy value (a
         # run/file param name declared by >= 2 owner-stack components, with a flat value present and
         # no component-scoped value). Fail TYPED here — BEFORE any owner stop, daemon launch, daemon
@@ -1212,6 +1225,13 @@ class LifecycleOpsMixin:
             return {}, None
         if not isinstance(raw, dict):
             return {}, "malformed daemon override payload"
+        # A start that serves NO daemon band (a band-less component like meshcom-gps-relay, which
+        # feeds the QEMU node's virtual UART and never (re)launches the LoRa daemon) has no launch
+        # for a daemon override to apply to. The Start-confirm form still carries the owning
+        # stack's daemon-panel values, so ignore them here rather than rejecting the start with a
+        # spurious "band N is not part of this start".
+        if not launch_bands:
+            return {}, None
         if not self._has_daemon_params(target):
             return {}, f"{target} has no configurable daemon parameters"
         allowed = set(launch_bands)

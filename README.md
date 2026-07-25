@@ -50,7 +50,7 @@ Waveshare (incl. dual, chip-selects as GPIOs); `hardware-cs` only for kernel-dri
 
 ### Not included
 
-- **No firewall management** — `lhpc` gates its own console; ports a stack opens are yours to close ([firewall](docs/firewall.md)).
+- **Managed firewall (opt-in)** — an nftables default-deny ruleset `lhpc` renders and you apply with one sudo command, closing stack ports it cannot otherwise gate (meshtasticd 4403/9443); it never edits your own firewall config ([firewall](docs/firewall.md)).
 - **No GUI/desktop is ever installed** — only GUI *application* libraries, and only with `--with-gui`.
 - **Licence & TX compliance** stay the operator's responsibility — TX is never implicit.
 
@@ -127,7 +127,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 <!-- test:deps-manual:start -->
 ```bash
 # lhpc itself + fetch/TLS tools (nginx only if you want the web console)
-sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nginx ca-certificates curl
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
 sudo apt install -y --no-install-recommends socat                                       # kiss

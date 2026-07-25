@@ -990,7 +990,7 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
         checks["stack_listener_mismatch_stacks"] = _mismatched
     bypassed = [p["stack_id"] for p in proxies if p["bypassable"]]
     if bypassed:
-        checks["upstream_bypass"] = "warn"        # not "failed": LHPC cannot close those ports
+        checks["upstream_bypass"] = "warn"        # not "failed": the managed firewall can close it
         checks["upstream_bypass_stacks"] = bypassed
 
     # The console's listener scope IS provable here — from /proc/net/tcp (local evidence, NOT a
