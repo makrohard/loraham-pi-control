@@ -17,7 +17,7 @@
   --header-ink: #ffffff;   /* nav/banner text — white in BOTH themes (banner is dark-blue in both) */
   --ok: #12722f;   /* darker green so the shared token clears WCAG AA (>=4.5:1) as small badge/flag text
                       on the light-green --badge-ok-bg/--flash-ok-bg; dark mode keeps its bright #3fb950 */
-  --warn: #9a6700;
+  --warn: #8f5f00;   /* ≥4.5:1 on --badge-warn-bg AND white (Lighthouse a11y) */
   --bad: #c1121f;
   --idle: #57606a;
   --shadow: 0 1px 3px rgba(16, 24, 40, .08), 0 1px 2px rgba(16, 24, 40, .06);
@@ -43,6 +43,11 @@
   --warnbtn-bg: #fff3cd;  --warnbtn-border: #e0b64f;  --warnbtn-ink: #7a5200;
   --code-bg: #0f1b2a;  --code-ink: #d7e3f2;
   --field-bad-bg: rgba(224, 82, 82, .12);
+  /* System-box GRAPH stroke hues (bars stay status-colored). Validated as a SET in row order
+     (OKLab ΔE ≥15 normal / ≥8 CVD on every adjacent pair, ≥3:1 vs surface) — change together,
+     keep all three theme blocks in sync. */
+  --sys-cpu: #0b5cab; --sys-mem: #0b6332; --sys-swap: #0e86ad; --sys-netrx: #c11a5b;
+  --sys-nettx: #6d28d9; --sys-disk: #475569; --sys-temp: #b45309;
 }
 
 * { box-sizing: border-box; }
@@ -55,7 +60,10 @@ body {
   overflow-x: hidden;                 /* a stray wide child can't drag the whole page sideways */
 }
 
-a { color: var(--brand); text-decoration: none; }
+a { color: var(--brand); text-decoration: underline; }   /* inline links must not rely on color alone */
+/* Standalone chrome links (header/nav buttons, card titles) are distinguishable by placement
+   and styling — no underline needed there. */
+.site-header a, .stack-group > header h2 a, .theme-toggle { text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
 /* Wide content stays reachable: pre scrolls inside its box; long unbroken commands wrap. */
@@ -87,6 +95,15 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
                     border-radius: 8px; background: rgba(255, 255, 255, .1); }
 .home:hover, .apps-link:hover { background: rgba(255, 255, 255, .22); }
 .apps-link { font-size: 1.2rem; white-space: nowrap; }
+/* Centered brand between Home and Apps; flex:1 centers it in the leftover space without ever
+   overlapping the buttons. Narrow viewports switch to the short form. */
+.brand-title { flex: 1; text-align: center; font-weight: 800; font-size: 1.25rem;
+               letter-spacing: .2px; white-space: nowrap; overflow: hidden; }
+.brand-short { display: none; }
+@media (max-width: 480px) {
+  .brand-long { display: none; }
+  .brand-short { display: inline; }
+}
 .wrap { max-width: 1024px; margin: 0 auto; padding: 1.25rem; }
 /* Single-radio mode (Dashboard only): narrow the whole page — header, nav, main, footer, boxes and
    banners — to half width, matching the single radio box (the radio grid becomes one column). */
@@ -108,7 +125,7 @@ body.dash-narrow .radiogrid { grid-template-columns: 1fr; }
 }
 .site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem 3.2rem;
                position: relative; }   /* relative: anchors the theme toggle to the footer's right edge */
-.site-footer .sub { margin-top: .4rem; opacity: .85; }
+.site-footer .sub { margin-top: .4rem; }   /* no opacity fade: muted@.85 on --bg was <4.5:1 */
 /* Footer version/head freshness indicator. */
 .ver { font-weight: 600; }
 .ver-green { color: var(--ok); }
@@ -518,7 +535,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
   color-scheme: dark;
   --brand: #58a6ff; --brand-hover: #79b8ff; --brand-ink: #0b1220;
   --btn-bg: #1f6feb; --btn-ink: #ffffff; --btn-hover: #388bfd;   /* muted deep-blue filled buttons */
-  --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #768390;
+  --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #8b97a5;   /* idle-as-TEXT (.tx-disabled) needs ≥4.5:1 on --surface */
   --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .4);
   --header-grad-a: #234e7d; --header-grad-b: #1a3c61;
   --warnbox-bg: #2b2411; --warnbox-border: #4a3f1a; --warnbox-ink: #e3c766;
@@ -535,6 +552,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
   --warnbtn-bg: #c9971f; --warnbtn-border: #e3b341; --warnbtn-ink: #1a1400;   /* clearly YELLOW in dark */
   --code-bg: #05080d; --code-ink: #c9d3de;
   --field-bad-bg: rgba(248, 81, 73, .15);
+  --sys-cpu: #58a6ff; --sys-mem: #2ea86b; --sys-swap: #3ec8dd; --sys-netrx: #f4649b;
+  --sys-nettx: #a78bfa; --sys-disk: #a3b0bc; --sys-temp: #e8963e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
@@ -542,7 +561,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
     color-scheme: dark;
     --brand: #58a6ff; --brand-hover: #79b8ff; --brand-ink: #0b1220;
     --btn-bg: #1f6feb; --btn-ink: #ffffff; --btn-hover: #388bfd;
-    --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #768390;
+    --ok: #3fb950; --warn: #d29922; --bad: #f85149; --idle: #8b97a5;   /* idle-as-TEXT (.tx-disabled) needs ≥4.5:1 on --surface */
     --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .4);
     --header-grad-a: #234e7d; --header-grad-b: #1a3c61;
     --warnbox-bg: #2b2411; --warnbox-border: #4a3f1a; --warnbox-ink: #e3c766;
@@ -559,6 +578,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
     --warnbtn-bg: #c9971f; --warnbtn-border: #e3b341; --warnbtn-ink: #1a1400;
     --code-bg: #05080d; --code-ink: #c9d3de;
     --field-bad-bg: rgba(248, 81, 73, .15);
+    --sys-cpu: #58a6ff; --sys-mem: #2ea86b; --sys-swap: #3ec8dd; --sys-netrx: #f4649b;
+    --sys-nettx: #a78bfa; --sys-disk: #a3b0bc; --sys-temp: #e8963e;
   }
 }
 
@@ -592,3 +613,85 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .theme-toggle .icon-moon { display: block; }
 :root[data-theme="dark"] .theme-toggle .icon-sun { display: block; }
 :root[data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+
+/* --- System box (dashboard): collapsed-by-default live host metrics ---------------------------
+   The bar fill width is set from JS via CSSOM (el.style.width) — a deliberate, commented
+   exception to the class-preference convention: it is CSP-legal (no style= attribute in server
+   HTML) and a 20-step class ladder would be visibly steppy. Colours are STATUS semantics only
+   (ok/warn/bad tokens — green healthy, yellow warn, red crit), toggled via explicit row
+   classes, never nth-child. */
+.sysbox > details > summary { cursor: pointer; padding: .8rem 1rem; color: var(--ink);
+                              display: flex; align-items: baseline; gap: .5rem; }
+.sysbox > details > summary::-webkit-details-marker { display: none; }
+.sysbox > details > summary::before { content: "▸"; color: var(--muted); }
+.sysbox > details[open] > summary::before { content: "▾"; }
+.sysbox > details > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
+.sysbox > details[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
+.systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
+.systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
+             padding: .3rem .4rem .3rem 0; }
+.systab td { padding: .3rem 0; }
+/* Middle-align every cell: the gauge cell has no text baseline, so default baseline alignment
+   floated the numbers off the bar line. */
+.systab th, .systab td { vertical-align: middle; border-bottom: 0; }
+/* ONE continuous separator per row: a tr border spans the full row width by construction —
+   per-cell borders rendered as broken segments and collided with the Power pill. */
+.systab tr { border-bottom: 1px solid var(--line); }
+/* Net renders as a FIXED two-line value (JS joins with \n): constant row height — a one-line
+   string wrapped and unwrapped as the rate text length changed, bouncing the box height. */
+/* Net value: everything right-aligned; the rate lives in a FIXED-WIDTH block so the arrow
+   directly before it neither drifts with the digit count nor strands at the far left. */
+.sys-netline { display: flex; justify-content: flex-end; gap: .45rem; }
+.sys-netline span:last-child { width: 5.6rem; text-align: right; }
+.sys-gauge { min-width: 0; }   /* stays a real table-cell: display:flex on the td broke the
+                                  row separator line (a flexed td no longer renders as a cell) */
+.sys-gaugewrap { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.sysbar { flex: 0 1 4rem; min-width: 1.5rem; height: .65rem; background: var(--pill-bg);
+          border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.sys-cpubars { flex: 0 1 4rem; min-width: 1.5rem; display: grid;
+               grid-template-columns: 1fr 1fr; gap: 2px; }   /* per-core mini bars, 2x2 on 4 cores */
+.sys-cpubars .sysbar { flex: none; width: 100%; min-width: 0; height: .45rem; }
+.sysbar-ghost { visibility: hidden; }   /* reserves the bar slot (Net row) so every
+                                           graph column starts at the same x */
+.sysbar-fill { display: block; height: 100%; width: 0; border-radius: 999px;
+               transition: width .6s linear; }
+.sysspark { flex: 1 1 3rem; min-width: 0; height: 1.4rem; }
+.sysspark polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke;
+                     stroke-linecap: round; stroke-linejoin: round; }
+.sysrow-net .sys-gaugewrap + .sys-gaugewrap { margin-top: .25rem; }
+/* Power row: extra clearance so the row's separator line runs BELOW the pill (full width),
+   never through it. */
+.sysrow-power th, .sysrow-power td { padding-top: .35rem; padding-bottom: .55rem; }   /* the
+                                           separator line clears the pill, never touches it */
+.sys-val { width: 11rem; text-align: right; font-size: .85rem;
+           font-variant-numeric: tabular-nums; padding-right: 0; }
+/* BARS carry status only (green = healthy, yellow = warn, red = crit); the GRAPHS may keep
+   per-metric hues (operator call) — warn/crit still repaints them, so an unhealthy metric is
+   unmistakable. The numeric value is always present, colour is never the only signal. */
+.sysbar-fill { background: var(--ok); }
+.sysrow-cpu  polyline { stroke: var(--sys-cpu); }
+.sysrow-mem  polyline { stroke: var(--sys-mem); }
+.sysrow-swap polyline { stroke: var(--sys-swap); }
+#sys-netrx-spark polyline { stroke: var(--sys-netrx); }
+#sys-nettx-spark polyline { stroke: var(--sys-nettx); }
+.sysrow-disk polyline { stroke: var(--sys-disk); }
+.sysrow-temp polyline { stroke: var(--sys-temp); }
+.sysrow.sys-warn .sysbar-fill { background: var(--warn); }
+.sysrow.sys-warn polyline     { stroke: var(--warn); }
+.sysrow.sys-crit .sysbar-fill { background: var(--bad); }
+.sysrow.sys-crit polyline     { stroke: var(--bad); }
+/* Per-BAR status (the per-core CPU grid colours each core on its own). */
+.sysbar.sys-warn .sysbar-fill { background: var(--warn); }
+.sysbar.sys-crit .sysbar-fill { background: var(--bad); }
+.sys-info { font-size: .85rem; margin: .5rem 0 0; }
+.sys-info span { white-space: nowrap; }   /* one flowing line that breaks ONLY between values —
+                                             each value is an unbreakable span */
+@media (max-width: 860px) {
+  /* Exempt the metrics table from the generic `table { display:block; overflow-x:auto }` phone
+     rule (cf. .radio-col .monitor table): the gauges SHRINK instead of scrolling — the page hides
+     horizontal overflow globally, so a scrolling table would clip information. */
+  .systab { display: table; overflow-x: visible; }
+  .systab th { width: 3.6rem; }
+  .sysbar { flex-basis: 3rem; }
+  .sys-val { width: 8.5rem; }
+}

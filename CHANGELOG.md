@@ -2,6 +2,8 @@
 
 ## unreleased
 
+- System monitor
+
 ## 0.1.5
 - Hardware setups: `lhpc hardware` selects the radio rig (LoRaHAM / Uputronics dual / Waveshare); daemon v112 multi-hardware, per-band arbitration
 - Built-from-source runtime: headless QEMU and server-only meshtasticd compiled from pinned sources into the runtime root
@@ -42,7 +44,6 @@
 Hardening (see `docs/hardening-0.1.md`):
 
 - Descriptor-anchored source transactions, fail-closed session tokens, thin launcher runtime, owned journals; dead-code/docs cleanup; MIT license.
-
 
 ## 0.1.0 — initial version
 

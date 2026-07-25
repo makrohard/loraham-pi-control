@@ -168,7 +168,7 @@ def test_get_routes_make_no_network_calls(tmp_path):
     for path in ("/", "/stacks", "/stacks/daemon",
                  "/healthz", "/logs/loraham-daemon", "/api/daemon/433",
                  "/api/dash-signature", "/api/logs/loraham-daemon",
-                 "/auto-install", "/api/auto-install"):
+                 "/auto-install", "/api/auto-install", "/api/system"):
         client.get(path)
     offenders = [c for c in calls if _is_network(c)]
     assert not offenders, f"GET routes ran network commands: {offenders}"
@@ -554,6 +554,25 @@ def test_logs_view(tmp_path):
 def test_log_api_returns_lines(tmp_path):
     j = _real_app(tmp_path).get("/api/logs/loraham-daemon").get_json()
     assert "lines" in j and isinstance(j["lines"], list)
+
+
+def test_system_api_is_read_only_json(tmp_path):
+    # ReadOnlyGuard client: proves the GET touches no mutating service method; contract minimum
+    # is a monotonic ts (raw counters are host-dependent and covered in test_sysstats.py).
+    r = _client(tmp_path).get("/api/system")
+    assert r.status_code == 200
+    j = r.get_json()
+    assert isinstance(j["ts"], float)
+
+
+def test_dashboard_system_box_collapsed_by_default(tmp_path):
+    body = _client(tmp_path).get("/").get_data(as_text=True)
+    doc = parse(body)
+    box = doc.by_id("sysbox")
+    assert box is not None
+    assert not box.has_attr("open")             # zero load while collapsed: no open attribute
+    # the metrics table is labelled for assistive tech
+    assert any(t["aria-label"] for t in doc.find("table", **{"class": "systab"}))
 
 
 @pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)

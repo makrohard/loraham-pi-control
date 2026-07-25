@@ -342,6 +342,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Cheap structural-state signature; the dashboard reloads only when it changes.
         return jsonify(sig=service.dash_signature())
 
+    @app.get("/api/system")
+    def system_api():  # noqa: ANN202
+        # Host metrics for the System box: RAW procfs/sysfs counters + a monotonic ts; the
+        # BROWSER computes rates between its own polls. File reads only — no subprocess, no
+        # network, no server-side history. Polled only while the box is expanded.
+        return jsonify(service.system_stats())
+
     @app.get("/api/tasks")
     def tasks_api():  # noqa: ANN202
         # Running-task banner feed (auto-install + HMAC + build/test/install jobs). STRICTLY read-only.

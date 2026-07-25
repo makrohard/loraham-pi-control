@@ -4,7 +4,6 @@
 (function () {
   "use strict";
   var cols = document.querySelectorAll("[data-radio-band]");
-  if (!cols.length) return;
 
   function set(id, text) {
     var el = document.getElementById(id);
@@ -70,12 +69,21 @@
   // (and the monitor windows don't flash) every tick. Live fields (RSSI/feed/…)
   // already update in place above. Poll faster while an interactive app is pending
   // so it flips to "running" quickly after the operator starts it in a terminal.
+  // NOTE: this block (and the restore above it) runs even with ZERO radio columns —
+  // the System box and the signature reload exist on a radio-less dashboard too.
+  //
+  // <details> open states persist across the reload STRICTLY BY ELEMENT ID: the reload
+  // fires exactly when the details population may have changed (radio-mode flip added or
+  // removed monitors), so index-keyed state silently opened the wrong panels — e.g. it
+  // could pop the collapsed System box open and start its polling unrequested. Elements
+  // without an id are deliberately not persisted; the legacy index-array format is
+  // ignored and removed once.
   try {
     var saved = JSON.parse(sessionStorage.getItem("dashDetails") || "null");
     sessionStorage.removeItem("dashDetails");
-    if (Array.isArray(saved)) {
-      document.querySelectorAll("details").forEach(function (el, i) {
-        if (typeof saved[i] === "number") el.open = saved[i] === 1;
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+      document.querySelectorAll("details").forEach(function (el) {
+        if (el.id && typeof saved[el.id] === "number") el.open = saved[el.id] === 1;
       });
     }
   } catch (e) { /* ignore */ }
@@ -99,9 +107,9 @@
           // a panel was open). Open/closed states are preserved across the reload.
           if (!busy && !selecting) {
             try {
-              var states = [];
+              var states = {};
               document.querySelectorAll("details").forEach(function (el) {
-                states.push(el.open ? 1 : 0);
+                if (el.id) states[el.id] = el.open ? 1 : 0;   // id-keyed ONLY (see restore above)
               });
               sessionStorage.setItem("dashDetails", JSON.stringify(states));
             } catch (e) { /* private mode etc. */ }

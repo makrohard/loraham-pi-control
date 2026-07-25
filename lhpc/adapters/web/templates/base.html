@@ -14,6 +14,8 @@
     <div class="wrap header-wrap">
       <div class="header-top">
         <h1><a href="{{ url_for('dashboard') }}" class="home" title="Dashboard (home)">Home</a></h1>
+        {# Centered brand between the two nav buttons; narrow viewports show the short form. #}
+        <span class="brand-title"><span class="brand-long">LoRaHAM Pi Control</span><span class="brand-short">LHPC</span></span>
         <a href="{{ url_for('stacks_overview') }}" class="apps-link">Apps</a>
       </div>
     </div>

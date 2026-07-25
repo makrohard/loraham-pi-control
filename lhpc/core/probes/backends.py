@@ -84,6 +84,9 @@ class FileSystem(Protocol):
     def is_char_device(self, path: str) -> bool: ...
     def effective_groups(self) -> frozenset[str]: ...   # process's EFFECTIVE group names (start gate)
     def configured_groups(self) -> frozenset[str]: ...  # operator's CONFIGURED group names (hint)
+    def read_text(self, path: str, max_bytes: int) -> str: ...   # bounded; "" on any OSError
+    def statvfs(self, path: str) -> dict | None: ...    # {"total_b","free_b","dev"}; None on OSError
+    def listdir(self, path: str, max_entries: int) -> list[str]: ...  # bounded; [] on any OSError
 
 
 class UnixClient(Protocol):
@@ -531,6 +534,41 @@ class RealFileSystem:
     def exists(self, path: str) -> bool:
         return os.path.exists(path)
 
+    def read_text(self, path: str, max_bytes: int) -> str:
+        """Bounded, fail-soft file read (procfs/sysfs values). The bound is a BYTE bound: read
+        binary then decode with replacement — a character bound would diverge on multibyte data."""
+        try:
+            with open(path, "rb") as fh:
+                return fh.read(max_bytes).decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def statvfs(self, path: str) -> dict | None:
+        """{"total_b","free_b","dev"} or None. free_b is the UNPRIVILEGED-available space
+        (f_bavail × f_frsize); dev identifies the filesystem so callers can drop duplicates."""
+        try:
+            sv = os.statvfs(path)
+            return {"total_b": sv.f_blocks * sv.f_frsize,
+                    "free_b": sv.f_bavail * sv.f_frsize,
+                    "dev": os.stat(path).st_dev}
+        except OSError:
+            return None
+
+    def listdir(self, path: str, max_entries: int) -> list[str]:
+        """GENUINELY bounded, fail-soft directory listing: lazy scandir stops AT the cap —
+        os.listdir would read the whole directory before any slice. The first `max_entries`
+        entries (directory order) are then sorted for determinism."""
+        out: list[str] = []
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    out.append(entry.name)
+                    if len(out) >= max_entries:
+                        break
+        except OSError:
+            return []
+        return sorted(out)
+
     def is_socket(self, path: str) -> bool:
         try:
             return stat.S_ISSOCK(os.stat(path).st_mode)
@@ -718,6 +756,9 @@ class FakeSystem:
     char_devices: set[str] = field(default_factory=set)
     unix_replies: dict[str, bytes] = field(default_factory=dict)
     unix_errors: dict[str, str] = field(default_factory=dict)
+    files: dict[str, str] = field(default_factory=dict)          # path -> text (fs.read_text)
+    statvfs_data: dict[str, dict] = field(default_factory=dict)  # path -> {"total_b","free_b","dev"}
+    dirs: dict[str, list[str]] = field(default_factory=dict)     # path -> entries (fs.listdir)
     calls: list[list[str]] = field(default_factory=list)
     # Distinct names from the group methods (a dataclass field cannot share a method's name). Permissive
     # defaults so existing tests that start hardware stacks stay green; the missing-capability case is
@@ -749,7 +790,21 @@ class FakeSystem:
 
     # FileSystem
     def exists(self, path: str) -> bool:
-        return path in self.paths or path in self.sockets or path in self.char_devices
+        return (path in self.paths or path in self.sockets or path in self.char_devices
+                or path in self.files)
+
+    def read_text(self, path: str, max_bytes: int) -> str:
+        # Reproduce the REAL byte semantics (encode → byte-slice → replacement-decode); a plain
+        # string slice would be character-bounded and diverge on multibyte content.
+        return self.files.get(path, "").encode("utf-8")[:max_bytes].decode(
+            "utf-8", errors="replace")
+
+    def statvfs(self, path: str) -> dict | None:
+        return self.statvfs_data.get(path)
+
+    def listdir(self, path: str, max_entries: int) -> list[str]:
+        # Mirror the REAL semantics: first max_entries in directory (insertion) order, then sorted.
+        return sorted(list(self.dirs.get(path, []))[:max_entries])
 
     def is_socket(self, path: str) -> bool:
         return path in self.sockets
