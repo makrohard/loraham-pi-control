@@ -1533,9 +1533,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
-        return render_template("webserver_logs.html", version=__version__,
-                               runtime_root=_runtime_root(), src="firewall", path=path,
-                               lines=lines)
+        return render_template("firewall_logs.html", version=__version__,
+                               runtime_root=_runtime_root(), path=path, lines=lines)
 
     @app.get("/controller/logs")
     def controller_logs():  # noqa: ANN202

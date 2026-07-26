@@ -228,9 +228,19 @@ class FirewallOpsMixin:
                       line=f"Firewall: Transition cleanup pending · {_mode_label(mode)}")
         elif st["config_ok"] and st["boot_ok"] and st["live_ok"]:
             extra = " · unwanted stack ports blocked" if mode == "compatibility" else ""
-            st.update(level="ok", reason="active",
-                      line=f"Firewall: Active — {_mode_label(mode)}{extra} · "
-                           f"Config ✓ · Boot ✓ · Live ✓")
+            unauth = _fw_allowed_unauth_ports(candidate)
+            if unauth:
+                # The firewall IS applied and verified (Config/Boot/Live all true) — but the operator
+                # allowed direct access to one or more UNAUTHENTICATED ports, so the policy opens an
+                # unauthenticated service to the network. A plain green "Secure default" would
+                # misrepresent that deliberately-opened hole, so name it and drop the pill to warn.
+                st.update(level="warn", reason="active-unauth-allow",
+                          line=f"Firewall: Active — {_mode_label(mode)}{extra} · allows "
+                               f"unauthenticated {', '.join(unauth)} · Config ✓ · Boot ✓ · Live ✓")
+            else:
+                st.update(level="ok", reason="active",
+                          line=f"Firewall: Active — {_mode_label(mode)}{extra} · "
+                               f"Config ✓ · Boot ✓ · Live ✓")
         elif not st["config_ok"]:
             st.update(level="warn", reason="changes-pending",
                       line="Firewall: Changes pending · Config ✗ · "
@@ -249,10 +259,11 @@ class FirewallOpsMixin:
 
     # ---- receipt read (hardened) ------------------------------------------------------------
 
-    def _fw_read_receipt(self, path=_fw.RECEIPT_PATH):
+    def _fw_read_receipt(self, path=None):
         """Bounded O_NOFOLLOW read + hard checks: regular file, ROOT owner, no group/other
         write, size bound, JSON shape, protocol match. Any failure => None (never green).
         A receipt the lhpc user could have forged must not be trusted."""
+        path = _fw.RECEIPT_PATH if path is None else path   # late-bound: tests repoint RECEIPT_PATH
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
@@ -261,8 +272,10 @@ class FirewallOpsMixin:
             stx = os.fstat(fd)
             if not stat.S_ISREG(stx.st_mode):
                 return None
-            if stx.st_uid != 0:
-                return None                            # not root-owned -> forgeable -> reject
+            # `path == RECEIPT_PATH` gates the overflow-uid fallback to the canonical root-only-
+            # writable receipt (an arbitrary caller path must never get that relaxed trust).
+            if not _owner_is_host_root(stx.st_uid, canonical_path=(path == _fw.RECEIPT_PATH)):
+                return None                            # not host-root-owned -> forgeable -> reject
             if stx.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 return None
             if stx.st_size > 64 * 1024:
@@ -914,6 +927,123 @@ class FirewallOpsMixin:
 
 
 # --- helpers (pure) ------------------------------------------------------------------------
+
+def _read_uid_map():
+    """Parse /proc/self/uid_map into a list of (ns_start, host_start, count) int triples. Returns
+    None on ANY malformed / unreadable / empty map so callers FAIL CLOSED. Row format is three
+    ints: '<ns_start> <host_start> <count>'."""
+    try:
+        rows = []
+        with open("/proc/self/uid_map", encoding="ascii") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                parts = line.split()
+                if len(parts) != 3:
+                    return None
+                ns_start, host_start, count = (int(x) for x in parts)
+                if ns_start < 0 or host_start < 0 or count <= 0:
+                    return None
+                rows.append((ns_start, host_start, count))
+    except (OSError, ValueError):
+        return None
+    return rows or None
+
+
+def _overflow_uid():
+    try:
+        with open("/proc/sys/kernel/overflowuid", encoding="ascii") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 65534
+
+
+# The ONLY uid_map that proves we run in the INITIAL host user namespace, where st_uid is the real
+# host uid. Any other map — including a NESTED "0 0 1" — is not the initial host, so a mapped uid 0
+# in it does not prove initial-host root and must never be trusted as such.
+_INITIAL_HOST_UID_MAP = [(0, 0, 4294967295)]
+
+
+def _managed_unit_leaf(cgroup_text):
+    """The systemd unit component (the LEAF of the cgroup-v2 path) from a '/proc/self/cgroup' text,
+    or None when the text is not a single unambiguous '0::/…' line (cgroup v1 / multi-controller /
+    empty => ambiguous => fail closed). The caller compares this for EXACT equality: a substring test
+    would accept an attacker-chosen transient scope whose path merely CONTAINS the unit name."""
+    lines = [ln.strip() for ln in cgroup_text.splitlines() if ln.strip()]
+    if len(lines) != 1 or not lines[0].startswith("0::"):
+        return None
+    return lines[0][3:].rsplit("/", 1)[-1]
+
+
+def _own_cgroup_text():
+    with open("/proc/self/cgroup", encoding="ascii") as f:
+        return f.read()
+
+
+def _in_managed_web_unit():
+    """Positive proof this process's systemd user unit is EXACTLY lhpc-web.service. The unit is the
+    innermost cgroup-v2 component (the path leaf), matched for EQUALITY — never a substring: a user
+    can name a transient scope so its cgroup path merely CONTAINS 'lhpc-web.service' (e.g.
+    'x-lhpc-web.service.scope' — systemd-run permits caller-chosen unit names). Containing names,
+    prefix/suffix lookalikes, and an unreadable/ambiguous cgroup all fail closed."""
+    try:
+        text = _own_cgroup_text()
+    except OSError:
+        return False
+    return _managed_unit_leaf(text) == "lhpc-web.service"
+
+
+def _owner_is_host_root(st_uid, *, canonical_path):
+    """True ONLY when a file's owner is INITIAL-HOST root (uid 0).
+
+    Both stat() ownership and /proc/self/uid_map are expressed relative to the CALLER's user
+    namespace, and namespaces NEST. Translating st_uid by one uid_map level reaches only the immediate
+    PARENT namespace, not the initial host: under nesting (outer 0->host 1000, inner 0->outer 0) an
+    operator-owned file reads as uid 0 with a "0 0 1" map, and a one-level translate would wrongly
+    trust it. So a mapped uid 0 is accepted ONLY when our uid_map is EXACTLY the initial-namespace
+    identity map (0 0 4294967295); every other map (0 0 1, 0 1000 1, nested, multi-row) fails closed.
+
+    LHPC's own web-console sandbox maps only its own uid (e.g. 1000 1000 1), so host root is unmapped
+    and a root receipt shows the overflow (nobody) uid. Overflow identifies ANY unmapped owner, not
+    uniquely root, so it is accepted ONLY under a positively-proven managed context: the exact
+    single-user same-ID map (host 0 unmapped) AND the canonical receipt path AND our cgroup being the
+    managed web unit. Anything else fails closed.
+
+    KNOWN RESIDUAL (accepted, not fixed — deliberate). The uid_map / cgroup / overflow evidence is
+    read via ordinary /proc pathname opens, which resolve through the CALLER's MOUNT namespace. A
+    process that can already run code as the lhpc user AND craft a user+mount namespace could
+    bind-mount a fake uid_map reading "0 0 4294967295" over /proc/self/uid_map, force the initial-host
+    branch, and get an operator-owned fake receipt (which appears as uid 0 in its rootless map)
+    accepted. Fully closing this needs openat2(RESOLVE_BENEATH|NO_XDEV|NO_SYMLINKS|NO_MAGICLINKS) from
+    an fstatfs-verified procfs fd (kernel >=5.6), failing closed elsewhere. It is intentionally NOT
+    done here because: (1) the web console — the routine consumer — is seccomp-blocked from creating
+    or entering namespaces (RestrictNamespaces=true in lhpc-web.service), so ITS reads are always its
+    real ones; (2) exploiting the remaining (non-web) path needs local code execution as the lhpc user
+    (a web RCE, or the operator on a single-user box) — post-exploitation, not remote; (3) the receipt
+    gate is defense-in-depth. Revisit if lhpc ever gains a real multi-user trust boundary.
+    """
+    uid_map = _read_uid_map()
+    if uid_map is None:
+        return False
+    if uid_map == _INITIAL_HOST_UID_MAP:               # initial host ns: st_uid is the real host uid
+        return st_uid == 0
+    # Otherwise the only trust path is the managed web-console same-ID sandbox (root -> overflow).
+    if not canonical_path or len(uid_map) != 1:
+        return False
+    ns_start, host_start, count = uid_map[0]
+    host0_mapped = any(h <= 0 < h + c for (_n, h, c) in uid_map)
+    return (ns_start == host_start and count == 1 and not host0_mapped
+            and st_uid == _overflow_uid() and _in_managed_web_unit())
+
+
+def _fw_allowed_unauth_ports(candidate):
+    """Ports the firewall is configured to ALLOW for endpoints that carry NO authentication —
+    allowing direct access there opens an unauthenticated service to the network. Endpoints in the
+    candidate are already non-loopback listeners. Returns sorted unique port strings."""
+    ports = {str(e["port"]) for e in (candidate or {}).get("endpoints", ())
+             if e.get("selected") and e.get("auth", "none") == "none"}
+    return sorted(ports, key=int)
+
 
 def _atomic_write_script(path, text, mode=0o755):
     """Write an executable script through a same-directory temp file + fsync + atomic rename —

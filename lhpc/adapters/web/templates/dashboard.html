@@ -278,13 +278,19 @@
     <div class="body">
       {% if firewall %}
       <div class="wsline fwline">
-        <a class="wsname" href="{{ url_for('stacks_overview') ~ '#firewall-row' }}">Firewall</a>
+        <a class="wsname" href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall</a>
         <span class="pill pill-{{ firewall.level }}" title="Managed firewall — declared/persistent/live are independent; green needs a verified current-boot live check">{{ firewall.line | replace('Firewall: ', '') }}</span>
         {% if firewall.foreign %}<span class="pill pill-warn" title="Foreign firewall tables are present — an lhpc allow does not guarantee reachability; a foreign chain may still drop.">foreign rules present</span>{% endif %}
         {% if firewall.has_log %}<a class="logslink hdrlogs" href="{{ url_for('firewall_logs') }}">logs</a>{% endif %}
       </div>
-      {% if not firewall.live_ok and firewall.installed %}
-        {{ cmdbox('fw-apply', 'sudo bash ' ~ runtime_root ~ '/config/files/firewall/firewall-apply.sh') }}
+      {% if not firewall.live_ok %}
+        {% if firewall.installed %}
+          {{ cmdbox('fw-apply', 'sudo bash ' ~ runtime_root ~ '/config/files/firewall/firewall-apply.sh') }}
+        {% else %}
+          <div class="wsline"><span class="muted">Not set up yet — configure it in the
+            <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall panel</a>, then run
+            the one apply command it shows.</span></div>
+        {% endif %}
       {% endif %}
       {% endif %}
       {% for w in webservers %}

@@ -1,0 +1,125 @@
+{# Managed Firewall — a sub-section INSIDE the LHCP controller row, SIBLING to Webserver (moved out
+   of the Webserver box, same level as it). The anchor id="firewall-row" MUST sit on a
+   <details class="advcfg"> (never a wrapping div) so the hash-open JS (closest('details')) opens it
+   when a dashboard link targets #firewall-row. `firewall_view` is a top-level render var (fail-safe
+   None -> the whole section is omitted). #}
+{% from "_macros.html" import cmdbox %}
+{% if firewall_view %}
+  <details class="advcfg" id="firewall-row"{% if request.args.get('open') == 'firewall' %} open data-force-open="1"{% endif %}>
+    <summary>Firewall{% if firewall_view.status %}
+      <span class="pill pill-{{ firewall_view.status.level }}">{{ firewall_view.status.line | replace('Firewall: ', '') }}</span>{% endif %}</summary>
+    <div class="body">
+      <p class="muted">lhpc renders the ruleset; you apply it with one sudo command (the console
+        never runs privileged commands). It never edits your own firewall configuration, and an
+        lhpc allow never guarantees reachability — a foreign chain may still drop.
+        <a class="logslink" href="{{ url_for('firewall_logs') }}" aria-label="firewall log">firewall log</a></p>
+
+      {# ---- Policy: read-only view of the EFFECTIVE config right now ---- #}
+      <details class="advcfg" open>
+        <summary>Policy</summary>
+        <section class="cfgsec">
+        <table class="paramgrid">
+          <tr><th>Mode</th><td>{{ 'Secure default — default-drop, only allowed ports pass'
+              if firewall_view.mode == 'secure-default'
+              else 'Compatibility — only unwanted stack ports blocked (no default-drop)' }}</td></tr>
+          <tr><th>Verified this boot</th><td>
+            Config {{ '✓' if firewall_view.status.config_ok else '✗' }} ·
+            Boot {{ '✓' if firewall_view.status.boot_ok else '✗' }} ·
+            Live {{ '✓' if firewall_view.status.live_ok else '✗' }}
+            {% if not firewall_view.status.installed %} · <span class="ver ver-red">not set up</span>{% endif %}
+          </td></tr>
+          <tr><th>Direct access allowed</th><td>
+            {% set allowed = firewall_view.endpoints | selectattr('selected') | list %}
+            {% if allowed %}{% for e in allowed %}<span class="pill {{ 'pill-warn' if e.auth == 'none' else 'pill-ok' }}"
+                title="{{ 'unauthenticated — reachable without a password' if e.auth == 'none' else 'authenticated' }}">{{ e.proto }}/{{ e.port }}{% if e.auth == 'none' %} · unauthenticated{% endif %}</span> {% endfor %}
+            {% else %}<span class="muted">none — no listener is opened directly</span>{% endif %}</td></tr>
+          <tr><th>Blocked (default-drop)</th><td>
+            {% set blocked = firewall_view.endpoints | rejectattr('selected') | list %}
+            {% if blocked %}{% for e in blocked %}<span class="pill">{{ e.proto }}/{{ e.port }}</span> {% endfor %}
+            {% else %}<span class="muted">—</span>{% endif %}</td></tr>
+          <tr><th>SSH ports allowed</th><td>{% if firewall_view.ssh_ports %}{{ firewall_view.ssh_ports | join(', ') }}
+            {% else %}<span class="muted">auto-detected from the running sshd</span>{% endif %}</td></tr>
+          <tr><th>Proxy ingress (nginx)</th><td>
+            {% if firewall_view.proxy_ingress %}{% for p in firewall_view.proxy_ingress %}<span class="pill">{{ p.proto }}/{{ p.port }} @ {{ p.addr }}</span> {% endfor %}
+            {% else %}<span class="muted">none exposed</span>{% endif %}</td></tr>
+          <tr><th>Access-Point rules</th><td>{% if firewall_view.ap.enabled %}enabled — {{ firewall_view.ap.interface or 'wlan0' }} / {{ firewall_view.ap.cidr }}
+            {% else %}<span class="muted">off</span>{% endif %}</td></tr>
+        </table>
+        <p class="muted">The raw live ruleset is root-owned; the console cannot read it, so the state
+          above is the configured policy plus the root-written verification (Config/Boot/Live).</p>
+        </section>
+      </details>
+
+      {# ---- Configure: the editable intent (collapsible — heavy form) ---- #}
+      <details class="advcfg">
+        <summary>Configure</summary>
+        <section class="cfgsec">
+          {% if firewall_view.recommend_compatibility %}
+            <p class="depnote depnote-warn">A foreign firewall configuration was detected —
+              <strong>Compatibility</strong> mode is recommended (it adds only lhpc-owned drops).
+              Secure-default is still selectable but adds an effective default-deny over the whole box.</p>
+          {% endif %}
+          <form method="post" action="{{ url_for('firewall_configure') }}">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <fieldset class="fwmode">
+              <label><input type="radio" name="mode" value="secure-default" {{ 'checked' if firewall_view.mode == 'secure-default' }}> Recommended — default-drop (only allowed ports pass)</label><br>
+              <label><input type="radio" name="mode" value="compatibility" {{ 'checked' if firewall_view.mode == 'compatibility' }}> Compatibility — only block unwanted stack ports (no default-drop)</label>
+            </fieldset>
+            <table class="paramgrid dptab">
+              <tr><th>Auto-allowed</th><td class="muted">actual SSH ports, and the external Webserver/proxy ingress you exposed</td></tr>
+              {% for e in firewall_view.endpoints %}
+              <tr>
+                <th>{{ e.id }}</th>
+                <td>
+                  <label><input type="checkbox" name="allow_{{ e.id }}" {{ 'checked' if e.selected }}>
+                    Allow direct access ({{ e.proto }}/{{ e.port }})</label>
+                  {% if e.auth == 'none' %}<span class="ver ver-red" title="This port has NO authentication. Allowing direct access exposes it unauthenticated on the network.">unauthenticated — exposes {{ e.port }} to the network</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+              <tr><th>SSH ports</th><td><input type="text" name="ssh_ports" value="{{ firewall_view.ssh_ports | join(', ') }}" placeholder="auto (leave blank)"><span class="dphelp muted"> blank = detect; a value means wildcard binding on those ports</span></td></tr>
+              <tr><th>Access-Point</th><td>
+                <label><input type="checkbox" name="ap_enabled" {{ 'checked' if firewall_view.ap.enabled }}> Enable AP DHCP/DNS server rules</label>
+                iface <input type="text" name="ap_interface" value="{{ firewall_view.ap.interface }}" placeholder="wlan0" size="7">
+                cidr <input type="text" name="ap_cidr" value="{{ firewall_view.ap.cidr }}" placeholder="10.42.0.0/24" size="14">
+              </td></tr>
+            </table>
+            <button type="submit">Save firewall settings</button>
+          </form>
+          <form method="post" action="{{ url_for('firewall_configure') }}" class="cfgreset">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="recommended" value="yes">
+            <button type="submit">Use recommended settings</button>
+          </form>
+          <form method="post" action="{{ url_for('firewall_refresh') }}" class="cfgreset">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <button type="submit">Refresh status</button>
+          </form>
+        </section>
+      </details>
+
+      {# ---- Apply & commands: the one setup command; check/reset tucked away ---- #}
+      <details class="advcfg">
+        <summary>Apply &amp; commands</summary>
+        <section class="cfgsec">
+          <p class="muted">Set up / update — run this ONE root command. It installs or refreshes the
+            firewall and verifies it; the status above turns green after the next refresh:</p>
+          {{ cmdbox('fw-apply-cmd', firewall_view.apply_cmd) }}
+          {% if firewall_view.cleanup_cmd %}
+            <p class="depnote depnote-warn">A listener migration is in progress — the old scope is
+              preserved until you complete the move, then run cleanup:</p>
+            {{ cmdbox('fw-cleanup-cmd', firewall_view.cleanup_cmd) }}
+          {% endif %}
+          <details class="fwextra">
+            <summary>Other commands (optional — not part of setup)</summary>
+            <p class="muted">Re-run the live verification now (it also runs automatically on a timer):</p>
+            {{ cmdbox('fw-check-cmd', firewall_view.check_cmd) }}
+            <p class="depnote depnote-warn">Remove the managed firewall. This UNDOES the apply above and
+              returns to “setup required” — do not run it as part of setup.</p>
+            {{ cmdbox('fw-reset-cmd', firewall_view.reset_cmd) }}
+          </details>
+        </section>
+      </details>
+    </div>
+  </details>
+{% endif %}

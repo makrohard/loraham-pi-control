@@ -56,6 +56,23 @@ def _isolated_runtime_root(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _fw_host_isolation(monkeypatch, tmp_path_factory):
+    """HERMETIC: the managed-firewall READ side consults HOST-GLOBAL paths (/etc/lhpc,
+    /etc/systemd/system wants, /run/lhpc-firewall/check.json). On a box where the operator has
+    actually applied the firewall those artifacts exist, every test service reads integration
+    'present', and the exposure gate goes red across the whole suite (live find: 24 failures the
+    hour the firewall was installed on the dev Pi). Default the class-level readers to the
+    fresh-machine answer and point the receipt at an empty per-test path; firewall tests that
+    exercise these functions stub them per-INSTANCE (or pass explicit paths) and are unaffected."""
+    from lhpc.core import firewall as fwm
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "_fw_integration_state", lambda self: "absent")
+    monkeypatch.setattr(ControllerService, "_fw_units_enabled", lambda self: False)
+    monkeypatch.setattr(fwm, "RECEIPT_PATH",
+                        str(tmp_path_factory.mktemp("fw-iso") / "check.json"))
+
+
+@pytest.fixture(autouse=True)
 def _default_hardware(request, monkeypatch):
     """A fresh install has NO radio hardware configured (the daemon refuses to start), but nearly every
     test exercises a working box. So the test BASELINE defaults to the LoRaHAM dual-radio setup — i.e.

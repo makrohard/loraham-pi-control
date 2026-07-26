@@ -88,7 +88,18 @@ def _run(script: Path, args, home: Path, fakebin: Path, *, real_first=False):
     path = f"{fakebin}:/usr/bin:/bin" if not real_first else f"/usr/bin:/bin:{fakebin}"
     env = {**os.environ, "HOME": str(home), "PATH": path}
     env.pop("VIRTUAL_ENV", None)
-    return subprocess.run(["bash", str(script), *args], env=env, cwd=str(home),
+    # HERMETIC — with NO production override. The shipped uninstall.sh hard-codes the canonical
+    # firewall roots (/etc/lhpc, /etc/systemd/system) so a production caller can never redirect its
+    # fail-closed preflight. To keep the suite hermetic (the dev box's own applied firewall must not
+    # trip the guard — live find: 14 red the hour the operator applied it on the Pi), tests run a
+    # COPY of the script with just those two roots rewritten to empty per-test dirs. The seam lives
+    # in the test, never in shipped code; the replace is a no-op for install.sh.
+    text = script.read_text()
+    text = text.replace('FW_ETC="/etc/lhpc"', f'FW_ETC="{home / "no-fw-etc"}"')
+    text = text.replace('FW_SYSD="/etc/systemd/system"', f'FW_SYSD="{home / "no-fw-sysd"}"')
+    run_script = home / f".{script.name}.hermetic"
+    run_script.write_text(text)
+    return subprocess.run(["bash", str(run_script), *args], env=env, cwd=str(home),
                           capture_output=True, text=True, timeout=600)
 
 

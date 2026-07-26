@@ -869,6 +869,108 @@ def test_receipt_reader_rejects_nonroot_symlink_and_unsafe(tmp_path, monkeypatch
     assert svc._fw_read_receipt(str(rp)) is None       # group-writable -> reject
 
 
+def test_owner_is_host_root_userns_translation(monkeypatch):
+    """st_uid and uid_map are BOTH relative to the caller's userns and namespaces NEST, so a mapped
+    uid 0 is trusted ONLY under the exact INITIAL identity map (0 0 4294967295) — a nested "0 0 1"
+    must be rejected. The overflow fallback (web sandbox) is gated on the exact same-ID map + the
+    canonical path + a positively-proven managed cgroup."""
+    from lhpc.core import service_firewall as m
+    monkeypatch.setattr(m, "_overflow_uid", lambda: 65534)
+    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: True)        # default: in the managed unit
+
+    def use_map(rows):
+        monkeypatch.setattr(m, "_read_uid_map", lambda: rows)
+
+    # initial identity map "0 0 4294967295", st_uid 0 -> ACCEPT; non-root uid -> reject
+    use_map([(0, 0, 4294967295)])
+    assert m._owner_is_host_root(0, canonical_path=True) is True
+    assert m._owner_is_host_root(0, canonical_path=False) is True
+    assert m._owner_is_host_root(1000, canonical_path=True) is False
+
+    # DECISIVE nested case: non-initial identity-looking "0 0 1" + st_uid 0 -> REJECT
+    use_map([(0, 0, 1)])
+    assert m._owner_is_host_root(0, canonical_path=True) is False
+
+    # rootless "0 1000 1" + st_uid 0 -> REJECT
+    use_map([(0, 1000, 1)])
+    assert m._owner_is_host_root(0, canonical_path=True) is False
+    assert m._owner_is_host_root(0, canonical_path=False) is False
+
+    # managed same-ID sandbox "1000 1000 1", overflow owner
+    use_map([(1000, 1000, 1)])
+    assert m._owner_is_host_root(65534, canonical_path=True) is True    # canonical + managed cgroup
+    assert m._owner_is_host_root(65534, canonical_path=False) is False  # non-canonical
+    assert m._owner_is_host_root(1000, canonical_path=True) is False    # our own uid, not overflow
+    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: False)
+    assert m._owner_is_host_root(65534, canonical_path=True) is False   # wrong context (not managed)
+    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: True)
+
+    # fail closed: unreadable map, and any multi-row / non-exact map
+    use_map(None)
+    assert m._owner_is_host_root(0, canonical_path=True) is False
+    use_map([(0, 0, 4294967295), (1000, 1000, 1)])
+    assert m._owner_is_host_root(0, canonical_path=True) is False
+
+
+def test_managed_web_unit_exact_identity(monkeypatch):
+    """The managed-unit proof must be the EXACT cgroup-v2 leaf unit, not a substring — a user can
+    name a transient scope so the path merely contains 'lhpc-web.service'."""
+    from lhpc.core import service_firewall as m
+    real = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/lhpc-web.service"
+    assert m._managed_unit_leaf(real) == "lhpc-web.service"
+    for spoof in ("0::/user.slice/user-1000.slice/user@1000.service/app.slice/attacker-lhpc-web.service.scope",
+                  "0::/user.slice/user-1000.slice/user@1000.service/app.slice/lhpc-web.service-evil.scope",
+                  "0::/foo/lhpc-web.service.fake"):
+        assert m._managed_unit_leaf(spoof) != "lhpc-web.service"
+    # ambiguous cgroup (empty, or cgroup-v1 / multi-controller) => None => not the managed unit
+    assert m._managed_unit_leaf("") is None
+    assert m._managed_unit_leaf("1:name=systemd:/a\n0::/b") is None
+
+    # _in_managed_web_unit drives the EXACT check via the (mockable) cgroup read
+    monkeypatch.setattr(m, "_own_cgroup_text", lambda: real)
+    assert m._in_managed_web_unit() is True
+    monkeypatch.setattr(m, "_own_cgroup_text", lambda: "0::/user.slice/x-lhpc-web.service.scope")
+    assert m._in_managed_web_unit() is False
+    def boom():
+        raise OSError()
+    monkeypatch.setattr(m, "_own_cgroup_text", boom)
+    assert m._in_managed_web_unit() is False
+
+
+def test_receipt_reader_userns_translation_end_to_end(tmp_path, monkeypatch):
+    """Through _fw_read_receipt on the canonical path: a nested-namespace forgery reading as uid 0
+    (map "0 0 1") is REJECTED; the legitimate managed web sandbox (overflow + EXACT lhpc-web.service
+    cgroup) is ACCEPTED; and a SPOOFED cgroup whose name merely CONTAINS the unit string is REJECTED."""
+    import os as _os
+
+    from lhpc.core import service_firewall as m
+    svc = _svc(tmp_path)
+    rp = tmp_path / "check.json"
+    _write_receipt(str(rp))
+    monkeypatch.setattr(fw, "RECEIPT_PATH", str(rp))               # make this file the canonical path
+    monkeypatch.setattr(m, "_overflow_uid", lambda: 65534)
+    monkeypatch.setattr(m, "_own_cgroup_text",
+                        lambda: "0::/user.slice/user-1000.slice/user@1000.service/app.slice/lhpc-web.service")
+    monkeypatch.setattr("lhpc.core.service_firewall.stat.S_ISREG", lambda mm: True)
+    real = _os.fstat
+
+    def fake_owner(uid):
+        monkeypatch.setattr(_os, "fstat", lambda fd: type("S", (), {
+            "st_mode": real(fd).st_mode & ~0o022, "st_uid": uid, "st_size": real(fd).st_size})())
+
+    # nested namespace (0 0 1): a fake operator-owned file reads as uid 0 -> MUST be rejected.
+    monkeypatch.setattr(m, "_read_uid_map", lambda: [(0, 0, 1)])
+    fake_owner(0)
+    assert svc._fw_read_receipt() is None
+    # legitimate managed web sandbox (same-ID map, overflow owner, EXACT unit) -> accepted.
+    monkeypatch.setattr(m, "_read_uid_map", lambda: [(1000, 1000, 1)])
+    fake_owner(65534)
+    assert svc._fw_read_receipt() is not None
+    # SPOOFED cgroup whose name only CONTAINS the unit string -> rejected.
+    monkeypatch.setattr(m, "_own_cgroup_text", lambda: "0::/user.slice/x-lhpc-web.service.scope")
+    assert svc._fw_read_receipt() is None
+
+
 def test_status_dimensions_and_freshness(tmp_path, monkeypatch):
     import time as _t
     svc = _svc(tmp_path)
@@ -1396,7 +1498,15 @@ def test_boot_gate_noop_without_integration(tmp_path):
 def test_uninstall_refuses_while_firewall_integration_installed():
     import pathlib
     src = pathlib.Path("uninstall.sh").read_text()
-    assert "/etc/lhpc/firewall-helper" in src
+    # SECURITY REGRESSION: the firewall roots must be HARD-CODED with NO caller-controlled override.
+    # A variable-driven root (even one named LHPC_TEST_*) lets a production caller point the
+    # preflight at an empty dir and orphan a live, boot-persistent firewall. The shipped script must
+    # therefore contain no such override at all; the hermetic test seam lives only in the tests
+    # (they run a copy with the canonical roots substituted).
+    assert "LHPC_TEST_FW" not in src
+    assert 'FW_ETC="/etc/lhpc"' in src
+    assert 'FW_SYSD="/etc/systemd/system"' in src
+    assert 'FW_HELPER="${FW_ETC}/firewall-helper"' in src
     assert "managed firewall integration is still installed" in src
     assert "firewall-reset.sh" in src
     # ownership-metadata-missing also blocks (never orphan a boot-persistent firewall)
@@ -1733,7 +1843,12 @@ def test_integration_state_classification(tmp_path, monkeypatch):
     # or a present journal (pending recovery / unsafe) is 'partial'; nothing at all is 'absent'.
     import os
     from lhpc.core import firewall as fwm
+    from lhpc.core.service_firewall import FirewallOpsMixin
     svc = _svc(tmp_path)
+    # the hermetic conftest fixture defaults this reader to "absent" suite-wide (host /etc
+    # isolation); THIS test exercises the real classification, so bind the mixin original.
+    monkeypatch.setattr(svc, "_fw_integration_state",
+                        FirewallOpsMixin._fw_integration_state.__get__(svc))
     files = {}   # simulated filesystem presence
     monkeypatch.setattr(os.path, "exists", lambda p: files.get(p, False))
     assert svc._fw_integration_state() == "absent"

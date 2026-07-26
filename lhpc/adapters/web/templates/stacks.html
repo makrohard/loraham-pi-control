@@ -45,7 +45,7 @@
          otherwise a link to another row would paint two open main rows at first load. #}
       {% set _explicit_row = request.args.get('open') or request.args.get('cfg') or request.args.get('dp') or request.args.get('inst') %}
       <div class="stackrow-wrap">
-      <details class="stackrow" id="controller-row"{% if confirm or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
+      <details class="stackrow" id="controller-row"{% if confirm or request.args.get('open') == 'firewall' or (not _explicit_row and 'controller-row' in restored_open) %} open{% endif %}>
         <summary>
           <span class="col-name"><span class="ss-name">{{ controller.display_name }}</span></span>
           {# Static 'console up' badge (green badge-ok, NOT badge-running): truthful — the web console
@@ -111,6 +111,8 @@
               {% include "_webserver.html" %}
             {% endwith %}
           {% endif %}
+          {# Managed Firewall — sibling of Webserver, INSIDE the LHCP controller row #}
+          {% include "_firewall.html" %}
         </div>
       </details>
       {# Action links OUTSIDE the summary (a11y) but overlaid on the row. #}
@@ -121,6 +123,7 @@
       </div>
       </div>
       {% endif %}
+
       {% for g in groups %}
         {# `restored_open` (from the lhpc_open cookie) makes a remembered-open row render inline+open at
            first paint, so re-opening it on reload causes no layout shift — same effect as a ?open= row. #}

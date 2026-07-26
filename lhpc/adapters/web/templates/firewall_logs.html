@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Firewall log — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# The managed firewall's own per-check diagnostic (firewall.log), written by the root helper to
+     tmpfs. Static tail — reload to refresh. NOT the nginx access/error logs (those live on the
+     Webserver logs page). #}
+  <div class="card">
+    <header>
+      <h2>Firewall log <span class="pill">firewall.log</span></h2>
+      <span class="tabs">
+        <a href="{{ url_for('firewall_logs') }}" class="pill">reload</a>
+        <a href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}" class="pill">← Firewall</a>
+      </span>
+    </header>
+    <div class="body">
+      <p class="muted">Per-check diagnostic written by the root helper to
+        <code>{{ path or '(no log file yet)' }}</code> (tmpfs — reset each boot; empty until the
+        firewall has been applied/checked).</p>
+      <pre class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+    </div>
+  </div>
+{% endblock %}

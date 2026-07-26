@@ -8,7 +8,6 @@ ownership inventory (v0 legacy + v1, integrity diagnostics, directory states).
 """
 
 import json
-import os
 import subprocess
 
 import pytest
@@ -244,7 +243,7 @@ def test_direct_component_start_records_component_scope(tmp_path, monkeypatch):
     fake = FakeSystem(unix_replies={"/tmp/loraconf433.sock": reply})   # daemon already serving
     (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)       # kiss installed
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    from tests.conftest import set_call
+    from conftest import set_call
     set_call(svc)
     captured = {}
     monkeypatch.setattr(ControllerService, "is_built", lambda self, comp: True)
@@ -976,7 +975,7 @@ def _serving_svc(tmp_path, monkeypatch, *, hardware=False, sockets=("/tmp/loraco
         (tmp_path / "config").mkdir(parents=True, exist_ok=True)
         (tmp_path / "config" / "local.toml").write_text('[radio]\nhardware = "loraham"\n')
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    from tests.conftest import set_call
+    from conftest import set_call
     set_call(svc)
     monkeypatch.setattr(ControllerService, "is_built", lambda self, comp: True)
     monkeypatch.setattr(lifecycle_mod.Lifecycle, "missing_requirements", lambda self, comp: [])
