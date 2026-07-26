@@ -1039,6 +1039,27 @@ class ParamsConfigMixin:
         return ActionResult(True, "operator identity saved",
                             details=[f"  callsign = {new_call or '(unset)'}"])
 
+    def boot_restore_enabled(self) -> "tuple[bool, str]":
+        """(enabled, reason). FAIL-CLOSED: enabled only when the [boot] config is VALID and
+        restore is true — a malformed/mistyped switch disables restoration with the reason."""
+        cfg = self.config().boot
+        if not cfg.valid:
+            return False, cfg.reason or "invalid [boot] config"
+        return bool(cfg.restore), "" if cfg.restore else "disabled by [boot] restore"
+
+    def set_boot_restore(self, enabled: bool) -> ActionResult:
+        """Persist the boot auto-restore switch (applies at the NEXT boot)."""
+        from .config import ConfigError, save_boot_restore
+        if not isinstance(enabled, bool):
+            return ActionResult(False, "boot restore switch must be a boolean")
+        try:
+            save_boot_restore(self._paths, enabled)
+        except (OSError, ConfigError) as exc:
+            return ActionResult(False, f"could not save the boot restore switch: {exc}")
+        self._invalidate_config()
+        state = "ON" if enabled else "OFF"
+        return ActionResult(True, f"Boot auto-restore switched {state} — applies at the next boot.")
+
     def set_hardware_setup(self, setup_id: str | None = None) -> ActionResult:
         """Set the radio HARDWARE setup (`[radio].hardware` in local.toml) — e.g. 'loraham',
         'uputronics', 'waveshare-433'. No arg reports the current setup + served bands. 'unset' means

@@ -28,13 +28,16 @@ PATH_UNIT = "lhpc-selfupdate.path"
 NGINX_UNIT = "lhpc-nginx.service"
 RESTART_UNIT = "lhpc-nginx-restart.service"
 RESTART_PATH_UNIT = "lhpc-nginx-restart.path"
-ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT, RESTART_UNIT, RESTART_PATH_UNIT)
+BOOT_RESTORE_UNIT = "lhpc-boot-restore.service"
+ALL_UNITS = (WEB_UNIT, HELPER_UNIT, PATH_UNIT, NGINX_UNIT, RESTART_UNIT, RESTART_PATH_UNIT,
+             BOOT_RESTORE_UNIT)
 
 # On-disk log files the controller units append to (StandardOutput/StandardError below). These are
 # the controller's OWN process logs — read by the GUI controller-logs page (the box's user journal
 # is not always populated, so file logging is the reliable source). Owned here beside the units.
 WEB_LOG_REL = ("logs", "lhpc-web.log")
 HELPER_LOG_REL = ("logs", "lhpc-selfupdate.log")
+BOOT_RESTORE_LOG_REL = ("logs", "lhpc-boot-restore.log")
 
 # in-root request-transaction paths (relative to the runtime root)
 REQUEST_REL = ("state", "selfupdate.request")
@@ -304,8 +307,75 @@ Unit=lhpc-nginx-restart.service
 WantedBy=default.target
 """
 
+_BOOT_RESTORE = """\
+# LoRaHAM Pi Control boot restore — CANONICAL managed unit (generated; do not hand-edit).
+# Rendered by lhpc.core.updater_units; the one-click updater proves this file BYTE-EXACT.
+# Restore with `lhpc self-update --repair-integration` after any change.
+[Unit]
+Description=LoRaHAM Pi Control boot restore (restart the stacks that were running)
+Documentation=file://{checkout}/docs/deployment.md
+# Ordering only. The USER-manager network-online.target is DECORATIVE (reached immediately; it
+# does not track NetworkManager the way the system target does) — nothing in the restore path may
+# rely on the network being up; restored stacks tolerate late network via their normal start
+# paths. Do not "fix" a race by leaning on this line.
+After=network-online.target lhpc-web.service
+Wants=network-online.target
+# Defense in depth: never fire mid-uninstall. Admission stays authoritative.
+ConditionPathExists=!{root}/{guard}
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+# The unit stays ACTIVE after the run: a later `systemctl --user start` is a no-op (ExecStart is
+# not re-invoked); an explicit `restart` re-runs the driver, which then finds consumed evidence.
+RemainAfterExit=yes
+# INTENTIONAL (same contract as lhpc-web.service): the stacks this driver restores live in THIS
+# unit's control group. KillMode matters when the unit is STOPPED, RESTARTED or TIMES OUT — the
+# default control-group mode would kill every restored stack then. (A successful ExecStart exit
+# does not itself stop the unit.) Only the driver process may ever be killed.
+KillMode=process
+# The runtime root is deliberately configurable via LHPC_RUNTIME_ROOT — without it a non-default
+# installation would run the correct binary against the default root.
+Environment=LHPC_RUNTIME_ROOT={root}
+WorkingDirectory={checkout}
+ExecStart={venv}/bin/lhpc autostart --run-service
+# Generous: a full restore waits out real readiness gates (meshcom alone allows 600 s). A timeout
+# SIGTERMs ONLY the driver (KillMode=process) — already-restored stacks survive, un-attempted
+# evidence remains restorable via an explicit restart.
+TimeoutStartSec=1800
+StandardOutput=append:{root}/logs/lhpc-boot-restore.log
+StandardError=append:{root}/logs/lhpc-boot-restore.log
+SyslogIdentifier=lhpc-boot-restore
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Same write set as lhpc-web.service: the restored stacks are the SAME workloads.
+ReadWritePaths={root} -%h/.meshcore_nm /tmp
+Environment=PLATFORMIO_CORE_DIR={root}/build/tool-cache/platformio
+Environment=IDF_TOOLS_PATH={root}/build/tool-cache/espressif
+Environment=XDG_CACHE_HOME={root}/build/tool-cache/cache
+Environment=PIP_CACHE_DIR={root}/build/tool-cache/pip
+# Bus-blind like the console: the driver only spawns processes and reads files.
+InaccessiblePaths=%t/bus %t/systemd/private
+PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH
+RestrictNamespaces=true
+LockPersonality=true
+# MemoryDenyWriteExecute is OMITTED — restored stacks include QEMU (TCG JIT needs W+X).
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
+"""
+
+
 _TEMPLATES = {WEB_UNIT: _WEB, HELPER_UNIT: _HELPER, PATH_UNIT: _PATH, NGINX_UNIT: _NGINX,
-              RESTART_UNIT: _NGINX_RESTART, RESTART_PATH_UNIT: _NGINX_RESTART_PATH}
+              RESTART_UNIT: _NGINX_RESTART, RESTART_PATH_UNIT: _NGINX_RESTART_PATH,
+              BOOT_RESTORE_UNIT: _BOOT_RESTORE}
 
 
 def render(kind: str, root: str, checkout: str, venv: str) -> str:
@@ -456,7 +526,7 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
 
 def integration(user_dir: Path, root: str) -> dict:
     """Aggregate one-click integration status for the deployment rooted at `root`. FILE READS
-    ONLY (GET-safe; no subprocess, no bus). `status` is `ok` only when ALL three units are `ok`."""
+    ONLY (GET-safe; no subprocess, no bus). `status` is `ok` only when EVERY canonical unit is `ok`."""
     _, checkout, venv = deployment_paths(root)
     per = {k: verify(user_dir, k, root, checkout, venv) for k in ALL_UNITS}
     if any(v in (FOREIGN, OVERRIDDEN, UNSAFE) for v in per.values()):

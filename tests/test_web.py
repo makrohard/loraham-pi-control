@@ -1051,7 +1051,7 @@ def test_stack_save_and_start_scoped_per_component(tmp_path, monkeypatch):      
     from lhpc.core import config as cfgmod
     m, c = _collide_app(tmp_path)
     seen = {}
-    def stub(self, stack, comp, cfg, band=""):
+    def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
@@ -1113,7 +1113,7 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
            data={"_csrf": tok, "band": "", "c_tgt__rp": "RP-T", "c_dep__rp": "RP-D",
                  "c_uniq": "U", "f_tgt__fp": "FP-T", "f_dep__fp": "FP-D"})
     seen = {}
-    def stub(self, stack, comp, cfg, band=""):
+    def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)

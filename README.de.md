@@ -366,7 +366,24 @@ Details samt Browser-Runbook für Client-Zertifikate: [`docs/webserver.md`](docs
 ## Autostart
 
 Die Installation richtet die Konsole für den Systemstart ein (rootlose User-Units + Lingering).
-Stacks starten **nicht** automatisch — die startest du über Konsole oder CLI.
+Stacks, die **vor einem Neustart liefen, werden automatisch wieder gestartet** (Standard: an):
+Beim Booten startet `lhpc-boot-restore.service` jeden Stack neu, der per LHPC gestartet und vor
+dem Reboot nicht gestoppt wurde — über den normalen Startpfad mit der **gespeicherten**
+Konfiguration. Alle Prüfungen (Hardware, Band-Arbitrierung, Rufzeichen, Firewall-Exposure)
+gelten unverändert; das TX-Verhalten kommt strikt aus der gespeicherten Konfiguration, nie aus
+einmaligen Overrides einer früheren Sitzung.
+
+```bash
+lhpc autostart          # Schalter und letztes Boot-Restore-Ergebnis anzeigen
+lhpc autostart off      # abschalten (gilt ab dem NÄCHSTEN Boot)
+lhpc autostart on       # wieder einschalten (Standard)
+```
+
+Derselbe Schalter steht im Webserver-Panel der Konsole ("Boot restore"). Die Wiederherstellung
+läuft nur, wenn die Web-Konsolen-Unit aktiviert und unverändert ist — eine deaktivierte oder
+angepasste Konsole schaltet sie wirksam ab. Ein Stack, dessen Wiederherstellung fehlschlägt,
+wird **nicht erneut versucht**; starte ihn selbst mit `lhpc stack start <id>` (das sagt auch das
+Dashboard-Banner).
 
 ```bash
 systemctl --user disable lhpc-nginx lhpc-web     # Konsole: nicht beim Booten starten

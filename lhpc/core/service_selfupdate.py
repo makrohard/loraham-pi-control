@@ -19,7 +19,13 @@ class SelfUpdateOpsMixin:
         selects the file: 'selfupdate' -> lhpc-selfupdate.log, anything else -> lhpc-web.log. Same
         containment-safe, O_NOFOLLOW, bounded read as `webserver_log_tail`; never raises into GET."""
         from . import runtime_fs, updater_units
-        const = updater_units.HELPER_LOG_REL if source == "selfupdate" else updater_units.WEB_LOG_REL
+        # EXPLICIT immutable source map — an unknown source is rejected (empty result), never
+        # silently aliased to the web log (P1-6).
+        const = {"web": updater_units.WEB_LOG_REL,
+                 "selfupdate": updater_units.HELPER_LOG_REL,
+                 "boot-restore": updater_units.BOOT_RESTORE_LOG_REL}.get(source)
+        if const is None:
+            return "", []
         try:
             n = max(1, min(int(lines), 5000))                 # clamp to a sane bounded range
         except (TypeError, ValueError):
@@ -1036,6 +1042,16 @@ class SelfUpdateOpsMixin:
         if web_en.returncode != 0:
             return ActionResult(False, "Could not enable the web service (lhpc-web.service) — not "
                                 "proceeding.", data={"web_enable_failed": True})
+        # Boot restore: plain `enable` (NEVER --now — enabling must not trigger a restore run;
+        # restoration is additionally gated on [boot] restore + a canonical enabled web unit).
+        # Systemd is demonstrably available at this point, so an enable failure is a REPAIR
+        # FAILURE — never fail-soft-and-report-success for an autonomous process starter.
+        br_en = self._system.runner.run(["systemctl", "--user", "enable",
+                                         updater_units.BOOT_RESTORE_UNIT], timeout=S)
+        if br_en.returncode != 0:
+            return ActionResult(False, "Could not enable the boot-restore unit "
+                                "(lhpc-boot-restore.service) — not proceeding.",
+                                data={"boot_restore_enable_failed": True})
         # The watcher MUST be active now — in BOTH modes (a migration's still-running OLD web does not
         # pull it up via Wants=, and a CLI repair must not silently leave it down) — otherwise a queued
         # request is never consumed. Fail BEFORE writing the root marker / restarting.

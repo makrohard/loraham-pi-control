@@ -20,6 +20,16 @@ Operational rules for `lhpc`. See `architecture.md` for internals.
 On each run it reconstructs real state from systemd, process identity, endpoint
 probes, source/pin state and resource ownership — never from a stale PID file.
 
+The one boot-time exception is **boot restore** (`lhpc autostart`, default on): after a reboot,
+`lhpc-boot-restore.service` runs the driver ONCE and exits — it is not a supervisor either. It
+restores the stacks that were **LHPC-owned and never verifiably stopped** before the reboot —
+not literally "alive at power-off": a stack that crashed shortly before the reboot may be
+restored too, and that is safe because every restored start replays the **saved** configuration
+through the normal gated start path (hardware, band arbitration, callsign, firewall exposure,
+TX mode strictly from saved config). One-off confirm-page overrides from the previous session
+are never replayed. Each piece of pre-reboot evidence is consumed exactly once: a failed restore
+is not retried — the dashboard banner and `lhpc autostart` name the stacks to start manually.
+
 ## Fast vs explicit
 
 - Fast & bounded (no network, no build, no mutation, no RF): `status`, `explain`,

@@ -19,3 +19,6 @@ callsign = "N0CALL"        # <- your callsign (runtime-local only)
 # Per-component source overrides, e.g. pin a different local path or branch:
 # [sources.loraham-daemon-433]
 # path = "src/loraham-daemon"
+
+# [boot]
+# restore = false        # do not restart previously running stacks after a reboot

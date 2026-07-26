@@ -18,6 +18,7 @@ verifies it via the daemon's STATS counter — never a continuous transmission.
 from __future__ import annotations
 
 import json
+import secrets
 import os
 import shutil
 import signal
@@ -146,6 +147,18 @@ class TxTestResult:
     txok_after: int | None
     detail: str
     evidence: dict = field(default_factory=dict)
+
+
+def current_boot_id() -> str:
+    """The kernel's per-boot UUID (/proc/sys/kernel/random/boot_id); "" when unreadable.
+    THE shared definition of "this boot" — ownership records stamp it, cessation/verification
+    compare against it, and the boot-restore driver gates on it. An empty value must always be
+    treated as "cannot prove" (conservative), never as a wildcard match."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "rb") as fh:
+            return fh.read(64).decode("ascii", errors="replace").strip()
+    except OSError:
+        return ""
 
 
 class Lifecycle:
@@ -381,7 +394,8 @@ class Lifecycle:
 
 
     def start(self, stack: Stack, comp: Component, params: dict | None = None,
-              band: str = "") -> StartLaunch:
+              band: str = "", *, requested_target: str = "",
+              start_scope: str = "") -> StartLaunch:
         """Launch a component detached with NO shell: typed pre-steps run in Python,
         then the target is exec'd directly via Popen(shell=False, cwd, env). The real
         process identity is observed before ownership is recorded (no shell-to-exec
@@ -436,7 +450,9 @@ class Lifecycle:
             pid = self._spawn(argv, log, cwd=cwd, env=env)
         except (OSError, PathContainmentError) as exc:
             return StartLaunch(False, str(log), str(exc))
-        status = self._observe_and_record(stack, comp, pid, band, argv)
+        status = self._observe_and_record(stack, comp, pid, band, argv,
+                                          requested_target=requested_target,
+                                          start_scope=start_scope)
         if status == "ok":
             return StartLaunch(True, str(log))
         # Not owned. Distinguish a clean failure (residual verified gone) from an
@@ -450,7 +466,8 @@ class Lifecycle:
                            "launch could not be owned — residual process terminated")
 
     def _observe_and_record(self, stack: Stack, comp: Component, pid: int | None,
-                            band: str, intended_argv: list[str]) -> str:
+                            band: str, intended_argv: list[str], *,
+                            requested_target: str = "", start_scope: str = "") -> str:
         """Observe the launched pid's identity then persist ownership. Returns:
           * "ok"         — identity observed AND a durable ownership record persisted;
           * "ceased"     — could not be owned, but the residual process is verified gone;
@@ -462,7 +479,9 @@ class Lifecycle:
             # so the zero-observation path follows the SAME no-signal-without-identity
             # rule as the normal path.
             ident = self._capture_identity(pid)
-            if self.record_launch(stack, comp, pid, band, ident=ident):
+            if self.record_launch(stack, comp, pid, band, ident=ident,
+                                  requested_target=requested_target,
+                                  start_scope=start_scope):
                 return "ok"
             return "ceased" if self._terminate_unobserved(pid, ident) else "unverified"
         if not pid:
@@ -490,7 +509,9 @@ class Lifecycle:
                 if (self._identity_complete(launch_ident) and obs_ident is not None
                         and str(obs_ident.get("starttime")) != str(launch_ident.get("starttime"))):
                     return "unverified"
-                if self.record_launch(stack, comp, pid, band, ident=obs_ident):
+                if self.record_launch(stack, comp, pid, band, ident=obs_ident,
+                                      requested_target=requested_target,
+                                      start_scope=start_scope):
                     return "ok"
                 # Identity observed but ownership could NOT be persisted -> never claim
                 # the launch; terminate the verified-owned session.
@@ -783,7 +804,8 @@ class Lifecycle:
 
     def record_launch(self, stack: Stack, comp: Component, pid: int | None,
                       band: str = "", ident: dict | None = None, role: str = "",
-                      binding: dict | None = None, extra: dict | None = None) -> bool:
+                      binding: dict | None = None, extra: dict | None = None, *,
+                      requested_target: str = "", start_scope: str = "") -> bool:
         """Atomically persist an LHPC-owned launch with its full process identity, via
         the safe runtime FS (no symlink-leaf, fsync'd). Returns True ONLY when the
         record was durably written. A start must NOT be reported owned/verified unless
@@ -807,10 +829,27 @@ class Lifecycle:
         # but tagged role="post" and given a role-scoped launch_id, so it never collides with the
         # main record and is filtered out of status (the main component never looks duplicated).
         tag = f"{role}-" if role else ""
-        rec = {"launch_id": f"{comp.id}__{band or 'x'}__{tag}{pid}", "stack": stack.id,
-               "component": comp.id, "band": band or "", "pid": pid, "role": role,
-               "launched_at": int(time.time()), **(extra or {}),
-               **(binding or {}), **(ident or {})}
+        # Per-launch 128-bit nonce: the old deterministic name (component__band__pid) let a
+        # post-reboot pid reuse OVERWRITE the previous record — and a later prune of the old
+        # record would then delete the NEW one. With the nonce in the filename that collision
+        # class is gone entirely.
+        nonce = secrets.token_hex(16)
+        rec = {**(extra or {}), **(binding or {}), **(ident or {})}
+        # RESERVED core identity — constructed LAST so no extra/binding/identity key can ever
+        # override it (schema v1). `requested_target`/`start_scope` record what the operator's
+        # ORIGINAL operation was: a direct main-component start is otherwise indistinguishable
+        # from a full-stack start, and boot-restore must never widen a component start into a
+        # stack restore. Post-runner records (role="post") carry defaults — they are never
+        # restore evidence (eligibility requires role=="").
+        rec.update({
+            "version": 1,
+            "launch_id": f"{comp.id}__{band or 'x'}__{tag}{pid}__{nonce}",
+            "stack": stack.id, "component": comp.id,
+            "requested_target": requested_target, "start_scope": start_scope,
+            "band": band or "", "pid": pid, "role": role,
+            "launched_at": int(time.time()),
+            "boot_id": current_boot_id(),
+        })
         path = self._owned_dir() / f"{rec['launch_id']}.json"
         try:
             runtime_fs.atomic_write(self.paths, path, json.dumps(rec), 0o600)
@@ -818,36 +857,106 @@ class Lifecycle:
         except (OSError, PathContainmentError):
             return False                 # could not persist ownership -> not owned
 
+    # Bounded ownership-record size: far above any real record (~1 KiB), far below abuse.
+    _OWNED_MAX_BYTES = 64 * 1024
+    # v0 = every record the previous releases wrote (deterministic launch_id, no version/boot/
+    # scope fields). v1 adds the reserved core set. ONE definition for the stop AND restore paths.
+    _OWNED_V0_KEYS = ("launch_id", "stack", "component", "band", "pid", "role", "launched_at")
+    _OWNED_V1_EXTRA = ("requested_target", "start_scope", "boot_id")
+
+    def _validate_owned_record(self, name: str, rec) -> str:
+        """"" when valid (v0 or v1), else a short reason. `name` is the filename leaf."""
+        if not isinstance(rec, dict):
+            return "not a JSON object"
+        for k in self._OWNED_V0_KEYS:
+            if k not in rec:
+                return f"missing field {k!r}"
+        if not all(isinstance(rec[k], str) for k in
+                   ("launch_id", "stack", "component", "band", "role")):
+            return "core string field has wrong type"
+        if not isinstance(rec["pid"], int) or isinstance(rec["pid"], bool) or rec["pid"] <= 0:
+            return "invalid pid"
+        if not isinstance(rec["launched_at"], (int, float)) or isinstance(rec["launched_at"], bool):
+            return "invalid launched_at"
+        if name != f"{rec['launch_id']}.json":
+            return "filename does not match launch_id"
+        version = rec.get("version")
+        if version is None:
+            return ""                                   # v0 legacy — valid as-is
+        if version != 1:
+            return f"unknown record version {version!r}"
+        for k in self._OWNED_V1_EXTRA:
+            if not isinstance(rec.get(k), str):
+                return f"v1 field {k!r} missing or wrong type"
+        if rec["start_scope"] not in ("stack", "component", ""):
+            return "invalid start_scope"
+        return ""
+
+    def owned_inventory(self) -> tuple[list[dict], list[dict], str]:
+        """THE single owned-records enumerator/validator: `(valid_records, integrity_issues,
+        directory_state)`. `directory_state`: "ok" | "missing" (valid empty inventory) |
+        "unsafe" (containment/symlink failure — boot restore must BLOCK, the stop path simply
+        sees no records). One malformed leaf is reported and skipped; unrelated valid records
+        stay usable. `_path` is injected here, never trusted from JSON."""
+        valid: list[dict] = []
+        issues: list[dict] = []
+        d = self._owned_dir()
+        try:
+            if not d.parent.exists() or not os.path.lexists(d):
+                return valid, issues, "missing"
+        except OSError:
+            return valid, issues, "unsafe"
+        try:
+            entries = runtime_fs.scandir_nofollow(self.paths, d)
+        except PathContainmentError:
+            return valid, issues, "unsafe"
+        except OSError as exc:
+            # ONLY a genuinely absent directory is a valid empty inventory. Any other I/O
+            # failure (EACCES, EIO, …) must read as UNSAFE: records may exist but be unreadable,
+            # and a fail-open "missing" here would let the boot-restore claim hook consume items
+            # as "evidence removed" and then prune evidence that still exists.
+            import errno
+            if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                return valid, issues, "missing"
+            return valid, issues, "unsafe"
+        for name, is_link in sorted(entries):
+            if is_link:
+                issues.append({"name": name, "reason": "symlinked leaf"})
+                continue
+            if not name.endswith(".json"):
+                issues.append({"name": name, "reason": "not a .json record"})
+                continue
+            f = d / name
+            try:
+                raw = runtime_fs.read_text(self.paths, f, max_bytes=self._OWNED_MAX_BYTES)
+                rec = json.loads(raw)
+            except (OSError, ValueError, PathContainmentError) as exc:
+                issues.append({"name": name, "reason": f"unreadable/malformed: {exc}"})
+                continue
+            why = self._validate_owned_record(name, rec)
+            if why:
+                issues.append({"name": name, "reason": why})
+                continue
+            rec["_path"] = str(f)
+            valid.append(rec)
+        return valid, issues, "ok"
+
     def owned_records(self, comp_id: str, band: str | None = None,
                       role: str | None = "") -> list[dict]:
         """Records for a component, optionally scoped to a band (a band-less `""` record matches any
         band request). `role` selects the record class: "" = MAIN launches (default — so status and
         the ordinary stop never see auxiliary runners), "post" = detached post-start runners,
-        None = every role."""
+        None = every role. Filters THE shared validated inventory (`owned_inventory`) — the stop
+        path and the boot-restore path share one definition of a valid record."""
+        valid, _issues, _state = self.owned_inventory()
         out = []
-        d = self._owned_dir()
-        # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping owned dir
-        # fails closed (no trusted records); a symlinked record LEAF is skipped, never
-        # followed. The per-record read is already no-follow.
-        try:
-            entries = runtime_fs.scandir_nofollow(self.paths, d)
-        except PathContainmentError:
-            return out
-        for name, is_link in sorted(entries):
-            if is_link or not name.endswith(".json"):
-                continue
-            f = d / name
-            try:
-                rec = json.loads(runtime_fs.read_text(self.paths, f))   # no-follow read
-            except (OSError, ValueError):
-                continue
+        for rec in valid:
             if rec.get("component") != comp_id:
                 continue
             if role is not None and rec.get("role", "") != role:
                 continue
             if band is not None and rec.get("band") not in (band, ""):
                 continue
-            rec["_path"] = str(f)
             out.append(rec)
         return out
 
@@ -859,6 +968,15 @@ class Lifecycle:
             p = Path(rec["_path"])
         except KeyError:
             return False
+        # COMPARE-BEFORE-DELETE: re-read the leaf and prove it still holds THIS record. Legacy
+        # deterministic filenames (and any future path collision) could otherwise let the prune
+        # of an old record unlink a NEWER one written at the same path.
+        try:
+            on_disk = json.loads(runtime_fs.read_text(self.paths, p))
+        except (OSError, ValueError, PathContainmentError):
+            return False               # unreadable/other content: never blind-delete evidence
+        if on_disk.get("launch_id") != rec.get("launch_id"):
+            return False               # the path now holds a different record — leave it
         try:
             runtime_fs.unlink(self.paths, p)
         except (OSError, PathContainmentError):
@@ -884,6 +1002,15 @@ class Lifecycle:
         pid = rec.get("pid")
         if not pid:
             return True
+        # A record stamped with a DIFFERENT boot id is provably from a previous boot — the
+        # original process cannot have survived a reboot. Without this, a recycled pid with a
+        # coincidentally identical numeric starttime (jiffies since boot restart from 0) would
+        # keep the record permanently "unverified". Both ids must be non-empty: an unreadable
+        # CURRENT boot id proves nothing.
+        rec_boot = str(rec.get("boot_id") or "")
+        cur_boot = current_boot_id()
+        if rec_boot and cur_boot and rec_boot != cur_boot:
+            return True
         if self._proc_ceased(pid):
             return True
         live = self._proc_identity(pid)
@@ -892,8 +1019,23 @@ class Lifecycle:
         return False
 
     def verify_owned(self, rec: dict) -> tuple[bool, str]:
-        """All-or-nothing identity check before any signal is sent."""
+        """All-or-nothing identity check before any signal is sent.
+
+        BOOT AWARENESS: a record whose stored boot_id differs from the current boot's id is
+        NEVER live — pid+starttime alone are reusable across reboots (starttime restarts from
+        boot). Rejected ONLY when BOTH ids are non-empty: an unreadable current boot id must
+        never disown a possibly-live process. PRUNING-RACE AUDIT (re-verified at a0f38eb):
+        ownership records are removed exclusively by Lifecycle.stop / _cancel_post_runners via
+        _remove_record — the status prober never reads state/owned/ and no boot-time sweep
+        exists, so this rule cannot cause an early prune of boot-restore evidence; an operator
+        stop before the restore runs is intent NOT to restore. Enforced by
+        test_verify_owned_rejects_foreign_boot, test_foreign_boot_identical_starttime_is_ceased
+        and test_unreadable_boot_id_preserves_ownership (tests/test_boot_restore.py)."""
         pid = rec.get("pid")
+        rec_boot = str(rec.get("boot_id") or "")
+        cur_boot = current_boot_id()
+        if rec_boot and cur_boot and rec_boot != cur_boot:
+            return False, "record from a previous boot"
         if not pid or not self._proc_alive(pid):
             return False, "process gone"
         live = self._proc_identity(pid)

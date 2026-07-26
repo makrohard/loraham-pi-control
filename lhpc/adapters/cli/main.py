@@ -438,6 +438,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("--lines", type=int, default=200, help="Tail length")
 
     from lhpc.core.config import HW_SETUPS as _HW_SETUPS
+    p_as = sub.add_parser("autostart",
+                          help="Boot auto-restore: restart previously running stacks after a reboot")
+    p_as.add_argument("switch", nargs="?", choices=("on", "off"),
+                      help="Enable/disable (applies at the NEXT boot); no argument: show the "
+                           "switch and the last boot-restore result")
+    # PLUMBING, run ONLY by lhpc-boot-restore.service at boot. Exit code contract: 0 whenever the
+    # driver completed and durably recorded every terminal result (even with failed stacks — the
+    # RemainAfterExit oneshot must stay active); nonzero only for driver/integrity failures.
+    p_as.add_argument("--run-service", action="store_true", help=argparse.SUPPRESS)
+
     p_hw = sub.add_parser("hardware",
                           help="Show or set the radio hardware setup (which board(s) the box has)")
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
@@ -831,6 +841,45 @@ def _run(argv: list[str] | None = None) -> int:
         return 1
     if args.command == "config":
         return _cmd_config(svc, args)
+    if args.command == "autostart":
+        if args.run_service:
+            if args.switch is not None:
+                print("ERR   --run-service takes no arguments (unit plumbing).")
+                return 2
+            res = svc.boot_restore_run()
+            rc = _render(res)
+            # Driver-completed runs exit 0 even with failed stacks (unit stays active);
+            # only integrity failures propagate nonzero.
+            return 0 if res.data.get("driver_completed") else (rc or 1)
+        if args.switch is not None:
+            return _render(svc.set_boot_restore(args.switch == "on"))
+        enabled, reason = svc.boot_restore_enabled()
+        state = "ON" if enabled else f"OFF ({reason})" if reason else "OFF"
+        print(f"OK    Boot auto-restore: {state}")
+        st = svc.boot_restore_status()
+        if st is None:
+            print("  last result: (none)")
+        elif st["state"] == "blocked":
+            # LIVE condition, not a stored result — showing an older result here would hide
+            # why nothing restored this boot.
+            print(f"  restore BLOCKED: {st.get('reason', '')}")
+        else:
+            when = st.get("finished_at")
+            import datetime as _dt
+            ts = (_dt.datetime.fromtimestamp(when).strftime(" @ %Y-%m-%d %H:%M:%S")
+                  if isinstance(when, (int, float)) else "")
+            c = st.get("counts", {})
+            print(f"  last result: {st['state']}{ts} — "
+                  f"{c.get('succeeded', 0)} restored, {c.get('failed', 0)} failed, "
+                  f"{c.get('cancelled', 0)} cancelled, {c.get('pending', 0)} pending, "
+                  f"{st.get('skipped', 0)} skipped")
+            if st.get("reason"):
+                print(f"  reason: {st['reason']}")
+            if st["state"] == "truncated":
+                print("  remainder restorable:  systemctl --user restart lhpc-boot-restore")
+            if c.get("failed"):
+                print("  failed stacks are NOT retried — restart them with:  lhpc stack start <id>")
+        return 0
     if args.command == "hardware":
         return _render(svc.set_hardware_setup(args.setup))
     if args.command == "firewall":

@@ -98,10 +98,11 @@ layout, it does not claim same-account race-proofness.
   ```bash
   ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
   ```
-- **Install / repair.** `install.sh` writes all four canonical units — the web console, the
-  self-update helper + watcher, and the `lhpc-nginx.service` TLS front-end (enabled but only
-  started once `lhpc webserver apply` has generated its config) — (never overwriting a
-  foreign one) and enables them; `lhpc self-update --repair-integration` restores the exact set on
+- **Install / repair.** `install.sh` writes all seven canonical units — the web console, the
+  self-update helper + watcher, the `lhpc-nginx.service` TLS front-end (enabled but only
+  started once `lhpc webserver apply` has generated its config) with its restart helper +
+  watcher, and the `lhpc-boot-restore.service` oneshot (enabled, **never started at install** —
+  it runs at the next boot) — (never overwriting a foreign one) and enables them; `lhpc self-update --repair-integration` restores the exact set on
   an existing or `--no-service` deployment (and the web "Repair & update" does the same in one click
   while the console still has bus access).
 
@@ -205,8 +206,9 @@ confirmation. See [`webserver.md`](webserver.md) for the topology and the expose
 These guarantees hold in every deployment; keep them in mind when operating or auditing the controller.
 
 - **Canonical user units are installed and enabled by `install.sh`** (unless service installation is
-  explicitly disabled). It renders the four canonical units (`lhpc-web.service`,
-  `lhpc-selfupdate.service`, `lhpc-selfupdate.path`, and — when nginx is present — `lhpc-nginx.service`),
+  explicitly disabled). It renders the seven canonical units (`lhpc-web.service`,
+  `lhpc-selfupdate.service`, `lhpc-selfupdate.path`, `lhpc-nginx.service`,
+  `lhpc-nginx-restart.service`, `lhpc-nginx-restart.path`, and `lhpc-boot-restore.service`),
   runs `daemon-reload`, enables the request watcher and the web service, and lingers the user so the
   console autostarts at boot. The generated units are byte-identical to the shipped `deploy/*.service`
   templates (differing only in `%h` vs the resolved paths — a single source of truth).
@@ -218,11 +220,22 @@ These guarantees hold in every deployment; keep them in mind when operating or a
   (`localhost`, `127.0.0.1`, `[::1]`, with any port) are accepted; configured DNS SANs and — only when
   the console is deliberately remote-exposed — bare IP literals are also accepted.
 
-- **`KillMode=process` is deliberate** on both the shipped and generated `lhpc-web.service`. LHPC
-  identity-tracks and lifecycle-manages the LoRaHAM stacks and detached build/test jobs it starts, so a
-  **web restart or a self-update must not tear those workloads down**. The default
-  `KillMode=control-group` would kill them on every web restart; controller uninstall is the one path
-  that stops and verifies them explicitly.
+- **`KillMode=process` is deliberate** on the shipped and generated `lhpc-web.service` AND
+  `lhpc-boot-restore.service`. LHPC identity-tracks and lifecycle-manages the LoRaHAM stacks and
+  detached build/test jobs it starts, so a **web restart or a self-update must not tear those
+  workloads down**. The default `KillMode=control-group` would kill them on every web restart;
+  controller uninstall is the one path that stops and verifies them explicitly. For the
+  boot-restore oneshot the same applies on a later **stop, restart, or start timeout** of the
+  unit: the restored stacks live in its control group, and control-group mode would slaughter
+  them then (a successful `ExecStart` exit alone never stops a `RemainAfterExit=yes` unit).
+
+- **Boot restore replays saved state through the full start path.** `lhpc-boot-restore.service`
+  (a `Type=oneshot`, `RemainAfterExit=yes` unit wanted by `default.target`) restores stacks that
+  were LHPC-owned and never verifiably stopped before the reboot. It refuses to act unless the
+  web console unit is enabled AND byte-exact canonical (a customized console disables autonomous
+  restarts), honors the fail-closed `[boot] restore` switch, consumes each piece of evidence
+  exactly once (journal `state/boot-restore.json` — no automatic retries), and starts stacks via
+  the public start path so every admission/hardware/band/firewall gate applies unchanged.
 
 - **Uninstall is quiescence-gated.** Before removing any controller code or state, `uninstall.sh` writes
   the `.lhpc-uninstalling` guard (which blocks new task admission) and invokes the controller

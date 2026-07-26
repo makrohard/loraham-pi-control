@@ -90,6 +90,7 @@ readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
 readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
 readonly RESTART_UNIT="${UNIT_DIR}/lhpc-nginx-restart.service"
 readonly RESTART_PATH_UNIT="${UNIT_DIR}/lhpc-nginx-restart.path"
+readonly BOOT_RESTORE_UNIT="${UNIT_DIR}/lhpc-boot-restore.service"
 GUARD="${TARGET_DIR}/.lhpc-uninstalling"
 
 # --------------------------------------------------------------------------- identity proof
@@ -265,6 +266,9 @@ step "Managed systemd units"
 UNITS_REMOVED=0
 # The canonical units, kind:path, in teardown order (used identically by PASS 0/1/2 below).
 UNIT_SPECS=(
+	# Boot-restore FIRST: disable the starter before stopping anything, so a crash mid-teardown
+	# can never leave a unit that would resurrect stacks on the next boot.
+	"lhpc-boot-restore.service:${BOOT_RESTORE_UNIT}"
 	"lhpc-nginx-restart.path:${RESTART_PATH_UNIT}"
 	"lhpc-nginx-restart.service:${RESTART_UNIT}"
 	"lhpc-nginx.service:${NGINX_UNIT}"

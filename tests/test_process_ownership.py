@@ -236,13 +236,17 @@ def test_terminate_unobserved_signals_matching_identity(tmp_path, reaper):
 
 # --- P0.2 ownership-record write is mandatory --------------------------------
 
-def test_record_launch_symlink_leaf_rejected(tmp_path, reaper):
+def test_record_launch_symlink_leaf_rejected(tmp_path, reaper, monkeypatch):
+    # The nonce'd filename makes a planted collision unguessable in practice; pin the nonce so
+    # the safe-writer's symlink-leaf refusal stays directly enforced.
     import os
+    from lhpc.core import lifecycle as _lm
     life = _life(tmp_path)
     p = _leader(reaper)
     owned = life._owned_dir(); owned.mkdir(parents=True)
     outside = tmp_path / "evil.json"; outside.write_text("{}")
-    os.symlink(outside, owned / f"loraham-daemon__433__{p.pid}.json")  # symlink leaf
+    monkeypatch.setattr(_lm.secrets, "token_hex", lambda n=16: "ab" * n)
+    os.symlink(outside, owned / f"loraham-daemon__433__{p.pid}__{'ab' * 16}.json")
     ok = life.record_launch(STACK, COMP, p.pid, band="433")
     assert ok is False                              # refused -> not owned
     assert outside.read_text() == "{}"              # link target untouched

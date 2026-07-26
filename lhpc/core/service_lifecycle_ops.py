@@ -302,11 +302,21 @@ class LifecycleOpsMixin:
     def start(self, target: str, apply: bool = False, params: dict | None = None,
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
-              file_overrides: dict | None = None, auto_install_ctx=None) -> ActionResult:
+              file_overrides: dict | None = None, auto_install_ctx=None, *,
+              _before_start_locked=None) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
-        persisted); None = apply the saved config, as the CLI does."""
+        persisted); None = apply the saved config, as the CLI does.
+
+        `_before_start_locked` (PRIVATE, keyword-only; ordinary CLI/web callers pass None) is the
+        boot-restore claim hook: invoked ONLY on the apply path, AFTER admission +
+        config-stability + the lifecycle/resource bundle are all held and BEFORE any mutation
+        (incl. the feed clear) — it revalidates the restore evidence and durably journals the
+        attempt; returning an ActionResult cancels the start with ZERO side effects. It must
+        never be routed through ambient/thread-local state (Waitress shares this service across
+        threads). Lock order (admission → config → lifecycle) is unchanged — enforced by
+        test_hook_runs_only_under_all_locks."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         from . import reslock
@@ -346,14 +356,23 @@ class LifecycleOpsMixin:
                 if _order:
                     _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
                     _radio = _r or ""
-                # Clear the RX/TX window at the start boundary (BEFORE any spawn): record the pre-start
-                # floor so the feed shows only THIS run's activity on a daemon (re)start, and clears
-                # stale activity whenever ANY stack is started while the daemon is already running.
-                for _b in self.active_bands():
-                    self.clear_daemon_feed(_b)
                 try:
                     with self._lifecycle_guard("start", target, band,
                                                stop_owners=stop_owners, radio=_radio):
+                        # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
+                        # mutation. A refusal cancels the start with zero side effects.
+                        if _before_start_locked is not None:
+                            _hook_refusal = _before_start_locked()
+                            if _hook_refusal is not None:
+                                return _hook_refusal
+                        # Clear the RX/TX window at the start boundary (BEFORE any spawn), SCOPED
+                        # to this operation's band set — the SAME set the lock bundle covers
+                        # (never a broader recompute): a 433 client clears 433 only, an
+                        # all-active daemon start clears every arbitrated band, a non-radio
+                        # start clears nothing. Under the guard + after the hook, so a cancelled
+                        # restore attempt mutates NOTHING.
+                        for _b in sorted(self._operation_bands(target, band, _radio, "start")):
+                            self.clear_daemon_feed(_b)
                         return self._start_impl(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
                                                 daemon_overrides=daemon_overrides,
@@ -416,6 +435,11 @@ class LifecycleOpsMixin:
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc list"])
+        # Ownership scope of THIS public operation: recorded on every launch it causes
+        # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
+        # component-scoped start must never be widened into a whole-stack boot restore.
+        _req_target = target
+        _req_scope = "stack" if self.stack(target) is not None else "component"
         if not self._paths.runtime_root_exists:
             return ActionResult(False, "Runtime root not bootstrapped.",
                                 next_commands=["lhpc bootstrap"])
@@ -617,7 +641,9 @@ class LifecycleOpsMixin:
                 continue
             if comp.id == self.DAEMON_ID:
                 dlines, dok = self._ensure_daemon(life, stack, comp, running, radio, params,
-                                                  start_sid, daemon_overrides)
+                                                  start_sid, daemon_overrides,
+                                                  requested_target=_req_target,
+                                                  start_scope=_req_scope)
                 out.extend(dlines)
                 results.append(CompResult(component=comp.id, stack=stack.id, action="start",
                     outcome=(Outcome.VERIFIED if dok else Outcome.FAILED),
@@ -723,7 +749,8 @@ class LifecycleOpsMixin:
             # required post-start log, and the detached post runner's log all get a
             # copy-pasteable `[log] <comp> -> tail -f <path>` line the moment they exist.
             announcer = self._log_announcer(comp.id, out)
-            res = life.start(stack, comp, comp_cfg, band=cfg_band)
+            res = life.start(stack, comp, comp_cfg, band=cfg_band,
+                             requested_target=_req_target, start_scope=_req_scope)
             if res.log_path:
                 announcer(f"start-{comp.id}", res.log_path)
             if not res.ok:
@@ -1075,7 +1102,8 @@ class LifecycleOpsMixin:
         return _cb
 
     def _ensure_daemon(self, life, stack, comp, running, radio, params, start_sid,
-                       daemon_overrides=None):
+                       daemon_overrides=None, *, requested_target: str = "",
+                       start_scope: str = ""):
         """Ensure the daemon is up FOR THE NEEDED BAND before the app starts.
 
         "Running" means the band's CONF socket is reachable, not merely that a
@@ -1149,7 +1177,9 @@ class LifecycleOpsMixin:
                 dparams["cadrssi"] = dparams.get(f"cadrssi_{b}", "-90")
                 if params and params.get("debug"):
                     dparams["debug"] = "1"
-                res = life.start(stack, comp, dparams, band=b)
+                res = life.start(stack, comp, dparams, band=b,
+                                 requested_target=requested_target,
+                                 start_scope=start_scope)
                 base = f"start daemon --radio {b}"
                 if not res.ok:
                     lines.append(f"  [fail] {base}: {res.detail}")

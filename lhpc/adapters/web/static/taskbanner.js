@@ -64,7 +64,7 @@
       // ✕ (dismiss) for failed; Recover for an unsafe JOB. Rebuild the trailing control on state change.
       var oldBtn = row.querySelector(".ti-close, .ti-recover");
       if (oldBtn) row.removeChild(oldBtn);
-      if (t.state === "failed") {
+      if (t.state === "failed" && !t.no_dismiss) {
         var x = el("button", "ti-close", "×"); x.setAttribute("type", "button"); x.title = "Dismiss";
         x.addEventListener("click", function () {
           post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) row.parentNode && banner.removeChild(row); });

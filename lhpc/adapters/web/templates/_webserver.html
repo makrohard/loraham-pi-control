@@ -236,6 +236,17 @@
       </table>
     </section>
   </details>
+  <section class="cfgsec">
+    <h3>Boot restore</h3>
+    <form method="post" action="{{ url_for('boot_restore_set') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <label><input type="checkbox" name="restore" value="on"
+             {% if boot_restore_on %}checked{% endif %}>
+        Restore running stacks after reboot (applies at the next boot)</label>
+      <button type="submit">Save</button>
+      {% if not boot_restore_valid %}<span class="pill pill-warn">config invalid — restore disabled</span>{% endif %}
+    </form>
+  </section>
   <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
   </div>
 </details>

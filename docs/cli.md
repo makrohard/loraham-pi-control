@@ -15,7 +15,7 @@ does is available here too.
 
 - [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [firewall](#firewall)
+- [config](#config) · [hardware](#hardware) · [autostart](#autostart) · [firewall](#firewall)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -131,6 +131,24 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
 - Also settable in the web console under the loraham daemon stack's **Hardware** settings section,
   which additionally offers a **Detect** probe (spawns the daemon briefly per candidate board and
   reports whether the chip responds — the board's LED lights during init).
+
+---
+
+### autostart
+**Boot auto-restore** — restart the stacks that were running before a reboot (default: **on**).
+At boot, `lhpc-boot-restore.service` restores every stack that was LHPC-started and not stopped
+before the reboot, replaying its saved configuration through the normal gated start path. It only
+runs while the web console unit is enabled and canonical. A failed restore is not retried —
+start that stack yourself with `lhpc stack start <id>`.
+
+```
+lhpc autostart               # show the switch + the last boot-restore result
+lhpc autostart off           # disable (applies at the NEXT boot)
+lhpc autostart on            # re-enable (the default)
+```
+
+Also switchable in the web console's Webserver panel ("Boot restore"). The unit's log is
+`logs/lhpc-boot-restore.log` (web: Controller logs → boot-restore).
 
 ---
 

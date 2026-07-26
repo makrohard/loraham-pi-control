@@ -351,8 +351,23 @@ and the browser client-cert runbook: [`docs/webserver.md`](docs/webserver.md).
 
 ## Autostart
 
-The install enables the console at boot (rootless user units + lingering). Stacks do **not**
-auto-start — you start them via console or CLI.
+The install enables the console at boot (rootless user units + lingering). Stacks that were
+**running before a reboot are restarted automatically** (default on): at boot,
+`lhpc-boot-restore.service` restarts every stack that was LHPC-started and not stopped before
+the reboot, replaying its **saved** configuration through the normal start path — every gate
+(hardware, band arbitration, callsign, firewall exposure) applies unchanged, and TX behaviour
+comes strictly from the saved config, never from a previous session's one-off overrides.
+
+```bash
+lhpc autostart          # show the switch and the last boot-restore result
+lhpc autostart off      # disable (applies at the NEXT boot)
+lhpc autostart on       # re-enable (the default)
+```
+
+The same switch lives in the console's Webserver panel ("Boot restore"). Restore only runs when
+the web console unit is enabled and unmodified — a disabled or customized console genuinely
+disables it. A stack whose restore attempt fails is **not retried**; start it yourself with
+`lhpc stack start <id>` (the dashboard banner says so, too).
 
 ```bash
 systemctl --user disable lhpc-nginx lhpc-web     # console: don't start at boot

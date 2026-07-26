@@ -15,7 +15,7 @@
     <a class="ti-view" href="{{ t.href }}">view &rarr;</a>
     {% if t.state == 'unsafe' and t.kind == 'job' %}
     <button type="button" class="ti-recover">Recover</button>
-    {% elif t.state == 'failed' %}
+    {% elif t.state == 'failed' and not t.no_dismiss %}
     <button type="button" class="ti-close" title="Dismiss">&times;</button>
     {% endif %}
   </div>

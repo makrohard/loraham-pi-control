@@ -29,6 +29,7 @@ TARGET_DIR="${HOME}/loraham-pi-control"
 WITH_SERVICE=1
 LINK_PATH=1
 SERVICE_UP=0
+BOOT_RESTORE_ENABLE_FAILED=0
 HTTPS_UP=0
 MANUAL_STEPS=""          # mandatory operator commands, printed as ONE block at the very bottom
 ROLLBACK_ARMED=0
@@ -97,6 +98,7 @@ readonly PATH_UNIT="${UNIT_DIR}/lhpc-selfupdate.path"
 readonly NGINX_UNIT="${UNIT_DIR}/lhpc-nginx.service"
 readonly RESTART_UNIT="${UNIT_DIR}/lhpc-nginx-restart.service"
 readonly RESTART_PATH_UNIT="${UNIT_DIR}/lhpc-nginx-restart.path"
+readonly BOOT_RESTORE_UNIT="${UNIT_DIR}/lhpc-boot-restore.service"
 
 # --------------------------------------------------------------------------- target safety
 step "Target safety"
@@ -138,7 +140,9 @@ if [ -e "$LOCAL_BIN_LINK" ] || [ -L "$LOCAL_BIN_LINK" ]; then
 fi
 if [ "$WITH_SERVICE" -eq 1 ] && [ -e "$UNIT_DIR" ]; then
 	no_symlink "$UNIT_DIR" "$UNIT_DIR"
-	for _u in "$WEB_UNIT" "$HELPER_UNIT" "$PATH_UNIT" "$NGINX_UNIT"; do
+	# ALL seven canonical units — a fresh install never overwrites ANY of them (this loop once
+	# omitted the nginx-restart pair; the boot-restore addition closed that hole too).
+	for _u in "$WEB_UNIT" "$HELPER_UNIT" "$PATH_UNIT" "$NGINX_UNIT" "$RESTART_UNIT" "$RESTART_PATH_UNIT" "$BOOT_RESTORE_UNIT"; do
 		if [ -e "$_u" ] || [ -L "$_u" ]; then
 			die "$_u already exists — a fresh install never overwrites systemd units. Remove it, or pass --no-service and later run: lhpc self-update --repair-integration"
 		fi
@@ -275,12 +279,22 @@ if [ "$WITH_SERVICE" -eq 1 ]; then
 		render_unit lhpc-nginx.service         > "$NGINX_UNIT"
 		render_unit lhpc-nginx-restart.service > "$RESTART_UNIT"
 		render_unit lhpc-nginx-restart.path    > "$RESTART_PATH_UNIT"
-		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT $RESTART_UNIT $RESTART_PATH_UNIT"
+		render_unit lhpc-boot-restore.service  > "$BOOT_RESTORE_UNIT"
+		CREATED_UNITS="$WEB_UNIT $HELPER_UNIT $PATH_UNIT $NGINX_UNIT $RESTART_UNIT $RESTART_PATH_UNIT $BOOT_RESTORE_UNIT"
 		systemctl --user daemon-reload 2>/dev/null || true
 		# Enable the request watchers + the console (the .paths are also pulled up by the web unit's
 		# Wants=, but enabling them makes them survive a manual `systemctl stop lhpc-web`).
 		systemctl --user enable lhpc-selfupdate.path >/dev/null 2>&1 || true
 		systemctl --user enable lhpc-nginx-restart.path >/dev/null 2>&1 || true
+		# Boot restore: plain `enable` NEVER starts a unit (only --now would) — it simply arms
+		# the next boot. Restoration itself is additionally gated on `[boot] restore` + a
+		# canonical, enabled web unit, so enabling here cannot start anything today. A failure
+		# here with a working user-systemd session is a REAL incomplete install — restore would
+		# silently never run — so it must be unmistakable, never swallowed.
+		if ! systemctl --user enable lhpc-boot-restore.service >/dev/null 2>&1; then
+			warn "INCOMPLETE: could not enable lhpc-boot-restore.service — stacks will NOT auto-restart after a reboot. Fix with: systemctl --user enable lhpc-boot-restore.service  (or: lhpc self-update --repair-integration)"
+			BOOT_RESTORE_ENABLE_FAILED=1
+		fi
 		# Enable the nginx TLS front-end ONLY when nginx is installed (NOT --now: it starts once
 		# LHPC has generated a proxy config via `lhpc webserver init && lhpc webserver start-service`; a
 		# ConditionPathExists gates it until then). If nginx is absent the unit file is still
@@ -296,7 +310,7 @@ if [ "$WITH_SERVICE" -eq 1 ]; then
 			# The managed web unit serves a Unix socket (no TCP) behind nginx — NOT :8770.
 			note "lhpc-web.service enabled (Waitress on a Unix socket, behind nginx); one-click self-update ready."
 		else
-			warn "could not start the service now (no user systemd session?). Finish after login with: systemctl --user enable --now lhpc-web.service && loginctl enable-linger ${USER}"
+			warn "could not start the service now (no user systemd session?). Finish after login with: systemctl --user enable lhpc-boot-restore.service && systemctl --user enable --now lhpc-web.service && loginctl enable-linger ${USER}"
 		fi
 		# HTTPS bring-up: when nginx is present, generate the PKI + proxy config and start the TLS
 		# front-end NOW, so the console is reachable at https://127.0.0.1:8443/ (loopback OPEN, no
@@ -371,6 +385,20 @@ The web console is NOT running (no service enabled).
 
 To run it as an auto-starting service WITH one-click self-update, run:
   ${LHPC} self-update --repair-integration
+────────────────────────────────────────────────────────────────────────
+EOF
+fi
+
+if [ "${BOOT_RESTORE_ENABLE_FAILED}" -eq 1 ]; then
+	cat <<EOF
+
+────────────────────────────────────────────────────────────────────────
+INCOMPLETE INSTALL: boot auto-restore is NOT armed.
+Stacks will NOT restart automatically after a reboot until you run:
+
+  systemctl --user enable lhpc-boot-restore.service
+
+(or repair everything in one step:  ${LHPC} self-update --repair-integration)
 ────────────────────────────────────────────────────────────────────────
 EOF
 fi

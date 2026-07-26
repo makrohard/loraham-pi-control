@@ -1012,7 +1012,7 @@ def _sidecar_svc(tmp_path, steps, alive_pid=None):
     result.write_text(json.dumps({"v": 1, "steps": steps, "done": True}))
     rec = {"launch_id": "meshcom-qemu__x__post-99999999", "stack": "meshcom",
            "component": "meshcom-qemu", "band": "", "pid": alive_pid or 99999999,
-           "role": "post", "result_path": str(result),
+           "role": "post", "launched_at": 1000, "result_path": str(result),
            "log_path": str(tmp_path / "logs" / "post-u1.log")}
     if alive_pid:
         # _original_ceased treats a starttime mismatch as confirmed pid reuse -> record the

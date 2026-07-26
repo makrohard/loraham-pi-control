@@ -2,8 +2,10 @@
 
 ## unreleased
 
-- Firewall
+- Managed firewall
 - System monitor
+- Boot auto-restore: stacks that were running before a reboot are restarted at boot
+  (`lhpc autostart on|off`, default on; new `lhpc-boot-restore.service` user unit)
 
 ## 0.1.5
 - Hardware setups: `lhpc hardware` selects the radio rig (LoRaHAM / Uputronics dual / Waveshare); daemon v112 multi-hardware, per-band arbitration

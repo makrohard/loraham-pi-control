@@ -755,7 +755,7 @@ def _run_scoped_start(svc, target, monkeypatch, **kw):
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     # Stub the actual launch (no real process) so the start exercises config generation only.
     monkeypatch.setattr(Lifecycle, "start",
-                        lambda self, stack, comp, cfg, band="": StartLaunch(True, "log", ""))
+                        lambda self, stack, comp, cfg, band="", **_scope: StartLaunch(True, "log", ""))
     return svc.start(target, apply=True, **kw)
 
 
@@ -778,7 +778,7 @@ def test_direct_start_run_params_component_scoped_no_collision(tmp_path, monkeyp
     svc = _scope_svc(tmp_path)
     seen = {}
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
-    def stub(self, stack, comp, cfg, band=""):
+    def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
@@ -883,7 +883,7 @@ def _capture_start(svc, monkeypatch):
     generated for real."""
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
     seen = {}
-    def stub(self, stack, comp, cfg, band=""):
+    def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)

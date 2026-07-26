@@ -141,6 +141,32 @@ def hw_preset_label(preset: str) -> str:
 
 
 @dataclass(frozen=True)
+class BootConfig:
+    """[boot] — boot auto-restore switch. FAIL-CLOSED like the firewall's ap_enabled (strict
+    boolean): an autonomous process-starter must never be enabled by a mistyped value, so a
+    non-boolean `restore` yields valid=False and the driver starts NOTHING (the deliberate
+    deviation from the fail-soft config convention; precedent: _parse_firewall)."""
+    restore: bool = True
+    valid: bool = True
+    reason: str = ""
+
+
+def _parse_boot(merged: dict, diagnostics: list) -> "BootConfig":
+    raw = merged.get("boot")
+    if raw is None:
+        return BootConfig()
+    if not isinstance(raw, dict):
+        diagnostics.append(f"[boot] is not a table ({type(raw).__name__}); restore DISABLED")
+        return BootConfig(restore=False, valid=False, reason="[boot] is not a table")
+    val = raw.get("restore", True)
+    if not isinstance(val, bool):
+        diagnostics.append(f"non-boolean [boot] restore {val!r}; restore DISABLED (fail closed)")
+        return BootConfig(restore=False, valid=False,
+                          reason=f"non-boolean [boot] restore {val!r}")
+    return BootConfig(restore=val)
+
+
+@dataclass(frozen=True)
 class RadioConfig:
     """Radio HARDWARE setup — sourced ONLY from the runtime-local layer. Default `unset` means no
     hardware is configured; the daemon refuses to start until a setup is chosen."""
@@ -299,6 +325,7 @@ class Config:
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
+    boot: "BootConfig" = field(default_factory=lambda: BootConfig())
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -591,6 +618,9 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         local = _load_runtime_toml(paths, local_path)
     except ConfigError as exc:
         local, diagnostics = {}, [f"ignored malformed local config — {exc}"]
+        local_layer_failed = True
+    else:
+        local_layer_failed = False
     merged = _deep_merge(defaults, local)
 
     # STRUCTURE validation (not just syntax): a wrong-typed section — e.g. a hand-edited
@@ -651,6 +681,15 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     webserver = _parse_webserver(merged, diagnostics)
     stackweb = _parse_stackweb(merged, diagnostics)
     firewall = _parse_firewall(merged, diagnostics)
+    boot = _parse_boot(merged, diagnostics)
+    # FAIL CLOSED (plan §3, deliberate deviation from the fail-soft convention above): when the
+    # LOCAL layer itself could not be read (malformed/unreadable/symlinked local.toml), the
+    # operator's boot-restore switch is unknown — an autonomous process-starter must not fall
+    # back to the default-ON. Every other consumer keeps the fail-soft defaults.
+    if local_layer_failed:
+        boot = BootConfig(restore=False, valid=False,
+                          reason="local config unreadable/malformed — boot restore disabled "
+                                 "(fail closed)")
 
     return Config(
         values=merged,
@@ -659,6 +698,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         webserver=webserver,
         stackweb=stackweb,
         firewall=firewall,
+        boot=boot,
         sources=sources,
         remotes=remotes,
         local_path=local_path,
@@ -888,6 +928,17 @@ def save_hardware_setup(paths: Paths, setup_id: str) -> Path:
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"radio": {"hardware": setup_id}})
+
+
+def save_boot_restore(paths: Paths, enabled: bool) -> Path:
+    """Persist the boot auto-restore switch. Accepts ONLY an actual bool (internal callers must
+    not smuggle strings/ints — a truthy "false" is exactly the failure mode the strict parser
+    guards against); patches only `[boot].restore`."""
+    if not isinstance(enabled, bool):
+        raise ConfigError(f"boot restore switch must be a bool, got {type(enabled).__name__}")
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"boot": {"restore": enabled}})
 
 
 def _cert_days(value, field: str) -> int:

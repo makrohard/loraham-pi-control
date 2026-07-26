@@ -435,6 +435,7 @@ def _repair_env(tmp_path, monkeypatch, *, linger_ok=True):
             ("systemctl", "--user", "enable", "--now", U.PATH_UNIT): CR(0, "", ""),
             ("systemctl", "--user", "enable", "--now", U.RESTART_PATH_UNIT): CR(0, "", ""),
             ("systemctl", "--user", "enable", U.WEB_UNIT): CR(0, "", ""),
+            ("systemctl", "--user", "enable", U.BOOT_RESTORE_UNIT): CR(0, "", ""),
             ("systemctl", "--user", "restart", U.WEB_UNIT): CR(0, "", ""),
             # restart=False (the web self-repair bridge) additionally proves the watchers are live
             ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT): CR(0, "", ""),
@@ -2057,6 +2058,7 @@ def _repair_svc(tmp_path, monkeypatch, show_for):
                  ("systemctl", "--user", "enable", "--now", U.PATH_UNIT),
                  ("systemctl", "--user", "enable", "--now", U.RESTART_PATH_UNIT),
                  ("systemctl", "--user", "enable", U.WEB_UNIT),
+                 ("systemctl", "--user", "enable", U.BOOT_RESTORE_UNIT),
                  ("systemctl", "--user", "is-active", "--quiet", U.PATH_UNIT),
                  ("systemctl", "--user", "is-active", "--quiet", U.RESTART_PATH_UNIT),
                  ("systemctl", "--user", "restart", U.WEB_UNIT)):
@@ -2071,6 +2073,21 @@ def test_repair_success_with_no_dropins(tmp_path, monkeypatch):
     assert res.ok, res.summary
     assert (tmp_path / ".lhpc-root").exists()                     # marker written on success
     assert any("enable" in c for c in svc._fake.calls) and any("restart" in c for c in svc._fake.calls)
+    # repair arms boot restore on migrated deployments (install.sh does it for fresh ones)
+    assert ["systemctl", "--user", "enable", "lhpc-boot-restore.service"] in svc._fake.calls
+
+
+def test_repair_boot_restore_enable_failure_is_hard(tmp_path, monkeypatch):
+    # A deployment whose boot unit cannot be armed is NOT a successful repair — silently
+    # reporting success would leave "restore after reboot" quietly dead on this box.
+    from lhpc.core import updater_units as U
+    from lhpc.core.probes.backends import CommandResult
+    svc = _repair_svc(tmp_path, monkeypatch,
+                      lambda k, want: f"FragmentPath={want}\nDropInPaths=\n")
+    svc._fake.commands[("systemctl", "--user", "enable", U.BOOT_RESTORE_UNIT)] = \
+        CommandResult(returncode=1, stdout="", stderr="nope")
+    res = svc.self_update_repair_integration()
+    assert not res.ok and res.data.get("boot_restore_enable_failed") is True
 
 
 def test_repair_refuses_active_dropin(tmp_path, monkeypatch):
@@ -2124,6 +2141,7 @@ def _legacy_svc(tmp_path, monkeypatch, *, seed_show=True):
                      ("systemctl", "--user", "enable", "--now", "lhpc-selfupdate.path"),
                      ("systemctl", "--user", "enable", "--now", "lhpc-nginx-restart.path"),
                      ("systemctl", "--user", "enable", U.WEB_UNIT),
+                     ("systemctl", "--user", "enable", U.BOOT_RESTORE_UNIT),
                      ("systemctl", "--user", "is-active", "--quiet", "lhpc-selfupdate.path"),
                      ("systemctl", "--user", "is-active", "--quiet", "lhpc-nginx-restart.path"),
                      ("systemctl", "--user", "restart", U.WEB_UNIT)):

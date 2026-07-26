@@ -67,6 +67,9 @@ def _fake_bin(tmp_path: Path, *, git_src: Path | None = None, systemctl: str = "
             fail = 'if [ "$2" = "stop" ]; then exit 1; fi\n'
         elif systemctl == "reloadfail":
             fail = 'if [ "$2" = "daemon-reload" ]; then exit 1; fi\n'
+        elif systemctl == "bootenablefail":
+            fail = ('if [ "$2" = "enable" ] && [ "$3" = "lhpc-boot-restore.service" ]; '
+                    'then exit 1; fi\n')
         else:
             fail = ""
         (b / "systemctl").write_text(
@@ -430,6 +433,41 @@ def test_install_generates_canonical_updater_units(tmp_path):
     assert "Unit=lhpc-selfupdate.service" in path_unit
 
 
+def test_install_enables_boot_restore_without_starting_it(tmp_path):
+    """install.sh renders + plain-`enable`s the boot-restore oneshot: armed for the NEXT boot,
+    never started during install (only `enable --now` or `start` would run it)."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    fb = _fake_bin(tmp_path, git_src=REPO)
+    r = _run(INSTALL, ["--target", str(root)], home, fb)
+    assert r.returncode == 0, r.stdout + r.stderr
+    unit = (home / ".config" / "systemd" / "user" / "lhpc-boot-restore.service").read_text()
+    active = [ln.strip() for ln in unit.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert "Type=oneshot" in active and "RemainAfterExit=yes" in active
+    assert "KillMode=process" in active
+    assert f"ExecStart={root}/venv/lhpc/bin/lhpc autostart --run-service" in active
+    log = [ln.split() for ln in (tmp_path / "systemctl.log").read_text().splitlines()]
+    boot = [ln for ln in log if ln and ln[-1] == "lhpc-boot-restore.service"]
+    assert ["--user", "enable", "lhpc-boot-restore.service"] in boot
+    assert not any("--now" in ln or ln[1] in ("start", "restart") for ln in boot)
+
+
+def test_install_boot_enable_failure_is_unmistakable(tmp_path):
+    """Only the boot-restore enable fails (working session otherwise): install must NOT report a
+    clean success — restore would silently never run. The INCOMPLETE result names the fix."""
+    home = tmp_path / "home"; home.mkdir()
+    root = home / "loraham-pi-control"
+    fb = _fake_bin(tmp_path, git_src=REPO, systemctl="bootenablefail")
+    r = _run(INSTALL, ["--target", str(root)], home, fb)
+    assert r.returncode == 0, r.stdout + r.stderr          # installer stays fail-soft overall
+    out = r.stdout + r.stderr
+    assert "INCOMPLETE" in out and "NOT armed" in out
+    assert "systemctl --user enable lhpc-boot-restore.service" in out
+    # the web unit was still enabled (the failure is scoped to the boot unit)
+    log = (tmp_path / "systemctl.log").read_text()
+    assert "--user enable --now lhpc-web.service" in log
+
+
 def test_uninstall_removes_canonical_units_leaves_foreign(tmp_path):
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -442,9 +480,15 @@ def test_uninstall_removes_canonical_units_leaves_foreign(tmp_path):
     fb = _fake_bin(tmp_path)
     r = _run(UNINSTALL, ["--target", str(root), "--yes"], home, fb)
     assert r.returncode == 0, r.stdout + r.stderr
-    for u in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path"):
+    for u in ("lhpc-web.service", "lhpc-selfupdate.service", "lhpc-selfupdate.path",
+              "lhpc-boot-restore.service"):
         assert not (ud / u).exists(), u
     assert (ud / "lhpc-selfupdate-other.service").exists()    # foreign left alone
+    # teardown order: the boot-restore STARTER is stopped/disabled before any other unit, so a
+    # crash mid-teardown cannot leave a reboot re-launching half-removed stacks
+    log = [ln.split() for ln in (tmp_path / "systemctl.log").read_text().splitlines()]
+    muts = [ln for ln in log if len(ln) > 1 and ln[1] in ("stop", "disable")]
+    assert muts and muts[0][-1] == "lhpc-boot-restore.service", muts[:4]
 
 
 def test_uninstall_purge_legacy_config_only(tmp_path):
@@ -501,6 +545,10 @@ def test_web_units_set_killmode_process():
     from lhpc.core import updater_units
     assert "KillMode=process" in pathlib.Path("deploy/lhpc-web.service").read_text()
     assert "KillMode=process" in updater_units._WEB
+    # same property for boot restore: restored stacks live in ITS cgroup — a later stop/restart/
+    # timeout of the oneshot must never take them down with it
+    assert "KillMode=process" in pathlib.Path("deploy/lhpc-boot-restore.service").read_text()
+    assert "KillMode=process" in updater_units._BOOT_RESTORE
 
 
 def test_uninstall_daemon_reload_failure_restores_units_and_retains(tmp_path):

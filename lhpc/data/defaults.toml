@@ -48,3 +48,9 @@ dns_sans = ""               # e.g. "pi.local,lhpc.example" — real hostnames fo
 ip_sans = ""                # e.g. "192.168.0.10" — LAN IP SANs (never 0.0.0.0)
 server_cert_days = 825      # HTTPS server leaf lifetime (renewed under the same server TLS CA)
 client_cert_days = 825      # client/device certificate lifetime
+
+[boot]
+# Restart the stacks that were running when the box last shut down (the lhpc-boot-restore user
+# unit stays enabled either way — this switch gates the action, so the web console can toggle it).
+# Applies at the NEXT boot. Strictly boolean: any other type disables restore (fail closed).
+restore = true

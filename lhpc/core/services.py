@@ -87,7 +87,10 @@ from .service_system import SystemStatsMixin
 from .service_firewall import FirewallOpsMixin
 
 
-class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin):
+from .service_boot_restore import BootRestoreOpsMixin
+
+
+class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
 
     `system` and `paths` are injectable so tests drive it with fakes.
@@ -1168,8 +1171,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # 'both'. A serve-all start is ALSO arbitrated away from bands a running radio-direct stack
             # owns, so this single source of truth for the conflict set + lock set matches what the
             # daemon will actually serve (it starts the free band(s), not the owned one).
-            r = radio or str(self.stack_config(sid).get("radio") or "")
-            kept, _ = self._daemon_arbitrated_bands(r)
+            # An EMPTY requested radio means "serve every active band after direct-owner
+            # arbitration" (one process per band) — exactly what _ensure_daemon launches. NEVER
+            # fall back to the saved/manifest default of the ephemeral `radio` run param: its
+            # manifest default is a single band, which UNDER-LOCKED a dual-band serve-all start
+            # (locked 433 while both bands were launched). Enforced by
+            # test_daemon_all_active_start_locks_every_band (tests/test_boot_restore.py).
+            kept, _ = self._daemon_arbitrated_bands(radio or "")
             return set(kept)
         # Client.
         if op == "stop":

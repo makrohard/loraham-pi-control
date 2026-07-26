@@ -589,6 +589,15 @@ class MaintenanceOpsMixin:
             epoch = self._parse_utc(ts)
             return {"finished_ago_s": max(0, now - epoch)} if epoch is not None else {}
 
+        def _done_within_epoch(epoch):
+            if not isinstance(epoch, (int, float)) or now - epoch >= self._TASK_BANNER_EXPIRY_S:
+                return None
+            return {"finished_ago_s": max(0, int(now - epoch))}
+
+        def _failed_extra_epoch(epoch):
+            return ({"finished_ago_s": max(0, int(now - epoch))}
+                    if isinstance(epoch, (int, float)) else {})
+
         def _bounded_reason(reason):
             # Never echo an unbounded/None reason into the banner.
             return (str(reason).strip()[:200]) if reason else "malformed or unreadable state — recovery required"
@@ -622,6 +631,43 @@ class MaintenanceOpsMixin:
                     out.append({**base, "state": "done", **fin})
             elif state == "completed-with-failures" and rid not in dismissed:
                 out.append({**base, "state": "failed", **_failed_extra(bst.get("finished_at", ""))})
+
+        # ---- boot restore (file+/proc projection only; the driver writes the journal) ------
+        try:
+            brs = self.boot_restore_status()
+        except Exception:                          # noqa: BLE001 — a GET must never 500
+            brs = None
+        if brs is not None:
+            _c = brs.get("counts", {})
+            _base = {"kind": "boot-restore", "run_id": brs.get("run_id", ""),
+                     "label": "Restore stacks after reboot",
+                     "href": "/controller/logs?src=boot-restore"}
+            _state = brs.get("state")
+            if _state == "running":
+                out.append({**_base, "state": "running"})
+            elif _state == "truncated":
+                # `no_dismiss`: the ✕ is suppressed — a truncation is resolved by the restart
+                # remedy, never dismissed (task_dismiss refuses it server-side as well).
+                out.append({**_base, "state": "failed", "no_dismiss": True,
+                            "hint": "run truncated — remainder restorable: "
+                                    "systemctl --user restart lhpc-boot-restore"})
+            elif _state in ("unsafe", "blocked"):
+                # `blocked` = LIVE integrity condition (unreadable current boot id): red like
+                # unsafe, never dismissible, the reason is the whole story.
+                out.append({**_base, "state": "unsafe",
+                            "hint": _bounded_reason(brs.get("reason"))})
+            elif _state == "failed" and _base["run_id"] not in dismissed:
+                out.append({**_base, "state": "failed",
+                            "hint": f"{_c.get('failed', 0)} stack(s) failed — evidence consumed; "
+                                    "restart them with lhpc stack start <id>",
+                            **_failed_extra_epoch(brs.get("finished_at"))})
+            elif _state in ("done", "disabled", "no-plan"):
+                fin = _done_within_epoch(brs.get("finished_at"))
+                if fin is not None:
+                    label = {"done": f"Restored {_c.get('succeeded', 0)} stack(s) after reboot",
+                             "disabled": "Boot restore disabled — old evidence retired",
+                             "no-plan": "Boot restore: nothing to restore"}[_state]
+                    out.append({**_base, "label": label, "state": "done", **fin})
 
         try:
             hst = self.hmac_apply_status()
@@ -726,6 +772,16 @@ class MaintenanceOpsMixin:
             except Exception:                              # noqa: BLE001
                 st = None
             if not (st and not st.get("unsafe") and st.get("phase") == "failed"):
+                return False
+            return self._task_dismiss_add(run_id)
+        if kind == "boot-restore":
+            # failed terminal runs only — truncated stays visible (remainder restorable) and
+            # unsafe/running are never dismissible.
+            try:
+                st = self.boot_restore_status()
+            except Exception:                              # noqa: BLE001
+                st = None
+            if not (st and st.get("state") == "failed" and st.get("run_id") == run_id):
                 return False
             return self._task_dismiss_add(run_id)
         return False

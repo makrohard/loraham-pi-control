@@ -53,8 +53,13 @@ def test_controller_log_tail_files(tmp_path):
     sp, sl = svc.controller_log_tail("selfupdate")
     assert wp.endswith("logs/lhpc-web.log") and wl == ["w1", "w2"]
     assert sp.endswith("logs/lhpc-selfupdate.log") and sl == ["s1"]
-    # unknown source -> web log; missing file -> (path, []); huge/non-int counts don't raise.
-    assert svc.controller_log_tail("bogus")[0].endswith("logs/lhpc-web.log")
+    runtime_fs.atomic_write(svc._paths, svc._paths.under("logs", "lhpc-boot-restore.log"),
+                            "b1\n", 0o644)
+    bp, bl = svc.controller_log_tail("boot-restore")
+    assert bp.endswith("logs/lhpc-boot-restore.log") and bl == ["b1"]
+    # unknown source -> ("", []): an explicit immutable map, never aliased to another unit's log
+    # (the web layer normalizes unknown selectors to "web" BEFORE calling).
+    assert svc.controller_log_tail("bogus") == ("", [])
     assert svc.controller_log_tail("web", 10 ** 9)[1] == ["w1", "w2"]
     assert svc.controller_log_tail("web", "oops")[1] == ["w1", "w2"]
 

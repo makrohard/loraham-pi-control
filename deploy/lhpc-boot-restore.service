@@ -1,0 +1,62 @@
+# LoRaHAM Pi Control boot restore — CANONICAL managed unit (generated; do not hand-edit).
+# Rendered by lhpc.core.updater_units; the one-click updater proves this file BYTE-EXACT.
+# Restore with `lhpc self-update --repair-integration` after any change.
+[Unit]
+Description=LoRaHAM Pi Control boot restore (restart the stacks that were running)
+Documentation=file://%h/loraham-pi-control/src/loraham-pi-control/docs/deployment.md
+# Ordering only. The USER-manager network-online.target is DECORATIVE (reached immediately; it
+# does not track NetworkManager the way the system target does) — nothing in the restore path may
+# rely on the network being up; restored stacks tolerate late network via their normal start
+# paths. Do not "fix" a race by leaning on this line.
+After=network-online.target lhpc-web.service
+Wants=network-online.target
+# Defense in depth: never fire mid-uninstall. Admission stays authoritative.
+ConditionPathExists=!%h/loraham-pi-control/.lhpc-uninstalling
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+# The unit stays ACTIVE after the run: a later `systemctl --user start` is a no-op (ExecStart is
+# not re-invoked); an explicit `restart` re-runs the driver, which then finds consumed evidence.
+RemainAfterExit=yes
+# INTENTIONAL (same contract as lhpc-web.service): the stacks this driver restores live in THIS
+# unit's control group. KillMode matters when the unit is STOPPED, RESTARTED or TIMES OUT — the
+# default control-group mode would kill every restored stack then. (A successful ExecStart exit
+# does not itself stop the unit.) Only the driver process may ever be killed.
+KillMode=process
+# The runtime root is deliberately configurable via LHPC_RUNTIME_ROOT — without it a non-default
+# installation would run the correct binary against the default root.
+Environment=LHPC_RUNTIME_ROOT=%h/loraham-pi-control
+WorkingDirectory=%h/loraham-pi-control/src/loraham-pi-control
+ExecStart=%h/loraham-pi-control/venv/lhpc/bin/lhpc autostart --run-service
+# Generous: a full restore waits out real readiness gates (meshcom alone allows 600 s). A timeout
+# SIGTERMs ONLY the driver (KillMode=process) — already-restored stacks survive, un-attempted
+# evidence remains restorable via an explicit restart.
+TimeoutStartSec=1800
+StandardOutput=append:%h/loraham-pi-control/logs/lhpc-boot-restore.log
+StandardError=append:%h/loraham-pi-control/logs/lhpc-boot-restore.log
+SyslogIdentifier=lhpc-boot-restore
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Same write set as lhpc-web.service: the restored stacks are the SAME workloads.
+ReadWritePaths=%h/loraham-pi-control -%h/.meshcore_nm /tmp
+Environment=PLATFORMIO_CORE_DIR=%h/loraham-pi-control/build/tool-cache/platformio
+Environment=IDF_TOOLS_PATH=%h/loraham-pi-control/build/tool-cache/espressif
+Environment=XDG_CACHE_HOME=%h/loraham-pi-control/build/tool-cache/cache
+Environment=PIP_CACHE_DIR=%h/loraham-pi-control/build/tool-cache/pip
+# Bus-blind like the console: the driver only spawns processes and reads files.
+InaccessiblePaths=%t/bus %t/systemd/private
+PrivateTmp=false
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH
+RestrictNamespaces=true
+LockPersonality=true
+# MemoryDenyWriteExecute is OMITTED — restored stacks include QEMU (TCG JIT needs W+X).
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target

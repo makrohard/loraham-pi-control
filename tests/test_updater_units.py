@@ -28,11 +28,33 @@ def _install(tmp_path, **units) -> Path:
     (U.NGINX_UNIT, "lhpc-nginx.service"),
     (U.RESTART_UNIT, "lhpc-nginx-restart.service"),
     (U.RESTART_PATH_UNIT, "lhpc-nginx-restart.path"),
+    (U.BOOT_RESTORE_UNIT, "lhpc-boot-restore.service"),
 ])
 def test_deploy_templates_are_exact_renders(kind, fname):
     r = "%h/loraham-pi-control"
     expected = U.render(kind, r, f"{r}/src/loraham-pi-control", f"{r}/venv/lhpc")
     assert (REPO / "deploy" / fname).read_text() == expected
+
+
+def test_boot_restore_unit_canon():
+    # The restore driver's stacks live in the unit's cgroup: KillMode=process +
+    # RemainAfterExit=yes are load-bearing (control-group mode would slaughter every restored
+    # stack on a later stop/restart/timeout). The sandbox is the _WEB posture: bus-blind and
+    # WITHOUT MemoryDenyWriteExecute (QEMU maps W+X). Deployment identity travels in the unit.
+    boot = U.render(U.BOOT_RESTORE_UNIT, ROOT, CO, VENV)
+    assert "Type=oneshot" in boot
+    assert "RemainAfterExit=yes" in boot
+    assert "KillMode=process" in boot
+    assert "TimeoutStartSec=1800" in boot
+    assert "WantedBy=default.target" in boot
+    assert f"Environment=LHPC_RUNTIME_ROOT={ROOT}" in boot
+    assert f"WorkingDirectory={CO}" in boot
+    assert f"ExecStart={VENV}/bin/lhpc autostart --run-service" in boot
+    assert f"ConditionPathExists=!{ROOT}/.lhpc-uninstalling" in boot
+    # assert on the DIRECTIVE — the template carries an explanatory comment naming it
+    assert not [ln for ln in boot.splitlines() if ln.startswith("MemoryDenyWriteExecute")]
+    inaccessible = [ln for ln in boot.splitlines() if ln.startswith("InaccessiblePaths=")]
+    assert inaccessible == ["InaccessiblePaths=%t/bus %t/systemd/private"]
 
 
 def test_overwrite_variant_is_gone():
@@ -200,8 +222,11 @@ def _pct_units(tail="loraham-pi-control"):
                f"ExecStart=%h/{tail}/venv/lhpc/bin/lhpc webserver --run-restart-service\n")
     restart_path = (f"[Path]\nPathExists=%h/{tail}/state/nginx-restart.request\n"
                     f"Unit=lhpc-nginx-restart.service\n")
+    boot = (f"[Service]\nEnvironment=LHPC_RUNTIME_ROOT=%h/{tail}\n"
+            f"ExecStart=%h/{tail}/venv/lhpc/bin/lhpc autostart --run-service\n")
     return {U.WEB_UNIT: web, U.HELPER_UNIT: helper, U.PATH_UNIT: path, U.NGINX_UNIT: nginx,
-            U.RESTART_UNIT: restart, U.RESTART_PATH_UNIT: restart_path}
+            U.RESTART_UNIT: restart, U.RESTART_PATH_UNIT: restart_path,
+            U.BOOT_RESTORE_UNIT: boot}
 
 
 def test_verify_pct_h_same_root_is_modified_ours(tmp_path):

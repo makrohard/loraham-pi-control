@@ -839,6 +839,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # cached-only — no live git/network/identity on a GET. hw_probe is popped (consumed once).
         ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
                                                   hw_probe=session.pop("hw_probe", None))
+        # Boot-restore toggle state for the webserver panel (config read only — GET-safe).
+        try:
+            _bcfg = service.config().boot
+            ctx.setdefault("boot_restore_on", bool(_bcfg.restore and _bcfg.valid))
+            ctx.setdefault("boot_restore_valid", bool(_bcfg.valid))
+        except Exception:                          # noqa: BLE001 — never break the page
+            ctx.setdefault("boot_restore_on", False)
+            ctx.setdefault("boot_restore_valid", False)
         ctx.update(over)
         return render_template("stacks.html", **ctx)
 
@@ -1532,9 +1540,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     @app.get("/controller/logs")
     def controller_logs():  # noqa: ANN202
         # The controller's OWN process logs — on-disk files under logs/ (StandardOutput=append:).
-        # Read-only, non-network, bounded no-follow file tail; `src` whitelisted to web|selfupdate.
-        src = "selfupdate" if request.args.get("src") == "selfupdate" else "web"
-        unit = "lhpc-selfupdate.service" if src == "selfupdate" else "lhpc-web.service"
+        # Read-only, non-network, bounded no-follow file tail; `src` is an EXPLICIT whitelist —
+        # an unknown value normalizes to "web" here AND is rejected by the service map, so it can
+        # never alias to the wrong log.
+        _SRC_UNITS = {"web": "lhpc-web.service", "selfupdate": "lhpc-selfupdate.service",
+                      "boot-restore": "lhpc-boot-restore.service"}
+        src = request.args.get("src", "web")
+        if src not in _SRC_UNITS:
+            src = "web"
+        unit = _SRC_UNITS[src]
         path, lines = service.controller_log_tail(src, 300)
         return render_template("controller_logs.html", version=__version__,
                                runtime_root=_runtime_root(), src=src, unit=unit,
@@ -1542,6 +1556,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     def _ws_back():
         return redirect(url_for("stacks_overview") + "#webserver-row")
+
+    @app.post("/boot-restore")
+    def boot_restore_set():  # noqa: ANN202
+        if not _csrf_ok():
+            abort(400)
+        res = service.set_boot_restore(request.form.get("restore") == "on")
+        flash(res.summary, "ok" if res.ok else "warn")
+        return _ws_back()
 
     @app.route("/webserver/configure", methods=["POST"])
     def webserver_configure():  # noqa: ANN202
