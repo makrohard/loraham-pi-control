@@ -769,9 +769,12 @@ class AutoInstallOpsMixin:
         (packaged binary, device groups, SPI, no conflicting service) are checked separately by
         `_auto_install_runtime_blockers` — they are a start gate, not an install fact."""
         work = StackWork.of(st)
-        if not all(self._paths.resolve_source(c.source.path).is_dir() for c in work.source):
+        # Binary-covered components have no clone (the artifact IS the build output); their
+        # readiness is decided by the physical artifact check in `is_built` alone.
+        if not all(self._paths.resolve_source(c.source.path).is_dir()
+                   for c in work.source if not self.binary_covers(c.id)):
             return False
-        return all(self.is_built(c) for c in work.build)
+        return all(self.is_built(c) for c in work.build if not self.binary_covers(c.id))
 
     def _auto_install_runtime_blockers(self, st) -> list[str]:
         """Mandatory start prerequisites that are STILL unmet after provisioning — the reason a
@@ -824,10 +827,15 @@ class AutoInstallOpsMixin:
                              "mandatory": self._auto_install_dep_mandatory(st, dep),
                              "ready": (self._auto_install_stack_installed(dep_st)
                                        and not self.unbuilt_components(dep))})
+            _bin_ok, _bin_why = self.binary_available(st.id)
             rows.append({"id": st.id, "name": st.name,
                          "installed": self._auto_install_stack_installed(st),
                          "testable": testable,
                          "tx_capable": self._auto_install_tx_capable(st.id),
+                         "binary_available": _bin_ok,
+                         "binary_reason": _bin_why,
+                         "channels": list(self.allowed_channels(st.id)),
+                         "default_channel": self.default_channel(st.id),
                          "deps": deps})
         return rows
 
@@ -841,8 +849,12 @@ class AutoInstallOpsMixin:
             if sid not in ids:
                 errs.append(f"unknown stack in selection: {sid!r}")
                 continue
-            if sel.get("version") not in self.SOURCE_CHOICES:
-                errs.append(f"{sid}: invalid version {sel.get('version')!r}")
+            if sel.get("version") not in self.allowed_channels(sid):
+                errs.append(f"{sid}: invalid version {sel.get('version')!r} "
+                            f"(choose {', '.join(self.allowed_channels(sid))})")
+            if sel.get("version") == self.BINARY_CHANNEL and sel.get("tests"):
+                errs.append(f"{sid}: host tests need the source channel "
+                            "(a binary install has no test tree)")
             if sel.get("tx"):
                 if not self._auto_install_tx_capable(sid):
                     errs.append(f"{sid}: the TX test is not available for this stack")
@@ -905,7 +917,9 @@ class AutoInstallOpsMixin:
         marker at every transition (a write failure STOPS the run), disclosed TX phase.
         stdout (`emit`) is the narrative log."""
         from . import auto_install as ai_mod
-        if source not in self.SOURCE_CHOICES:
+        if source and source not in self.CHANNEL_CHOICES:
+            # The per-stack selection validates against each stack's OWN allowed channels;
+            # this is only the run-wide default.
             return ActionResult(False, f"Unknown source choice {source!r}.")
         if tx and not tests:
             return ActionResult(False, "Refusing: the TX test requires host tests to be "
@@ -984,7 +998,13 @@ class AutoInstallOpsMixin:
                     res = ActionResult(False, f"Refusing the auto-install run: {why}")
             if res is None:
                 if sel is None:
-                    sel = {st.id: {"install": True, "version": source, "tests": tests,
+                    # An UNSET selector means "each stack's own default" (binary where
+                    # published, else dev) — a uniform global "dev" would compile the three
+                    # heavy stacks from source on a fresh box.
+                    sel = {st.id: {"install": True,
+                                   "version": source or self.default_channel(st.id),
+                                   "tests": tests and (source or self.default_channel(st.id))
+                                            != self.BINARY_CHANNEL,
                                    "tx": bool(tx) and self._auto_install_tx_capable(st.id)}
                            for st, _ in scope}
                 selerr = self._auto_install_selection_errors(scope, sel)
@@ -1207,9 +1227,42 @@ class AutoInstallOpsMixin:
                             continue
                         emit(f"  [skip] {st.id}: optional GUI component(s) not installable here: "
                              f"{', '.join(w.skipped)} — {GUI_MISSING_HINT}")
-                    # MANDATORY system-dep gate — BEFORE any source clone/adopt. A stack missing a
-                    # mandatory dep of a non-optional component is skipped without touching its
-                    # sources; optional missing deps only warn and fall through into the build.
+                    # ---- BINARY channel row: download the artifact instead of adopting +
+                    # building sources. The build/host-test phases below are skipped by
+                    # construction (nothing buildable is left, and host tests need a source
+                    # tree), and the mid-run failure is a BLOCKED row with the exact fallback
+                    # command — an interactive "build from source instead?" confirm is
+                    # impossible inside a detached run.
+                    if selection[st.id].get("version") == self.BINARY_CHANNEL:
+                        emit(f"==== {st.id}: binary channel ====")
+                        r["status"] = "downloading"
+                        bw()
+                        br = self.binary_install(st.id, apply=True, locked=True)
+                        for line in br.details:
+                            emit(line)
+                        if not br.ok:
+                            r["status"] = "blocked"
+                            r["detail"] = (br.summary + " — install from source with: "
+                                           + (br.next_commands[0] if br.next_commands
+                                              else f"lhpc install {st.id} --source pinned --yes"))
+                            failed_stacks.add(st.id)
+                            emit(f"  [blocked] {st.id}: {r['detail']}")
+                            bw()
+                            continue
+                        emit(f"  [ok] {st.id}: {br.summary}")
+                        r["tests"] = {"ran": False, "ok": None,
+                                      "detail": "skipped (binary install — no source tree)"}
+                        # "success" is THE terminal token every consumer keys on (run verdict,
+                        # counters, TX gate, web badge) — "ok" silently reported failure.
+                        r["status"] = "success"
+                        r["detail"] = br.summary
+                        bw()
+                        continue
+                    # MANDATORY system-dep gate for the SOURCE path — BEFORE any clone/adopt.
+                    # It runs AFTER the channel branch above on purpose: these are BUILD
+                    # dependencies (compiler, cmake, dev headers), and a binary install must
+                    # never be blocked by a toolchain it does not use — that is the whole point
+                    # of the channel. A binary row checks only the artifact's runtime_deps.
                     gate = self.install_dep_gate(st.id)
                     for d in gate["warn"]:
                         _kind = "GUI-only (opt-in: --with-gui)" if d.get("gui") else "optional"

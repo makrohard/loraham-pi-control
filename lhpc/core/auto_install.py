@@ -42,6 +42,10 @@ RUN_STATES = ("preparing", "running", "completed", "completed-with-failures",
 # It is an ACCEPTED outcome, not a failure — but it must never read as "installed".
 STACK_STATUSES = ("pending", "downloading", "building", "testing",
                   "success", "fail", "blocked", "skipped")
+# Per-row channel selectors the marker/plan may record. "binary" belongs here: a binary row is
+# a normal selection, and leaving it out made a completed binary run read as a MALFORMED marker
+# that blocked every later run until the operator acknowledged it (operator-reported).
+SELECTORS = ("pinned", "dev", "stable", "binary")
 TX_STATUSES = ("skipped", "pending", "running", "success", "fail")
 
 # Terminal run states: a NEW run may start over these without acknowledgement. `aborted` is a clean
@@ -450,7 +454,7 @@ def valid_marker(d) -> bool:
                         # present it must be complete + valid.
                         and ("selected" not in st
                              or (isinstance(st["selected"], dict)
-                                 and st["selected"].get("version") in ("pinned", "dev", "stable")
+                                 and st["selected"].get("version") in SELECTORS
                                  and isinstance(st["selected"].get("tests"), bool)
                                  and isinstance(st["selected"].get("tx"), bool)))
                         for st in d["stacks"]))

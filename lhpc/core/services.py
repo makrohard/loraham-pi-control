@@ -11,6 +11,7 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 from __future__ import annotations
 
 import os
+import secrets
 import shlex
 import threading
 import time
@@ -20,6 +21,8 @@ from pathlib import Path
 
 from .lifecycle import GUI_MISSING_HINT
 from .snapshot_memo import invalidates_snapshot
+from . import binary_install as binary_install_mod
+from . import binary_receipt as binary_receipt_mod
 from . import manifest as manifest_mod
 from .config import (
     HW_SETUPS,
@@ -48,7 +51,7 @@ _UNSET = object()                # sentinel: "not yet resolved" (distinct from N
 
 
 from .service_base import (ActionResult, AdmissionRefused, ConfigWrite, SourceTxnBlocked, _StopRun,
-                           _canon_git_url, _proc_ceased, _proc_start_time)
+                           _SwitchReplace, _canon_git_url, _proc_ceased, _proc_start_time)
 
 # Public import surface (the adapters + tests import these names FROM lhpc.core.services). Listing
 # them in __all__ also marks the re-exports above as intentionally exported, so a name whose only
@@ -87,10 +90,13 @@ from .service_system import SystemStatsMixin
 from .service_firewall import FirewallOpsMixin
 
 
+from .service_binary_channel import BinaryChannelMixin
+from .service_binary_ops import BinaryOpsMixin
 from .service_boot_restore import BootRestoreOpsMixin
 
 
-class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin):
+class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
+                        BinaryChannelMixin, BinaryOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
 
     `system` and `paths` are injectable so tests drive it with fakes.
@@ -497,7 +503,20 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid, entry in comp["entries"].items():
                     if entry.get("commit"):
                         confirmed.setdefault(cid, set()).add(entry["commit"])
-        snap = StatusProber(self._system, self._paths, confirmed).assess_stacks(self.stacks())
+        # Components currently provided by a verified binary artifact — the ONE receipt read
+        # per snapshot (cheap four-state, no hashing), passed to the prober so a binary stack
+        # reports artifact provenance instead of "no git checkout".
+        binary_cover: dict = {}
+        for s in self.stacks():
+            spec = getattr(s, "binary", None)
+            if spec is None:
+                continue
+            state, rec, _why = self.binary_receipt_state(s.id)
+            if state == "valid" and rec is not None:
+                for cid in spec.covers:
+                    binary_cover[cid] = rec
+        snap = StatusProber(self._system, self._paths, confirmed,
+                            binary_cover=binary_cover).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._snapshot_state.cache = snap
@@ -664,10 +683,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 st = ss.components[comp.id]
                 pin = (comp.source.pin_commit[:12] or "-") if comp.source else "-"
                 tag = comp.source.pin_tag or "-"
-                details.append(
-                    f"  {comp.id:24s} {st.source_state.value:12s} "
-                    f"pin={pin} tag={tag}"
-                )
+                if st.source_state.value == "binary":
+                    # Binary channel: the artifact's own provenance is the honest answer —
+                    # there is no checkout whose HEAD could be compared to the pin.
+                    details.append(
+                        f"  {comp.id:24s} {'binary':12s} "
+                        f"{st.source_version} built_from={(st.source_head or '-')[:12]} "
+                        f"pin={pin}"
+                    )
+                else:
+                    details.append(
+                        f"  {comp.id:24s} {st.source_state.value:12s} "
+                        f"pin={pin} tag={tag}"
+                    )
         return ActionResult(
             ok=True,
             summary="Source/pin status (local git only; no fetch). "
@@ -782,6 +810,21 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("  dependencies: all declared system/build prerequisites satisfied")
         details.append(f"  ({deps_mod.NOT_EXECUTED_NOTE})")
 
+        # BINARY-channel ownership: a receipt that no longer matches the disk (files removed
+        # by a source adoption of a shared checkout, an interrupted transaction, a hand-edited
+        # record) is the one binary-channel fault the ordinary status view cannot show — it
+        # reads as an ordinary source state while the stack is in fact not installed
+        # (live-found on the Zero). Name it here, with the reason and the way out.
+        for s in self.stacks():
+            if self.binary_spec(s.id) is None:
+                continue
+            state, _rec, why = self.binary_receipt_state(s.id)
+            if state in ("unsafe", "superseded"):
+                details.append(f"  {s.id}: binary install {state} — {why}")
+                _cmd = f"lhpc install {s.id} --yes"
+                details.append(f"    | run yourself: {_cmd}")
+                _add_cmd(_cmd)
+
         # Run-state tally from a fresh snapshot.
         snap = self.build_snapshot()
         tally: dict[str, int] = {}
@@ -816,6 +859,72 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         plan = inst.apply_bootstrap(plan)
         return self._plan_result(plan, applied=True, next_apply=None)
 
+    def _switch_records_missing(self, paths) -> list:
+        """Source paths this switch adopted whose ownership record is not valid — the switch is
+        not complete until every one of them is recorded (audit finding)."""
+        from . import source_registry
+        return [p for p in sorted(set(paths))
+                if source_registry.record_state(self._paths, p)[0] != "valid"]
+
+    def _resolve_switch(self, *, ok: bool, created) -> list:
+        """THE single commit point of a binary -> source switch. Returns detail lines.
+
+        `ok` is the verdict over the COMPLETE switch. On success the retirement becomes final
+        and the local backups are dropped; on failure the source paths this switch CREATED are
+        removed FIRST (a checkout that existed before the switch is never touched) and the
+        previous binary — files, owned directories, receipt and authentication — is then
+        restored from the transaction, with no network, no release lookup and no pin re-check."""
+        if ok:
+            if binary_install_mod.commit(self._paths):
+                return []
+            return ["  the retired artifact's backup could not be dropped — the next binary "
+                    "operation resolves it"]
+        # ORDER MATTERS: undo the new state before restoring the old one. The artifact's files
+        # live INSIDE these source paths, so removing them afterwards would delete what the
+        # restore just put back.
+        undone = self._undo_created_sources(created)
+        rb_ok, rb_why = self.binary_recover()
+        if not rb_ok:
+            return undone + [f"  INCOMPLETE: the binary install could NOT be restored ({rb_why})"
+                             " — the recovery evidence is kept; resolve state/binary by hand"]
+        return undone + ["  restored the binary install from disk — the source switch changed "
+                         "nothing"]
+
+    def _preserve_replaced_source(self, txn: str, rel: str) -> str:
+        """Move a to-be-replaced checkout and its ownership record into the switch transaction.
+        Returns "" or a typed reason. Both are restored together by `binary_recover()`."""
+        from . import source_registry
+        try:
+            binary_install_mod.displace_dir(self._paths, txn, rel)
+            binary_install_mod.displace(
+                self._paths, txn,
+                [str(source_registry.record_path(self._paths, rel).relative_to(
+                    self._paths.runtime_root))])
+        except (binary_install_mod.BinaryInstallError, OSError, PathContainmentError,
+                ValueError) as exc:
+            return f"the existing {rel} checkout could not be set aside ({exc})"
+        return ""
+
+    def _undo_created_sources(self, created) -> list:
+        """Remove ONLY the checkouts (and their ownership records) this failed switch created —
+        which includes the NEW tree at a path whose previous checkout was set aside above. A
+        checkout that existed before the switch is restored, never left half-switched."""
+        from . import source_fs, source_registry
+        out = []
+        for rel in sorted(set(created)):
+            try:
+                source_fs.rmtree_at(self._paths, self._paths.resolve_source(rel))
+            except (OSError, PathContainmentError, ValueError) as exc:
+                out.append(f"  INCOMPLETE: {rel} was created by this switch and could not be "
+                           f"removed ({exc})")
+                continue
+            if not source_registry.remove_record(self._paths, rel):
+                out.append(f"  INCOMPLETE: the ownership record this switch wrote for {rel} "
+                           "could not be removed")
+                continue
+            out.append(f"  removed the {rel} checkout this switch created")
+        return out
+
     @invalidates_snapshot
     def install(self, stack_id: str | None = None, apply: bool = False,
                 source: str = "pinned", auto_install_ctx=None, on_admit=None) -> ActionResult:
@@ -823,6 +932,24 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return _r
         if stack_id and self.stack(stack_id) is None:
             return self._unknown_stack(stack_id)
+        # ---- CHANNEL dispatch (before any source planning) -------------------------------
+        if source == self.BINARY_CHANNEL:
+            if not stack_id:
+                return ActionResult(False, "The binary channel installs ONE stack at a time.",
+                                    next_commands=["lhpc install <stack> --source binary"])
+            return self.binary_install(stack_id, apply=apply)
+        # A SOURCE install over a binary install must not be silently skipped ("destination
+        # already exists") — the artifact is retired, but LATER: only once the runtime root,
+        # shared-remote coherence and the adoption plan have all validated, and inside the
+        # install's own guards. Retiring up here would destroy a working binary before a
+        # source resolution failure that never adopts anything (audit finding).
+        _retire_note = ""
+        # ANY receipt state but "absent" must be retired — a SUPERSEDED or drifted receipt still
+        # names files this box owns, and `on_binary_channel` (valid receipts only) let those
+        # bypass retirement entirely (audit finding). An unreadable receipt is refused by
+        # `binary_retire` itself, with the manual-resolution command.
+        _retire_binary = bool(apply and stack_id
+                              and self.binary_receipt_state(stack_id)[0] != "absent")
         if not self._paths.runtime_root_exists:
             return ActionResult(
                 ok=False,
@@ -846,7 +973,21 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         plan = inst.plan_install(stack_id)
         if not apply:
             cmd = f"lhpc install {stack_id} --yes" if stack_id else "lhpc install --yes"
-            return self._plan_result(plan, applied=False, next_apply=cmd)
+            res = self._plan_result(plan, applied=False, next_apply=cmd)
+            if stack_id and self.on_binary_channel(stack_id):
+                # SWITCHING AWAY from the binary channel is real work even when every source
+                # path already exists: the artifact must be retired (and its files removed)
+                # first. Without counting it, the CLI's dry-run short-circuit reports "Nothing
+                # to do" and the switch silently never happens (live-found on the Zero).
+                _d = dict(res.data)
+                _d["changes"] = int(_d.get("changes", 0)) + 1
+                return ActionResult(
+                    res.ok, res.summary,
+                    details=[f"  [switch] retire the binary install of '{stack_id}' "
+                             "(its files are removed, then the sources are adopted)"]
+                    + list(res.details),
+                    next_commands=res.next_commands, data=_d)
+            return res
         from . import source_fs
         # ONE adoption per coherent source GROUP: each shared path is installed exactly once
         # (deterministic first declarer), never opportunistically re-attempted through
@@ -889,8 +1030,52 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                 "install.", data={"contended": True})
         _guard = (self._source_operation_guard(_guard_paths, op="install")
                   if on_admit is not None else contextlib.nullcontext())
+        _switch_txn = ""
+        _sw_replace: set = set()          # checkouts the switch must REPLACE (wrong commit)
+        # Source paths this switch CREATED from nothing — the only ones a rollback may remove
+        # (a checkout that existed before the switch is never reset by it).
+        _switch_created: list = []
+        if _retire_binary:
+            # SELECTOR ENFORCEMENT, before anything is set aside: an existing checkout must be
+            # provably ours, clean, and at the commit the requested selector resolves to —
+            # otherwise this "switch to dev" would leave a pinned tree in place and report
+            # success (audit finding). Refuse here, with the artifact untouched.
+            _sw_owned = (self.binary_receipt_state(stack_id)[1] or None)
+            _sw_replace, _sw_refusals = self.switch_source_plan(
+                groups, owned_files=(_sw_owned.files if _sw_owned else ()))
+            if _sw_refusals:
+                _adm_stack.close()
+                return ActionResult(
+                    False,
+                    f"Refusing to switch '{stack_id}' to the {source} source channel: the "
+                    "existing checkout(s) cannot be taken over.",
+                    details=[f"  {r}" for r in _sw_refusals],
+                    next_commands=[f"lhpc status {stack_id}"])
+            # Everything above validated; now it is safe to hand the paths back to the source
+            # machinery. The artifact is retired INTO AN OPEN TRANSACTION: its files, its owned
+            # directories and its receipt are moved aside locally, not deleted. If the adoption
+            # below fails, `binary_recover()` puts the exact previous install back from disk —
+            # re-downloading it would need the network, the release, and an artifact that still
+            # matches the pins, which is precisely what an operator switching to source is
+            # working around (audit finding). `locked=False` so retirement rechecks running.
+            _switch_txn = secrets.token_hex(8)
+            try:
+                binary_install_mod.open_txn(
+                    self._paths, stack_id, _switch_txn,
+                    old_receipt=binary_receipt_mod.read_raw(self._paths, stack_id))
+            except binary_install_mod.BinaryInstallError as _exc:
+                _adm_stack.close()
+                return ActionResult(False, f"Refusing to install '{stack_id}': {_exc.message}")
+            _ret = self.binary_retire(stack_id, txn=_switch_txn)
+            if not _ret.ok:
+                self.binary_recover()               # nothing moved, or everything goes back
+                _adm_stack.close()
+                return _ret
+            _retire_note = _ret.summary
         with _adm_stack, _guard:
             if on_admit is not None and not on_admit():
+                if _retire_note:
+                    self.binary_recover()      # put the set-aside artifact back
                 return ActionResult(False, "Install superseded before admission — nothing was changed.")
             for path, comp, selector, resolved in groups:
                 dest = self._paths.resolve_source(path)
@@ -899,6 +1084,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 # into `adopt_source`, whose locked leaf checks install or refuse typed —
                 # a dangling/unknown leaf is never silently treated as installed.
                 try:
+                    # On a SWITCH, a directory the pre-flight marked for replacement must go
+                    # through adoption (forced) — never through the "already installed" skip.
+                    if _retire_binary and path in _sw_replace:
+                        raise _SwitchReplace
                     if source_fs.leaf_kind(self._paths, dest) == "dir":
                         # HEALTHY SKIP: the leaf already serves this install. RE-JOIN the
                         # targeted consumers in the ownership record's live membership —
@@ -917,8 +1106,30 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                                 extra_out.append(f"  [warn] {path}: shared-consumer record "
                                                  "could not be updated — re-run install")
                         continue
+                except _SwitchReplace:
+                    pass                       # fall through to the forced adoption below
                 except PathContainmentError:
                     pass                       # unsafe parent -> adopt_source refuses typed
+                if _retire_binary and path in _sw_replace:
+                    # PRESERVE the checkout this switch is about to replace — the directory AND
+                    # its ownership record — inside the switch transaction. The source
+                    # transaction deletes the prior tree once its own activation succeeds, so
+                    # without this a later failure could restore the binary while the checkout
+                    # (and its NEW registry txn id) stayed on the source channel: the receipt's
+                    # baseline no longer matched and the restored install read SUPERSEDED
+                    # (audit finding). Adoption then runs against an absent destination.
+                    _err = self._preserve_replaced_source(_switch_txn, path)
+                    if _err:
+                        self.binary_recover()
+                        return ActionResult(
+                            False, f"Refusing to switch '{stack_id}' to the {source} source "
+                                   f"channel: {_err}")
+                _pre_absent = False
+                if _retire_binary:
+                    try:
+                        _pre_absent = source_fs.leaf_kind(self._paths, dest) == "absent"
+                    except PathContainmentError:
+                        _pre_absent = False
                 st_of = next((st2 for st2 in self.stacks()
                               if any(c2.id == comp.id for c2 in st2.components)), None)
                 # Announce the clone log BEFORE the (possibly minutes-long, off-TTY-silent)
@@ -926,11 +1137,17 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if comp.source and comp.source.strategy != "link":
                     extra_out.append(f"  [log] {comp.id} -> tail -f "
                                      f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
-                result = self._adopt_dev_fallback(inst, st_of, comp, selector, resolved,
-                                                  force=False,
-                                                  locked=_locked_adopt)
+                result = self._adopt_dev_fallback(
+                    inst, st_of, comp, selector, resolved,
+                    # A switch REPLACES a checkout that is at the wrong commit: the same forced
+                    # adoption `lhpc update` uses (capture -> verify identity -> dirty check ->
+                    # candidate -> atomic swap). Nothing binary-specific.
+                    force=bool(_retire_binary and path in _sw_replace),
+                    locked=_locked_adopt)
                 if result.status == "done":
                     mutated_paths.append(path)
+                    if _pre_absent:
+                        _switch_created.append(path)
                 for a in plan.actions:
                     if a.target == str(dest):
                         a.status, a.detail = result.status, result.detail
@@ -953,15 +1170,46 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                             break
             retire_ok = self._retire_candidates_for_paths(mutated_paths, extra_out)
             res = self._plan_result(plan, applied=True, next_apply=None)
+            # ---- THE switch commit point ------------------------------------------------
+            # The binary retirement becomes final ONLY when the WHOLE switch succeeded: every
+            # source group adopted, every ownership record written, and (where it applies) the
+            # MeshCom password enabled. Committing earlier left the operator with a failed
+            # switch and no way back to the binary (audit finding).
+            _switch_note = []
+            if _retire_note:
+                _missing = self._switch_records_missing(mutated_paths)
+                _switch_ok = bool(res.ok and not hmac_err and not _missing)
+                _switch_note = self._resolve_switch(ok=_switch_ok, created=_switch_created)
+                if not _switch_ok:
+                    _why = ("the source adoption failed" if not res.ok else
+                            f"the HMAC password could not be enabled ({hmac_err})" if hmac_err
+                            else "the ownership record for "
+                                 f"{', '.join(_missing)} is incomplete")
+                    return ActionResult(
+                        False,
+                        f"Switch of '{stack_id}' to the {source} source channel FAILED — "
+                        f"{_why}.",
+                        details=[f"  {_retire_note}"] + _switch_note + list(res.details)
+                                + extra_out,
+                        next_commands=[f"lhpc status {stack_id}"], data=res.data)
             if hmac_err:
                 return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
                                     f"({hmac_err}); fix and re-run before starting the meshcom link.",
-                                    details=list(res.details) + extra_out,
+                                    details=_switch_note + list(res.details) + extra_out,
                                     next_commands=res.next_commands)
             if not retire_ok:
                 return ActionResult(False, res.summary + " (candidate cleanup INCOMPLETE)",
-                                    details=list(res.details) + extra_out,
+                                    details=_switch_note + list(res.details) + extra_out,
                                     next_commands=res.next_commands)
+            if _retire_note:
+                # Say plainly what happened to the binary install, either way.
+                return ActionResult(res.ok, res.summary,
+                                    details=[f"  {_retire_note}"] + _switch_note
+                                            + list(res.details),
+                                    next_commands=(res.next_commands if res.ok else
+                                                   [f"lhpc install {stack_id} --source pinned "
+                                                    "--yes"]),
+                                    data=res.data)
             return res
 
     def _plan_result(self, plan: Plan, *, applied: bool, next_apply: str | None) -> ActionResult:
@@ -1543,6 +1791,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     _IDENTITY_ENFORCE = {"callsign": "licensed", "node": "unlicensed"}
 
     SOURCE_CHOICES = ("pinned", "dev", "stable")   # pinned = production-safe default
+    # The binary CHANNEL is a fourth selector alongside the three SOURCE selectors. It is
+    # deliberately NOT in SOURCE_CHOICES: `adopt_source` and the git planners must never see it
+    # (a binary install has no ref to resolve — it IS the pinned refs, precompiled).
+    BINARY_CHANNEL = "binary"
+    CHANNEL_CHOICES = SOURCE_CHOICES + (BINARY_CHANNEL,)
 
     # ============================================================================================
     # One-click self-update — ESCAPE-PROOF trigger. The running console cannot mutate its own code

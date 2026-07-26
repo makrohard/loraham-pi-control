@@ -90,6 +90,11 @@ class SourceTxnBlocked(Exception):
     is present — every source-mutating op fails closed until an operator resolves it."""
 
 
+class _SwitchReplace(Exception):
+    """Control-flow marker: on a binary -> source switch this destination must be REPLACED by
+    a forced adoption, never treated as "destination already exists"."""
+
+
 class AdmissionRefused(Exception):
     """Raised (on the FRESH/outermost acquire) by the task-admission guard when a controller
     self-update or uninstall is pending/in progress. Carries a human reason + a `data` tag; ops catch

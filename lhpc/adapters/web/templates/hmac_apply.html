@@ -24,7 +24,18 @@
   {# --- Pre-start: this page IS the warning; Apply starts the run. Suppressed while a run is live, while the
      state is malformed (st.unsafe), AND while a persisted run is blocking-unsafe (phase=='unsafe') — the
      recovery card handles that case; showing Apply would contradict the blocking safety state. --- #}
-  {% if not active and not (st and (st.unsafe or st.phase == 'unsafe')) %}
+  {% if binary_block %}
+  {# Binary channel: the published firmware has NO mesh password, so an apply is impossible.
+     The action is shown WITH ITS REASON (never silently hidden) plus the way to enable it. #}
+  <div class="card">
+    <header><h2>HMAC Password — not available</h2></header>
+    <div class="body">
+      <p class="depnote depnote-warn">{{ binary_block }}.</p>
+      <p>Install this stack from source to manage the mesh password:</p>
+      <pre class="cmd">lhpc install {{ sid }} --source pinned --yes</pre>
+    </div>
+  </div>
+  {% elif not active and not (st and (st.unsafe or st.phase == 'unsafe')) %}
   <div class="card">
     <header><h2>HMAC Password — {{ action_label }}</h2></header>
     <div class="body">

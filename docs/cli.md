@@ -81,10 +81,10 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 `lhpc bootstrap [--yes]` — create the runtime root and a starter config.
 
 ### install
-`lhpc install [<stack>] [--check] [--source pinned|dev|stable] [--yes]` — adopt/verify managed sources into the runtime root. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
+`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack: download the published **binary** artifact, or adopt/verify managed sources into the runtime root. Without `--source`, a named stack uses its default channel (binary where one is published for this platform, else `dev`); the all-stacks form stays on the source channel. A failed binary install asks **explicitly** whether to build from source — it never falls back silently. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
 
 ### auto-install
-`lhpc auto-install [--source pinned|dev|stable] [--tests] [--tx] [--status] [--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one guided run. Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and transmits one bounded test frame per ready band (real RF — dummy loads). `--status` prints the run state and any recovery reason, then exits. `--recover` acknowledges a crashed/interrupted run and clears all its leftover state (reservation + lease + run marker) so a new run can start — the CLI equivalent of the web console's recover button; add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect/terminate it first).
+`lhpc auto-install [--source binary|pinned|dev|stable] [--tests] [--tx] [--status] [--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one guided run. Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and transmits one bounded test frame per ready band (real RF — dummy loads). `--status` prints the run state and any recovery reason, then exits. `--recover` acknowledges a crashed/interrupted run and clears all its leftover state (reservation + lease + run marker) so a new run can start — the CLI equivalent of the web console's recover button; add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect/terminate it first).
 
 ---
 
@@ -187,7 +187,7 @@ after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` sho
 `lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx` (real RF, dummy loads).
 
 ### update
-`lhpc update [<target>] [--source pinned|dev|stable] [--yes]` — update a stack/component to the selected source.
+`lhpc update [<target>] [--source binary|pinned|dev|stable] [--yes]` — update a stack/component to the selected source. Without `--source` the target KEEPS its current channel: a binary-installed stack updates binary→binary, everything else defaults to `dev`. When the published binary lags this lhpc's pins, the update refuses and names the source build as the only way forward — cancelling keeps the working binary.
 
 ### uninstall
 `lhpc uninstall [<target>] [--yes]` — uninstall a stack/component.

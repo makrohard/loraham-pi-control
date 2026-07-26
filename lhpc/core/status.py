@@ -58,10 +58,15 @@ class Snapshot:
 class StatusProber:
     """Bounded, read-only status assessment for components and snapshots."""
 
-    def __init__(self, system: System, paths: Paths, profiles: dict | None = None) -> None:
+    def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
+                 binary_cover: dict | None = None) -> None:
         self._system = system
         self._paths = paths
         self._profiles = profiles or {}
+        # {component_id: BinaryReceipt} for components currently provided by a verified
+        # artifact. Passed in by the service (which owns the receipt read) so status stays a
+        # pure, bounded assessor.
+        self._binary_cover = binary_cover or {}
 
     def _resolve_addr(self, address: str, *, lenient: bool = False) -> str:
         """A RELATIVE unix/path endpoint address is runtime-root-relative (contained by
@@ -184,6 +189,18 @@ class StatusProber:
     def _assess_source(self, comp: Component):
         if comp.source is None:
             return _NA_SOURCE
+        rec = self._binary_cover.get(comp.id)
+        if rec is not None:
+            # BINARY channel: there is no checkout to compare against the pin (and for a
+            # covered component none is expected). Report the artifact's provenance instead —
+            # without this branch a binary stack reads NOT_A_REPO/MISSING and therefore
+            # NOT_INSTALLED (see `_run_state_for_service`).
+            commit = rec.components.get(comp.id, "")
+            return SourceProbe(
+                SourceState.BINARY, head=commit,
+                version=f"binary@{rec.artifact_sha256[:9]}",
+                evidence={"artifact": rec.filename, "sha256": rec.artifact_sha256,
+                          "built_from": commit, "channel": "binary"})
         abs_path = str(self._paths.resolve_source(comp.source.path))
         return probe_source(self._system, comp.source, abs_path)
 
@@ -342,6 +359,8 @@ def _profile_from_source(source_state: SourceState) -> ProfileState:
         SourceState.MATCH: ProfileState.INSTALLED_UNVALIDATED,
         SourceState.DIFFERS: ProfileState.CANDIDATE_AVAILABLE,
         SourceState.DIRTY: ProfileState.LOCALLY_MODIFIED,
+        # A verified artifact is installed material, not a validated known-working profile.
+        SourceState.BINARY: ProfileState.INSTALLED_UNVALIDATED,
     }.get(source_state, ProfileState.UNKNOWN)
 
 

@@ -85,12 +85,20 @@
             <td><input type="checkbox" id="ai-all-tests"></td>
             <td><input type="checkbox" id="ai-all-tx"></td></tr>
           {% for r in rows %}
-          <tr data-stack="{{ r.id }}" data-deps='{{ r.deps|tojson }}'>
+          {# data-testable / data-txcapable: the STACK's own capability, so the script can tell
+             "disabled because this stack has no host test" from "disabled because you picked
+             the binary channel" and restore the box when you switch back to source. #}
+          <tr data-stack="{{ r.id }}" data-deps='{{ r.deps|tojson }}'
+              data-testable="{{ 1 if r.testable else 0 }}"
+              data-txcapable="{{ 1 if r.tx_capable else 0 }}">
             <td>{{ r.name }}</td>
             <td class="muted">{{ 'yes' if r.installed else 'no' }}</td>
             <td><input type="checkbox" class="ai-install" name="install:{{ r.id }}" value="yes" checked></td>
-            <td><select class="ai-version" name="version:{{ r.id }}" aria-label="Version for {{ r.name }}">
-              {% for key, label in src_labels %}<option value="{{ key }}"{% if key == 'dev' %} selected{% endif %}>{{ label }}</option>{% endfor %}
+            {# Only the channels THIS stack allows (binary appears where a signed-off artifact
+               is published for this platform), preselected with the stack's default. #}
+            <td><select class="ai-version" name="version:{{ r.id }}" aria-label="Version for {{ r.name }}"
+                       {% if r.binary_available %}title="Binary = download a prebuilt, sha256-verified artifact (minutes instead of hours); host tests need a source channel"{% endif %}>
+              {% for key, label in src_labels %}{% if key in r.channels %}<option value="{{ key }}"{% if key == r.default_channel %} selected{% endif %}>{{ label }}</option>{% endif %}{% endfor %}
             </select></td>
             <td><input type="checkbox" class="ai-tests" name="tests:{{ r.id }}" value="yes"{% if not r.testable %} disabled{% endif %}></td>
             <td><input type="checkbox" class="ai-tx" name="tx:{{ r.id }}" value="yes"{% if not r.tx_capable %} disabled{% endif %}></td>

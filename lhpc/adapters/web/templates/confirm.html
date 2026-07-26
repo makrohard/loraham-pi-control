@@ -80,11 +80,14 @@
               <select name="source">
                 {% for ch in source_choices %}
                   <option value="{{ ch }}" {% if source==ch %}selected{% endif %}>
-                    {{ {'dev':'Development','stable':'Latest stable','pinned':'Known working'}[ch] }}</option>
+                    {{ {'dev':'Development','stable':'Latest stable','pinned':'Known working',
+                        'binary':'Binary (prebuilt)'}.get(ch, ch) }}</option>
                 {% endfor %}
               </select>
             </label>
-            <span class="muted">Known working = last operator-confirmed composition (falls back
+            <span class="muted">Binary = download a prebuilt, sha256-verified artifact built
+              from the pinned commits (minutes instead of hours; build and host tests then need
+              a source channel) · Known working = last operator-confirmed composition (falls back
               to the manifest pin) · Development = configured branch tip · Latest stable =
               newest release tag, else newest tag, else main</span>
             <br>
@@ -146,6 +149,30 @@
         {% endif %}
       {% else %}
         <p class="depnote depnote-warn">This action cannot proceed (see above).</p>
+        {% if offer_source and source_choices %}
+          {# A refused BINARY install is the one dead end worth a way out: the operator picks a
+             source channel here instead of being sent to the CLI (settled decision: an explicit
+             "build from source instead?", never a silent fallback). #}
+          <form method="post" action="/action">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="op" value="{{ op }}">
+            <input type="hidden" name="target" value="{{ target }}">
+            {% if frm %}<input type="hidden" name="from" value="{{ frm }}">{% endif %}
+            <h3>Build from source instead?</h3>
+            <label>source
+              <select name="source">
+                {% for ch in source_choices if ch != 'binary' %}
+                  <option value="{{ ch }}" {% if ch=='pinned' %}selected{% endif %}>
+                    {{ {'dev':'Development','stable':'Latest stable',
+                        'pinned':'Known working'}.get(ch, ch) }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <span class="muted">Building from source takes hours on a small Pi.</span>
+            <br><hr class="sep">
+            <button type="submit">Continue from source</button>
+          </form>
+        {% endif %}
       {% endif %}
     </div>
   </div>

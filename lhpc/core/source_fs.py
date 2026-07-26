@@ -214,7 +214,7 @@ def ident_matches(parent_fd: int, name: str, ident) -> bool:
     return _ident_cmp(st, ident)
 
 
-def remove_bound(parent_fd: int, name: str, ident) -> tuple:
+def remove_bound(parent_fd: int, name: str, ident, *, allow_ipc: bool = False) -> tuple:
     """THE identity-bound destructive removal: leaf `name` under `parent_fd` is removed ONLY
     while it matches `ident` ([dev, ino] or v5 [dev, ino, ctime_ns]) — never through the mutable
     name alone.
@@ -245,10 +245,12 @@ def remove_bound(parent_fd: int, name: str, ident) -> tuple:
             if not _ident_cmp(bst, ident):
                 return False, "leaf was substituted during binding — refusing"
             for child in os.listdir(fd):
-                _rmtree_fd(fd, child)                 # contents via the BOUND fd only
+                _rmtree_fd(fd, child, allow_ipc=allow_ipc)   # contents via the BOUND fd only
             if os.listdir(fd):
                 return False, "contents could not be fully removed (remainder retained)"
-        except OSError as exc:
+        except (OSError, PathContainmentError) as exc:
+            # A refused leaf must be a TYPED failure, never an exception escaping into a
+            # caller that reports it as "managed source parent is unsafe" (audit finding).
             return False, f"bound removal incomplete: {exc} (remainder retained)"
         finally:
             os.close(fd)
@@ -557,11 +559,18 @@ def rename_child(paths: Paths, parent: Path, old_name: str, new_name: str) -> No
         os.rename(oname, new_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
 
 
-def _rmtree_fd(parent_fd: int, name: str) -> None:
+def _rmtree_fd(parent_fd: int, name: str, *, allow_ipc: bool = False) -> None:
     """Remove entry `name` under `parent_fd`, recursing NO-FOLLOW. A symlink or regular
     leaf is unlinked (never followed); a directory is opened `O_NOFOLLOW`, its children
-    removed relative to ITS fd, then rmdir'd; a special (fifo/socket/device) leaf fails
-    closed (a managed source tree never legitimately contains one) so evidence is retained."""
+    removed relative to ITS fd, then rmdir'd; a special leaf fails closed so evidence is
+    retained.
+
+    `allow_ipc` additionally permits SOCKET and FIFO leaves — set ONLY for a transaction's own
+    inode-bound `.prev` quarantine. A stack that runs FROM its checkout legitimately leaves a
+    runtime socket there (meshcom's `.run/gps-uart1.sock`), and refusing it aborted the archive
+    cleanup HALFWAY: the partial removal bumped `.prev`'s ctime, its recorded v5 identity could
+    never be re-proven again, and every source operation on the box stayed blocked (live-found
+    on the Zero). Block/char DEVICE nodes still fail closed — nothing legitimate creates one."""
     try:
         st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)   # lstat, no-follow
     except FileNotFoundError:
@@ -571,13 +580,16 @@ def _rmtree_fd(parent_fd: int, name: str) -> None:
         dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
         try:
             for child in os.listdir(dfd):
-                _rmtree_fd(dfd, child)
+                _rmtree_fd(dfd, child, allow_ipc=allow_ipc)
         finally:
             os.close(dfd)
         os.rmdir(name, dir_fd=parent_fd)
         return
     if _stat.S_ISLNK(mode) or _stat.S_ISREG(mode):
         os.unlink(name, dir_fd=parent_fd)          # never follows a symlink leaf
+        return
+    if allow_ipc and (_stat.S_ISSOCK(mode) or _stat.S_ISFIFO(mode)):
+        os.unlink(name, dir_fd=parent_fd)          # runtime IPC leaf inside our own quarantine
         return
     # fifo / socket / block / char device -> fail closed, retain as evidence.
     raise PathContainmentError(

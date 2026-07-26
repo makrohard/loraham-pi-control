@@ -1272,7 +1272,10 @@ class Installer:
         if ident is None:
             return False                           # no identity evidence -> RETAIN
         source_fs.race_seam("pre-prev-delete", prev.name)
-        ok, _why = source_fs.remove_bound(txn.fd, prev.name, ident)
+        # `allow_ipc`: `.prev` is THIS transaction's own inode-bound quarantine — a checkout a
+        # stack runs from legitimately holds a runtime socket (meshcom's `.run/`), and refusing
+        # it left the archive half-deleted and the whole box blocked (live-found on the Zero).
+        ok, _why = source_fs.remove_bound(txn.fd, prev.name, ident, allow_ipc=True)
         if not ok:
             return False                           # substituted/unprovable -> RETAIN
         return txn.leaf_kind(prev.name) == "absent"

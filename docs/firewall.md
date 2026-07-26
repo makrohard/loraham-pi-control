@@ -31,10 +31,15 @@ nftables.
 | 9443 | meshtasticd web UI | all interfaces | **none** | **deny-default** (reach it via the `:8445` proxy) |
 | 8001 | KISS/TCP TNC | loopback default | source allow-list | direct-access row |
 | 5000 | MeshCore companion | loopback default | source allow-list | direct-access row |
-| 7000 | MeshCom bridge | loopback default | password | direct-access row |
+| 7000 | MeshCom bridge | loopback default | password<sup>†</sup> | direct-access row |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 | 8444/8445 | stack proxies | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
+
+<sup>†</sup> **unless the stack is installed from the [binary channel](../README.md#binary-channel-prebuilt)**:
+the published MeshCom firmware is built without a mesh password, so the bridge runs open and the
+firewall model classifies this listener as `auth: none` — the direct-access checkbox then carries
+the unauthenticated-exposure warning. Install meshcom from source to run it password-protected.
 
 **meshtastic 4403/9443 are the reason this feature exists**: reachable from anywhere on your
 network the moment the stack starts, with no upstream option to bind them to loopback. The
@@ -226,6 +231,12 @@ matches a modeled candidate scope the live receipt vouches for; an ephemeral bin
 a non-default-band scope that isn't modeled is refused with *"Save the setting permanently, apply the
 firewall, then start."* A TCP listener with no firewall metadata is treated as exposed and gated
 (fail-closed), so a newly added listener can never slip out unprotected.
+
+**Install channels change nothing here.** A stack installed from the binary channel is gated
+exactly like a source-built one — the firewall reasons about *listeners*, not about how the
+binary got onto the box. The one difference is truthfulness: while a binary receipt is valid the
+meshcom bridge is modeled as unauthenticated (see the table above), because the published
+firmware has no mesh password to authenticate against.
 
 **Verified across updates.** The installed root helper stamps a revision (a hash of its own source)
 into every receipt; after an lhpc update replaces the helper, the old attestation no longer matches,

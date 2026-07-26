@@ -13,7 +13,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 
 - [Überblick](#überblick) — [Stacks](#stacks) · [Hardware](#hardware) · [Nicht enthalten](#nicht-enthalten)
 - [Installation](#installation) — von der frisch geflashten Karte zu laufenden Stacks (Schritte 0–8)
-- [Stacks konfigurieren & betreiben](#stacks-konfigurieren--betreiben) · [Fernzugriff](#fernzugriff) · [Autostart](#autostart) · [Aktualisieren](#aktualisieren)
+- [Stacks konfigurieren & betreiben](#stacks-konfigurieren--betreiben) · [Fernzugriff](#fernzugriff) · [Autostart](#autostart) · [Binary-Kanal](#binary-kanal-vorkompiliert) · [Aktualisieren](#aktualisieren)
 - [Fehlerbehebung](#fehlerbehebung) · [Dokumentation](#dokumentation)
 
 ## Überblick
@@ -132,7 +132,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 <!-- test:deps-manual:start -->
 ```bash
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
-sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
 sudo apt install -y --no-install-recommends socat                                       # kiss
@@ -391,6 +391,47 @@ systemctl --user enable lhpc-nginx lhpc-web      # wieder beim Booten starten (S
 systemctl --user stop lhpc-nginx lhpc-web        # jetzt stoppen
 systemctl --user start lhpc-nginx lhpc-web       # jetzt starten
 ```
+
+## Binary-Kanal (vorkompiliert)
+
+Drei Stacks kompilieren lange — der LoRaHAM-Daemon, meshtasticd und MeshComs QEMU. Für die kann
+lhpc statt eines Quell-Builds ein **vorkompiliertes Binary** installieren: Wo eines für deine
+Plattform veröffentlicht ist (aarch64 / Debian Trixie), ist das der Standard — aus einer
+mehrstündigen Installation werden wenige Minuten Download.
+
+```bash
+lhpc install daemon --yes                    # Binary, wo veröffentlicht (Standard)
+lhpc install daemon --source pinned --yes    # stattdessen aus Quellen bauen
+lhpc status --versions                       # zeigt: binary  binary@<sha>  built_from=<commit>
+```
+
+Jedes Artefakt wird über HTTPS geladen und **vor dem Entpacken per sha256 und Größe geprüft**,
+muss aus exakt den Commits gebaut sein, die dieses lhpc pinnt, und den verpflichtenden
+Smoke-Test des Builders bestanden haben. Schlägt eine Prüfung fehl, verweigert die Installation
+und bietet den Quell-Kanal an — niemals ein stiller Rückfall.
+
+Was der Binary-Kanal praktisch bedeutet:
+
+- **Updates** bleiben im Kanal: Gibt es ein neueres Artefakt, wird binary→binary aktualisiert.
+  Hinkt das Binary der gepinnten Version hinterher, sagt lhpc das und lässt dich den (langen)
+  Quell-Build wählen — Abbrechen behält das laufende Binary.
+- **Build und Host-Tests brauchen Quellen.** Eine Binary-Installation hat kein Checkout, diese
+  Aktionen verweigern mit dem Befehl zum Umschalten.
+- **MeshCom läuft in diesem Kanal ohne Auth**: Die veröffentlichte Firmware wird ohne
+  Mesh-Passwort gebaut, deshalb läuft die Bridge ohne Passwort und Passwortänderungen sind
+  deaktiviert, bis du aus Quellen installierst.
+- **Die Konsole bietet dieselbe Wahl.** Install wählt Binary vor, wo eines veröffentlicht ist;
+  scheitert der Download oder eine Prüfung, fragt die Bestätigungsseite *„Stattdessen aus Quellen
+  bauen?"* — der Wechsel bleibt deine Entscheidung.
+- **Eine abgebrochene Installation wird zurückgenommen, nicht halbfertig gelassen.** Dateien,
+  Beleg (Receipt) und die MeshCom-Passworteinstellung gehören zu einer journalisierten
+  Transaktion: Bis sie committet, meldet der Status den Stack als klärungsbedürftig, und die
+  nächste Binary-Operation stellt die vorherige Installation wieder her.
+- Benötigt `zstd` (Teil von `bootstrap-deps.sh`).
+
+Gebaut und veröffentlicht werden die Binaries von
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries) — ein Workflow pro Stack, mit
+Provenienz (Quell-Commits, Rezept-Commit, Container-Digest) im Index.
 
 ## Aktualisieren
 

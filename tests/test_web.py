@@ -426,12 +426,69 @@ def test_actions_grouped_and_install_state_aware(tmp_path):
     assert 'grouplabel">Setup<' not in body
 
 
-def test_install_confirm_offers_source_versions(tmp_path):
+def _stub_binary_plan(monkeypatch):
+    """Render the binary PLAN without touching the network (the plan branch fetches the
+    index — see test_install_confirm_defaults_to_the_stacks_default_channel)."""
+    from lhpc.core.service_base import ActionResult
+    seen = {}
+
+    def _plan(self, sid, apply=False, locked=False):
+        seen["called"] = (sid, apply)
+        return ActionResult(True, f"Binary install plan for {sid!r}.", data={"changes": 1})
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(ControllerService, "binary_install", _plan)
+    return seen
+
+
+def test_install_confirm_offers_source_versions(tmp_path, monkeypatch):
+    _stub_binary_plan(monkeypatch)
     c = _real_app(tmp_path)
     token = _csrf(c)
     cf = c.post("/action", data={"_csrf": token, "op": "install", "target": "daemon"}).get_data(as_text=True)
     assert 'name="source"' in cf and "Known working" in cf and "Development" in cf \
-        and "Latest stable" in cf
+        and "Latest stable" in cf and "Binary (prebuilt)" in cf
+
+
+def test_install_confirm_defaults_to_the_stacks_default_channel(tmp_path, monkeypatch):
+    """A bare Install click must resolve the SAME channel the CLI would: binary wherever it is
+    published. Defaulting to "dev" here started a multi-hour source compile nobody asked for
+    (audit finding)."""
+    seen = _stub_binary_plan(monkeypatch)
+    c = _real_app(tmp_path)
+    cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                 "target": "daemon"}).get_data(as_text=True)
+    assert seen.get("called") == ("daemon", False)
+    assert 'value="binary" selected' in " ".join(cf.split())
+
+
+def test_install_confirm_keeps_dev_where_no_binary_is_published(tmp_path, monkeypatch):
+    _stub_binary_plan(monkeypatch)
+    c = _real_app(tmp_path)
+    # kiss declares no [stack.binary] — its confirm keeps the historical source default
+    cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                 "target": "kiss"}).get_data(as_text=True)
+    flat = " ".join(cf.split())
+    assert 'value="binary"' not in flat
+    assert 'value="dev" selected' in flat
+
+
+def test_refused_binary_plan_offers_the_source_channel(tmp_path, monkeypatch):
+    """A refused binary install must not be a dead end: the settled decision is an explicit
+    "build from source instead?" — offered right here, never a silent fallback."""
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(
+        ControllerService, "binary_install",
+        lambda self, sid, apply=False, locked=False: ActionResult(
+            False, "Binary install of 'daemon' refused: could not download the index.",
+            data={"binary_failed": True, "offer_source": True}))
+    c = _real_app(tmp_path)
+    flat = " ".join(c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+                                            "target": "daemon"})
+                     .get_data(as_text=True).split())
+    assert "Build from source instead?" in flat
+    assert 'value="pinned" selected' in flat and 'name="target" value="daemon"' in flat
+    assert 'value="binary"' not in flat        # the channel that just failed is not re-offered
 
 
 def test_action_requires_csrf(tmp_path):

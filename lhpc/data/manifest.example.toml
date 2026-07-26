@@ -33,6 +33,17 @@ name = "LoRaHAM daemon"
 summary = "The LoRaHAM daemon. Owns the radios and exposes the sockets the app stacks use. lhpc launches one --radio <band> process per band (433 and/or 868)."
 main = "loraham-daemon"
 
+  # Prebuilt-binary channel (lhpc-binaries, schema-2 index): the artifact replaces the
+  # daemon+RadioLib source builds. The content-addressed filename comes from the index.
+  [stack.binary]
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  covers = ["loraham-daemon", "radiolib"]
+  # The daemon binary sits INSIDE its source tree, next to tracked sources — the root is the
+  # exact file, never the directory (publishing merges, but a narrow root is the real guard).
+  publish_roots = ["src/loraham-daemon/loraham_daemon/loraham_daemon"]
+  proof_paths = ["src/loraham-daemon/loraham_daemon/loraham_daemon"]
+  probes = [["src/loraham-daemon/loraham_daemon/loraham_daemon", "--version"]]
+
   [[stack.component]]
   id = "loraham-daemon"
   name = "LoRaHAM Daemon"
@@ -883,6 +894,15 @@ name = "Meshtastic"
 summary = "Native meshtasticd on the RF95 (433 or 868). Run ROOTLESS by lhpc as a user process. Direct SPI — conflicts with the LoRaHAM daemon."
 main = "meshtastic"
 
+  # Prebuilt-binary channel: replaces the multi-hour PlatformIO native build. The artifact
+  # ships build/tools/meshtasticd (binary + web assets) and the source-local build marker.
+  [stack.binary]
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  covers = ["meshtastic"]
+  publish_roots = ["build/tools/meshtasticd", "src/meshtastic-firmware/.lhpc-build-complete"]
+  proof_paths = ["build/tools/meshtasticd/meshtasticd"]
+  probes = [["build/tools/meshtasticd/meshtasticd", "--version"]]
+
   [[stack.component]]
   id = "meshtastic"
   name = "Meshtastic (meshtasticd)"
@@ -1196,6 +1216,27 @@ id = "meshcom"
 name = "MeshCom (QEMU)"
 summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon DIRECT. Order: daemon -> bridge -> GPS -> QEMU."
 main = "meshcom-qemu"
+
+  # Prebuilt-binary channel: replaces the qemu-from-source + firmware + bridge builds.
+  # HYBRID: meshcom-qemu still needs its PINNED clone (run.sh/gps-relay live in the repo);
+  # the artifact overlays .work firmware images, the qemu prefix and the bridge binary.
+  # NOTE: the published firmware is built with an EMPTY XR password — the binary channel
+  # runs the stack OPEN-AUTH and disables HMAC password changes.
+  [stack.binary]
+  index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
+  covers = ["meshcom-qemu", "meshcom-bridge"]
+  clone_required = ["meshcom-qemu"]
+  publish_roots = [
+    "build/tool-cache/qemu-xtensa",
+    "src/meshcom-qemu-raspi/.work",
+    "src/meshcom-loraham-bridge/build",
+  ]
+  proof_paths = [
+    "build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa",
+    "src/meshcom-qemu-raspi/.work/MeshCom-Firmware/.pio/build/qemu-headless-extradio-gpsd/flash.bin",
+    "src/meshcom-loraham-bridge/build/meshcom-loraham-bridge",
+  ]
+  probes = [["build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606/qemu/bin/qemu-system-xtensa", "--version"]]
 
   [[stack.component]]
   id = "meshcom-bridge"

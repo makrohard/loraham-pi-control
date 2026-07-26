@@ -29,6 +29,17 @@ class MaintenanceOpsMixin:
         """
         from . import stackupdates
         entry = {"remote": "", "source_path": "", "local_head_at_check": "", "upstream_head": ""}
+        # A binary-covered component has no meaningful REMOTE comparison: meshcom keeps its
+        # pinned clone, so the ordinary probe would report "update available" for a stack whose
+        # channel is binary. Answer from the receipt instead — local, no network. (Uses the
+        # SAME entry shape/status vocabulary as every other return here.)
+        if (comp is not None and getattr(comp, "source", None) is not None
+                and getattr(self, "binary_covers", None) and self.binary_covers(comp.id)):
+            sid = self.stack_of(comp.id) or comp.id
+            fresh = self.binary_freshness(sid)
+            return {**entry, "source_path": comp.source.path, "channel": "binary",
+                    "status": (stackupdates.BEHIND if fresh["state"] == "behind"
+                               else stackupdates.UP_TO_DATE)}
         if comp is None or comp.source is None or not comp.source.remote:
             return {**entry, "status": stackupdates.UNKNOWN}
         entry["source_path"] = comp.source.path
@@ -1114,6 +1125,46 @@ class MaintenanceOpsMixin:
         """
         if (_r := self._controller_refusal(target)) is not None:
             return _r
+        # ---- BINARY channel dispatch ----------------------------------------------------
+        # Moving a SOURCE-installed stack (back) onto the published artifact is an install, and
+        # must be routed as one: the source planners only understand pinned/dev/stable, so a
+        # "binary" selector reaching them silently performed a SOURCE update instead.
+        if source == self.BINARY_CHANNEL and not (target and self.on_binary_channel(target)):
+            if not target:
+                return ActionResult(
+                    False, "The binary channel installs ONE stack at a time — name the stack.",
+                    next_commands=["lhpc install daemon --yes"])
+            if err := self.channel_error(target, source):
+                return ActionResult(False, f"Cannot update '{target}' from binary: {err}",
+                                    next_commands=[f"lhpc update {target} --source pinned "
+                                                   "--yes"])
+            return self.binary_install(target, apply=apply)
+        # A binary-installed stack updates binary→binary when the publisher has caught up with
+        # the manifest pins; when the artifact LAGS, switching to source is a long compile, so
+        # it is offered as an explicit choice, never performed implicitly.
+        if target and self.on_binary_channel(target):
+            if source == self.BINARY_CHANNEL:
+                fresh = self.binary_freshness(target)
+                if fresh["state"] == "behind":
+                    return ActionResult(
+                        False,
+                        f"A newer version of '{target}' exists, but only as source: the "
+                        "published binary was built from older commits.",
+                        details=["  behind for: " + ", ".join(fresh["behind"]),
+                                 "  Switching to the source channel means a full local build "
+                                 "(this can take hours on a Pi).",
+                                 f"  Staying on the binary keeps {target} exactly as it is."],
+                        next_commands=[f"lhpc install {target} --source pinned --yes"],
+                        data={"binary_behind": fresh["behind"], "offer_source": True,
+                              "channel": "binary"})
+                return self.binary_install(target, apply=apply)
+            # An EXPLICIT source selector is an intentional channel switch: install handles the
+            # retirement + clone, so point there rather than half-updating a binary tree.
+            return ActionResult(
+                False, f"'{target}' is installed from a binary — switching to the "
+                       f"{source} source channel is an install, not an update.",
+                next_commands=[f"lhpc install {target} --source {source} --yes"],
+                data={"channel": "binary"})
         all_items = self._with_source(target)
         if not all_items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
@@ -1576,6 +1627,14 @@ class MaintenanceOpsMixin:
         if not items:
             return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
         target_ids = {c.id for _, c in items}
+        # A binary install owns files the SOURCE machinery knows nothing about. It is retired
+        # LATER — inside the locked region, after the authoritative running recheck — because
+        # deleting files before those refusals could destroy a running stack's binary and then
+        # abort ("zero mutation" is that region's contract). Only a STACK target retires: a
+        # component target must never remove the whole stack's artifact.
+        _binary_note = ""
+        _retire_sid = target if (apply and target and self.stack(target) is not None
+                                 and self.binary_receipt_state(target)[0] != "absent") else ""
 
         # 1) Refuse while any target component is running.
         snap = self.build_snapshot()
@@ -1638,6 +1697,13 @@ class MaintenanceOpsMixin:
                         "started while the uninstall was acquiring its locks.",
                         details=[f"  running: {', '.join(running)} — stop them first"],
                         next_commands=[f"lhpc stack stop {target} --yes"])
+                if _retire_sid:
+                    # Now safe: locks held, nothing running, and the run is committed to
+                    # mutating. `force` clears an unsafe/superseded receipt too — uninstall
+                    # must leave no artifact residue behind.
+                    _br = self.binary_retire(_retire_sid, force=True, locked=True)
+                    _binary_note = _br.summary
+                    ok = _br.ok and ok
                 # Recompute the destructive set from POST-LOCK reality.
                 to_remove, kept, orphans, consumers = self._classify_uninstall_paths(
                     items, target_ids)
@@ -1683,6 +1749,8 @@ class MaintenanceOpsMixin:
                                 next_commands=["lhpc status"])
         out += [f"  [kept — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"
                 for p, r in kept]
+        if _binary_note:
+            out.insert(0, f"  [binary] {_binary_note}")
         return ActionResult(ok, f"Uninstall {'applied' if ok else 'incomplete'} for "
                             f"'{target or 'all'}' (config preserved).",
                             details=out, next_commands=["lhpc status"])
@@ -1799,6 +1867,14 @@ class MaintenanceOpsMixin:
                             "the clean was acquiring its locks.",
                             details=[f"  running: {', '.join(running)} — stop them first"],
                             next_commands=[f"lhpc stack stop {sid} --yes"])
+                    # ONLY NOW, with the stack PROVEN stopped under the locks, retire the
+                    # binary — FORCEFULLY, because "remove every trace" must also survive an
+                    # edited artifact file or an unsafe receipt. Retiring before the recheck
+                    # could delete a running stack's binary and then abort (audit finding).
+                    if self.binary_receipt_state(sid)[0] != "absent":
+                        _br = self.binary_retire(sid, force=True, locked=True)
+                        out.append(f"  [binary] {_br.summary}")
+                        ok = _br.ok and ok
                     # Recompute the destructive sets from POST-LOCK reality (the dry-run
                     # preview above may predate the locks).
                     consumers = self._source_consumers()

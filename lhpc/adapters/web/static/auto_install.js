@@ -158,15 +158,54 @@
       rows().forEach(function (r) {
         var el = cell(r, rowCls);
         if (!el || el.disabled) return;
-        if (isSelect) el.value = m.value; else el.checked = m.checked;
+        if (isSelect) {
+          // A row only offers the channels ITS stack allows: "Binary" is absent where no
+          // artifact is published. Assigning a value a <select> does not have would silently
+          // blank it, so leave such rows on their own choice instead.
+          var has = Array.prototype.some.call(el.options, function (o) { return o.value === m.value; });
+          if (has) el.value = m.value;
+        } else {
+          el.checked = m.checked;
+        }
       });
       if (rowCls === "ai-install") recompute();
+      if (isSelect) syncAllChannels();       // a master channel change may disable rows' tests
     });
   }
+  // Host tests need a SOURCE checkout: a binary install has none, and the server refuses the
+  // combination outright. Reflect that in the row instead of letting the operator tick a box
+  // whose run would be rejected — and restore it when the channel goes back to source.
+  var BINARY_TESTS_HINT =
+    "Host tests need a source channel — a binary install has no test tree";
+  function syncRowChannel(r) {
+    var sel = cell(r, "ai-version"), tests = cell(r, "ai-tests"), tx = cell(r, "ai-tx");
+    var binary = !!sel && sel.value === "binary";
+    var testable = r.getAttribute("data-testable") === "1";
+    var txCapable = r.getAttribute("data-txcapable") === "1";
+    if (tests) {
+      tests.disabled = binary || !testable;
+      if (tests.disabled) tests.checked = false;
+      tests.title = binary ? BINARY_TESTS_HINT : "";
+    }
+    if (tx) {
+      // The TX test runs ON TOP of the host tests (the server requires install+tests), so it
+      // follows them down.
+      tx.disabled = binary || !txCapable;
+      if (tx.disabled) tx.checked = false;
+      tx.title = binary ? BINARY_TESTS_HINT : "";
+    }
+  }
+  function syncAllChannels() { rows().forEach(syncRowChannel); }
+  rows().forEach(function (r) {
+    var sel = cell(r, "ai-version");
+    if (sel) sel.addEventListener("change", function () { syncRowChannel(r); });
+  });
+
   bindAll("ai-all-install", "ai-install", false);
   bindAll("ai-all-tests", "ai-tests", false);
   bindAll("ai-all-tx", "ai-tx", false);
   bindAll("ai-all-version", "ai-version", true);
+  syncAllChannels();                          // initial state (binary is the default for some)
 
   function recompute() {
     // start from a clean slate: re-enable every Install box, then re-derive forced ones

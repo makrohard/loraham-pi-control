@@ -104,6 +104,13 @@ class SelfUpdateOpsMixin:
                  "install": _ws.NGINX_INSTALL_CMD,
                  "purpose": "HTTPS + mTLS front-end — the console runs over loopback without it; "
                             "exposed/HTTPS access needs it"},
+                {"what": "zstd", "required": False,
+                 "satisfied": have_cmd("zstd", "/usr/bin/zstd", "/bin/zstd"),
+                 "install": "sudo apt install -y zstd",
+                 # OPTIONAL controller capability: without it the binary CHANNEL cannot unpack a
+                 # published artifact (the source channels are unaffected), so its absence
+                 # degrades one install path rather than blocking the controller.
+                 "purpose": "unpack prebuilt binary artifacts (binary install channel)"},
                 {"what": "nftables", "required": False,
                  "satisfied": have_cmd("nft", "/usr/sbin/nft", "/sbin/nft"),
                  "install": "sudo apt install -y nftables",

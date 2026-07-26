@@ -5,6 +5,7 @@ Operational rules for `lhpc`. See `architecture.md` for internals.
 ## Contents
 
 - [Not a supervisor](#not-a-supervisor)
+- [Install channels](#install-channels)
 - [Fast vs explicit](#fast-vs-explicit)
 - [TX safety](#tx-safety)
 - [Resource ownership](#resource-ownership)
@@ -29,6 +30,62 @@ through the normal gated start path (hardware, band arbitration, callsign, firew
 TX mode strictly from saved config). One-off confirm-page overrides from the previous session
 are never replayed. Each piece of pre-reboot evidence is consumed exactly once: a failed restore
 is not retried — the dashboard banner and `lhpc autostart` name the stacks to start manually.
+
+## Install channels
+
+Each stack is installed either from **source** (`pinned` / `dev` / `stable` — a git checkout lhpc
+adopts and builds) or, for the three long-compiling stacks, from a **binary** artifact published
+by lhpc-binaries. The channel is a per-install choice, not a stored preference: what a stack is
+running on right now is recorded in `state/binary/<stack>.json` (its receipt) and shown as
+`src: binary  binary@<sha>` in status.
+
+The binary channel accepts an artifact only when it verifies by sha256 AND size, was built from
+exactly the commits this lhpc pins (per component, not a single "built from" field), matches this
+platform, and passed the builder's mandatory smoke test. Anything else is a typed refusal that
+offers the source channel — never a silent source build.
+
+Consequences worth knowing before you rely on it:
+
+- **No source tree.** Build and host tests refuse (they need the checkout); the bounded TX test
+  still works, since it exercises the running stack.
+- **meshcom runs open auth** — the published firmware has no mesh password, so the bridge runs
+  without one and HMAC changes are refused until you install from source. The managed firewall
+  models that listener as unauthenticated accordingly.
+- **No binary rollback.** The release keeps the latest artifact per stack; going back means
+  installing from source (`lhpc install <stack> --source pinned --yes`), which also retires the
+  binary install.
+- Switching to source retires the artifact first, and refuses if you have edited an installed
+  file by hand rather than overwriting your change.
+- **Every binary mutation is a stopped-stack operation.** Install, update, retire, uninstall and
+  clean all refuse while a component of that stack is running (checked again under the operation
+  locks, so a start that slips in mid-flight still cannot be overwritten).
+- **A failed install never costs you the previous one.** The mesh-password switch, the file
+  promotion, the meshtastic CLI provisioning, the executable probes and the receipt write are ONE
+  journaled transaction, opened before the first change: if any step fails, the previous artifact
+  (including files only the old artifact shipped), its receipt and the previous mesh-password
+  setting are all restored. While that journal is open — during a run, or after a power cut in the
+  middle of one — the receipt is **not** treated as authoritative: status reports the stack as
+  needing attention, and the next binary operation recovers it. `clean --purge` is the escape
+  hatch when a journal is damaged beyond recovery.
+- **Switching to source cannot cost you the binary.** The artifact is set aside — locally, inside
+  the same journaled transaction — so the clone meets a clean destination; if the adoption then
+  fails, the exact previous install is restored from disk. No download, no release lookup and no
+  pin re-check: switching to source is often done *because* the published binary is behind, and a
+  restore that re-downloaded would refuse for that very reason. The retirement becomes final only
+  once the source install has succeeded.
+- **meshcom keeps its pinned source checkout** even on the binary channel (its run scripts live
+  there). lhpc verifies that checkout is ours and at the pin before reusing it, and adopts it if
+  absent — a stale or foreign tree is refused rather than combined with pinned binaries.
+- **meshtastic provisions its managed CLI locally** after extraction: that virtualenv embeds
+  absolute paths and cannot be shipped in an artifact, yet the stack cannot start without it
+  (it applies the LoRa region after every start). lhpc owns it as a whole DIRECTORY — half a
+  virtualenv is symlinks pointing outside the runtime root — so it is moved aside intact during
+  an install, restored intact if the install fails, and removed intact at retirement.
+- **A broken binary install is named by `lhpc doctor`.** If the artifact's files are removed
+  behind lhpc's back (a source adoption of a shared checkout does exactly that), ordinary status
+  still shows the stack's source state; `doctor` reports the receipt as unsafe or superseded,
+  with the reason and the command that repairs it. Re-installing IS the repair — only a receipt
+  that cannot be read at all refuses, because then lhpc cannot know what the old install owned.
 
 ## Fast vs explicit
 

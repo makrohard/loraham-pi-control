@@ -190,6 +190,17 @@ class HmacOpsMixin:
     def _xr_pw_path(self):
         return self._paths.runtime_root.joinpath(*_XR_PW)
 
+    def hmac_binary_block(self, stack_id: str) -> str:
+        """"" unless the stack is installed from a binary artifact, in which case NO HMAC
+        mutation is possible: the published firmware is built with an EMPTY XR password, so
+        enabling one here would leave the bridge authenticating against a node that cannot.
+        (`hmac_applies` deliberately stays True — the UI must show the REASON, not pretend the
+        feature does not exist for this stack.)"""
+        if not getattr(self, "on_binary_channel", None) or not self.on_binary_channel(stack_id):
+            return ""
+        return (f"{stack_id} is installed from a prebuilt binary whose firmware has NO mesh "
+                "password (open auth) — install it from source to manage the password")
+
     @invalidates_snapshot
     def hmac_set_secret(self, stack_id: str, action: str) -> ActionResult:
         """ONE atomic/rollback-safe state change (config override + secret file). On ANY failure the visible
@@ -199,6 +210,10 @@ class HmacOpsMixin:
         c = self._hmac_component(stack_id)
         if c is None:
             return ActionResult(False, f"HMAC password does not apply to '{stack_id}'")
+        if action != "disable" and (_blk := self.hmac_binary_block(stack_id)):
+            # ENABLING auth against firmware that has none would break the link; DISABLING
+            # (what the binary install itself does) stays available.
+            return ActionResult(False, _blk, data={"binary_channel": True})
         if action not in ("enable", "disable", "renew"):
             return ActionResult(False, f"unknown HMAC action: {action!r}")
         path = self._xr_pw_path()
@@ -421,6 +436,10 @@ class HmacOpsMixin:
         Returns the run id in data on success. `disable` requires `confirm` (the typed-phrase gate),
         enforced HERE — before any reservation/spawn — so a CSRF-only POST cannot bypass it."""
         from . import reslock
+        if (_blk := self.hmac_binary_block(stack_id)):
+            return ActionResult(False, _blk,
+                                next_commands=[f"lhpc install {stack_id} --source pinned --yes"],
+                                data={"binary_channel": True})
         if not self.hmac_applies(stack_id):
             return ActionResult(False, f"HMAC password does not apply to '{stack_id}'")
         if action not in ("enable", "disable", "renew"):
@@ -541,6 +560,9 @@ class HmacOpsMixin:
         import os
         import signal
         import threading
+        if (_blk := self.hmac_binary_block(stack_id)):
+            emit(_blk + ".")
+            return 1
         if not self.hmac_applies(stack_id):
             emit(f"HMAC password does not apply to '{stack_id}'.")
             return 1
@@ -788,6 +810,10 @@ class HmacOpsMixin:
         node = s.main_component if s else None
         if c is None or node is None:
             emit(f"HMAC apply refused: it does not apply to '{stack_id}'.")
+            return 1
+        if (_blk := self.hmac_binary_block(stack_id)):
+            # Driver-side gate: the authoritative one — a CLI/web check alone could be bypassed.
+            emit(f"HMAC apply refused: {_blk}.")
             return 1
 
         # RUN-SCOPED redaction: track EVERY secret sensitive during this run, not just the current file.

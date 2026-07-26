@@ -225,3 +225,86 @@ def test_param_known_keys_ok():
                              "default": "5", "label": "Rate", "advanced": True}]})
     comp = stacks[0].components[0]
     assert comp.run_params[0].name == "rate"
+
+
+# --- [stack.binary] (prebuilt-binary channel declaration) ---------------------------------------
+
+def _binary_manifest(binary_table):
+    return {"stack": [{
+        "id": "s1", "name": "S1", "main": "c1",
+        "component": [{
+            "id": "c1", "name": "C1", "kind": "service", "purpose": "x",
+            "source": {"path": "src/c1", "pin_commit": "a" * 40,
+                       "remote": "https://example.invalid/c1.git", "branch": "main"},
+        }],
+        "binary": binary_table,
+    }]}
+
+
+def _valid_binary():
+    return {
+        "index_url": "https://example.invalid/index.json",
+        "covers": ["c1"],
+        "publish_roots": ["src/c1/out"],
+        "proof_paths": ["src/c1/out/c1"],
+        "probes": [["src/c1/out/c1", "--version"]],
+    }
+
+
+def test_binary_block_parses():
+    from lhpc.core.manifest import parse_manifest
+    st = parse_manifest(_binary_manifest(_valid_binary()))[0]
+    assert st.binary is not None
+    assert st.binary.covers == ("c1",)
+    assert st.binary.probes == (("src/c1/out/c1", "--version"),)
+
+
+def test_binary_block_absent_is_none():
+    from lhpc.core.manifest import parse_manifest
+    m = _binary_manifest(_valid_binary())
+    del m["stack"][0]["binary"]
+    assert parse_manifest(m)[0].binary is None
+
+
+@pytest.mark.parametrize("mutate,msg", [
+    (lambda b: b.update(index_url="http://example.invalid/i.json"), "https"),
+    (lambda b: b.update(extra_key=1), "unknown key"),
+    (lambda b: b.update(covers=["nope"]), "unknown component"),
+    (lambda b: b.update(covers=[]), "non-empty"),
+    (lambda b: b.update(publish_roots=["/etc/passwd"]), "unsafe path"),
+    (lambda b: b.update(publish_roots=["src/../../x"]), "unsafe path"),
+    (lambda b: b.update(proof_paths=["build/elsewhere/bin"]), "not under any publish root"),
+    (lambda b: b.update(clone_required=["c9"]), "must also be in covers"),
+    (lambda b: b.update(probes=[[]]), "invalid argv"),
+    (lambda b: b.update(probes=[["/abs/bin", "--v"]]), "unsafe binary path"),
+])
+def test_binary_block_rejections(mutate, msg):
+    from lhpc.core.manifest import ManifestError, parse_manifest
+    b = _valid_binary()
+    mutate(b)
+    with pytest.raises(ManifestError, match=msg):
+        parse_manifest(_binary_manifest(b))
+
+
+def test_binary_covers_require_pinned_source():
+    from lhpc.core.manifest import ManifestError, parse_manifest
+    m = _binary_manifest(_valid_binary())
+    del m["stack"][0]["component"][0]["source"]["pin_commit"]
+    with pytest.raises(ManifestError, match="no pinned source"):
+        parse_manifest(m)
+
+
+def test_shipped_manifest_binary_declarations():
+    # The three heavy stacks declare the channel; every covered component is pin-validated
+    # (the index components-map comparison dies silently otherwise).
+    from lhpc.core.manifest import load_manifest
+    stacks = {s.id: s for s in load_manifest()}
+    assert set(k for k, s in stacks.items() if s.binary) == {"daemon", "meshtastic", "meshcom"}
+    for s in stacks.values():
+        if not s.binary:
+            continue
+        by_id = {c.id: c for c in s.components}
+        for cid in s.binary.covers:
+            assert by_id[cid].source is not None and by_id[cid].source.pin_commit
+        for cid in s.binary.clone_required:
+            assert cid in s.binary.covers

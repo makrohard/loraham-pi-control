@@ -2337,3 +2337,22 @@ def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
     svc.auto_install(apply=True, tests=False, emit=lambda s: None)
     rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
     assert rows["voice"]["status"] == "skipped"            # still skipped, from the frozen plan
+
+
+def test_marker_accepts_a_binary_row_selection():
+    """A COMPLETED binary run must read back valid. The row selector list omitted "binary", so a
+    successful binary auto-install produced a marker that failed schema validation — the page
+    then showed "run state unreadable or malformed" and BLOCKED every later run until the
+    operator acknowledged it (operator-reported, live)."""
+    from lhpc.core import auto_install as ai
+    row = {"id": "meshcom", "status": "success", "tests": {}, "tx": {},
+           "selected": {"version": "binary", "tests": False, "tx": False}}
+    marker = {"version": 1, "run_id": "a" * 32, "state": "completed", "mode": "update",
+              "tests": False, "tx": False, "tx_phase": {"status": "skipped"},
+              "stacks": [row]}
+    assert ai.valid_marker(marker) is True
+    for sel in ("pinned", "dev", "stable"):                  # unchanged for source rows
+        row["selected"]["version"] = sel
+        assert ai.valid_marker(marker) is True
+    row["selected"]["version"] = "nonsense"                  # still strict
+    assert ai.valid_marker(marker) is False

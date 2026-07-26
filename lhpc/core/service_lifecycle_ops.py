@@ -1901,6 +1901,13 @@ class LifecycleOpsMixin:
               redactor=None, should_cancel=None) -> ActionResult:
         if (_r := self._controller_refusal(target)) is not None:
             return _r
+        # A binary-installed stack has no source tree to build FROM (and its artifacts would be
+        # overwritten by a half-built one). Refuse with the switch-back command, never attempt it.
+        _sid = self.stack_of(target) or target
+        if (_blk := self.binary_block_reason(_sid, "build")):
+            return ActionResult(False, f"Refusing to build '{target}': {_blk}",
+                                next_commands=[f"lhpc install {_sid} --source pinned --yes"],
+                                data={"binary_channel": True})
         # A caller-supplied run-specific log-base prefix (HMAC apply) is validated BEFORE any path is
         # constructed — a strict controller pattern bound to the FULL 32-hex run id (never marker-time only).
         if log_base_override and not _HMAC_LOG_BASE_RE.match(log_base_override):
@@ -2166,9 +2173,15 @@ class LifecycleOpsMixin:
             _adm_stack.close()
             return None, "blocked", "a task is starting right now (admission contended) — retry"
         try:
-            if op == "install" and source not in self.SOURCE_CHOICES:
-                return None, "blocked", (f"invalid source '{source}' (choose "
-                                         f"{', '.join(self.SOURCE_CHOICES)})")
+            _sid = self.stack_of(target) or target
+            if op == "install":
+                # The web may request any CHANNEL this stack allows (binary included); the
+                # source-only selectors are validated against the historical tuple.
+                if (_cerr := self.channel_error(_sid, source)):
+                    return None, "blocked", _cerr
+            elif op in ("build", "test") and (_blk := self.binary_block_reason(
+                    _sid, "build" if op == "build" else "host tests")):
+                return None, "blocked", _blk
             items, err = self._resolve(target)
             if err:
                 return None, "blocked", err
@@ -2623,6 +2636,12 @@ class LifecycleOpsMixin:
         if ctx_err:
             return ActionResult(False, f"Refusing to test '{target}': {ctx_err}")
         life = self._lifecycle()
+        if not tx and (_blk := self.binary_block_reason(self.stack_of(target) or target,
+                                                        "host tests")):
+            # The repo's own test suite lives in the source checkout; a binary install has none.
+            # (A bounded TX test exercises the RUNNING stack and stays available.)
+            return ActionResult(False, f"Refusing to host-test '{target}': {_blk}",
+                                data={"binary_channel": True, "skipped": "binary-install"})
         if not tx:
             # RX-safe host tests.
             if not apply:
@@ -3018,7 +3037,11 @@ class LifecycleOpsMixin:
         operator (or the spawner) a command that points at a missing binary."""
         life = self._lifecycle()
         sid = self.stack_of(comp.id) or comp.id
-        if comp.source and not life.source_dir(comp).exists():
+        # A binary-covered component has no clone by design (the artifact provides its build
+        # output directly) — only the physical artifact check below decides readiness. Every
+        # other component keeps the byte-identical source-dir requirement.
+        covered = self.binary_covers(comp.id)
+        if comp.source and not covered and not life.source_dir(comp).exists():
             return f"not installed — run: lhpc install {sid}"
         if not self.is_built(comp):
             return f"not built — run: lhpc build {sid}"
@@ -3474,7 +3497,7 @@ class LifecycleOpsMixin:
                    file_overrides: dict | None = None, purge: bool = False) -> ActionResult:
         """Dispatch a named action to its service method (plan when apply=False)."""
         # An invalid source selector is a typed failure — NEVER silently rewritten to 'dev'.
-        if op in ("install", "update") and source not in self.SOURCE_CHOICES:
+        if op in ("install", "update") and source not in self.CHANNEL_CHOICES:
             return ActionResult(False, f"Invalid source '{source}' (choose "
                                 f"{', '.join(self.SOURCE_CHOICES)}).",
                                 next_commands=[f"lhpc {op} {target} --source pinned"])

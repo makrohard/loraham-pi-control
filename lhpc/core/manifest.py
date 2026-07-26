@@ -24,6 +24,7 @@ from pathlib import Path
 from . import commands
 from .assets import asset_path
 from .model import (
+    BinarySpec,
     Component,
     ComponentKind,
     ControllerSpec,
@@ -345,6 +346,80 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
                 "(pin/tag/branch/remote/strategy/artifact must be identical)")
 
 
+_BINARY_KEYS = frozenset({"index_url", "covers", "publish_roots", "proof_paths",
+                          "clone_required", "probes"})
+
+
+def _rel_path_ok(p: str) -> bool:
+    """Runtime-root-relative, normalized, never escaping."""
+    if not isinstance(p, str) or not p or p.startswith("/") or p.startswith("~"):
+        return False
+    parts = p.split("/")
+    return all(seg not in ("", ".", "..") for seg in parts)
+
+
+def _parse_binary(raw, stack_id: str, components: tuple[Component, ...]) -> BinarySpec:
+    """STRICT `[stack.binary]` parse. The declaration is a security surface (it decides what
+    an artifact may replace and where downloads come from), so every field is allow-listed
+    and validated; a covered component must keep a pinned git source (the components-map
+    pin comparison dies silently otherwise)."""
+    if not isinstance(raw, dict):
+        raise ManifestError(f"[{stack_id}.binary] must be a table")
+    unknown = set(raw) - _BINARY_KEYS
+    if unknown:
+        raise ManifestError(f"[{stack_id}.binary]: unknown key(s) {sorted(unknown)}")
+    url = raw.get("index_url")
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise ManifestError(f"[{stack_id}.binary].index_url must be an https:// URL")
+
+    def _str_tuple(key, required):
+        v = raw.get(key, [])
+        if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+            raise ManifestError(f"[{stack_id}.binary].{key} must be a list of strings")
+        if required and not v:
+            raise ManifestError(f"[{stack_id}.binary].{key} must be non-empty")
+        return tuple(v)
+
+    covers = _str_tuple("covers", required=True)
+    roots = _str_tuple("publish_roots", required=True)
+    proofs = _str_tuple("proof_paths", required=True)
+    clone_req = _str_tuple("clone_required", required=False)
+    by_id = {c.id: c for c in components}
+    for cid in covers:
+        c = by_id.get(cid)
+        if c is None:
+            raise ManifestError(f"[{stack_id}.binary].covers: unknown component {cid!r}")
+        if c.source is None or not c.source.pin_commit:
+            raise ManifestError(
+                f"[{stack_id}.binary].covers: component {cid!r} has no pinned source — "
+                "the index components-map comparison requires a pin_commit")
+    for cid in clone_req:
+        if cid not in covers:
+            raise ManifestError(
+                f"[{stack_id}.binary].clone_required: {cid!r} must also be in covers")
+    for p in (*roots, *proofs):
+        if not _rel_path_ok(p):
+            raise ManifestError(f"[{stack_id}.binary]: unsafe path {p!r}")
+    for p in proofs:
+        if not any(p == r or p.startswith(r + "/") for r in roots):
+            raise ManifestError(
+                f"[{stack_id}.binary].proof_paths: {p!r} not under any publish root")
+    probes_raw = raw.get("probes", [])
+    if not isinstance(probes_raw, list):
+        raise ManifestError(f"[{stack_id}.binary].probes must be a list of argv lists")
+    probes = []
+    for pr in probes_raw:
+        if (not isinstance(pr, list) or not pr
+                or not all(isinstance(x, str) and x for x in pr)):
+            raise ManifestError(f"[{stack_id}.binary].probes: invalid argv {pr!r}")
+        if not _rel_path_ok(pr[0]):
+            raise ManifestError(f"[{stack_id}.binary].probes: unsafe binary path {pr[0]!r}")
+        probes.append(tuple(pr))
+    return BinarySpec(index_url=url, covers=covers, publish_roots=roots,
+                      proof_paths=proofs, clone_required=clone_req,
+                      probes=tuple(probes))
+
+
 def parse_manifest(data: dict) -> tuple[Stack, ...]:
     """Parse an already-loaded TOML mapping (kept separate for testing). Validates
     each component's structured lifecycle spec AND the whole dependency graph — an
@@ -356,6 +431,9 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
         )
         for comp in components:
             _validate_component(comp)
+        binary = None
+        if "binary" in stack_raw:
+            binary = _parse_binary(stack_raw["binary"], stack_raw["id"], components)
         stacks.append(
             Stack(
                 id=stack_raw["id"],
@@ -364,6 +442,7 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
                 components=components,
                 main=stack_raw.get("main", ""),
                 operator_box=bool(stack_raw.get("operator_box", True)),
+                binary=binary,
             )
         )
     result = tuple(stacks)

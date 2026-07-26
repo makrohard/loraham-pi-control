@@ -11,7 +11,7 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 
 - [Overview](#overview) — [Stacks](#stacks) · [Hardware](#hardware) · [Not included](#not-included)
 - [Install](#install) — flashed card to running stacks (steps 0–8)
-- [Configure & run stacks](#configure--run-stacks) · [Remote access](#remote-access) · [Autostart](#autostart) · [Updating](#updating)
+- [Configure & run stacks](#configure--run-stacks) · [Remote access](#remote-access) · [Autostart](#autostart) · [Binary channel](#binary-channel-prebuilt) · [Updating](#updating)
 - [Troubleshooting](#troubleshooting) · [Documentation](#documentation)
 
 ## Overview
@@ -127,7 +127,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 <!-- test:deps-manual:start -->
 ```bash
 # lhpc itself + fetch/TLS tools (nginx only if you want the web console)
-sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
 sudo apt install -y --no-install-recommends socat                                       # kiss
@@ -375,6 +375,46 @@ systemctl --user enable lhpc-nginx lhpc-web      # start at boot again (the defa
 systemctl --user stop lhpc-nginx lhpc-web        # stop right now
 systemctl --user start lhpc-nginx lhpc-web       # start right now
 ```
+
+## Binary channel (prebuilt)
+
+Three stacks take a long time to compile — the LoRaHAM daemon, meshtasticd, and MeshCom's
+QEMU. For those, lhpc can install a **prebuilt binary** instead of building from source: it is
+the default where one is published for your platform (aarch64 / Debian Trixie), and it turns a
+multi-hour install into a download of a few minutes.
+
+```bash
+lhpc install daemon --yes                    # binary where published (the default)
+lhpc install daemon --source pinned --yes    # build from source instead
+lhpc status --versions                       # shows: binary  binary@<sha>  built_from=<commit>
+```
+
+Every artifact is downloaded over HTTPS and **verified by sha256 and size before anything is
+unpacked**, must have been built from exactly the commits this lhpc pins, and must have passed
+the builder's mandatory smoke test. If any check fails, the install refuses and offers the
+source channel — it never silently falls back.
+
+What the binary channel means in practice:
+
+- **Updates** stay on the channel: when a newer artifact exists it updates binary→binary. If the
+  published binary lags the pinned version, lhpc says so and lets you choose the (long) source
+  build — cancelling keeps the working binary.
+- **Build and host tests need source.** A binary install has no source checkout, so those
+  actions refuse with the command to switch back.
+- **MeshCom runs open auth on this channel**: the published firmware is built without a mesh
+  password, so the bridge runs without one and password changes are disabled until you install
+  from source.
+- **The console offers the same choice.** Install preselects Binary where one is published; if
+  the download or a verification fails, the confirm page asks *"Build from source instead?"* —
+  the switch is always yours to make.
+- **An interrupted install is undone, not left half-done.** Every file move, the receipt and the
+  MeshCom password setting belong to one journaled transaction: until it commits, status reports
+  the stack as needing attention, and the next binary operation restores the previous install.
+- Needs `zstd` (part of `bootstrap-deps.sh`).
+
+Binaries are built and published by
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries) — one workflow per stack, with
+provenance (source commits, recipe commit, container digest) recorded in its index.
 
 ## Updating
 

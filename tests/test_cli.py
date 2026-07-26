@@ -43,7 +43,9 @@ def test_install_plan_is_dry_run(tmp_path, monkeypatch, capsys):
     main(["bootstrap", "--yes"])
     capsys.readouterr()
     # Nothing installed -> install plans adoptions but does not act without --yes.
-    assert main(["install", "daemon", "--check"]) == 0
+    # (explicit --source: `daemon` now DEFAULTS to the binary channel, whose plan is a
+    # download plan — the source-adoption plan is what this test is about)
+    assert main(["install", "daemon", "--check", "--source", "pinned"]) == 0
     assert "Install" in capsys.readouterr().out
 
 
@@ -323,7 +325,7 @@ def test_auto_install_unbootstrapped_cli_refuses(tmp_path, monkeypatch, capsys):
     assert not absent.exists()
 
 
-def test_auto_install_default_source_is_dev(monkeypatch, capsys):
+def test_auto_install_default_source_is_per_stack(monkeypatch, capsys):
     from lhpc.adapters.cli import main as cli_main
     from lhpc.core.services import ActionResult, ControllerService
     seen = []
@@ -332,7 +334,12 @@ def test_auto_install_default_source_is_dev(monkeypatch, capsys):
                         apply=False, emit=print:
                         (seen.append(source), ActionResult(True, "p", data={"changes": 0}))[1])
     cli_main.main(["auto-install", "--yes"])
-    assert seen and seen[0] == "dev"
+    # An UNSET selector reaches the driver as "" and each stack resolves its OWN default
+    # (binary where published, else dev) — a uniform "dev" would compile the heavy stacks.
+    assert seen and seen[0] == ""
+    seen.clear()
+    cli_main.main(["auto-install", "--yes", "--source", "dev"])
+    assert seen and seen[0] == "dev"          # an explicit selector still wins
 
 
 # --------------------------------------------------------------------------------------------------

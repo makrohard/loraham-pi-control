@@ -325,8 +325,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("stack", nargs="?", help="Limit to one stack")
     p_install.add_argument("--check", action="store_true", help="Dry run (plan only)")
     p_install.add_argument("--yes", action="store_true", help="Apply without confirmation")
-    p_install.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
-                           help="Version to clone: latest dev / latest stable / pinned")
+    p_install.add_argument("--source", choices=("pinned", "dev", "stable", "binary"),
+                           default="",
+                           help="Channel: binary (prebuilt, where published — the default for "
+                                "those stacks) | pinned | dev | stable")
     # Internal (web-job only): record a green/red task-banner result under this run's job-result marker,
     # gated on the parent's identity tracking. STRICTLY bound to install-<stack>.log + attempt id.
     p_install.add_argument("--web-result", default="", help=argparse.SUPPRESS)
@@ -336,8 +338,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Install/update, build and test ALL stacks in one guided "
                                "run (this can take several minutes)")
     p_ia.add_argument("--yes", action="store_true", help="Apply without confirmation")
-    p_ia.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
-                      help="Version to clone (default: dev — latest development)")
+    p_ia.add_argument("--source", choices=("pinned", "dev", "stable", "binary"), default="",
+                      help="Channel for every stack (default: each stack's own — binary where "
+                           "published, else dev)")
     p_ia.add_argument("--tests", action="store_true",
                       help="Run host tests (OFF by default, matching the web Auto-install page)")
     p_ia.add_argument("--tx", action="store_true",
@@ -472,8 +475,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("target", nargs="?", default="", help="Stack/component id")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
         if name == "update":
-            sp.add_argument("--source", choices=("pinned", "dev", "stable"), default="dev",
-                            help="Version to fetch: latest dev / latest stable / pinned")
+            # "binary" belongs here too: an operator on the source channel must be able to
+            # move a stack BACK to the published artifact with `update --source binary`,
+            # exactly as install offers it (the service validates it per stack).
+            sp.add_argument("--source", choices=("pinned", "dev", "stable", "binary"),
+                            default="",
+                            help="Version to fetch: prebuilt binary / latest dev / latest "
+                                 "stable / pinned (default: keep the stack's current channel)")
 
     p_clean = sub.add_parser("clean", help="DESTRUCTIVE: purge a stack (sources, config, "
                              "logs, history)")
@@ -669,16 +677,43 @@ def _run(argv: list[str] | None = None) -> int:
         web = getattr(args, "web_result", "") or ""
 
         def _do_install() -> int:                          # INTERACTIVE CLI path (keeps "Nothing to do.")
+            # CHANNEL FIRST: the source dep gate below checks BUILD dependencies (compiler,
+            # cmake, dev headers). A binary install uses none of them — blocking it on a
+            # toolchain would defeat the entire point of the channel. Its own runtime_deps are
+            # checked inside the transaction.
+            # Resolve the effective channel ONCE: an explicit --source wins; otherwise the
+            # stack's default (binary where published, else the historical "dev").
+            # NOTE: the all-stacks form (`lhpc install` with no stack) stays on the source
+            # channel — one plan covers many stacks, and the binary channel installs one stack
+            # at a time. Name a stack to use it.
+            _chan = args.source or (svc.default_channel(args.stack) if args.stack else "dev")
+            if _chan == svc.BINARY_CHANNEL and not args.check:
+                # `--check` stays a READ-ONLY preview and must never prompt: it falls through
+                # to the plan render below (which prints the binary plan without applying).
+                rc = _apply_flow(lambda apply: svc.install(args.stack, apply=apply,
+                                                           source=svc.BINARY_CHANNEL),
+                                 yes=args.yes)
+                if rc == 0:
+                    return 0
+                # THE settled fallback: ask explicitly, never switch silently. Only for a real
+                # binary failure, and only when a human is there to answer.
+                if not args.yes and _confirm("\nBuild from source instead? [y/N] "):
+                    return _apply_flow(
+                        lambda apply: svc.install(args.stack, apply=apply, source="pinned"),
+                        yes=True)
+                return rc
             if args.check:
                 # Read-only preview: render the plan FIRST (so the bootstrap precondition and adoptions
                 # always show), then REPORT the dep gate — it never preempts the plan. Exit nonzero when
                 # the plan itself failed, else when the gate blocks (still "not installable").
-                rc = _render(svc.install(args.stack, apply=False, source=args.source))
+                rc = _render(svc.install(args.stack, apply=False, source=_chan))
+                if _chan == svc.BINARY_CHANNEL:
+                    return rc                      # no BUILD deps are needed for a download
                 blocked = _print_install_dep_gate(svc, args.stack, check=True)
                 return rc if rc != 0 else (1 if blocked else 0)
             if _print_install_dep_gate(svc, args.stack, check=False):
                 return 1
-            return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=args.source),
+            return _apply_flow(lambda apply: svc.install(args.stack, apply=apply, source=_chan),
                                yes=args.yes)
         if not web:
             return _do_install()
@@ -699,10 +734,12 @@ def _run(argv: list[str] | None = None) -> int:
         if not jobresult.mark_gate_passed(svc._paths, web, aid):
             print("web install: could not clear the startup flag — refusing (no mutation).")
             return 3
-        if _print_install_dep_gate(svc, args.stack, check=False):
+        _wchan = args.source or (svc.default_channel(args.stack) if args.stack else "dev")
+        # The BUILD dep gate applies to source installs only (see _do_install).
+        if _wchan != svc.BINARY_CHANNEL and _print_install_dep_gate(svc, args.stack, check=False):
             rc = 1                                         # a blocked dep-gate is a real (never-admitted) failure
         else:
-            rc = _render(svc.install(args.stack, apply=True, source=args.source,
+            rc = _render(svc.install(args.stack, apply=True, source=_wchan,
                                      on_admit=lambda: jobresult.mark_running(svc._paths, web, aid)))
         jobresult.terminalize(svc._paths, web, aid, "done" if rc == 0 else "failed",
                               detail="" if rc == 0 else "install failed")
@@ -921,7 +958,11 @@ def _run(argv: list[str] | None = None) -> int:
             return 0
         return _render_daemon(svc.daemon_view(args.band))
     if args.command == "update":
-        return _apply_flow(lambda a: svc.update(args.target, apply=a, source=args.source),
+        # An unspecified selector KEEPS the stack on its current channel: a binary-installed
+        # stack updates binary→binary, everything else keeps the historical "dev" default.
+        _usrc = args.source or ("binary" if (args.target
+                                             and svc.on_binary_channel(args.target)) else "dev")
+        return _apply_flow(lambda a: svc.update(args.target, apply=a, source=_usrc),
                            yes=args.yes)
     if args.command == "uninstall":
         return _apply_flow(lambda a: svc.uninstall(args.target, apply=a), yes=args.yes)

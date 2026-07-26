@@ -1081,3 +1081,63 @@ def test_pages_use_auto_install_label(tmp_path):
     stacks = c.get("/stacks").data.decode()
     assert ">Auto-install</button>" in stacks                    # stacks-page entry button
     assert "This can take several minutes" not in stacks         # deleted on the stacks page
+
+
+# --- the "All" master row vs per-stack channels --------------------------------------------------
+
+def test_all_row_never_forces_a_channel_a_stack_lacks():
+    """Selecting "Binary" in the All box must leave stacks that publish no binary on their own
+    choice. Assigning a value a <select> does not contain silently BLANKS it, which would post
+    an empty version for those rows (operator-reported)."""
+    import pathlib
+    js = pathlib.Path("lhpc/adapters/web/static/auto_install.js").read_text()
+    # the guard: membership is checked before assigning
+    assert "o.value === m.value" in js
+    # and the naive assignment is gone
+    assert "if (isSelect) el.value = m.value;" not in js
+
+
+def test_row_selects_only_offer_allowed_channels(tmp_path, monkeypatch):
+    """Server side of the same rule: a row renders ONLY its stack's channels, so a stack with
+    no published artifact has no 'binary' option at all."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.adapters.web.app import create_app
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    body = create_app(service_factory=lambda: svc).test_client().get("/auto-install").get_data(as_text=True)
+    import re
+    for sid, expect_binary in (("daemon", True), ("kiss", False)):
+        m = re.search(rf'name="version:{sid}"(.*?)</select>', body, re.S)
+        assert m, sid
+        assert ('value="binary"' in m.group(1)) is expect_binary, sid
+
+
+def test_binary_channel_disables_the_tests_box():
+    """Picking Binary must deactivate AND uncheck that row's Tests box (and the TX box, which
+    the server only accepts together with tests) — and restore them on a switch back to a
+    source channel (operator-reported)."""
+    import pathlib
+    js = pathlib.Path("lhpc/adapters/web/static/auto_install.js").read_text()
+    assert "syncRowChannel" in js and "syncAllChannels()" in js
+    # disabled AND unchecked, both boxes, driven by the row's OWN capability flags
+    assert "tests.disabled = binary || !testable;" in js
+    assert "tx.disabled = binary || !txCapable;" in js
+    assert js.count("if (tests.disabled) tests.checked = false;") == 1
+    assert js.count("if (tx.disabled) tx.checked = false;") == 1
+
+
+def test_rows_expose_their_capabilities_for_the_script(tmp_path, monkeypatch):
+    """The script needs the stack's OWN testability to tell "no host test" from "binary chosen"
+    — otherwise switching back to source could never re-enable the box."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.adapters.web.app import create_app
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    body = create_app(service_factory=lambda: svc).test_client().get("/auto-install").get_data(as_text=True)
+    import re
+    for row in re.findall(r'<tr data-stack="[^"]+"[^>]*>', body):
+        assert "data-testable=" in row and "data-txcapable=" in row

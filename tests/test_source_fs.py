@@ -337,3 +337,64 @@ def test_link_handle_detects_dangling_target(tmp_path):
     with source_fs.ManagedSourceTransaction(paths, src) as txn:
         h = txn.create_link(tgt, ".app.candidate")
         assert txn.verify_link(h, ".app.candidate") is False    # target not a directory
+
+
+# --- remove_bound: the transaction's own `.prev` quarantine ------------------------------------
+
+def _quarantine(tmp_path, populate, name="quarantine"):
+    """(parent_fd, leaf_path, ident) for a POPULATED directory leaf, bound exactly the way the
+    transaction binds `.prev`: the v5 identity is captured LAST (creating a child bumps the
+    directory's ctime)."""
+    parent = tmp_path / "src"
+    parent.mkdir(exist_ok=True)
+    leaf = parent / name
+    leaf.mkdir()
+    populate(leaf)
+    fd = os.open(str(parent), os.O_RDONLY | os.O_DIRECTORY)
+    st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    return fd, leaf, [st.st_dev, st.st_ino, st.st_ctime_ns]
+
+
+def test_remove_bound_clears_a_quarantine_holding_a_runtime_socket(tmp_path):
+    """A checkout a stack RUNS FROM legitimately holds a runtime socket (meshcom's
+    `.run/gps-uart1.sock`). Refusing it left the archive half-deleted: the partial removal
+    bumped `.prev`'s ctime, its recorded identity could never be re-proven, and every source
+    operation on the box stayed blocked (live-found on the Zero)."""
+    import socket
+
+    def _populate(leaf):
+        (leaf / ".run").mkdir()
+        (leaf / "README.md").write_text("x")
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(str(leaf / ".run" / "gps-uart1.sock"))
+        s.close()
+        os.mkfifo(leaf / ".run" / "fifo")
+    fd, leaf, ident = _quarantine(tmp_path, _populate)
+    try:
+        ok, why = source_fs.remove_bound(fd, leaf.name, ident, allow_ipc=True)
+        assert ok, why
+        assert not leaf.exists()
+    finally:
+        os.close(fd)
+
+
+def test_remove_bound_still_refuses_ipc_leaves_by_default(tmp_path):
+    fd, leaf, ident = _quarantine(tmp_path, lambda leaf: os.mkfifo(leaf / "pipe"))
+    try:
+        ok, why = source_fs.remove_bound(fd, leaf.name, ident)
+        assert not ok and "remainder retained" in why
+        assert (leaf / "pipe").exists()               # evidence retained
+    finally:
+        os.close(fd)
+
+
+def test_remove_bound_reports_a_refused_leaf_instead_of_raising(tmp_path):
+    """The refusal must be a TYPED result: it used to escape as an exception that the caller
+    reported as "managed source parent is unsafe (symlinked/swapped)" — a message that sent the
+    operator looking for a symlink that was never there (live-found on the Zero)."""
+    fd, leaf, ident = _quarantine(tmp_path, lambda leaf: os.mkfifo(leaf / "pipe"))
+    try:
+        ok, why = source_fs.remove_bound(fd, leaf.name, ident)   # must not raise
+        assert not ok and "bound removal incomplete" in why
+    finally:
+        os.close(fd)

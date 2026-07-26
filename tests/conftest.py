@@ -56,6 +56,22 @@ def _isolated_runtime_root(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_binary_network(monkeypatch):
+    """HERMETIC: the binary channel is the first lhpc feature that can fetch over HTTPS, and the
+    CLI/web defaults route the three heavy stacks through it. A test that reaches the real
+    release would be slow, flaky and dependent on what is published RIGHT NOW — fail loudly
+    instead. Tests that exercise the transaction stub `_http_get` themselves (their monkeypatch
+    runs after this fixture and wins)."""
+    from lhpc.core import binary_install as _bi
+
+    def _refuse(url, max_bytes):
+        raise AssertionError(
+            f"test attempted a real binary-channel download: {url} — stub "
+            "lhpc.core.binary_install._http_get or pick a source channel")
+    monkeypatch.setattr(_bi, "_http_get", _refuse)
+
+
+@pytest.fixture(autouse=True)
 def _fw_host_isolation(monkeypatch, tmp_path_factory):
     """HERMETIC: the managed-firewall READ side consults HOST-GLOBAL paths (/etc/lhpc,
     /etc/systemd/system wants, /run/lhpc-firewall/check.json). On a box where the operator has

@@ -379,8 +379,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                   request.form.get("attempt_id", ""))
         return jsonify(ok=bool(ok)), (200 if ok else 409)
 
-    _SRC_LABELS = (("pinned", "Known working"), ("dev", "Development"),
-                   ("stable", "Latest stable"))
+    _SRC_LABELS = (("binary", "Binary (prebuilt)"), ("pinned", "Known working"),
+                   ("dev", "Development"), ("stable", "Latest stable"))
 
     def auto_install_mod2_run_id_re():
         from lhpc.core import auto_install as ai_mod
@@ -463,7 +463,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for row in service.auto_install_rows():
             sid = row["id"]
             sel[sid] = {"install": request.form.get(f"install:{sid}") == "yes",
-                        "version": request.form.get(f"version:{sid}", "dev"),
+                        # per-stack default: binary where published, else the historical "dev"
+                        "version": request.form.get(f"version:{sid}", row["default_channel"]),
                         "tests": request.form.get(f"tests:{sid}") == "yes",
                         "tx": request.form.get(f"tx:{sid}") == "yes"}
         canonical = ";".join(f"{sid}:{int(v['install'])}{v['version']}{int(v['tests'])}{int(v['tx'])}"
@@ -605,6 +606,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "hmac_apply.html", version=__version__, runtime_root=_runtime_root(),
             sid=sid, action=action, action_label=label, warning=warning,
             disable_phrase=service.HMAC_DISABLE_CONFIRM,
+            binary_block=service.hmac_binary_block(sid),
             st=st, active=active, log_seed=log_seed, complog_seed=complog_seed)
 
     @app.post("/stacks/<sid>/hmac/<action>/apply")
@@ -1109,7 +1111,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         plan = service.run_action(op, target, apply=False, params=params, source=source, band=band)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
         # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
-        _gate = (service.install_dep_gate(target) if op in ("install", "build") else None)
+        # BUILD dependencies gate the SOURCE channel only — a download needs no toolchain
+        # (the same channel-before-deps rule the CLI and the auto-install driver follow).
+        _gate = (service.install_dep_gate(target)
+                 if (op == "build" or (op == "install" and source != service.BINARY_CHANNEL))
+                 else None)
         return render_template(
             "confirm.html", version=__version__, runtime_root=_runtime_root(),
             op=op, target=target, plan=plan, tx=("tx" in op),
@@ -1128,7 +1134,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             optional_starts=(service.optional_start_components(target)
                              if op == "start" else None),
             frm=frm,
-            source_choices=service.SOURCE_CHOICES if op in ("install", "update") else None)
+            source_choices=(service.allowed_channels(service.stack_of(target) or target)
+                            if op in ("install", "update") else None),
+            # A refused binary install offers the source channel right on this page.
+            offer_source=bool(plan.data.get("offer_source")))
 
     @app.post("/action")
     def action():  # noqa: ANN202
@@ -1148,7 +1157,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # carries the operator's explicit choice. An INVALID selector is rejected by run_action
         # (never silently rewritten). Note a 'dev' checkout of a component that declares a
         # `pin_commit` reads `src: differs` forever, by design: clean, just not at the pin.
-        source = request.form.get("source", "dev")
+        # The web default is THE SAME as the CLI's: `default_channel` — binary wherever it is
+        # published (that is the whole point: a fresh Pi must not silently start a four-hour
+        # compile because nobody touched the selector), the historical "dev" everywhere else.
+        # A binary plan does fetch the index, so an offline box renders a typed refusal that
+        # offers the source channel — which is the honest outcome, not a source build nobody
+        # asked for (audit finding).
+        _t = request.form.get("target", "")
+        _sid = service.stack_of(_t) or _t
+        source = request.form.get("source") or (
+            service.default_channel(_sid) if _sid else "dev")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect

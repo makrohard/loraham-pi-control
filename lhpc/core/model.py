@@ -43,6 +43,8 @@ class SourceState(str, Enum):
     MISSING = "missing"          # configured source path does not exist
     NOT_APPLICABLE = "not-applicable"   # component declares no source
     UNKNOWN = "unknown"          # probe failed
+    BINARY = "binary"            # provided by a verified prebuilt artifact (binary channel):
+                                 # there is no git checkout to compare, and none is expected
 
 
 class TxState(str, Enum):
@@ -342,6 +344,26 @@ class SourceSpec:
 
 
 @dataclass(frozen=True)
+class BinarySpec:
+    """Optional per-stack prebuilt-binary channel declaration (`[stack.binary]`).
+
+    STACK-level by design: artifacts are per-stack tarballs, and shared-source coherence
+    forbids per-SourceSpec divergence. The artifact FILENAME is deliberately absent — the
+    content-addressed name comes from the validated index (schema 2), never the manifest."""
+
+    index_url: str                        # trusted index.json location (manifest-only —
+                                          # config can never redirect the download source)
+    covers: tuple[str, ...]               # component ids whose source/build the artifact replaces
+    publish_roots: tuple[str, ...]        # runtime-root-relative dirs/files the artifact OWNS —
+                                          # install may back up/replace ONLY these
+    proof_paths: tuple[str, ...]          # artifacts whose existence proves the install
+    clone_required: tuple[str, ...] = ()  # covered components that STILL need their pinned clone
+                                          # (run scripts live in the repo, e.g. meshcom-qemu)
+    probes: tuple[tuple[str, ...], ...] = ()   # post-install exec probes (argv; [0] is a
+                                               # runtime-root-relative binary path)
+
+
+@dataclass(frozen=True)
 class Component:
     """One software component within a stack."""
 
@@ -420,6 +442,7 @@ class Stack:
     main: str = ""               # id of the primary component (the app itself)
     operator_box: bool = True    # show the shared Operator (callsign) box on the config
                                  # page; false when the stack edits its callsign in its own config
+    binary: "BinarySpec | None" = None   # optional prebuilt-binary channel declaration
 
     def component(self, component_id: str) -> Component | None:
         for c in self.components:

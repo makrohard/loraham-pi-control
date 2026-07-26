@@ -48,6 +48,13 @@ class FirewallOpsMixin:
         (None = the stack's default band) — the candidate resolves EACH band, and the gate
         resolves the actual LAUNCH band, so a per-band bind/port is never silently mis-scoped."""
         meta = ep.firewall
+        # TRUTHFUL auth: the published meshcom firmware is built with an EMPTY XR password, so a
+        # binary-installed stack runs the bridge OPEN — the firewall model must not treat that
+        # listener as password-protected (the checkbox warning depends on this being honest).
+        _auth = meta.auth
+        if _auth == "password" and getattr(self, "binary_covers", None) and \
+                self.binary_covers(comp.id):
+            _auth = "none"
         band = self._config_band(stk.id, band or "") if hasattr(self, "_config_band") else ""
         static_host, _, static_port = str(ep.address).rpartition(":")
         port = self._fw_param_int(stk, comp, meta.port_param, band, static_port, overrides)
@@ -61,13 +68,13 @@ class FirewallOpsMixin:
             # meshtasticd 4403/9443: binds 0.0.0.0 unconditionally, no knob — drop the port on
             # EVERY non-loopback address of BOTH families, regardless of the probe address.
             return {"id": eid, "proto": "tcp", "family": "dual", "addr": "*", "port": port,
-                    "allow_cidrs": [], "deny": True, "auth": meta.auth, "loopback": False}
+                    "allow_cidrs": [], "deny": True, "auth": _auth, "loopback": False}
         if meta.bind_param:
             # A bind-address listener (kiss --kiss-host, bridge --bind): exposure from the
             # RESOLVED bind; the source allow-list (if any) narrows it.
             family, addr = _classify_bind(bind)
             return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
-                    "allow_cidrs": cidrs, "deny": False, "auth": meta.auth, "loopback": _is_loopback(bind)}
+                    "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(bind)}
         if meta.allow_param:
             # A source-allow-list listener with NO bind knob (meshcore wifi.allow): binds
             # LOOPBACK by default and only 0.0.0.0 once the allow-list admits a non-loopback
@@ -75,10 +82,10 @@ class FirewallOpsMixin:
             non_lo = [c for c in cidrs if not _cidr_is_loopback(c)]
             exposed = bool(non_lo)
             return {"id": eid, "proto": "tcp", "family": "dual", "addr": "*", "port": port,
-                    "allow_cidrs": non_lo, "deny": False, "auth": meta.auth, "loopback": not exposed}
+                    "allow_cidrs": non_lo, "deny": False, "auth": _auth, "loopback": not exposed}
         family, addr = _classify_bind(static_host)
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
-                "allow_cidrs": cidrs, "deny": False, "auth": meta.auth, "loopback": _is_loopback(static_host)}
+                "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(static_host)}
 
     def _fw_param_int(self, stk, comp, name, band, default, overrides=None):
         if not name:
