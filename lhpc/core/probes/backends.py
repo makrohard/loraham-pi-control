@@ -275,8 +275,9 @@ class RealCommandRunner:
         unsupported ionice can never prevent the real command from running."""
         try:
             subprocess.run(["ionice", "-c", "3", "-p", str(pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-        except Exception:                                  # noqa: BLE001 — strictly best-effort
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+                           check=False)
+        except Exception:
             pass
 
     def run_streaming(self, argv: list[str], timeout: float, log_fh,
@@ -371,7 +372,7 @@ class RealCommandRunner:
             try:
                 sink.write(data)
                 sink.flush()
-            except Exception:                            # noqa: BLE001 — never crash; keep draining
+            except Exception:
                 write_failed[0] = True
 
         def _drain():
@@ -656,7 +657,7 @@ class RealFileSystem:
         return self._names_for_gids(gids)
 
 
-def _authenticate_tmp_peer(sock: "socket.socket", path: str) -> None:
+def _authenticate_tmp_peer(sock: socket.socket, path: str) -> None:
     """Authenticate the peer of a COMPATIBILITY `/tmp` socket via SO_PEERCRED before trusting a reply
     or sending any command/status/config/RF payload. The pinned daemon documents its `/tmp` socket
     names as world-writable-directory paths vulnerable to local squatting: a foreign local user could
@@ -675,7 +676,7 @@ def _authenticate_tmp_peer(sock: "socket.socket", path: str) -> None:
         raise OSError(f"cannot authenticate /tmp socket peer on this platform: {path}")
     try:
         raw = sock.getsockopt(socket.SOL_SOCKET, peercred, struct.calcsize("iII"))
-        pid, uid, gid = struct.unpack("iII", raw)    # struct ucred { pid_t; uid_t; gid_t }
+        _pid, uid, _gid = struct.unpack("iII", raw)    # struct ucred { pid_t; uid_t; gid_t }
     except (OSError, struct.error) as exc:
         raise OSError(f"/tmp socket peer credentials unavailable ({path}): {exc}") from exc
     euid = os.geteuid()
@@ -730,7 +731,7 @@ class System:
     unix: UnixClient
 
 
-def RealSystem() -> System:  # noqa: N802 (factory reads as a constructor)
+def RealSystem() -> System:
     return System(
         runner=RealCommandRunner(),
         procfs=RealProcFs(),

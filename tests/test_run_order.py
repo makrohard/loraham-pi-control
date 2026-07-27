@@ -465,22 +465,17 @@ def test_daemon_stop_cascade_stops_dependents_before_daemon(tmp_path, monkeypatc
 
 # --- A2: client stop releases the ACTUAL daemon band ----------------------------------------
 
-def test_client_release_actual_band_868(tmp_path):
+@pytest.mark.parametrize("stack,band,sock,other", [
+    pytest.param("voice", "868", "/tmp/loraconf868.sock", "433", id="voice-ran-on-868"),
+    pytest.param("kiss", "433", "/tmp/loraconf433.sock", "868", id="kiss-ran-on-433"),
+])
+def test_client_release_actual_band(tmp_path, stack, band, sock, other):
     svc = ControllerService(system=FakeSystem(
-        unix_replies={"/tmp/loraconf868.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("voice", "868")                    # voice ran on 868
-    res = svc.stop("voice", apply=True)
+        unix_replies={sock: _RDY6}).system, paths=Paths(runtime_root=tmp_path))
+    svc._set_running_band(stack, band)                       # the band the client actually ran on
+    res = svc.stop(stack, apply=True)
     rel = [r for r in res.results if r.component == svc.DAEMON_ID]
-    assert rel and "868" in rel[0].summary and "433" not in rel[0].summary
-
-
-def test_client_release_actual_band_433(tmp_path):
-    svc = ControllerService(system=FakeSystem(
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
-    svc._set_running_band("kiss", "433")                     # kiss ran on 433
-    res = svc.stop("kiss", apply=True)
-    rel = [r for r in res.results if r.component == svc.DAEMON_ID]
-    assert rel and "433" in rel[0].summary and "868" not in rel[0].summary
+    assert rel and band in rel[0].summary and other not in rel[0].summary
 
 
 def test_daemon_release_failure_makes_client_stop_nonsuccess(tmp_path, monkeypatch):

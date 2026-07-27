@@ -18,10 +18,19 @@ from __future__ import annotations
 import ipaddress as _ipaddress
 import secrets as _secrets
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from flask import (
-    Flask, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for,
+    Flask,
+    Response,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
 )
 
 from lhpc.core import config as _config
@@ -154,7 +163,7 @@ def _parse_start_daemon_overrides(form):
     (`_normalize_ephemeral_overrides`); this parser does not duplicate those rules. A blank value is
     carried through (the service treats blank/absent as "no override")."""
     per_band: dict = {}
-    for name in form.keys():
+    for name in form:
         if not name.startswith("dp_"):
             continue
         if len(form.getlist(name)) > 1:                       # duplicated/conflicting field
@@ -197,7 +206,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["csrf_token"] = _csrf_token
 
     @app.context_processor
-    def _inject_selfupdate():  # noqa: ANN202
+    def _inject_selfupdate():
         # Footer version/head indicator, on EVERY page. Reads the cached state marker ONLY — no git,
         # no network, no subprocess — so it never violates the no-network-GET rule. Fail-safe.
         try:
@@ -208,7 +217,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                    "update_available": False}}
 
     @app.context_processor
-    def _inject_hardware():  # noqa: ANN202
+    def _inject_hardware():
         # Read-only current radio-hardware setup for the footer, on EVERY page. Config read only.
         try:
             sid = service.hardware_setup()
@@ -218,20 +227,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return {"hardware_footer": {"id": "unset", "label": "Not configured", "configured": False}}
 
     @app.after_request
-    def _set_headers(response):  # noqa: ANN001
+    def _set_headers(response):
         for key, value in _SECURITY_HEADERS.items():
             response.headers[key] = value
         return response
 
     @app.before_request
-    def _fresh_snapshot():  # noqa: ANN202
+    def _fresh_snapshot():
         # The status snapshot is memoized WITHIN a request (a page render assesses it ~15×). Drop it
         # at the start of EVERY request so no request ever serves state from a previous one — freshness
         # is guaranteed; the memo only coalesces the repeated reads inside this one render.
         service.invalidate_snapshot()
 
     @app.before_request
-    def _trusted_host():  # noqa: ANN202
+    def _trusted_host():
         """Explicit trusted-host policy — ENFORCED IN EVERY SERVING MODE, including the plain-loopback
         interactive console (NOT keyed on Secure cookies or productive mode). It runs before any session
         is created, any CSRF token is used, and any mutation, so a rejected Host can never drive state.
@@ -260,7 +269,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if ws.bind and ws.bind not in ("0.0.0.0", "::"):
                 allowed.add(ws.bind.lower())
             exposed = bool(ws.remote_exposed)
-        except Exception:                                # noqa: BLE001 — unreadable config -> loopback only
+        except Exception:
             pass
         # A present, allowed Host passes; empty/missing/malformed/unrelated all fall through to 400.
         if host and _host_allowed(host, allowed, exposed):
@@ -278,7 +287,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return Response(body, status=400, mimetype="text/plain")
 
     @app.errorhandler(_config.ConfigError)
-    def _malformed_config(exc):  # noqa: ANN202
+    def _malformed_config(exc):
         # A stored config file is present but malformed/unreadable/oversized/wrong-typed. Fail closed:
         # a bounded, operator-repairable 409 — NEVER a traceback, and NEVER the malformed value echoed
         # back. The detail (path + parse error) goes only to the server log. The bad file is preserved.
@@ -292,7 +301,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return str(service.runtime_root)  # display only
 
     @app.get("/")
-    def dashboard():  # noqa: ANN202
+    def dashboard():
         # Radio-centric overview: one column per band (433/868) with daemon/radio
         # config, live monitor, the stack running on it, and a start-stack control.
         radios = service.radio_overview()
@@ -306,6 +315,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         webservers = []
         try:
             for w in service.dashboard_webservers(served_via_nginx=served_via_nginx()):
+                w_entry = w
                 if w["kind"] == "console":
                     addr = _console_addr(w.get("port", ""))
                 elif w["kind"] == "port":
@@ -318,8 +328,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     addr = f"{_url_host(request.host or '')}:{w['port']}" if w.get("enabled") else ""
                     # Not proxied but running: show the DIRECT web-UI address on the reached host.
                     if not w.get("enabled") and w.get("direct_port"):
-                        w = {**w, "direct_addr": f"{_url_host(request.host or '')}:{w['direct_port']}"}
-                webservers.append({**w, "addr": addr})
+                        w_entry = {**w, "direct_addr": f"{_url_host(request.host or '')}:{w['direct_port']}"}
+                webservers.append({**w_entry, "addr": addr})
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
         try:
@@ -345,24 +355,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
-    def dash_signature_api():  # noqa: ANN202
+    def dash_signature_api():
         # Cheap structural-state signature; the dashboard reloads only when it changes.
         return jsonify(sig=service.dash_signature())
 
     @app.get("/api/system")
-    def system_api():  # noqa: ANN202
+    def system_api():
         # Host metrics for the System box: RAW procfs/sysfs counters + a monotonic ts; the
         # BROWSER computes rates between its own polls. File reads only — no subprocess, no
         # network, no server-side history. Polled only while the box is expanded.
         return jsonify(service.system_stats())
 
     @app.get("/api/tasks")
-    def tasks_api():  # noqa: ANN202
+    def tasks_api():
         # Running-task banner feed (auto-install + HMAC + build/test/install jobs). STRICTLY read-only.
         return jsonify(tasks=service.running_tasks())
 
     @app.post("/api/tasks/dismiss")
-    def tasks_dismiss():  # noqa: ANN202
+    def tasks_dismiss():
         # Close a FAILED (red) banner (never unsafe/running). CSRF-guarded; durable.
         if not _csrf_ok():
             abort(400)
@@ -371,7 +381,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return jsonify(ok=bool(ok)), (200 if ok else 409)
 
     @app.post("/api/tasks/recover")
-    def tasks_recover():  # noqa: ANN202
+    def tasks_recover():
         # Explicit-ack recovery of an UNSAFE build/test/install job → non-blocking failed. CSRF-guarded.
         if not _csrf_ok():
             abort(400)
@@ -391,7 +401,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return ai_mod.TERMINAL_OK
 
     @app.get("/auto-install")
-    def auto_install_page():  # noqa: ANN202
+    def auto_install_page():
         st = service.auto_install_status()
         mode = service.auto_install_mode()
         running = service.auto_install_running()
@@ -404,7 +414,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # phase — the POST redirect lands within milliseconds of the spawn.
         if st is None or (not st.get("unsafe")
                           and st.get("state") in auto_install_mod_terminal_ok()):
-            from lhpc.core import auto_install as ai_mod, procident
+            from lhpc.core import auto_install as ai_mod
+            from lhpc.core import procident
             rstate, res = ai_mod.read_reservation(service._paths)
             if (rstate == "valid"
                     and res.get("phase") in ("spawning", "spawned", "claimed")
@@ -504,7 +515,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return ""
 
     @app.post("/auto-install/start")
-    def auto_install_start():  # noqa: ANN202
+    def auto_install_start():
         if not _csrf_ok():
             abort(400)
         selection, canonical = _parse_ai_selection()
@@ -526,7 +537,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if why:
                 flash(f"RF confirmation refused: {why}.", "warn")
                 return redirect(url_for("auto_install_page"))
-        job, err = service.spawn_auto_install_job(selection)
+        _job, err = service.spawn_auto_install_job(selection)
         if err:
             flash(err, "warn")
         else:
@@ -534,7 +545,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("auto_install_page"))
 
     @app.post("/auto-install/ack")
-    def auto_install_ack():  # noqa: ANN202
+    def auto_install_ack():
         if not _csrf_ok():
             abort(400)
         res = service.auto_install_ack(
@@ -543,7 +554,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("auto_install_page"))
 
     @app.post("/auto-install/abort")
-    def auto_install_abort_route():  # noqa: ANN202
+    def auto_install_abort_route():
         if not _csrf_ok():
             abort(400)
         res = service.auto_install_abort(request.form.get("run_id", ""))
@@ -551,7 +562,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("auto_install_page"))
 
     @app.get("/api/auto-install")
-    def auto_install_api():  # noqa: ANN202
+    def auto_install_api():
         st = service.auto_install_status()
         out = {"state": st if st is not None else {"absent": True},
                "running": service.auto_install_running(), "run_id": "", "log": {}}
@@ -562,7 +573,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Whether a spawn reservation is LIVE (spawning/spawned/claimed, identity
         # proven): the starting card uses this to detect a child that ended BEFORE
         # writing its marker (e.g. the running-components preflight refusal).
-        from lhpc.core import auto_install as ai_mod, procident
+        from lhpc.core import auto_install as ai_mod
+        from lhpc.core import procident
         rstate, res = ai_mod.read_reservation(service._paths)
         out["spawn_live"] = bool(
             rstate == "valid"
@@ -588,7 +600,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     }
 
     @app.get("/stacks/<sid>/hmac/<action>")
-    def hmac_apply_page(sid, action):  # noqa: ANN202
+    def hmac_apply_page(sid, action):
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
             abort(404)
         st = service.hmac_apply_status()
@@ -610,7 +622,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             st=st, active=active, log_seed=log_seed, complog_seed=complog_seed)
 
     @app.post("/stacks/<sid>/hmac/<action>/apply")
-    def hmac_apply_run(sid, action):  # noqa: ANN202
+    def hmac_apply_run(sid, action):
         if not _csrf_ok():
             abort(400)
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
@@ -623,7 +635,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 
     @app.post("/stacks/<sid>/hmac/<action>/abort")
-    def hmac_apply_abort_route(sid, action):  # noqa: ANN202
+    def hmac_apply_abort_route(sid, action):
         if not _csrf_ok():
             abort(400)
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
@@ -633,7 +645,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 
     @app.post("/stacks/<sid>/hmac/<action>/recover")
-    def hmac_apply_recover_route(sid, action):  # noqa: ANN202
+    def hmac_apply_recover_route(sid, action):
         if not _csrf_ok():
             abort(400)
         if action not in _HMAC_ACTIONS or not service.hmac_applies(sid):
@@ -643,7 +655,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("hmac_apply_page", sid=sid, action=action))
 
     @app.get("/api/hmac-apply")
-    def hmac_apply_api():  # noqa: ANN202
+    def hmac_apply_api():
         st = service.hmac_apply_status()
         out = {"state": st if st is not None else {"absent": True},
                "running": service.hmac_apply_running(), "run_id": "", "log": {}}
@@ -815,25 +827,25 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _ws = service.webserver_monitor(served_via_nginx=served_via_nginx()).data
         except Exception:
             _ws = None
-        ctx = dict(
-            version=__version__, runtime_root=_runtime_root(), snapshot=snapshot,
-            summary=summarize(snapshot), groups=groups, auto_install_mode=service.auto_install_mode(),
-            observed_conflicts=service.observed_conflicts(snapshot),   # band-aware
-            controller=service.controller_status(),
-            controller_system_deps=service.controller_system_deps(),
-            ws_mon=_ws, ws_certs=(_ws or {}).get("pki", {}).get("clients", []),
-            ws_modes=list(_WS_MODES), ws_loopback=peer_is_loopback(),
-            firewall_view=_firewall_view_safe(service),
-            st=service.self_update_status(), jobs=service.active_jobs(),
-            updater=service.updater_integration(),
-            dep_summary=service.dependency_overview(),
-            req_host=_url_host(request.host or ""),
-            ws_console_addr=_console_addr((_ws or {}).get("desired", {}).get("port", "")),
-            tasks=service.running_tasks(),
-            restored_open=restored_open,
-            hw_probe=hw_probe,
-            confirm=None,
-        )
+        ctx = {
+            "version": __version__, "runtime_root": _runtime_root(), "snapshot": snapshot,
+            "summary": summarize(snapshot), "groups": groups, "auto_install_mode": service.auto_install_mode(),
+            "observed_conflicts": service.observed_conflicts(snapshot),   # band-aware
+            "controller": service.controller_status(),
+            "controller_system_deps": service.controller_system_deps(),
+            "ws_mon": _ws, "ws_certs": (_ws or {}).get("pki", {}).get("clients", []),
+            "ws_modes": list(_WS_MODES), "ws_loopback": peer_is_loopback(),
+            "firewall_view": _firewall_view_safe(service),
+            "st": service.self_update_status(), "jobs": service.active_jobs(),
+            "updater": service.updater_integration(),
+            "dep_summary": service.dependency_overview(),
+            "req_host": _url_host(request.host or ""),
+            "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
+            "tasks": service.running_tasks(),
+            "restored_open": restored_open,
+            "hw_probe": hw_probe,
+            "confirm": None,
+        }
         return ctx, groups, snapshot
 
     def _render_stacks(**over):
@@ -846,14 +858,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _bcfg = service.config().boot
             ctx.setdefault("boot_restore_on", bool(_bcfg.restore and _bcfg.valid))
             ctx.setdefault("boot_restore_valid", bool(_bcfg.valid))
-        except Exception:                          # noqa: BLE001 — never break the page
+        except Exception:
             ctx.setdefault("boot_restore_on", False)
             ctx.setdefault("boot_restore_valid", False)
         ctx.update(over)
         return render_template("stacks.html", **ctx)
 
     @app.get("/stacks/<sid>/body")
-    def stack_body(sid: str):  # noqa: ANN202
+    def stack_body(sid: str):
         # Lazy per-stack body: the Apps page renders only OPEN stacks' bodies inline; a closed stack's
         # body (its settings/source/config forms) is fetched here when the operator expands it. Same
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
@@ -866,18 +878,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template("_stack_body.html", g=g, **ctx)
 
     @app.get("/stacks")
-    def stacks_overview():  # noqa: ANN202
+    def stacks_overview():
         return _render_stacks()
 
     @app.get("/dependencies")
-    def dependencies_page():  # noqa: ANN202
+    def dependencies_page():
         # Read-only: every dependency of LHPC, the web server and each INSTALLED stack, with a fulfill
         # action or copyable command for each unmet one. No mutation / subprocess on load.
         return render_template("dependencies.html", overview=service.dependency_overview(),
                                version=__version__, runtime_root=_runtime_root())
 
     @app.post("/self-update/check")
-    def self_update_check():  # noqa: ANN202
+    def self_update_check():
         if not _csrf_ok():
             abort(400)
         res = service.self_update_check()          # NETWORK (explicit): git fetch, refresh cache
@@ -885,7 +897,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview") + "#controller-update")
 
     @app.post("/source-check/<target>")
-    def source_check(target: str):  # noqa: ANN202
+    def source_check(target: str):
         # DEDICATED route, deliberately NOT an /action op: probing remote freshness is non-mutating
         # and needs no confirm stage, so it must not inherit the lifecycle dispatch that
         # install/build/start/stop share. `target` is a stack id or a component id.
@@ -899,7 +911,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _install_back(sid)                  # land on the stack's Install section
 
     @app.route("/self-update/apply", methods=["GET", "POST"])
-    def self_update_apply():  # noqa: ANN202
+    def self_update_apply():
         # One-click self-update. The running console cannot apply in-process (it holds the
         # controller-runtime lock SHARED so its own code is never mutated underneath it);
         # a confirmed request starts the PARAMETER-FREE updater unit, which stops this
@@ -943,7 +955,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                runtime_root=_runtime_root())
 
     @app.get("/stacks/<stack_id>")
-    def stack_detail(stack_id: str):  # noqa: ANN202
+    def stack_detail(stack_id: str):
         # The per-stack detail page was folded into the /stacks overview (collapsible sections
         # per stack). This URL is kept as a redirect so bookmarks/links survive: it opens the
         # stack's row on the overview. Unknown stack -> 404 (as before).
@@ -952,7 +964,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
 
     @app.post("/stacks/<stack_id>/known-working/confirm")
-    def known_working_confirm(stack_id: str):  # noqa: ANN202
+    def known_working_confirm(stack_id: str):
         if not _csrf_ok():
             abort(400)
         if service.stack(stack_id) is None:
@@ -962,7 +974,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open=stack_id) + "#stackrow-" + stack_id)
 
     @app.post("/interactive/<stack_id>/dismiss")
-    def interactive_dismiss(stack_id: str):  # noqa: ANN202
+    def interactive_dismiss(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -971,7 +983,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("dashboard"))
 
     @app.get("/api/daemon/<band>")
-    def daemon_api(band: str):  # noqa: ANN202
+    def daemon_api(band: str):
         if band not in ("433", "868"):
             abort(404)
         view = service.daemon_view(band)
@@ -981,7 +993,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                        feed=service.daemon_feed(band, 40))
 
     @app.get("/api/daemon/<band>/socket")
-    def daemon_socket_api(band: str):  # noqa: ANN202
+    def daemon_socket_api(band: str):
         # READ-ONLY live poll of the CONF socket for the "View Socket" monitor: one bounded,
         # sanitised status line per request (band validated -> never an arbitrary socket path;
         # fail-closed to '' when unreachable). The window/polling live entirely in the browser.
@@ -991,7 +1003,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return jsonify(band=band, line=line, reachable=bool(line))
 
     @app.post("/radio/<band>/set")
-    def radio_set(band: str):  # noqa: ANN202
+    def radio_set(band: str):
         # Apply a LIVE daemon setting (runtime) — same two-step plan + confirm as
         # every other mutation (P0.7). First POST shows the plan; a confirmed POST
         # applies. The key is whitelisted by the service; nothing transmits.
@@ -1140,7 +1152,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             offer_source=bool(plan.data.get("offer_source")))
 
     @app.post("/action")
-    def action():  # noqa: ANN202
+    def action():
         if not _csrf_ok():
             abort(400)
         op = request.form.get("op", "")
@@ -1350,7 +1362,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return ""
 
     @app.get("/logs/<target>")
-    def logs_view(target: str):  # noqa: ANN202
+    def logs_view(target: str):
         if service.stack_of(target) is None:
             abort(404)
         job = _safe_job(request.args.get("job"))
@@ -1362,7 +1374,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                running=service.log_running(target, job))
 
     @app.get("/api/logs/<target>")
-    def logs_api(target: str):  # noqa: ANN202
+    def logs_api(target: str):
         if service.stack_of(target) is None:
             abort(404)
         job = _safe_job(request.args.get("job"))
@@ -1372,7 +1384,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                        running=service.log_running(target, job))
 
     @app.post("/stacks/<stack_id>/config")
-    def stack_config_save(stack_id: str):  # noqa: ANN202
+    def stack_config_save(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -1426,7 +1438,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         + "#stack-daemon-params-" + stack_id)
 
     @app.post("/hardware")
-    def hardware_set():  # noqa: ANN202
+    def hardware_set():
         if not _csrf_ok():
             abort(400)
         result = service.set_hardware_setup(request.form.get("hardware", ""))
@@ -1435,7 +1447,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         + "#stack-settings-daemon")
 
     @app.post("/hardware/probe")
-    def hardware_probe():  # noqa: ANN202
+    def hardware_probe():
         if not _csrf_ok():
             abort(400)
         pr = service.probe_hardware(request.form.get("band", ""), request.form.get("hw", ""))
@@ -1446,7 +1458,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         + "#stack-settings-daemon")
 
     @app.post("/stacks/<stack_id>/daemon-params")
-    def daemon_params_save(stack_id: str):  # noqa: ANN202
+    def daemon_params_save(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -1457,7 +1469,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _dp_back(stack_id, band)
 
     @app.post("/stacks/<stack_id>/daemon-params/apply")
-    def daemon_params_apply(stack_id: str):  # noqa: ANN202
+    def daemon_params_apply(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -1476,7 +1488,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _dp_back(stack_id, band)
 
     @app.post("/stacks/<stack_id>/daemon-params/reset")
-    def daemon_params_reset(stack_id: str):  # noqa: ANN202
+    def daemon_params_reset(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -1487,7 +1499,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _dp_back(stack_id, band)
 
     @app.post("/stacks/<stack_id>/config/reset")
-    def stack_config_reset(stack_id: str):  # noqa: ANN202
+    def stack_config_reset(stack_id: str):
         if service.stack(stack_id) is None:
             abort(404)
         if not _csrf_ok():
@@ -1499,17 +1511,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                         + "#stack-settings-" + stack_id)
 
     @app.get("/healthz")
-    def healthz():  # noqa: ANN202
+    def healthz():
         # Cheap liveness: manifest parses; does NOT run the full probe sweep.
         stacks = service.stacks()
         return jsonify(status="ok", stacks=len(stacks), version=__version__)
 
     @app.errorhandler(404)
-    def _not_found(_err):  # noqa: ANN001, ANN202
+    def _not_found(_err):
         return render_template("error.html", code=404, message="Not found"), 404
 
     @app.errorhandler(405)
-    def _method_not_allowed(_err):  # noqa: ANN001, ANN202
+    def _method_not_allowed(_err):
         # A GET can only 405 on a POST-only ACTION URL — a browser stranded on the form target
         # (see /self-update/apply's stray-GET note). Never dead-end that reload; a non-GET 405
         # (a stray POST to a page URL) stays a real error page.
@@ -1518,7 +1530,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return render_template("error.html", code=405, message="Method not allowed"), 405
 
     @app.errorhandler(Exception)
-    def _unexpected(err):  # noqa: ANN001, ANN202
+    def _unexpected(err):
         # HTTP errors (404/405/400 …) keep their own status/handling.
         from werkzeug.exceptions import HTTPException
         if isinstance(err, HTTPException):
@@ -1534,11 +1546,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     # ---- Webserver: controller-owned component, rendered INLINE in the controller row on
     # /stacks (no separate page). This route only redirects old bookmarks to that anchor.
     @app.route("/stacks/loraham-pi-control")
-    def controller_webserver():  # noqa: ANN202
+    def controller_webserver():
         return redirect(url_for("stacks_overview") + "#webserver-row")
 
     @app.get("/webserver/logs")
-    def webserver_logs():  # noqa: ANN202
+    def webserver_logs():
         # The LHPC-managed nginx front-end's on-disk access/error logs. Read-only, cached-only:
         # a bounded no-follow tail (no service probe). `src` is whitelisted to error|access.
         src = "access" if request.args.get("src") == "access" else "error"
@@ -1547,7 +1559,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                runtime_root=_runtime_root(), src=src, path=path, lines=lines)
 
     @app.get("/firewall/logs")
-    def firewall_logs():  # noqa: ANN202
+    def firewall_logs():
         # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
@@ -1555,7 +1567,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                runtime_root=_runtime_root(), path=path, lines=lines)
 
     @app.get("/controller/logs")
-    def controller_logs():  # noqa: ANN202
+    def controller_logs():
         # The controller's OWN process logs — on-disk files under logs/ (StandardOutput=append:).
         # Read-only, non-network, bounded no-follow file tail; `src` is an EXPLICIT whitelist —
         # an unknown value normalizes to "web" here AND is rejected by the service map, so it can
@@ -1575,7 +1587,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview") + "#webserver-row")
 
     @app.post("/boot-restore")
-    def boot_restore_set():  # noqa: ANN202
+    def boot_restore_set():
         if not _csrf_ok():
             abort(400)
         res = service.set_boot_restore(request.form.get("restore") == "on")
@@ -1583,7 +1595,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.route("/webserver/configure", methods=["POST"])
-    def webserver_configure():  # noqa: ANN202
+    def webserver_configure():
         if not _csrf_ok():
             abort(400)
         f = request.form
@@ -1614,7 +1626,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.post("/stacks/<stack_id>/webserver")
-    def stack_web_configure(stack_id: str):  # noqa: ANN202
+    def stack_web_configure(stack_id: str):
         """Per-stack web-UI proxy policy. Same typed-confirmation contract as /webserver/configure."""
         if not _csrf_ok():
             abort(400)
@@ -1640,7 +1652,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
 
     @app.route("/webserver/reset", methods=["POST"])
-    def webserver_reset():  # noqa: ANN202
+    def webserver_reset():
         if not _csrf_ok():
             abort(400)
         if request.form.get("confirm_phrase", "") != "reset":
@@ -1651,7 +1663,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.route("/webserver/verify", methods=["POST"])
-    def webserver_verify():  # noqa: ANN202
+    def webserver_verify():
         if not _csrf_ok():
             abort(400)
         r = service.webserver_verify()
@@ -1662,7 +1674,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview") + "#firewall-row")
 
     @app.route("/firewall/configure", methods=["GET", "POST"])
-    def firewall_configure():  # noqa: ANN202
+    def firewall_configure():
         if request.method == "GET":
             return redirect(url_for("stacks_overview") + "#firewall-row")
         if not _csrf_ok():
@@ -1691,7 +1703,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _fw_back()
 
     @app.route("/firewall/refresh", methods=["POST"])
-    def firewall_refresh():  # noqa: ANN202
+    def firewall_refresh():
         # READ-ONLY: re-render the cached status from the root-written receipt. It cannot
         # inspect live nftables (unprivileged) — the immediate-check sudo command is shown
         # in the panel for that.
@@ -1703,7 +1715,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _fw_back()
 
     @app.route("/webserver/init", methods=["POST"])
-    def webserver_init():  # noqa: ANN202
+    def webserver_init():
         if not _csrf_ok():
             abort(400)
         # First-time init on a fresh PKI needs no phrase; RE-initializing (destructive) requires
@@ -1714,7 +1726,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.route("/webserver/tls-renew", methods=["POST"])
-    def webserver_tls_renew():  # noqa: ANN202
+    def webserver_tls_renew():
         if not _csrf_ok():
             abort(400)
         r = service.webserver_tls_renew()
@@ -1722,7 +1734,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.route("/webserver/cert", methods=["POST"])
-    def webserver_cert():  # noqa: ANN202
+    def webserver_cert():
         if not _csrf_ok():
             abort(400)
         f = request.form
@@ -1754,7 +1766,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return _ws_back()
 
     @app.route("/webserver/cert/<label>/download")
-    def webserver_cert_download(label):  # noqa: ANN202
+    def webserver_cert_download(label):
         # LOOPBACK-ONLY: a remotely-authenticated browser must never pull a new private key.
         if not peer_is_loopback():
             abort(403)
@@ -1843,7 +1855,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
         try:
             for _fw_note in ControllerService().firewall_post_update_reconcile():
                 print(f"INFO firewall: {_fw_note}")
-        except Exception:                                    # noqa: BLE001 — never block startup
+        except Exception:
             pass
         if socket:
             # PRODUCTIVE mode (behind nginx). Two separate facts, deliberately not one flag:
@@ -1855,7 +1867,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
             try:
                 from lhpc.core.config import load_config as _load_config
                 _scheme = _load_config(_resolve_paths()).webserver.scheme
-            except Exception:                            # noqa: BLE001 — unreadable config -> https
+            except Exception:
                 _scheme = "https"
             app.config.update(LHPC_PRODUCTIVE=True,
                               SESSION_COOKIE_SECURE=(_scheme == "https"))
@@ -1927,7 +1939,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
                 _urls = _console_urls(_wcfg)
                 _where = "remote" if _wcfg.remote_exposed else "loopback-only"
                 sdnotify.notify_status(f"{' · '.join(_urls)} ({_where})")
-            except Exception:                        # noqa: BLE001 — never block startup
+            except Exception:
                 pass
             _waitress_serve(app, unix_socket=sock_path, unix_socket_perms="600",
                             threads=8, ident="lhpc")

@@ -789,6 +789,7 @@ def test_controller_system_deps_shape_and_required_flags(tmp_path, monkeypatch):
     assert flat["cryptography"]["satisfied"] is True and flat["flask"]["satisfied"] is True
 
 
+@pytest.mark.contract
 def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     svc = _svc(tmp_path)
@@ -812,6 +813,7 @@ def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
                            "(no init, no network, no RF).")
 
 
+@pytest.mark.contract
 def test_doctor_ok_when_only_optional_dep_missing(tmp_path, monkeypatch):
     # Optional-only missing (nginx) must NOT flip doctor.ok, and the summary stays the base string.
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))

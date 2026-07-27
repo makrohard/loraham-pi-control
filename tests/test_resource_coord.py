@@ -1,6 +1,8 @@
 """Cross-stack resource-claim coordination: a start/stop/restart of one stack must
 serialize against a DIFFERENT stack claiming the same EXCLUSIVE/PROVIDER resource."""
 
+import pytest
+
 from lhpc.core import reslock
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
@@ -8,7 +10,12 @@ from lhpc.core.probes.backends import FakeSystem
 
 
 def _svc(tmp_path):
-    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    # The same-process serialize window only matters to the contention tests here; shorten it so
+    # a held-lock refusal returns in ~0.2s instead of the 5.0s production grace (the OUTCOME is
+    # identical — a bounded wait then ResourceBusy). Tests that need a specific window set their own.
+    svc._SELF_LOCK_WAIT_S = 0.2
+    return svc
 
 
 def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
@@ -18,6 +25,7 @@ def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
     assert "loraham.radio.868" in keys and keys == sorted(keys)
 
 
+@pytest.mark.contract
 def test_cross_stack_shared_radio_blocks_start(tmp_path):
     # meshtastic and meshcore both claim loraham.radio.868 (different stacks).
     svc = _svc(tmp_path)

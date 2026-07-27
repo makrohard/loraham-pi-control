@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import ClassVar
 
-from .snapshot_memo import invalidates_snapshot
 from . import runtime_fs
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .snapshot_memo import invalidates_snapshot
 
 
 class MaintenanceOpsMixin:
@@ -191,7 +192,7 @@ class MaintenanceOpsMixin:
                     consumers.setdefault(c.source.path, set()).add(c.id)
                 for dep_id in c.build_requires:
                     dep = comp_index.get(dep_id)
-                    if dep is not None and dep.source is not None:
+                    if dep is not None and dep.source is not None:  # noqa: SIM102
                         # the build edge holds only while the CONSUMER's own source is
                         # installed (an uninstalled daemon no longer references RadioLib)
                         if c.source is None or self._paths.resolve_source(c.source.path).exists():
@@ -279,8 +280,8 @@ class MaintenanceOpsMixin:
         from . import known_working
         try:
             entries = known_working.compatible_composition(
-                self._paths, stack, lambda c: self._effective_remote(c))
-        except Exception:                        # noqa: BLE001 — fallback probe only
+                self._paths, stack, self._effective_remote)
+        except Exception:
             entries = None
         if entries and comp.id in entries and entries[comp.id].get("commit"):
             return (entries[comp.id]["commit"],
@@ -295,6 +296,7 @@ class MaintenanceOpsMixin:
         ((sha, label), "") or ((None, None), typed-reason). Adoption receives the frozen
         sha and performs NO second selector lookup."""
         import re
+
         from . import validators
         spec = comp.source
         remote = self.config().remotes.get(comp.id) or spec.remote
@@ -373,7 +375,7 @@ class MaintenanceOpsMixin:
         for st in {s.id: s for s, _ in items}.values():
             if _sel(st.id) == "pinned":
                 compositions[st.id] = known_working.compatible_composition(
-                    self._paths, st, lambda c: self._effective_remote(c))
+                    self._paths, st, self._effective_remote)
         by_path: dict = {}
         for st, comp in items:
             spec = comp.source
@@ -501,6 +503,7 @@ class MaintenanceOpsMixin:
         operator runs BEFORE cloning/installing. lhpc only PRINTS it; it never runs privileged
         commands. The dep revision in the header fingerprints the declared command set."""
         import hashlib
+
         from . import deps
         core, gui = self._declared_dep_scopes()
         # The revision fingerprints COMMAND **and** SCOPE. Hashing the command strings alone would
@@ -542,15 +545,15 @@ class MaintenanceOpsMixin:
 
     def _parse_utc(self, ts):
         """Bounded parse of the canonical persisted UTC timestamp -> epoch seconds, or None."""
-        import time
         import calendar
+        import time
         try:
             return calendar.timegm(time.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ"))
         except (ValueError, TypeError):
             return None
 
     # Success/failure hints per (op, outcome); ("*", …) is the op-agnostic fallback.
-    _JOB_HINT = {
+    _JOB_HINT: ClassVar[dict] = {
         ("install", "done"): "Next: Build.",
         ("build", "done"): "Next: Test.",
         ("test", "done"): "Ready.",
@@ -585,6 +588,7 @@ class MaintenanceOpsMixin:
         (jobs use `active_jobs(cleanup=False)`/`log_running`/`jobresult.read_results`, all no-follow, bounded).
         Colours: running=yellow, done=green, failed/unsafe=red."""
         import time
+
         from . import jobresult
         now = int(time.time())
         out = []
@@ -615,7 +619,7 @@ class MaintenanceOpsMixin:
 
         try:
             bst = self.auto_install_status()
-        except Exception:                          # noqa: BLE001 — a GET must never 500
+        except Exception:
             bst = None
         if bst and bst.get("unsafe"):
             # A MALFORMED / unreadable auto-install marker (top-level `unsafe`) MUST be surfaced as a
@@ -646,7 +650,7 @@ class MaintenanceOpsMixin:
         # ---- boot restore (file+/proc projection only; the driver writes the journal) ------
         try:
             brs = self.boot_restore_status()
-        except Exception:                          # noqa: BLE001 — a GET must never 500
+        except Exception:
             brs = None
         if brs is not None:
             _c = brs.get("counts", {})
@@ -682,7 +686,7 @@ class MaintenanceOpsMixin:
 
         try:
             hst = self.hmac_apply_status()
-        except Exception:                          # noqa: BLE001
+        except Exception:
             hst = None
         if hst and hst.get("unsafe"):
             # Same as auto-install: a malformed/unreadable HMAC marker is surfaced as recovery-required
@@ -710,7 +714,7 @@ class MaintenanceOpsMixin:
         # ---- detached web build/test/install jobs (yellow → green/red) ----
         try:
             results = jobresult.read_results(self._paths)
-        except Exception:                          # noqa: BLE001
+        except Exception:
             results = []
         for log, rec in results:
             target = rec.get("target", "")
@@ -772,7 +776,7 @@ class MaintenanceOpsMixin:
         if kind == "auto-install":
             try:
                 st = self.auto_install_status()
-            except Exception:                              # noqa: BLE001
+            except Exception:
                 st = None
             if not (st and not st.get("unsafe") and st.get("state") == "completed-with-failures"):
                 return False
@@ -780,7 +784,7 @@ class MaintenanceOpsMixin:
         if kind == "hmac":
             try:
                 st = self.hmac_apply_status()
-            except Exception:                              # noqa: BLE001
+            except Exception:
                 st = None
             if not (st and not st.get("unsafe") and st.get("phase") == "failed"):
                 return False
@@ -790,7 +794,7 @@ class MaintenanceOpsMixin:
             # unsafe/running are never dismissible.
             try:
                 st = self.boot_restore_status()
-            except Exception:                              # noqa: BLE001
+            except Exception:
                 st = None
             if not (st and st.get("state") == "failed" and st.get("run_id") == run_id):
                 return False
@@ -1222,61 +1226,61 @@ class MaintenanceOpsMixin:
         try:
             # LOCK ORDER #1: admission OUTSIDE config-stability (the inner source guard reuses it
             # reentrantly), so a source update never contends config/admission out of order.
-            with self._admission_guard("update", target or ""), self._config_stable():
-                with self._source_operation_guard(sorted(affected), op="update"):
-                    self._op_seam("update-locked")
-                    # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
-                    # slipped in after the preflight refuses the update with ZERO candidate/
-                    # journal/source/registry/marker/config mutation.
-                    running = self._running_source_consumers(affected)
-                    if running:
-                        owners = sorted({self._owner_stack_id(cid) for cid in running})
-                        return ActionResult(
-                            False, f"Refusing to update '{target or 'all'}': component(s) "
-                            "using the affected source(s) started while the update was "
-                            "acquiring its locks.",
-                            details=[f"  running: {', '.join(running)} — stop them first"],
-                            next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
-                    # ONE effective remote per shared checkout + ONE immutable plan — both
-                    # built UNDER the configuration-stable and source locks (a concurrent
-                    # remote save waits; the plan can never use a stale config snapshot).
-                    conflicts = sorted({c for c in (self._shared_remote_conflict(p)
-                                                    for p in affected) if c})
-                    if conflicts:
-                        return ActionResult(False, f"Refusing to update '{target or 'all'}': "
-                                            "shared-source remote configuration is "
-                                            "inconsistent.",
-                                            details=[f"  {c}" for c in conflicts])
-                    groups, plan_conflicts = self._plan_source_groups(items, source)
-                    if plan_conflicts:
-                        return ActionResult(False, f"Refusing to update '{target or 'all'}': "
-                                            "incompatible source resolutions for a shared "
-                                            "checkout.",
-                                            details=[f"  {c}" for c in plan_conflicts])
-                    inst = self._installer()
-                    out, ok = [], True
-                    mutated_paths = []
-                    stacks_by_comp = {c2.id: st2 for st2 in self.stacks()
-                                      for c2 in st2.components}
-                    for path, c, selector, resolved in groups:
-                        r = self._adopt_dev_fallback(
-                            inst, stacks_by_comp.get(c.id), c, selector, resolved,
-                            force=True, locked=True)
-                        out.append(f"  [{r.status}] {c.id}: {r.detail}")
-                        if r.status == "failed":
-                            ok = False                    # incl. prior-dirty: NEVER success
-                            if r.detail.startswith("prior-dirty:"):
-                                # the NEW source IS active (record coherent) — its stacks'
-                                # stale candidates must still be retired truthfully
-                                mutated_paths.append(path)
-                        elif r.status == "done":
+            with (self._admission_guard("update", target or ""), self._config_stable(),
+                  self._source_operation_guard(sorted(affected), op="update")):
+                self._op_seam("update-locked")
+                # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
+                # slipped in after the preflight refuses the update with ZERO candidate/
+                # journal/source/registry/marker/config mutation.
+                running = self._running_source_consumers(affected)
+                if running:
+                    owners = sorted({self._owner_stack_id(cid) for cid in running})
+                    return ActionResult(
+                        False, f"Refusing to update '{target or 'all'}': component(s) "
+                        "using the affected source(s) started while the update was "
+                        "acquiring its locks.",
+                        details=[f"  running: {', '.join(running)} — stop them first"],
+                        next_commands=[f"lhpc stack stop {o} --yes" for o in owners])
+                # ONE effective remote per shared checkout + ONE immutable plan — both
+                # built UNDER the configuration-stable and source locks (a concurrent
+                # remote save waits; the plan can never use a stale config snapshot).
+                conflicts = sorted({c for c in (self._shared_remote_conflict(p)
+                                                for p in affected) if c})
+                if conflicts:
+                    return ActionResult(False, f"Refusing to update '{target or 'all'}': "
+                                        "shared-source remote configuration is "
+                                        "inconsistent.",
+                                        details=[f"  {c}" for c in conflicts])
+                groups, plan_conflicts = self._plan_source_groups(items, source)
+                if plan_conflicts:
+                    return ActionResult(False, f"Refusing to update '{target or 'all'}': "
+                                        "incompatible source resolutions for a shared "
+                                        "checkout.",
+                                        details=[f"  {c}" for c in plan_conflicts])
+                inst = self._installer()
+                out, ok = [], True
+                mutated_paths = []
+                stacks_by_comp = {c2.id: st2 for st2 in self.stacks()
+                                  for c2 in st2.components}
+                for path, c, selector, resolved in groups:
+                    r = self._adopt_dev_fallback(
+                        inst, stacks_by_comp.get(c.id), c, selector, resolved,
+                        force=True, locked=True)
+                    out.append(f"  [{r.status}] {c.id}: {r.detail}")
+                    if r.status == "failed":
+                        ok = False                    # incl. prior-dirty: NEVER success
+                        if r.detail.startswith("prior-dirty:"):
+                            # the NEW source IS active (record coherent) — its stacks'
+                            # stale candidates must still be retired truthfully
                             mutated_paths.append(path)
-                        self._op_seam("update-between-groups")
-                    # Candidate retirement BEFORE the source locks release: a new healthy
-                    # Start (which needs these locks) cannot write a fresh marker between
-                    # the source mutation and this retirement — only stale pre-update
-                    # markers are retired. A clear failure is a truthful INCOMPLETE.
-                    ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
+                    elif r.status == "done":
+                        mutated_paths.append(path)
+                    self._op_seam("update-between-groups")
+                # Candidate retirement BEFORE the source locks release: a new healthy
+                # Start (which needs these locks) cannot write a fresh marker between
+                # the source mutation and this retirement — only stale pre-update
+                # markers are retired. A clear failure is a truthful INCOMPLETE.
+                ok = self._retire_candidates_for_paths(mutated_paths, out) and ok
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
@@ -1331,9 +1335,7 @@ class MaintenanceOpsMixin:
             if rec.strategy != "link" and not allow_dirty:
                 dirty = inst.dirty_report(Path(handle.pinned_path()), path)
                 if dirty:
-                    return False, ([f"  [refused] {path}: local changes present — "
-                                    "not removed (use Clean to remove anyway)"]
-                                   + dirty.lines())
+                    return False, ([f"  [refused] {path}: local changes present — " "not removed (use Clean to remove anyway)", *dirty.lines()])
 
                 def final_check(h=handle, p=path):
                     # FINAL dirty recheck immediately before the irreversible detach —
@@ -1369,7 +1371,8 @@ class MaintenanceOpsMixin:
         edges; an ABSENT leaf with a lingering ownership record becomes an ORPHAN-cleanup
         item. The APPLY path calls this again UNDER the operation locks so the destructive
         set is derived from post-lock reality, never a stale preflight."""
-        from . import source_fs as _sfs, source_registry as _sreg
+        from . import source_fs as _sfs
+        from . import source_registry as _sreg
         consumers = self._source_consumers()
         to_remove: dict = {}
         kept: list = []
@@ -1415,7 +1418,7 @@ class MaintenanceOpsMixin:
         is a truthful INCOMPLETE — the retry converges. Returns overall ok."""
         from . import source_registry as _sreg
         ok = True
-        for path, remaining in kept:
+        for path, _remaining in kept:
             state, rec, _why = _sreg.record_state(self._paths, path)
             if state != "valid":
                 continue                          # legacy/unowned: manifest fallback rules
@@ -1441,6 +1444,7 @@ class MaintenanceOpsMixin:
         already wrote the .lhpc-uninstalling guard, so prep does NOT run the strict self-check — it IS
         the uninstall — it inspects the durable job/auto-install/HMAC/snapshot evidence instead.)"""
         import contextlib
+
         from . import reslock
         with contextlib.ExitStack() as adm:
             try:
@@ -1456,7 +1460,7 @@ class MaintenanceOpsMixin:
         # 1) a controller self-update in flight is incompatible with tearing the controller down
         try:
             req = self.classify_request()
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+        except Exception as exc:
             return ActionResult(False, f"Cannot verify self-update state ({exc}) — refusing to prepare "
                                 "uninstall.", data={"prep_blocked": "unverifiable"})
         if req in ("pending", "in_flight", "malformed"):
@@ -1473,7 +1477,7 @@ class MaintenanceOpsMixin:
         # 3) unresolved auto-install / HMAC state
         try:
             ai_block = self._auto_install_gate()
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+        except Exception as exc:
             ai_block = f"unverifiable ({exc})"
         if ai_block:
             return ActionResult(False, f"An auto-install run is unresolved — {ai_block}.",
@@ -1481,7 +1485,7 @@ class MaintenanceOpsMixin:
         try:
             hst = self.hmac_apply_status()
             hmac_bad = bool(hst) and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted"))
-        except Exception:                                 # noqa: BLE001 — cannot prove safe -> refuse
+        except Exception:
             hmac_bad = True
         if hmac_bad:
             return ActionResult(False, "HMAC apply state is running or unresolved/unsafe — resolve it "
@@ -1489,7 +1493,7 @@ class MaintenanceOpsMixin:
         # 4) INITIAL fresh snapshot (an exception is fail-closed); an UNKNOWN component blocks
         try:
             snap = self.build_snapshot(fresh=True)
-        except Exception as exc:                          # noqa: BLE001 — cannot prove state -> refuse
+        except Exception as exc:
             return ActionResult(False, f"Could not assess component runtime state ({exc}) — refusing to "
                                 "uninstall.", data={"prep_blocked": "snapshot"})
         unknown = [f"{ss.stack.id}/{cid}" for ss in snap.stacks
@@ -1522,7 +1526,7 @@ class MaintenanceOpsMixin:
         # 6) FINAL fresh snapshot (an exception is fail-closed); nothing may still be running/degraded/unknown
         try:
             snap2 = self.build_snapshot(fresh=True)
-        except Exception as exc:                          # noqa: BLE001 — cannot prove state -> refuse
+        except Exception as exc:
             return ActionResult(False, f"Could not re-assess component runtime state ({exc}) — refusing "
                                 "to uninstall.", data={"prep_blocked": "snapshot"})
         still = [f"{ss.stack.id}/{cid}={cs.run_state.value}" for ss in snap2.stacks
@@ -1543,6 +1547,7 @@ class MaintenanceOpsMixin:
         already owns it => refused. Records the CALLER's (the shell's) pid + nonce + /proc start time so a
         live owner is distinguishable from PID reuse."""
         import json
+
         from . import reslock, runtime_fs, updater_units
         from .service_base import _guard_owner_ints, _proc_ceased
         guard = self._paths.under(updater_units.UNINSTALL_GUARD)
@@ -1558,7 +1563,7 @@ class MaintenanceOpsMixin:
                     return ActionResult(True, "uninstall guard claimed.", data={"nonce": nonce})
                 except FileExistsError:
                     pass                                  # a guard exists — decide below
-                except Exception as exc:                  # noqa: BLE001 — containment/fs error
+                except Exception as exc:
                     return ActionResult(False, f"Could not claim the uninstall guard: {exc}",
                                         data={"claim_failed": True})
                 # A guard already exists. RECLAIM it ONLY if its recorded owner is PROVEN DEAD (an
@@ -1567,7 +1572,7 @@ class MaintenanceOpsMixin:
                 try:
                     rec = json.loads(runtime_fs.read_text_regular(self._paths, guard, max_bytes=4096))
                     owner_pid, owner_start = _guard_owner_ints(rec)
-                except Exception:                         # noqa: BLE001 — cannot prove -> refuse
+                except Exception:
                     return ActionResult(False, "An uninstall guard already exists and is "
                                         "unreadable/malformed — refusing (verify no uninstall runs, "
                                         "then remove it).", data={"guard_unsafe": True})
@@ -1578,7 +1583,7 @@ class MaintenanceOpsMixin:
                     runtime_fs.unlink(self._paths, guard)     # descriptor-safe, no-follow
                     m = runtime_fs.open_marker_excl(self._paths, guard, payload)
                     m.close()
-                except Exception as exc:                  # noqa: BLE001
+                except Exception as exc:
                     return ActionResult(False, f"could not reclaim the stale uninstall guard: {exc}",
                                         data={"reclaim_failed": True})
                 return ActionResult(True, "reclaimed a STALE uninstall guard (a previous uninstall "
@@ -1592,6 +1597,7 @@ class MaintenanceOpsMixin:
         matches). Strict no-follow, regular-only, bounded read + nonce compare, then a descriptor-safe
         unlink. NEVER removes a pre-existing / foreign / replaced / unreadable guard. Absent = no-op."""
         import json
+
         from . import reslock, runtime_fs, updater_units
         from .paths import PathContainmentError
         path = self._paths.under(updater_units.UNINSTALL_GUARD)
@@ -1681,8 +1687,8 @@ class MaintenanceOpsMixin:
         all_paths = sorted({c.source.path for _, c in items})
         try:
             # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
-            with self._admission_guard("uninstall", target or ""), self._config_stable():
-              with self._source_operation_guard(all_paths, op="uninstall"):
+            with (self._admission_guard("uninstall", target or ""), self._config_stable(),
+                  self._source_operation_guard(all_paths, op="uninstall")):
                 self._op_seam("uninstall-locked")
                 # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
                 # slipped in after the preflight refuses with ZERO mutation (no source,
@@ -1785,7 +1791,8 @@ class MaintenanceOpsMixin:
 
         # Removal set (computed up front so the dry-run names EXACTLY what apply removes).
         consumers = self._source_consumers()
-        from . import source_fs as _sfs, source_registry as _sreg
+        from . import source_fs as _sfs
+        from . import source_registry as _sreg
         src_remove, src_keep = [], []
         orphans: list = []                       # absent leaves with a stale ownership record
         for c in stack.components:
@@ -1851,120 +1858,120 @@ class MaintenanceOpsMixin:
                            | set(orphans)) or [sid]
         try:
             # LOCK ORDER #1: admission OUTSIDE config-stability (inner source guard reuses reentrantly).
-            with self._admission_guard("clean", sid), self._config_stable():
-                with self._source_operation_guard(all_paths, op="clean"):
-                    self._op_seam("clean-locked")
-                    # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
-                    # slipped in after the preflight refuses with ZERO mutation — no
-                    # source, config, log, marker, known-working, or registry cleanup.
-                    snap = self.build_snapshot(fresh=True)   # UNDER locks: never a cached read
-                    running = sorted(cid for ss in snap.stacks
-                                     for cid, st in ss.components.items()
-                                     if cid in comp_ids and st.run_state in up)
-                    if running:
-                        return ActionResult(
-                            False, f"Refusing to clean '{sid}': component(s) started while "
-                            "the clean was acquiring its locks.",
-                            details=[f"  running: {', '.join(running)} — stop them first"],
-                            next_commands=[f"lhpc stack stop {sid} --yes"])
-                    # ONLY NOW, with the stack PROVEN stopped under the locks, retire the
-                    # binary — FORCEFULLY, because "remove every trace" must also survive an
-                    # edited artifact file or an unsafe receipt. Retiring before the recheck
-                    # could delete a running stack's binary and then abort (audit finding).
-                    if self.binary_receipt_state(sid)[0] != "absent":
-                        _br = self.binary_retire(sid, force=True, locked=True)
-                        out.append(f"  [binary] {_br.summary}")
-                        ok = _br.ok and ok
-                    # Recompute the destructive sets from POST-LOCK reality (the dry-run
-                    # preview above may predate the locks).
-                    consumers = self._source_consumers()
-                    src_remove, src_keep = [], []
-                    orphans = []
-                    for c in stack.components:
-                        if c.source is None:
-                            continue
-                        path = c.source.path
-                        if path in {p for p, _ in src_remove} \
-                                or path in {p for p, _ in src_keep} or path in orphans:
-                            continue
-                        try:
-                            kind = source_fs.leaf_kind(self._paths,
-                                                       self._paths.resolve_source(path))
-                        except PathContainmentError:
-                            kind = "special"
-                        if kind == "absent":
-                            if source_registry.read_record(self._paths, path) is not None:
-                                orphans.append(path)
-                            continue
-                        remaining = sorted(self._live_consumers(path, consumers)
-                                           - comp_ids)
-                        (src_keep if remaining else src_remove).append((path, remaining))
-                    # 1) sources — race-safe capture/verify/detach removal under the held
-                    # lock; dirty TRACKED/UNTRACKED changes are allowed (explicit purge), but
-                    # a drifted commit/remote/leaf-type still refuses (not LHPC's anymore).
-                    inst = self._installer()
-                    removed_paths = []
-                    for path, _ in src_remove:
-                        comp = next(c for c in stack.components
-                                    if c.source and c.source.path == path)
-                        removed, lines = self._remove_source_leaf(path, comp, consumers, inst,
-                                                                  allow_dirty=True)
-                        out.extend(lines)
-                        if not removed:
-                            ok = False
-                            continue
-                        removed_paths.append(path)
-                        if not source_registry.remove_record(self._paths, path):
-                            out.append(f"  [fail] {path}: source removed, but the ownership "
-                                       "record could not be dropped — re-run clean to retry")
-                            ok = False
-                    ok = self._retire_candidates_for_paths(removed_paths, out) and ok
-                    ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
-                    for path in orphans:
-                        if source_registry.remove_record(self._paths, path):
-                            out.append(f"  [cleaned] orphaned ownership record for {path}")
-                        else:
-                            out.append(f"  [fail] {path}: orphaned ownership record could "
-                                       "not be removed")
-                            ok = False
-                    # 2) per-stack config files
-                    for name in cfg_files:
-                        try:
-                            runtime_fs.unlink(self._paths, cfg_dir / name)
-                            out.append(f"  [removed] config/stacks/{name}")
-                        except (OSError, PathContainmentError) as exc:
-                            out.append(f"  [fail] config/stacks/{name}: {exc}")
-                            ok = False
-                    # 3) markers + known-working history (no-follow unlink; missing = done)
-                    for m in markers:
-                        try:
-                            runtime_fs.unlink(self._paths, m)
-                        except (OSError, PathContainmentError) as exc:
-                            out.append(f"  [fail] {m.name}: {exc}")
-                            ok = False
-                    out.append("  [removed] state markers + known-working history")
-                    # 4) logs (never an active job's — live evidence is preserved)
-                    protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
-                    protected = {f"{n}.log" for n in protected} | protected
-                    removed_logs = 0
+            with (self._admission_guard("clean", sid), self._config_stable(),
+                  self._source_operation_guard(all_paths, op="clean")):
+                self._op_seam("clean-locked")
+                # AUTHORITATIVE running recheck AFTER all locks are held: a Start that
+                # slipped in after the preflight refuses with ZERO mutation — no
+                # source, config, log, marker, known-working, or registry cleanup.
+                snap = self.build_snapshot(fresh=True)   # UNDER locks: never a cached read
+                running = sorted(cid for ss in snap.stacks
+                                 for cid, st in ss.components.items()
+                                 if cid in comp_ids and st.run_state in up)
+                if running:
+                    return ActionResult(
+                        False, f"Refusing to clean '{sid}': component(s) started while "
+                        "the clean was acquiring its locks.",
+                        details=[f"  running: {', '.join(running)} — stop them first"],
+                        next_commands=[f"lhpc stack stop {sid} --yes"])
+                # ONLY NOW, with the stack PROVEN stopped under the locks, retire the
+                # binary — FORCEFULLY, because "remove every trace" must also survive an
+                # edited artifact file or an unsafe receipt. Retiring before the recheck
+                # could delete a running stack's binary and then abort (audit finding).
+                if self.binary_receipt_state(sid)[0] != "absent":
+                    _br = self.binary_retire(sid, force=True, locked=True)
+                    out.append(f"  [binary] {_br.summary}")
+                    ok = _br.ok and ok
+                # Recompute the destructive sets from POST-LOCK reality (the dry-run
+                # preview above may predate the locks).
+                consumers = self._source_consumers()
+                src_remove, src_keep = [], []
+                orphans = []
+                for c in stack.components:
+                    if c.source is None:
+                        continue
+                    path = c.source.path
+                    if path in {p for p, _ in src_remove} \
+                            or path in {p for p, _ in src_keep} or path in orphans:
+                        continue
                     try:
-                        entries = runtime_fs.scandir_nofollow(self._paths,
-                                                              self._paths.under("logs"))
+                        kind = source_fs.leaf_kind(self._paths,
+                                                   self._paths.resolve_source(path))
                     except PathContainmentError:
-                        entries = []
-                    for name, is_link in entries:
-                        if is_link or name in protected:
-                            continue
-                        stem = name[:-len(".log")] if name.endswith(".log") else name
-                        if any(stem == p or stem.startswith(p + "-") for p in log_prefixes):
-                            try:
-                                runtime_fs.unlink(self._paths,
-                                                  self._paths.under("logs", name))
-                                removed_logs += 1
-                            except (OSError, PathContainmentError):
-                                ok = False
-                                out.append(f"  [fail] logs/{name}")
-                    out.append(f"  [removed] {removed_logs} log file(s)")
+                        kind = "special"
+                    if kind == "absent":
+                        if source_registry.read_record(self._paths, path) is not None:
+                            orphans.append(path)
+                        continue
+                    remaining = sorted(self._live_consumers(path, consumers)
+                                       - comp_ids)
+                    (src_keep if remaining else src_remove).append((path, remaining))
+                # 1) sources — race-safe capture/verify/detach removal under the held
+                # lock; dirty TRACKED/UNTRACKED changes are allowed (explicit purge), but
+                # a drifted commit/remote/leaf-type still refuses (not LHPC's anymore).
+                inst = self._installer()
+                removed_paths = []
+                for path, _ in src_remove:
+                    comp = next(c for c in stack.components
+                                if c.source and c.source.path == path)
+                    removed, lines = self._remove_source_leaf(path, comp, consumers, inst,
+                                                              allow_dirty=True)
+                    out.extend(lines)
+                    if not removed:
+                        ok = False
+                        continue
+                    removed_paths.append(path)
+                    if not source_registry.remove_record(self._paths, path):
+                        out.append(f"  [fail] {path}: source removed, but the ownership "
+                                   "record could not be dropped — re-run clean to retry")
+                        ok = False
+                ok = self._retire_candidates_for_paths(removed_paths, out) and ok
+                ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
+                for path in orphans:
+                    if source_registry.remove_record(self._paths, path):
+                        out.append(f"  [cleaned] orphaned ownership record for {path}")
+                    else:
+                        out.append(f"  [fail] {path}: orphaned ownership record could "
+                                   "not be removed")
+                        ok = False
+                # 2) per-stack config files
+                for name in cfg_files:
+                    try:
+                        runtime_fs.unlink(self._paths, cfg_dir / name)
+                        out.append(f"  [removed] config/stacks/{name}")
+                    except (OSError, PathContainmentError) as exc:
+                        out.append(f"  [fail] config/stacks/{name}: {exc}")
+                        ok = False
+                # 3) markers + known-working history (no-follow unlink; missing = done)
+                for m in markers:
+                    try:
+                        runtime_fs.unlink(self._paths, m)
+                    except (OSError, PathContainmentError) as exc:
+                        out.append(f"  [fail] {m.name}: {exc}")
+                        ok = False
+                out.append("  [removed] state markers + known-working history")
+                # 4) logs (never an active job's — live evidence is preserved)
+                protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
+                protected = {f"{n}.log" for n in protected} | protected
+                removed_logs = 0
+                try:
+                    entries = runtime_fs.scandir_nofollow(self._paths,
+                                                          self._paths.under("logs"))
+                except PathContainmentError:
+                    entries = []
+                for name, is_link in entries:
+                    if is_link or name in protected:
+                        continue
+                    stem = name.removesuffix(".log")
+                    if any(stem == p or stem.startswith(p + "-") for p in log_prefixes):
+                        try:
+                            runtime_fs.unlink(self._paths,
+                                              self._paths.under("logs", name))
+                            removed_logs += 1
+                        except (OSError, PathContainmentError):
+                            ok = False
+                            out.append(f"  [fail] logs/{name}")
+                out.append(f"  [removed] {removed_logs} log file(s)")
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:

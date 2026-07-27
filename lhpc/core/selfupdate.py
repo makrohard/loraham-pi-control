@@ -24,10 +24,10 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import runtime_fs
-from .paths import Paths, PathContainmentError
-from .probes.backends import System
 from ..version import __version__
+from . import runtime_fs
+from .paths import PathContainmentError, Paths
+from .probes.backends import System
 
 _REMOTE = "origin"
 _LOCAL_TIMEOUT = 5.0
@@ -317,8 +317,9 @@ def read_cache(paths: Paths) -> dict:
         must be dicts of bounded primitives — a scalar/list/wrong-shape payload → `{}`.
     Any unsafe / missing / malformed / wrong-shape cache returns `{}` (rendered as GRAY
     "unknown"), never an exception or a block."""
-    from . import runtime_fs as _rfs
     import stat as _stat
+
+    from . import runtime_fs as _rfs
     try:
         # `paths.under()` realpath-checks the leaf and raises PathContainmentError (a
         # ValueError) for an ESCAPING symlink — it MUST be inside the try so that case

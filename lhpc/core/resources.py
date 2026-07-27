@@ -29,9 +29,7 @@ def _conflicting(a: ResourceMode, b: ResourceMode) -> bool:
         return False  # cooperative peers co-exist
     if a is ResourceMode.EXCLUSIVE or b is ResourceMode.EXCLUSIVE:
         return True
-    if a is ResourceMode.PROVIDER and b is ResourceMode.PROVIDER:
-        return True
-    return False
+    return bool(a is ResourceMode.PROVIDER and b is ResourceMode.PROVIDER)
 
 
 def interpret_conflicts(

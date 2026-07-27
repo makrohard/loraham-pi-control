@@ -223,7 +223,7 @@ class EndpointSpec:
     client: bool = False
     scheme: str = ""             # "http"|"kiss"|"tcp"|"serial"… (http renders a link)
     # Managed-Firewall semantics; None on non-firewall-relevant endpoints (unix, external).
-    firewall: "FirewallMeta | None" = None
+    firewall: FirewallMeta | None = None
 
 
 @dataclass(frozen=True)
@@ -258,7 +258,7 @@ class RunParam:
                                  # own titled block (e.g. "Network exposure") in the config panel
 
 
-def emit_param(p: "RunParam", value) -> list[str]:
+def emit_param(p: RunParam, value) -> list[str]:
     """Render a run parameter into ZERO OR MORE argv TOKENS (never a joined string).
 
     flag      -> [flag] when truthy, else []  (the option is its own token).
@@ -442,7 +442,7 @@ class Stack:
     main: str = ""               # id of the primary component (the app itself)
     operator_box: bool = True    # show the shared Operator (callsign) box on the config
                                  # page; false when the stack edits its callsign in its own config
-    binary: "BinarySpec | None" = None   # optional prebuilt-binary channel declaration
+    binary: BinarySpec | None = None   # optional prebuilt-binary channel declaration
 
     def component(self, component_id: str) -> Component | None:
         for c in self.components:

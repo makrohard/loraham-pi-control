@@ -26,48 +26,29 @@ def test_valid_graph_parses():
     assert len(parse_manifest(data)) == 1
 
 
-def test_duplicate_stack_id_rejected():
-    with pytest.raises(ManifestError, match="duplicate stack id"):
-        parse_manifest(_mf(_stack("s", [_comp("a")]), _stack("s", [_comp("b")])))
-
-
-def test_duplicate_component_id_rejected():
-    with pytest.raises(ManifestError, match="duplicate component id"):
-        parse_manifest(_mf(_stack("s1", [_comp("x")]), _stack("s2", [_comp("x")])))
-
-
-def test_main_must_be_in_own_stack():
-    with pytest.raises(ManifestError, match="main"):
-        parse_manifest(_mf(_stack("s", [_comp("a")], main="ghost")))
-
-
-def test_dependency_must_resolve():
-    with pytest.raises(ManifestError, match="unknown component"):
-        parse_manifest(_mf(_stack("s", [_comp("a", depends_on=["ghost"])])))
-
-
-def test_self_dependency_rejected():
-    with pytest.raises(ManifestError, match="depends on itself"):
-        parse_manifest(_mf(_stack("s", [_comp("a", depends_on=["a"])])))
-
-
-def test_cycle_rejected_with_evidence():
-    data = _mf(_stack("s", [_comp("a", depends_on=["b"]), _comp("b", depends_on=["a"])]))
-    with pytest.raises(ManifestError, match="dependency cycle: a -> b -> a"):
+@pytest.mark.parametrize("data,msg", [
+    pytest.param(_mf(_stack("s", [_comp("a")]), _stack("s", [_comp("b")])), "duplicate stack id",
+                 id="test_duplicate_stack_id_rejected"),
+    pytest.param(_mf(_stack("s1", [_comp("x")]), _stack("s2", [_comp("x")])), "duplicate component id",
+                 id="test_duplicate_component_id_rejected"),
+    pytest.param(_mf(_stack("s", [_comp("a")], main="ghost")), "main",
+                 id="test_main_must_be_in_own_stack"),
+    pytest.param(_mf(_stack("s", [_comp("a", depends_on=["ghost"])])), "unknown component",
+                 id="test_dependency_must_resolve"),
+    pytest.param(_mf(_stack("s", [_comp("a", depends_on=["a"])])), "depends on itself",
+                 id="test_self_dependency_rejected"),
+    pytest.param(_mf(_stack("s", [_comp("a", depends_on=["b"]), _comp("b", depends_on=["a"])])),
+                 "dependency cycle: a -> b -> a", id="test_cycle_rejected_with_evidence"),
+    pytest.param(_mf(_stack("s", [_comp("a", depends_on=["b"]),
+                                  _comp("b", depends_on=["c"]),
+                                  _comp("c", depends_on=["a"])])),
+                 "dependency cycle", id="test_longer_cycle_rejected"),
+    pytest.param(_mf(_stack("s", [_comp("a", band="999")])), "unknown band",
+                 id="test_invalid_band_rejected"),
+])
+def test_manifest_graph_rejected(data, msg):
+    with pytest.raises(ManifestError, match=msg):
         parse_manifest(data)
-
-
-def test_longer_cycle_rejected():
-    data = _mf(_stack("s", [_comp("a", depends_on=["b"]),
-                            _comp("b", depends_on=["c"]),
-                            _comp("c", depends_on=["a"])]))
-    with pytest.raises(ManifestError, match="dependency cycle"):
-        parse_manifest(data)
-
-
-def test_invalid_band_rejected():
-    with pytest.raises(ManifestError, match="unknown band"):
-        parse_manifest(_mf(_stack("s", [_comp("a", band="999")])))
 
 
 def test_cross_stack_dependency_resolves():

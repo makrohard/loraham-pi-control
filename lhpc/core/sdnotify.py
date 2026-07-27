@@ -53,7 +53,7 @@ def notify(state: str) -> bool:
             sock.connect(addr)
             sock.sendall(payload.encode("utf-8"))     # EXPLICIT utf-8: the unit has no locale
         return True
-    except Exception:                                 # noqa: BLE001 — never let this reach startup
+    except Exception:
         return False
 
 

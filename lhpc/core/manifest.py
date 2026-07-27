@@ -29,9 +29,9 @@ from .model import (
     ComponentKind,
     ControllerSpec,
     EndpointSpec,
-    FirewallMeta,
     FileConfig,
     FileParam,
+    FirewallMeta,
     ProcessSpec,
     Requirement,
     ResourceClaim,
@@ -81,7 +81,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             if ".." in value.split("/"):
                 raise ManifestError(f"{label} must not traverse, got {value!r}")
             continue
-        if value.startswith("/") or value.startswith("{") or ".." in value.split("/"):
+        if value.startswith(("/", "{")) or ".." in value.split("/"):
             raise ManifestError(
                 f"{label} must be '{{runtime}}/...', '{{asset}}/...' (base only) or a relative "
                 f"source path, got {value!r}")
@@ -178,7 +178,7 @@ def _validate_endpoint(cid: str, e) -> None:
         try:
             host, _port, _fam = parse_endpoint(e.address)
         except ValueError:
-            raise ManifestError(f"{cid}: malformed tcp endpoint address {e.address!r}")
+            raise ManifestError(f"{cid}: malformed tcp endpoint address {e.address!r}") from None
         if e.ready and host not in _LOOPBACK_HOSTS:
             raise ManifestError(f"{cid}: a ready=true tcp endpoint must be loopback "
                                 f"(got {host!r}) — readiness must not probe a remote host")
@@ -228,15 +228,15 @@ def _validate_component(comp) -> None:
         _check_token(cid, tok, names)
     for step in comp.build_steps:
         for tok in step.get("argv", []):
-            tok = str(tok)
-            if tok.startswith("{pkgconfig:") and tok.endswith("}"):
+            tok_str = str(tok)
+            if tok_str.startswith("{pkgconfig:") and tok_str.endswith("}"):
                 continue            # build-only placeholder (resolved via pkg-config)
-            if tok == "{asset}" or tok.startswith("{asset}/"):
+            if tok_str == "{asset}" or tok_str.startswith("{asset}/"):
                 # Build-only placeholder: a helper SHIPPED as lhpc package data, for steps whose
                 # logic cannot live in an upstream checkout. Resolved (and path-validated) by
                 # commands._asset_token; read-only by construction.
                 continue
-            _check_token(cid, tok, names)
+            _check_token(cid, tok_str, names)
         # Optional quiet-step preamble written into the step log at step start: a string with
         # only {runtime}/{source} placeholders. Validated EAGERLY (dry-run substitution) so a
         # typo'd placeholder fails at manifest load, not minutes into a build.
@@ -247,7 +247,7 @@ def _validate_component(comp) -> None:
             try:
                 commands._paths_subst(ann, "r", "s", "")
             except commands.CommandError as exc:
-                raise ManifestError(f"{cid}: build-step announce: {exc}")
+                raise ManifestError(f"{cid}: build-step announce: {exc}") from exc
     for step in comp.pre_steps:
         if step.get("kind") not in _PRE_KINDS:
             raise ManifestError(f"{cid}: invalid pre-step kind {step.get('kind')!r}")
@@ -304,16 +304,16 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
                                     "declares no source checkout")
 
     WHITE, GRAY, BLACK = 0, 1, 2                        # cycle detection with evidence
-    color = {cid: WHITE for cid in comp_of}
+    color = dict.fromkeys(comp_of, WHITE)
 
     def _visit(cid: str, path: list[str]) -> None:
         color[cid] = GRAY
         for dep in comp_of[cid].depends_on:
             if color[dep] == GRAY:                     # dep is on the current stack -> cycle
                 i = path.index(dep)
-                raise ManifestError("dependency cycle: " + " -> ".join(path[i:] + [dep]))
+                raise ManifestError("dependency cycle: " + " -> ".join([*path[i:], dep]))
             if color[dep] == WHITE:
-                _visit(dep, path + [dep])
+                _visit(dep, [*path, dep])
         color[cid] = BLACK
 
     for cid in comp_of:
@@ -352,7 +352,7 @@ _BINARY_KEYS = frozenset({"index_url", "covers", "publish_roots", "proof_paths",
 
 def _rel_path_ok(p: str) -> bool:
     """Runtime-root-relative, normalized, never escaping."""
-    if not isinstance(p, str) or not p or p.startswith("/") or p.startswith("~"):
+    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
         return False
     parts = p.split("/")
     return all(seg not in ("", ".", "..") for seg in parts)

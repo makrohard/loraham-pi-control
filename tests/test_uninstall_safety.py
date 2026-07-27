@@ -5,6 +5,8 @@ of an affected source is running."""
 
 import time
 
+import pytest
+
 from lhpc.core import source_registry
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
@@ -63,6 +65,8 @@ def _own(tmp_path, rel, comps=("x",)):
                                        "", tuple(comps)))
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_uninstall_keeps_source_shared_by_another_stack(tmp_path):
     # chat and iGate share src/LoRaHAM_Daemon. Uninstalling chat must KEEP it.
     _mksrc(tmp_path, "LoRaHAM_Daemon")
@@ -83,6 +87,8 @@ def test_uninstall_keeps_source_shared_within_stack(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_uninstall_refuses_while_running(tmp_path):
     _mksrc(tmp_path, "LoRaHAM_Daemon")
     # a chat process is running
@@ -92,6 +98,8 @@ def test_uninstall_refuses_while_running(tmp_path):
     assert (tmp_path / "src" / "LoRaHAM_Daemon").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_uninstall_removes_unshared_owned_source(tmp_path):
     # Uninstalling the whole kiss stack (both consumers) removes the REGISTERED checkout,
     # and drops its ownership record.
@@ -131,6 +139,8 @@ def test_uninstall_fails_toward_dirty_when_status_unprovable(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_uninstall_refuses_identity_drift(tmp_path):
     # A registered tree whose ORIGIN no longer matches the record/config, or whose HEAD
     # moved to a different commit, is NOT LHPC's anymore: refused, tree unchanged.

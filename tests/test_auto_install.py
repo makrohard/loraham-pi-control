@@ -118,6 +118,8 @@ def test_dry_run_names_scope_and_flags(tmp_path):
     assert any("TX test: off" in d for d in r.details)
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_tx_requires_tests(tmp_path):
     svc = _svc(tmp_path)
     r = svc.auto_install(apply=True, tests=False, tx=True)
@@ -389,6 +391,8 @@ def test_tx_stop_failure_never_claims_stopped(tmp_path, monkeypatch):
     assert "may still be RUNNING" in marker["tx_phase"]["detail"]
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_tx_refused_without_callsign(tmp_path, monkeypatch):
     svc, marker, calls = _tx_env(tmp_path, monkeypatch, callsign="")
     svc._auto_install_tx_phase(marker, None, lambda s: None, lambda: None)
@@ -1080,6 +1084,8 @@ def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
     return svc, lifecycle
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 @pytest.mark.needs_session
 def test_tx_no_callsign_driver_refuses_before_any_mutation(tmp_path):
     svc = _svc(tmp_path)                                          # no callsign configured
@@ -1166,6 +1172,8 @@ def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
     assert not r.ok and "REMAIN installed" in r.summary
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 @pytest.mark.needs_session
 def test_tx_happy_path_still_runs(tmp_path, monkeypatch):
     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)

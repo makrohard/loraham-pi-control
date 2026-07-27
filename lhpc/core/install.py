@@ -25,7 +25,7 @@ from pathlib import Path
 from .assets import asset_text
 from .config import Config
 from .model import Component, Stack
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 from .probes import System
 from .probes.source import probe_source
 
@@ -264,7 +264,7 @@ class Installer:
         return plan
 
     def adopt_source(self, comp: Component, *, force: bool = False,
-                     source: str = "pinned", pinned_expected: tuple = None,
+                     source: str = "pinned", pinned_expected: tuple | None = None,
                      locked: bool = False) -> PlanAction:
         """Install a component's source. `source` selects the version:
           * "dev"    — newest commit on the remote branch (default);
@@ -318,7 +318,7 @@ class Installer:
             return action
 
     def _adopt_locked(self, comp, spec, dest, action, force, source,
-                      pinned_expected: tuple = None):
+                      pinned_expected: tuple | None = None):
         # Index + target source-path locks are held by the caller. Recovery + the global
         # blocking decision already ran under the index lock.
         from . import runtime_fs, source_fs, source_registry
@@ -454,10 +454,10 @@ class Installer:
                     "known working (operator-confirmed composition)")
         return "", "fallback: manifest pin — no known-working record"
 
-    def _stage_and_activate(self, comp: Component, source: str, action: "PlanAction",
-                            dest: Path, spec, local: "Path | None", strategy: str,
+    def _stage_and_activate(self, comp: Component, source: str, action: PlanAction,
+                            dest: Path, spec, local: Path | None, strategy: str,
                             had_prior: bool = False, prior=None,
-                            pinned_expected: tuple = None) -> "PlanAction":
+                            pinned_expected: tuple | None = None) -> PlanAction:
         """Create, verify, and atomically activate a candidate under ONE held source-parent
         FD spanning journal preflight → exclusive candidate creation → staging → candidate
         provenance → activation → active-source provenance → rollback/cleanup. The active
@@ -468,7 +468,8 @@ class Installer:
         an update (roll back to `.prev`) from a fresh install (remove the candidate) when the
         ownership record cannot be persisted."""
         import time as _time
-        from . import source_fs, provenance
+
+        from . import provenance, source_fs
         staging = dest.with_name(f".{dest.name}.candidate-{os.getpid()}-{_time.monotonic_ns()}")
         trusted, signer_diags = provenance.load_trusted_signers(self.config)
         # 'Known working' resolution: a FROZEN per-operation plan value when the caller
@@ -645,7 +646,7 @@ class Installer:
         return "removed"
 
     def _stage_candidate(self, txn, comp, source: str, dest: Path, staging: Path, spec,
-                         local: "Path | None", strategy: str, action,
+                         local: Path | None, strategy: str, action,
                          expected_pin: str = ""):
         """Stage the candidate through the held transaction. Returns `(desc, handle)` — a
         description plus the `CandidateHandle` (a retained FD on the candidate dir; None for
@@ -915,6 +916,7 @@ class Installer:
         RECOVERY when completing an interrupted activation. Returns False on failure —
         the caller must then RETAIN the journal (never report an un-owned activation)."""
         import time as _time
+
         from . import source_registry
         return source_registry.write_record(self.paths, source_registry.RegistryRecord(
             source_rel=self._source_rel(dest), remote=meta["remote"],
@@ -944,8 +946,9 @@ class Installer:
         # SHA-256 digest of `source_rel`). Recovery re-derives this and refuses any journal
         # whose filename does not match its declared source (so a legacy basename-only
         # `app.json` is retained and blocks, never silently migrated).
-        from . import validators
         import hashlib
+
+        from . import validators
         rel = self._source_rel(dest)
         # FULL SHA-256 (domain-separated) of the normalized source_rel — collision-resistant,
         # not a truncated prefix.
@@ -1163,7 +1166,8 @@ class Installer:
         journal replaced after validation but before removal is never removed (the replacement
         is retained). The marker fds always close."""
         import json
-        from . import runtime_fs, reslock
+
+        from . import reslock, runtime_fs
         try:
             marker = runtime_fs.open_existing_marker(self.paths, jf)
         except (OSError, PathContainmentError):
@@ -1798,7 +1802,7 @@ class Installer:
             # hung with its output buffered invisibly until completion. checkout/rev-parse/
             # describe stay on the buffered run() — their stdout is parsed.
             if log_fh is not None and run_streaming is not None:
-                return run_streaming(argv[:2] + ["--progress"] + argv[2:], timeout, log_fh)
+                return run_streaming([*argv[:2], "--progress", *argv[2:]], timeout, log_fh)
             return run(argv, timeout)
 
         remote = remote or spec.remote

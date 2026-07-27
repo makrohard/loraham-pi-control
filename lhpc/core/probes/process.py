@@ -36,7 +36,7 @@ def matches(spec: ProcessSpec, argv: list[str]) -> bool:
     if not argv:
         return False
     exec_basename = posixpath.basename(argv[0])
-    if exec_basename != spec.exec_name:
+    if exec_basename != spec.exec_name:  # noqa: SIM102
         # CONSOLE-SCRIPT form: a pip entry point named `exec_name` executes as
         # "<venv>/bin/pythonX.Y <venv>/bin/<exec_name> …" (the shebang interpreter
         # becomes argv[0]). Accept it only when argv[0] IS a python interpreter and
@@ -47,9 +47,7 @@ def matches(spec: ProcessSpec, argv: list[str]) -> bool:
             return False
     if not all(_token_contains(argv, p) for p in spec.all_args):
         return False
-    if spec.any_args and not any(_token_contains(argv, p) for p in spec.any_args):
-        return False
-    return True
+    return not (spec.any_args and not any(_token_contains(argv, p) for p in spec.any_args))
 
 
 def probe_process(system: System, spec: ProcessSpec) -> ProcessMatch:

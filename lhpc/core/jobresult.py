@@ -112,9 +112,7 @@ def _valid(d, log: str) -> bool:
     if d["state"] in _TERMINAL and not _TS_RE.match(d.get("finished_at", "")):
         return False        # a terminal record MUST carry a valid completion time
     di = d.get("driver_ident")
-    if di is not None and not isinstance(di, dict):
-        return False
-    return True
+    return not (di is not None and not isinstance(di, dict))
 
 
 def _read_raw(paths, log: str) -> dict | None:

@@ -32,7 +32,7 @@ class SessionToken:
                    for v in (self.pid, self.starttime, self.sid, self.pgid))
 
 
-def reconstruct_token(ident) -> "SessionToken | None":
+def reconstruct_token(ident) -> SessionToken | None:
     """Rebuild a SessionToken from a stored sanitized identity `{pid, starttime, sid, pgid}` (the
     inverse of `jobresult._safe_ident`, for recovery/cessation proofs). Returns None when the dict is
     absent/malformed OR any field is non-positive — an `int()` of 0/-1 is NOT a usable token
@@ -96,7 +96,7 @@ def session_member_details(sid: int, exclude_pid: int) -> list[tuple[int, int]]:
     return out
 
 
-def _signal_session_groups(token: "SessionToken", exclude_pid: int, sig: int) -> None:
+def _signal_session_groups(token: SessionToken, exclude_pid: int, sig: int) -> None:
     """Signal EVERY process group that belongs to our private session (`token.sid`), so a
     `setpgrp()` descendant is reached too — but NEVER the controller's own group."""
     try:

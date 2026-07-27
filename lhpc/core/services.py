@@ -10,17 +10,16 @@ web adapter call it, so a page load and a CLI run see the same fresh evidence.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import secrets
 import shlex
 import threading
 import time
-import contextlib
 from contextlib import contextmanager
 from pathlib import Path
+from typing import ClassVar
 
-from .lifecycle import GUI_MISSING_HINT
-from .snapshot_memo import invalidates_snapshot
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import manifest as manifest_mod
@@ -33,16 +32,16 @@ from .config import (
     load_stack_config,
 )
 from .install import Installer, Plan
-from .lifecycle import Lifecycle
+from .lifecycle import GUI_MISSING_HINT, Lifecycle
 from .model import (
     ComponentKind,
     ResourceMode,
     RunState,
     Stack,
 )
-from .paths import Paths, PathContainmentError, resolve_paths
-from .probes import RealSystem, System
-from .probes import hardware
+from .paths import PathContainmentError, Paths, resolve_paths
+from .probes import RealSystem, System, hardware
+from .snapshot_memo import invalidates_snapshot
 from .status import Snapshot, StatusProber, rollup_states, summarize
 
 _SPI_DEV = "/dev/spidev0.0"
@@ -50,14 +49,31 @@ _GPIO_DEV = "/dev/gpiochip0"
 _UNSET = object()                # sentinel: "not yet resolved" (distinct from None)
 
 
-from .service_base import (ActionResult, AdmissionRefused, ConfigWrite, SourceTxnBlocked, _StopRun,
-                           _SwitchReplace, _canon_git_url, _proc_ceased, _proc_start_time)
+from .service_base import (
+    ActionResult,
+    AdmissionRefused,
+    ConfigWrite,
+    SourceTxnBlocked,
+    _canon_git_url,
+    _proc_ceased,
+    _proc_start_time,
+    _StopRun,
+    _SwitchReplace,
+)
 
 # Public import surface (the adapters + tests import these names FROM lhpc.core.services). Listing
 # them in __all__ also marks the re-exports above as intentionally exported, so a name whose only
 # in-module users have moved to a service_* mixin is not reported as an unused import.
-__all__ = ["ControllerService", "ActionResult", "ConfigWrite", "SourceTxnBlocked",
-           "_StopRun", "_canon_git_url", "_proc_start_time", "_proc_ceased"]
+__all__ = [
+    "ActionResult",
+    "ConfigWrite",
+    "ControllerService",
+    "SourceTxnBlocked",
+    "_StopRun",
+    "_canon_git_url",
+    "_proc_ceased",
+    "_proc_start_time",
+]
 
 # A SHARED config-stability acquire (start/restart) waits at most this long before a typed refusal: long
 # enough to sail past an ordinary EXCLUSIVE config SAVE (milliseconds), short enough that it does NOT hang
@@ -65,34 +81,18 @@ __all__ = ["ControllerService", "ActionResult", "ConfigWrite", "SourceTxnBlocked
 _CONFIG_STABLE_SHARED_TIMEOUT_S = 3.0
 
 
-from .service_webserver import WebserverOpsMixin
-
-
-from .service_selfupdate import SelfUpdateOpsMixin
-
-
 from .service_auto_install import AutoInstallOpsMixin
-
-
-from .service_maintenance import MaintenanceOpsMixin
-
-
-from .service_params import ParamsConfigMixin
-
-
-from .service_lifecycle_ops import LifecycleOpsMixin
-
-
-from .service_hmac import HmacOpsMixin
-
-
-from .service_system import SystemStatsMixin
-from .service_firewall import FirewallOpsMixin
-
-
 from .service_binary_channel import BinaryChannelMixin
 from .service_binary_ops import BinaryOpsMixin
 from .service_boot_restore import BootRestoreOpsMixin
+from .service_firewall import FirewallOpsMixin
+from .service_hmac import HmacOpsMixin
+from .service_lifecycle_ops import LifecycleOpsMixin
+from .service_maintenance import MaintenanceOpsMixin
+from .service_params import ParamsConfigMixin
+from .service_selfupdate import SelfUpdateOpsMixin
+from .service_system import SystemStatsMixin
+from .service_webserver import WebserverOpsMixin
 
 
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
@@ -150,6 +150,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         BEFORE any lifecycle/resource lock; a failure raises here so the caller fails typed with no side
         effect. Thread-local mode/fd state is cleared on the outermost exit, including exceptional exits."""
         import fcntl
+
         from . import runtime_fs
         st = self._cfg_stable_state
         depth = getattr(st, "depth", 0)
@@ -161,7 +162,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 # (the auto-install boundary) is REFUSED after a short wait rather than blocking for the
                 # whole run; the EXCLUSIVE acquirer (the boundary) waits the full config timeout for
                 # in-flight SHARED transitions to finish. Uncontended acquisition succeeds immediately.
-                from .config import CONFIG_LOCK_TIMEOUT_S, _CONFIG_LOCK_POLL_S
+                from .config import _CONFIG_LOCK_POLL_S, CONFIG_LOCK_TIMEOUT_S
                 lock_op = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
                 timeout = CONFIG_LOCK_TIMEOUT_S if exclusive else _CONFIG_STABLE_SHARED_TIMEOUT_S
                 deadline = time.monotonic() + timeout
@@ -173,7 +174,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         if time.monotonic() >= deadline:
                             raise SourceTxnBlocked(
                                 "config-stability lock is busy — a long-running config operation "
-                                "holds it; try again shortly")
+                                "holds it; try again shortly") from None
                         time.sleep(_CONFIG_LOCK_POLL_S)
             except BaseException:
                 fh.close()
@@ -363,7 +364,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         return (f"{shlex.quote(str(python_bin))} -m pip install -e "
                 f"{shlex.quote(str(checkout))}")
 
-    def _controller_refusal(self, target) -> "ActionResult | None":
+    def _controller_refusal(self, target) -> ActionResult | None:
         """CENTRAL guard: a generic verb (install/update/uninstall/clean/build/test/
         start/stop) targeting the controller id returns a typed refusal BEFORE any target
         resolution or mutation. The CLI/web adapters only RENDER this — they hold no guard
@@ -536,7 +537,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 continue
             try:
                 skip = set(self.gui_unavailable_components(ss.stack))
-            except Exception:  # noqa: BLE001 — presentation garnish only: if the requirement
+            except Exception:
                 continue      # probe layer is unavailable, show the un-overlaid truth instead
                               # of failing the snapshot (and every caller composing it).
             for c in ss.stack.components:
@@ -885,10 +886,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         undone = self._undo_created_sources(created)
         rb_ok, rb_why = self.binary_recover()
         if not rb_ok:
-            return undone + [f"  INCOMPLETE: the binary install could NOT be restored ({rb_why})"
-                             " — the recovery evidence is kept; resolve state/binary by hand"]
-        return undone + ["  restored the binary install from disk — the source switch changed "
-                         "nothing"]
+            return [*undone, f"  INCOMPLETE: the binary install could NOT be restored ({rb_why})" " — the recovery evidence is kept; resolve state/binary by hand"]
+        return [*undone, "  restored the binary install from disk — the source switch changed " "nothing"]
 
     def _preserve_replaced_source(self, txn: str, rel: str) -> str:
         """Move a to-be-replaced checkout and its ownership record into the switch transaction.
@@ -983,9 +982,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 _d["changes"] = int(_d.get("changes", 0)) + 1
                 return ActionResult(
                     res.ok, res.summary,
-                    details=[f"  [switch] retire the binary install of '{stack_id}' "
-                             "(its files are removed, then the sources are adopted)"]
-                    + list(res.details),
+                    details=[f"  [switch] retire the binary install of '{stack_id}' " "(its files are removed, then the sources are adopted)", *list(res.details)],
                     next_commands=res.next_commands, data=_d)
             return res
         from . import source_fs
@@ -1189,8 +1186,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         False,
                         f"Switch of '{stack_id}' to the {source} source channel FAILED — "
                         f"{_why}.",
-                        details=[f"  {_retire_note}"] + _switch_note + list(res.details)
-                                + extra_out,
+                        details=[f"  {_retire_note}", *_switch_note, *list(res.details), *extra_out],
                         next_commands=[f"lhpc status {stack_id}"], data=res.data)
             if hmac_err:
                 return ActionResult(False, res.summary + " — but the HMAC password could NOT be enabled "
@@ -1204,8 +1200,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if _retire_note:
                 # Say plainly what happened to the binary install, either way.
                 return ActionResult(res.ok, res.summary,
-                                    details=[f"  {_retire_note}"] + _switch_note
-                                            + list(res.details),
+                                    details=[f"  {_retire_note}", *_switch_note, *list(res.details)],
                                     next_commands=(res.next_commands if res.ok else
                                                    [f"lhpc install {stack_id} --source pinned "
                                                     "--yes"]),
@@ -1716,6 +1711,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         an unprovable candidate is kept pending (never raw-value-deleted); a file whose write FAILS
         keeps all its candidates for retry."""
         from collections import defaultdict
+
         from .paths import PathContainmentError
         by_file: dict = defaultdict(dict)                                # (stack, band) -> {key: old_default}
         meta: dict = {}                                                  # (stack, band, key) -> (cand, old_param)
@@ -1788,14 +1784,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # A run/file param whose validator marks it the stack's operator identity: a "callsign"
     # validator => LICENSED (refuse empty / N0CALL); a "node" validator => UNLICENSED (refuse only
     # empty, the default name is accepted).
-    _IDENTITY_ENFORCE = {"callsign": "licensed", "node": "unlicensed"}
+    _IDENTITY_ENFORCE: ClassVar[dict] = {"callsign": "licensed", "node": "unlicensed"}
 
     SOURCE_CHOICES = ("pinned", "dev", "stable")   # pinned = production-safe default
     # The binary CHANNEL is a fourth selector alongside the three SOURCE selectors. It is
     # deliberately NOT in SOURCE_CHOICES: `adopt_source` and the git planners must never see it
     # (a binary install has no ref to resolve — it IS the pinned refs, precompiled).
     BINARY_CHANNEL = "binary"
-    CHANNEL_CHOICES = SOURCE_CHOICES + (BINARY_CHANNEL,)
+    CHANNEL_CHOICES = (*SOURCE_CHOICES, BINARY_CHANNEL)
 
     # ============================================================================================
     # One-click self-update — ESCAPE-PROOF trigger. The running console cannot mutate its own code

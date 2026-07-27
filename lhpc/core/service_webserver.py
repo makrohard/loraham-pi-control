@@ -23,7 +23,7 @@ class WebserverOpsMixin:
     # NEVER routed through the generic stack/component verbs (install/build/test/...): the
     # Webserver "component" is presentation only, so controller isolation is unaffected.
 
-    def webserver_monitor(self, served_via_nginx: bool | None = None) -> "ActionResult":
+    def webserver_monitor(self, served_via_nginx: bool | None = None) -> ActionResult:
         """READ-ONLY status (Monitor/GET): desired config + effective evidence + PKI state + warnings.
         No network/subprocess probe, no mutation — but the console listener SCOPE is read live from
         /proc (as the stack-proxy bypass warnings below already are), so the panel is accurate on load
@@ -55,7 +55,7 @@ class WebserverOpsMixin:
                              "authentication. Firewall it or accept the exposure.")})
         return ActionResult(True, "webserver monitor", data=view)
 
-    def webserver_verify(self) -> "ActionResult":
+    def webserver_verify(self) -> ActionResult:
         """Explicit verification: assemble + persist the effective-evidence checklist.
 
         Validates the SAME config `apply` would promote — stack web-UI proxies included. Verifying a
@@ -72,7 +72,7 @@ class WebserverOpsMixin:
                            "reachable directly, bypassing this proxy's authentication.")
         return ActionResult(ok, summary, details=details, data=ev)
 
-    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> "ActionResult":
+    def webserver_init(self, *, dns_sans=None, ip_sans=None, confirm=False) -> ActionResult:
         """First-time bootstrap (correction #2): create BOTH CAs, the server leaf, and an
         initial (empty) CRL. Remote exposure stays disabled until explicitly enabled + proven.
         RE-initializing when a CA already exists is DESTRUCTIVE (invalidates every issued
@@ -112,7 +112,7 @@ class WebserverOpsMixin:
         return ActionResult(True, "webserver PKI initialized (two CAs + server cert + CRL)",
                             next_commands=["lhpc webserver verify"])
 
-    def webserver_configure(self, **fields) -> "ActionResult":
+    def webserver_configure(self, **fields) -> ActionResult:
         from . import config as _config
         from .validators import ValidationError
         try:
@@ -125,13 +125,14 @@ class WebserverOpsMixin:
 
     def webserver_configure_apply(self, *, bind=None, port=None, scheme=None, access_mode=None,
                                   dns_sans=None, ip_sans=None, allowed_cidrs=None,
-                                  confirm=False, confirm_public=False) -> "ActionResult":
+                                  confirm=False, confirm_public=False) -> ActionResult:
         """Unified controller Settings action (the single 'Apply' button): derive `remote_exposed` from
         `bind`, gate remote exposure with `plan_exposure` (elevated confirm for public/no-auth/http), then
         — only on accept — save ALL fields in ONE write (incl. `remote_exposed` + `allowed_cidrs`), add the
         host IP SAN + reissue the server cert on exposure, and apply (staged validate + reload). On refusal
         it saves nothing and applies nothing. Folds in the former dedicated Remote-exposure form."""
-        from . import config as _config, webserver as _ws
+        from . import config as _config
+        from . import webserver as _ws
         from .config import WebserverConfig
         from .validators import ValidationError
         cur = self.config().webserver
@@ -225,7 +226,12 @@ class WebserverOpsMixin:
         """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is
         evidence from THIS host (/proc/net/tcp), not a hardcoded per-stack fact."""
         from . import webserver as _ws
-        from .config import StackWebConfig, STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
+        from .config import (
+            STACKWEB_MODES,
+            WEBSERVER_ACCESS_MODES,
+            WEBSERVER_SCHEMES,
+            StackWebConfig,
+        )
         up = self.stack_web_upstream(stack_id)
         if up is None:
             return {}
@@ -388,10 +394,11 @@ class WebserverOpsMixin:
 
     def stack_web_configure(self, stack_id: str, *, mode=None, port=None, scheme=None,
                             access_mode=None, cidrs=None, confirm=False,
-                            confirm_public=False) -> "ActionResult":
+                            confirm_public=False) -> ActionResult:
         """Persist ONE stack's web-UI proxy policy. Mirrors `webserver_expose`'s two-level
         confirmation. Writes INTENT only — activation is `lhpc webserver apply`."""
-        from . import config as _config, webserver as _ws
+        from . import config as _config
+        from . import webserver as _ws
         from .config import StackWebConfig
         from .validators import ValidationError
         if self.stack_web_upstream(stack_id) is None:
@@ -432,7 +439,7 @@ class WebserverOpsMixin:
         return ActionResult(True, f"web UI proxy for '{stack_id}' saved (desired; run apply)",
                             details=details, next_commands=["lhpc webserver apply"])
 
-    def stack_web_configure_apply(self, stack_id: str, **kwargs) -> "ActionResult":
+    def stack_web_configure_apply(self, stack_id: str, **kwargs) -> ActionResult:
         """Unified per-stack Settings action (the single 'Apply' button): save this proxy's policy (with
         its two-level typed confirmation) then apply (staged validate + reload). Save-only failures (incl.
         a needed confirmation) short-circuit — nothing is applied."""
@@ -444,11 +451,12 @@ class WebserverOpsMixin:
                             next_commands=ar.next_commands, data=ar.data)
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,
-                         confirm_public=False) -> "ActionResult":
+                         confirm_public=False) -> ActionResult:
         """Enable remote exposure. Requires >=1 CIDR; a public default route (0.0.0.0/0) or
         a no-auth remote mode needs elevated confirmation. Writes desired config only — the
         listener is not proven active until verify/apply."""
-        from . import config as _config, webserver as _ws
+        from . import config as _config
+        from . import webserver as _ws
         from .config import WebserverConfig
         from .validators import ValidationError
         cidrs = list(cidrs or [])
@@ -496,7 +504,9 @@ class WebserverOpsMixin:
         FAIL-SOFT by contract: the exposure config is already written. `issue_server_cert` raises when
         the server CA is not initialized — rolling the exposure back over that would leave the operator
         strictly worse off than a missing SAN, so we keep ok=True and disclose."""
-        from . import config as _config, pki as _pki, webserver as _ws
+        from . import config as _config
+        from . import pki as _pki
+        from . import webserver as _ws
         cfg = self.config().webserver                    # FRESH: post-exposure-write state
         ip = _ws.local_ip()
         if not ip:
@@ -506,7 +516,7 @@ class WebserverOpsMixin:
             return [f"  SAN: {ip} is already an IP SAN — certificate left untouched"]
         try:
             _config.save_webserver_config(self._paths, ip_sans=[*cfg.ip_sans, ip])
-        except Exception as exc:                         # noqa: BLE001 — never fail a done exposure
+        except Exception as exc:
             return [f"  SAN: could not persist {ip} as an IP SAN ({exc}) — add it by hand, then: "
                     "lhpc webserver tls-renew"]
         self._invalidate_config()
@@ -514,12 +524,12 @@ class WebserverOpsMixin:
         try:
             _pki.issue_server_cert(self._paths, dns_sans=list(cfg.dns_sans),
                                    ip_sans=list(cfg.ip_sans), days=cfg.server_cert_days)
-        except Exception as exc:                         # noqa: BLE001 — incl. PKIError (no CA yet)
+        except Exception as exc:
             return [f"  SAN: {ip} added to ip_sans, but the certificate was NOT reissued ({exc})",
                     "       run: lhpc webserver init   # then: lhpc webserver tls-renew"]
         return [f"  SAN: {ip} added to ip_sans and the server certificate was reissued for it"]
 
-    def webserver_disable_remote(self) -> "ActionResult":
+    def webserver_disable_remote(self) -> ActionResult:
         from . import config as _config
         _config.save_webserver_config(self._paths, bind="127.0.0.1", remote_exposed=False)
         self._invalidate_config()
@@ -527,7 +537,7 @@ class WebserverOpsMixin:
                             "verify to prove the remote listener has ceased",
                             next_commands=["lhpc webserver verify"])
 
-    def webserver_reset_defaults(self) -> "ActionResult":
+    def webserver_reset_defaults(self) -> ActionResult:
         """Reset to safe defaults AND prove remote exposure has ceased. Writes DESIRED defaults
         (loopback:8443, local unauthenticated, remote off, CIDRs cleared), stages + VALIDATES a
         loopback-only nginx config, and — if a proven LHPC-owned nginx master exists — reloads
@@ -535,7 +545,8 @@ class WebserverOpsMixin:
         config has no remote listener). Reports success ONLY when cessation is proven; otherwise
         stays truthful ('reset requested; remote cessation unproven'). NEVER deletes CA keys,
         certificates, CRL, revocation history, `.p12` exports, or the session secret."""
-        from . import config as _config, webserver as _ws
+        from . import config as _config
+        from . import webserver as _ws
         # scheme MUST be reset alongside access_mode, in the same save. `save_webserver_config`
         # resolves the patch over the STORED config, so resetting to a cert-based access mode while
         # leaving a stored scheme=http would raise ConfigError (http can't do client-cert auth) —
@@ -603,7 +614,7 @@ class WebserverOpsMixin:
                             "cessation UNPROVEN (start/repair the service to prove it)",
                             details=detail, next_commands=["lhpc webserver verify"], data=ev)
 
-    def webserver_tls_renew(self) -> "ActionResult":
+    def webserver_tls_renew(self) -> ActionResult:
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -614,7 +625,7 @@ class WebserverOpsMixin:
         return ActionResult(True, f"server certificate renewed (serial {summ['serial']})",
                             data=summ)
 
-    def webserver_cert_issue(self, label, passphrase) -> "ActionResult":
+    def webserver_cert_issue(self, label, passphrase) -> ActionResult:
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -627,7 +638,7 @@ class WebserverOpsMixin:
                                      f"sha256: {summ['export_sha256']}",
                                      f"expires: {summ['not_after']}"], data=summ)
 
-    def webserver_cert_reissue(self, label, passphrase) -> "ActionResult":
+    def webserver_cert_reissue(self, label, passphrase) -> ActionResult:
         from . import pki as _pki
         cfg = self.config().webserver
         try:
@@ -637,12 +648,12 @@ class WebserverOpsMixin:
             return ActionResult(False, f"reissue failed: {exc}")
         return ActionResult(True, f"reissued client certificate '{summ['label']}'", data=summ)
 
-    def webserver_cert_list(self) -> "ActionResult":
+    def webserver_cert_list(self) -> ActionResult:
         from . import pki as _pki
         return ActionResult(True, "client certificates",
                             data={"certs": _pki.list_client_certs(self._paths)})
 
-    def webserver_cert_revoke(self, label) -> "ActionResult":
+    def webserver_cert_revoke(self, label) -> ActionResult:
         from . import pki as _pki
         try:
             _pki.revoke_client_cert(self._paths, label)
@@ -652,18 +663,18 @@ class WebserverOpsMixin:
                             "not proven effective until the proxy reloads and rejects it",
                             next_commands=["lhpc webserver verify"])
 
-    def webserver_cert_discard_export(self, label) -> "ActionResult":
+    def webserver_cert_discard_export(self, label) -> ActionResult:
         from . import pki as _pki
         removed = _pki.discard_export(self._paths, label)
         return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
 
-    def webserver_cert_export_bytes(self, label) -> "bytes | None":
+    def webserver_cert_export_bytes(self, label) -> bytes | None:
         """Raw `.p12` bytes for a label (or None). The WEB route must gate this on a
         loopback-origin session; the CLI locates the file directly."""
         from . import pki as _pki
         return _pki.read_export(self._paths, label)
 
-    def webserver_apply(self) -> "ActionResult":
+    def webserver_apply(self) -> ActionResult:
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
         activate an invalid one), then reload an already-running LHPC-owned nginx master, then
         verify + persist evidence. A missing/inactive master returns a typed 'service not active /
@@ -750,7 +761,7 @@ class WebserverOpsMixin:
             next_commands=["systemctl --user restart lhpc-nginx.service",
                            "lhpc webserver logs"], data=ev)
 
-    def _apply_via_restart_watcher(self, cfg, listeners_ok) -> "ActionResult":
+    def _apply_via_restart_watcher(self, cfg, listeners_ok) -> ActionResult:
         """WEB-context completion of a listener BIND change via the nginx-restart escape hatch:
         exclusively create the request marker, then wait (bounded) for the static path unit to claim
         it and for a fresh verify to prove the listeners match. Falls back to the honest typed
@@ -759,6 +770,7 @@ class WebserverOpsMixin:
         WATCHER is dead (integration remedy); a claimed one means the restart RAN but nginx never
         came good (nginx-side remedy). Never reports an unverified bind change."""
         import time as _time
+
         from . import runtime_fs, updater_units
         from . import webserver as _ws
         root = str(self._paths.runtime_root)
@@ -781,7 +793,7 @@ class WebserverOpsMixin:
             m.close()
         except FileExistsError:
             pass                                    # a restart is already queued/in flight — ride it
-        except Exception as exc:                    # noqa: BLE001 — containment / fs error
+        except Exception as exc:
             return ActionResult(False, f"could not queue the front-end restart request: {exc}")
         deadline = _time.monotonic() + _RESTART_WATCH_WAIT_S
         ev = None
@@ -817,7 +829,7 @@ class WebserverOpsMixin:
             "error log (logs/nginx-error.log) / journal.",
             next_commands=["lhpc webserver logs"], data=ev or {})
 
-    def webserver_run_restart_service(self) -> "ActionResult":
+    def webserver_run_restart_service(self) -> ActionResult:
         """`lhpc-nginx-restart.service` ExecStart body: CLAIM the restart request (atomic
         no-overwrite rename request -> inflight; absent request = stray start -> typed no-op) and
         consume it. NO nginx interaction in-process — systemd's declarative unit relationships
@@ -844,7 +856,7 @@ class WebserverOpsMixin:
                 except OSError as exc:
                     return ActionResult(False, f"Could not clear a stale in-flight record: {exc}",
                                         data={"claim_failed": True})
-            except Exception as exc:                           # noqa: BLE001
+            except Exception as exc:
                 return ActionResult(False, f"Could not claim the restart request: {exc}",
                                     data={"claim_failed": True})
         try:
@@ -854,7 +866,7 @@ class WebserverOpsMixin:
         return ActionResult(True, "nginx-restart request consumed — systemd now starts a fresh "
                             "lhpc-nginx (declarative OnSuccess=).", data={"consumed": True})
 
-    def webserver_start_service(self) -> "ActionResult":
+    def webserver_start_service(self) -> ActionResult:
         """OPERATOR-CONTEXT bootstrap (correction 1): generate + validate + promote the nginx
         config, then ENABLE + START the rootless nginx user unit via `systemctl --user`. This is
         the only path that STARTS nginx — it REFUSES to run from a managed unit (the web process
@@ -862,7 +874,9 @@ class WebserverOpsMixin:
         console up. Prerequisites (nginx installed, server cert present, config valid) are
         checked and reported truthfully."""
         import os as _os
-        from . import pki as _pki, webserver as _ws
+
+        from . import pki as _pki
+        from . import webserver as _ws
         if _os.environ.get("INVOCATION_ID"):
             return ActionResult(False, "refusing to start nginx from a managed unit — run "
                                 "`lhpc webserver start-service` from an interactive operator shell")
@@ -906,7 +920,8 @@ class WebserverOpsMixin:
         selects the access or (default) error log — an unknown selector degrades to the error
         log so it can never name an arbitrary path. Read-only: a bounded, O_NOFOLLOW disk tail
         (same guard as `log_tail`), no systemctl/network probe."""
-        from . import runtime_fs, webserver as _ws
+        from . import runtime_fs
+        from . import webserver as _ws
         const = _ws._ACC_LOG if source == "access" else _ws._ERR_LOG
         try:
             n = max(1, min(int(lines), 5000))             # clamp to a sane bounded range

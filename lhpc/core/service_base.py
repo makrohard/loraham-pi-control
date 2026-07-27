@@ -61,7 +61,7 @@ def _guard_owner_ints(rec: dict) -> tuple[int, int]:
     safe evidence). Raises ValueError on anything rejected — callers keep the guard."""
     def _strict(v) -> int:
         if isinstance(v, bool):
-            raise ValueError("boolean is not an identity value")
+            raise ValueError("boolean is not an identity value")  # noqa: TRY004
         if isinstance(v, int):
             i = v
         elif isinstance(v, str) and v.strip().isdigit():

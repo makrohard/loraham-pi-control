@@ -2,22 +2,24 @@
 
 The channel is a fourth selector, never a persisted preference: declaration + platform decide
 availability, a valid receipt decides "is it on binary now", and SOURCE_CHOICES stays 3-valued
-so the git planners can never see "binary".
-"""
+so the git planners can never see "binary"."""
+
 
 import pytest
-
-from lhpc.core import binary_receipt as brx
+import json
+from lhpc.core import binary_receipt as brx, runtime_fs, source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
+from lhpc.core.model import SourceState
 
 
-
+# ===== merged from test_binary_channel.py =====
 def _h(root, rel):
     """sha256 of an installed test file — the receipt validator requires one hash per file."""
     import hashlib
     return hashlib.sha256((root / rel).read_bytes()).hexdigest()
+
 
 def _svc(tmp_path, target="aarch64-trixie", monkeypatch=None):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
@@ -44,8 +46,6 @@ def _receipt_for(svc, tmp_path, stack_id="daemon"):
         proof_paths=tuple(files),
         registry_baseline={}, probe="ok")
 
-
-# --- capability ---------------------------------------------------------------------------------
 
 def test_declared_stacks_offer_binary(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
@@ -95,8 +95,6 @@ def test_channel_error(tmp_path, monkeypatch, channel, stack, ok):
     assert (err == "") is ok
 
 
-# --- current state ------------------------------------------------------------------------------
-
 def test_receipt_drives_on_binary_channel(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch=monkeypatch)
     assert svc.on_binary_channel("daemon") is False
@@ -142,8 +140,6 @@ def test_block_reason_only_while_on_binary(tmp_path, monkeypatch):
     msg = svc.binary_block_reason("daemon", "build")
     assert "prebuilt binary" in msg and "build" in msg
 
-
-# --- an OPEN transaction makes the receipt non-authoritative ------------------------------------
 
 def test_open_journal_makes_the_receipt_unsafe(tmp_path, monkeypatch):
     """A receipt written INSIDE an unfinished transaction is not the truth yet: recovery may
@@ -396,3 +392,640 @@ def test_recovery_fails_loudly_when_the_receipt_cannot_be_removed(tmp_path, monk
     monkeypatch.undo()
     assert svc.binary_recover()[0] is True                          # …and it converges later
     assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+# ===== merged from test_binary_receipt.py =====
+def _paths(tmp_path):
+    return Paths(runtime_root=tmp_path)
+
+
+def _install_file(tmp_path, rel, data=b"artifact"):
+    p = tmp_path
+    for seg in rel.split("/")[:-1]:
+        p = p / seg
+    p.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_bytes(data)
+    return tmp_path / rel
+
+
+def _receipt(tmp_path, **over):
+    rel = "src/demo/bin/demo"
+    _install_file(tmp_path, rel)
+    import hashlib
+    base = dict(
+        stack="demo", artifact_sha256="a" * 64, artifact_size=123,
+        filename="demo-" + "a" * 64 + ".tar.zst", url="https://example.invalid/x.tar.zst",
+        components={"demo-main": "b" * 40}, provenance={"lhpc_commit": "c" * 40},
+        files=(rel,), file_hashes={rel: hashlib.sha256(b"artifact").hexdigest()},
+        proof_paths=(rel,), registry_baseline={"src/demo": ""}, probe="demo 1.0",
+    )
+    base.update(over)
+    return brx.BinaryReceipt(**base)
+
+
+def _write_registry(tmp_path, source_rel, txn_id):
+    rec = source_registry.RegistryRecord(
+        source_rel=source_rel, remote="https://example.invalid/demo.git", selector="pinned",
+        resolved_commit="d" * 40, adopted_at=1000.0, txn_id=txn_id, strategy="adopt",
+        components=("demo-main",))
+    assert source_registry.write_record(_paths(tmp_path), rec)
+
+
+def test_absent_when_no_receipt(tmp_path):
+    assert brx.receipt_state(_paths(tmp_path), "demo") == ("absent", None, "")
+
+
+def test_valid_round_trip(tmp_path):
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    state, got, reason = brx.receipt_state(paths, "demo")
+    assert state == "valid" and reason == ""
+    assert got.components == rec.components and got.files == rec.files
+    assert got.artifact_sha256 == rec.artifact_sha256
+
+
+def test_valid_with_matching_registry_baseline(tmp_path):
+    # A source record that ALREADY existed at install time is recorded as the baseline and
+    # must keep reading valid while it is unchanged.
+    paths = _paths(tmp_path)
+    _write_registry(tmp_path, "src/demo", "txn-1")
+    assert brx.write_receipt(paths, _receipt(tmp_path, registry_baseline={"src/demo": "txn-1"}))
+    assert brx.receipt_state(paths, "demo")[0] == "valid"
+
+
+def test_superseded_when_registry_record_appears(tmp_path):
+    # baseline "" (no record at install) -> a source adoption wrote one: superseded.
+    paths = _paths(tmp_path)
+    assert brx.write_receipt(paths, _receipt(tmp_path))
+    _write_registry(tmp_path, "src/demo", "txn-new")
+    state, _rec, reason = brx.receipt_state(paths, "demo")
+    assert state == "superseded" and "source channel now owns" in reason
+
+
+def test_superseded_when_txn_id_differs(tmp_path):
+    paths = _paths(tmp_path)
+    _write_registry(tmp_path, "src/demo", "txn-1")
+    assert brx.write_receipt(paths, _receipt(tmp_path, registry_baseline={"src/demo": "txn-1"}))
+    _write_registry(tmp_path, "src/demo", "txn-2")          # re-adopted
+    assert brx.receipt_state(paths, "demo")[0] == "superseded"
+
+
+def test_supersession_is_difference_not_ordering(tmp_path):
+    # Txn ids are OPAQUE: a lexically SMALLER id is still a different adoption.
+    paths = _paths(tmp_path)
+    _write_registry(tmp_path, "src/demo", "zzz")
+    assert brx.write_receipt(paths, _receipt(tmp_path, registry_baseline={"src/demo": "zzz"}))
+    _write_registry(tmp_path, "src/demo", "aaa")
+    assert brx.receipt_state(paths, "demo")[0] == "superseded"
+
+
+def test_missing_proof_path_is_unsafe_not_superseded(tmp_path):
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    (tmp_path / rec.proof_paths[0]).unlink()
+    state, _r, reason = brx.receipt_state(paths, "demo")
+    # a missing artifact file is DRIFT, not source supersession (audit correction)
+    assert state == "unsafe" and "is gone" in reason
+
+
+def test_malformed_receipt_is_unsafe_never_absent(tmp_path):
+    paths = _paths(tmp_path)
+    runtime_fs.mkdir(paths, "state", "binary")
+    brx.receipt_path(paths, "demo").write_text("{not json")
+    state, rec, reason = brx.receipt_state(paths, "demo")
+    assert state == "unsafe" and rec is None and "malformed" in reason
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(version=99),
+    lambda d: d.update(stack="other"),
+    lambda d: d.update(artifact_sha256="short"),
+    lambda d: d.update(artifact_size=0),
+    lambda d: d.update(files=[]),
+    lambda d: d.update(proof_paths=["not/in/files"]),
+    lambda d: d.update(components={"x": 7}),
+    lambda d: d.update(registry_baseline={"src/demo": 5}),
+    lambda d: d.pop("installed_at"),
+])
+def test_structurally_invalid_receipt_is_unsafe(tmp_path, mutate):
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    d = json.loads(brx.receipt_path(paths, "demo").read_text())
+    mutate(d)
+    brx.receipt_path(paths, "demo").write_text(json.dumps(d))
+    assert brx.receipt_state(paths, "demo")[0] == "unsafe"
+
+
+def test_unsafe_registry_record_blocks_judgement(tmp_path):
+    paths = _paths(tmp_path)
+    _write_registry(tmp_path, "src/demo", "txn-1")
+    assert brx.write_receipt(paths, _receipt(tmp_path, registry_baseline={"src/demo": "txn-1"}))
+    # corrupt the ownership record: we can no longer judge the binary install either way
+    source_registry.record_path(paths, "src/demo").write_text("{broken")
+    state, _r, reason = brx.receipt_state(paths, "demo")
+    assert state == "unsafe" and "cannot judge" in reason
+
+
+def test_disappeared_registry_record_is_conservative(tmp_path):
+    # Recorded baseline txn -> record REMOVED: not proof of adoption, not proof of anything.
+    paths = _paths(tmp_path)
+    _write_registry(tmp_path, "src/demo", "txn-1")
+    assert brx.write_receipt(paths, _receipt(tmp_path, registry_baseline={"src/demo": "txn-1"}))
+    source_registry.record_path(paths, "src/demo").unlink()
+    state, _r, reason = brx.receipt_state(paths, "demo")
+    assert state == "unsafe" and "disappeared" in reason
+
+
+def test_verify_files_detects_modification(tmp_path):
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    ok, bad = brx.verify_files(paths, rec)
+    assert ok and bad == []
+    (tmp_path / rec.files[0]).write_bytes(b"tampered")
+    ok, bad = brx.verify_files(paths, rec)
+    assert not ok and bad[0]["path"] == rec.files[0]
+
+
+def test_verify_files_missing_file_is_mismatch(tmp_path):
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    (tmp_path / rec.files[0]).unlink()
+    ok, bad = brx.verify_files(paths, rec)
+    assert not ok and bad[0]["actual"] == ""
+
+
+def test_status_read_does_not_hash(tmp_path, monkeypatch):
+    # The cheap read must never hash owned files (a QEMU tree on every dashboard render).
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    monkeypatch.setattr(brx, "sha256_file",
+                        lambda *a, **k: pytest.fail("receipt_state must not hash files"))
+    assert brx.receipt_state(paths, "demo")[0] == "valid"
+
+
+def test_remove_receipt_is_idempotent(tmp_path):
+    paths = _paths(tmp_path)
+    assert brx.write_receipt(paths, _receipt(tmp_path))
+    assert brx.remove_receipt(paths, "demo") is True
+    assert brx.receipt_state(paths, "demo")[0] == "absent"
+    assert brx.remove_receipt(paths, "demo") is True        # already gone
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../../etc/passwd", "a/../../b", "~/x"])
+def test_receipt_with_escaping_paths_is_unsafe(tmp_path, bad):
+    # Every listed path is DELETED at retirement — a hand-edited receipt must read UNSAFE,
+    # never reach the filesystem (audit finding).
+    paths = _paths(tmp_path)
+    rec = _receipt(tmp_path)
+    assert brx.write_receipt(paths, rec)
+    d = json.loads(brx.receipt_path(paths, "demo").read_text())
+    d["files"] = [bad]
+    d["proof_paths"] = [bad]
+    brx.receipt_path(paths, "demo").write_text(json.dumps(d))
+    assert brx.receipt_state(paths, "demo")[0] == "unsafe"
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["file_hashes"].pop(d["files"][0]),          # a file with no hash
+    lambda d: d["file_hashes"].update({"src/demo/extra": "a" * 64}),   # hash without a file
+    lambda d: d["file_hashes"].update({d["files"][0]: "NOTHEX" + "a" * 58}),
+    lambda d: d["files"].extend(d["files"]),                 # duplicate entry
+])
+def test_receipt_hash_set_must_match_file_set(tmp_path, mutate):
+    """Retirement deletes every `files` entry while verify_files only checks hashed ones — an
+    unhashed file could authorize an unverified deletion (audit finding)."""
+    paths = _paths(tmp_path)
+    assert brx.write_receipt(paths, _receipt(tmp_path))
+    d = json.loads(brx.receipt_path(paths, "demo").read_text())
+    mutate(d)
+    brx.receipt_path(paths, "demo").write_text(json.dumps(d))
+    assert brx.receipt_state(paths, "demo")[0] == "unsafe"
+
+
+# ===== merged from test_binary_status.py =====
+def _svc_binary_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def _install_binary(svc, tmp_path, stack="daemon", sha="ab" * 32, commits=None):
+    spec = svc.binary_spec(stack)
+    for rel in spec.proof_paths:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(b"ELF")
+    comps = commits or {c: "cd" * 20 for c in spec.covers}
+    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
+        stack=stack, artifact_sha256=sha, artifact_size=9,
+        filename=f"{stack}-{sha}.tar.zst", url="https://example.invalid/a.tar.zst",
+        components=comps, provenance={"lhpc_commit": "ee" * 20},
+        files=tuple(spec.proof_paths),
+        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
+        proof_paths=tuple(spec.proof_paths), registry_baseline={}, probe="ok"))
+    svc._snapshot_state.cache = None
+
+
+def _cs(svc, stack, cid):
+    return svc.build_snapshot().stack(stack).components[cid]
+
+
+def test_without_receipt_source_reads_missing(tmp_path, monkeypatch):
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    st = _cs(svc, "daemon", "loraham-daemon")
+    assert st.source_state is SourceState.MISSING
+    assert st.run_state.value == "not-installed"
+
+
+def test_binary_receipt_gives_binary_state_and_provenance(tmp_path, monkeypatch):
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    st = _cs(svc, "daemon", "loraham-daemon")
+    assert st.source_state is SourceState.BINARY
+    assert st.source_version == "binary@" + ("ab" * 32)[:9]
+    assert st.source_head == "cd" * 20                      # the artifact's component commit
+    assert st.run_state.value != "not-installed"            # THE bug this branch prevents
+
+
+def test_every_covered_component_reports_binary(tmp_path, monkeypatch):
+    # RadioLib has no clone at all in binary mode; it must not read "missing".
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    assert _cs(svc, "daemon", "radiolib").source_state is SourceState.BINARY
+
+
+def test_uncovered_stacks_are_untouched(tmp_path, monkeypatch):
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    assert _cs(svc, "kiss", "loraham-kiss-tnc").source_state is SourceState.MISSING
+
+
+def test_superseded_receipt_falls_back_to_git_probe(tmp_path, monkeypatch):
+    from lhpc.core import source_registry
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    spec = svc.binary_spec("daemon")
+    for rel in spec.proof_paths:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(b"ELF")
+    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
+        stack="daemon", artifact_sha256="ab" * 32, artifact_size=9,
+        filename="daemon-x.tar.zst", url="https://example.invalid/a", components={},
+        provenance={}, files=tuple(spec.proof_paths),
+        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
+        proof_paths=tuple(spec.proof_paths),
+        registry_baseline={"src/loraham-daemon": ""}, probe="ok"))
+    svc._snapshot_state.cache = None
+    assert _cs(svc, "daemon", "loraham-daemon").source_state is SourceState.BINARY
+    source_registry.write_record(svc._paths, source_registry.RegistryRecord(
+        source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
+        selector="pinned", resolved_commit="c" * 40, adopted_at=1.0, txn_id="txn-1",
+        strategy="adopt", components=("loraham-daemon",)))
+    svc._snapshot_state.cache = None
+    # receipt superseded -> the ordinary git probe answers again
+    assert _cs(svc, "daemon", "loraham-daemon").source_state is not SourceState.BINARY
+
+
+def test_status_versions_shows_artifact_provenance(tmp_path, monkeypatch):
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    res = svc.status_versions()
+    line = next(d for d in res.details if "loraham-daemon" in d)
+    assert "binary" in line and "binary@" in line and "built_from=" in line
+
+
+def test_status_versions_unchanged_for_source_stacks(tmp_path, monkeypatch):
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    line = next(d for d in svc.status_versions().details if "loraham-kiss-tnc" in d)
+    assert "pin=" in line and "tag=" in line and "binary@" not in line
+
+
+def test_web_pill_renders_provenance(tmp_path, monkeypatch):
+    from lhpc.adapters.web.app import create_app
+    svc = _svc_binary_status(tmp_path, monkeypatch)
+    _install_binary(svc, tmp_path)
+    client = create_app(service_factory=lambda: svc).test_client()
+    # the source pill lives in the stack SUMMARY row on the overview page
+    body = client.get("/stacks").get_data(as_text=True)
+    assert "src: binary" in body and "binary@" + ("ab" * 32)[:9] in body
+
+
+# ===== merged from test_binary_predicates.py =====
+def _svc_binary_predicates(tmp_path, monkeypatch):
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def _install_daemon_binary(svc, tmp_path):
+    """Lay down exactly what the artifact lays down (daemon binary only — NO clone, no
+    RadioLib) plus the receipt."""
+    spec = svc.binary_spec("daemon")
+    for rel in spec.proof_paths:
+        p = tmp_path
+        for seg in rel.split("/")[:-1]:
+            p = p / seg
+        p.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(b"ELF")
+    rec = brx.BinaryReceipt(
+        stack="daemon", artifact_sha256="a" * 64, artifact_size=10,
+        filename=f"daemon-{'a' * 64}.tar.zst", url="https://example.invalid/d.tar.zst",
+        components={c: "b" * 40 for c in spec.covers}, provenance={},
+        files=tuple(spec.proof_paths),
+        file_hashes={r: _h(tmp_path, r) for r in spec.proof_paths},
+        proof_paths=tuple(spec.proof_paths),
+        registry_baseline={}, probe="loraham_daemon 1.0")
+    assert brx.write_receipt(svc._paths, rec)
+
+
+def _comp(svc, cid):
+    for st in svc.stacks():
+        for c in st.components:
+            if c.id == cid:
+                return c
+    raise AssertionError(cid)
+
+
+def test_is_built_is_unchanged_for_binary_artifacts(tmp_path, monkeypatch):
+    # The artifact lands exactly at the manifest `bin` path, so the PHYSICAL probe answers
+    # "built" with no receipt involvement at all.
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    assert svc.is_built(_comp(svc, "loraham-daemon")) is True
+
+
+def test_install_blocker_accepts_covered_component_without_clone(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    daemon = _comp(svc, "loraham-daemon")
+    assert "not installed" in svc.install_blocker(daemon)     # nothing there yet
+    _install_daemon_binary(svc, tmp_path)
+    assert svc.install_blocker(daemon) == ""                  # binary-covered: no clone needed
+
+
+def test_install_blocker_unchanged_for_uncovered_component(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    kiss = _comp(svc, "loraham-kiss-tnc")
+    assert "not installed" in svc.install_blocker(kiss)       # different stack, still source
+
+
+def test_auto_install_installed_predicate_ignores_covered_clones(tmp_path, monkeypatch):
+    # RadioLib has NO clone in binary mode; the stack must still read "installed".
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    st = svc.stack("daemon")
+    assert svc._auto_install_stack_installed(st) is False
+    _install_daemon_binary(svc, tmp_path)
+    assert svc._auto_install_stack_installed(st) is True
+
+
+def test_predicates_revert_when_receipt_retired(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    assert svc._auto_install_stack_installed(svc.stack("daemon")) is True
+    assert brx.remove_receipt(svc._paths, "daemon")
+    # without the receipt the source-dir requirement is back (RadioLib is missing)
+    assert svc._auto_install_stack_installed(svc.stack("daemon")) is False
+
+
+def test_build_refused_on_binary_stack(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    res = svc.build("daemon", apply=True)
+    assert not res.ok and "prebuilt binary" in res.summary
+    assert res.data.get("binary_channel") is True
+    assert any("--source pinned" in c for c in res.next_commands)
+
+
+def test_host_test_refused_on_binary_stack(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    res = svc.test("daemon", apply=True)
+    assert not res.ok and "host tests" in res.summary
+    assert res.data.get("skipped") == "binary-install"
+
+
+def test_build_and_test_allowed_without_receipt(tmp_path, monkeypatch):
+    # No receipt -> the historical behaviour must be byte-identical (these fail for the
+    # ordinary "not installed" reasons, never the binary refusal).
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    for res in (svc.build("daemon", apply=False), svc.test("daemon", apply=False)):
+        assert "prebuilt binary" not in res.summary
+
+
+def test_web_job_refuses_build_on_binary_stack(tmp_path, monkeypatch):
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _install_daemon_binary(svc, tmp_path)
+    _job, state, reason = svc.spawn_web_job("build", "daemon")
+    assert state == "blocked" and "prebuilt binary" in reason
+
+
+def test_web_job_accepts_binary_channel_for_install(tmp_path, monkeypatch):
+    # The web install path must accept the new channel (and still reject nonsense).
+    svc = _svc_binary_predicates(tmp_path, monkeypatch)
+    _job, state, reason = svc.spawn_web_job("install", "kiss", source="binary")
+    assert state == "blocked" and "binary channel unavailable" in reason
+    _job2, state2, reason2 = svc.spawn_web_job("install", "daemon", source="bogus")
+    assert state2 == "blocked" and "invalid source" in reason2
+
+
+# ===== merged from test_binary_hmac_firewall.py =====
+def _svc_binary_hmac_firewall(tmp_path, monkeypatch):
+    monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def _lay_down(svc, tmp_path, stack="meshcom"):
+    import hashlib
+    spec = svc.binary_spec(stack)
+    files, hashes = [], {}
+    for rel in spec.proof_paths:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_bytes(b"ELF")
+        files.append(rel)
+        hashes[rel] = hashlib.sha256(b"ELF").hexdigest()
+    assert brx.write_receipt(svc._paths, brx.BinaryReceipt(
+        stack=stack, artifact_sha256="ab" * 32, artifact_size=9,
+        filename=f"{stack}-{'ab' * 32}.tar.zst", url="https://example.invalid/a.tar.zst",
+        components=dict(svc._binary_pins(stack)), provenance={}, files=tuple(files),
+        file_hashes=hashes, proof_paths=tuple(spec.proof_paths), registry_baseline={},
+        probe="qemu 9.0"))
+    svc.invalidate_snapshot()
+
+
+def test_hmac_applies_stays_true_but_blocks_with_reason(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    # NOT flipped to "does not apply" — the UI must show the reason
+    assert svc.hmac_applies("meshcom") is True
+    reason = svc.hmac_binary_block("meshcom")
+    assert "NO mesh password" in reason and "open auth" in reason
+
+
+def test_hmac_apply_start_refused(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    res = svc.hmac_apply_start("meshcom", "enable")
+    assert not res.ok and res.data.get("binary_channel") is True
+    assert any("--source pinned" in c for c in res.next_commands)
+
+
+def test_hmac_cli_refused(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    lines = []
+    assert svc.hmac_apply_cli("meshcom", "enable", lines.append) == 1
+    assert any("NO mesh password" in ln for ln in lines)
+
+
+def test_hmac_driver_refused_authoritatively(tmp_path, monkeypatch):
+    # The shared step runner gates too — a CLI/web-only check could be bypassed.
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    lines = []
+    assert svc._hmac_run_steps("meshcom", "enable", "f" * 32, lines.append) == 1
+    assert any("refused" in ln and "NO mesh password" in ln for ln in lines)
+
+
+def test_hmac_set_secret_enable_refused_disable_allowed(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    assert svc.hmac_set_secret("meshcom", "enable").ok is False
+    # `disable` is what the binary install itself performs — it must stay available
+    assert "NO mesh password" not in svc.hmac_set_secret("meshcom", "disable").summary
+
+
+def test_hmac_unblocked_without_receipt(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    assert svc.hmac_binary_block("meshcom") == ""
+
+
+def test_hmac_page_shows_reason(tmp_path, monkeypatch):
+    from lhpc.adapters.web.app import create_app
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    client = create_app(service_factory=lambda: svc).test_client()
+    body = client.get("/stacks/meshcom/hmac/enable").get_data(as_text=True)
+    assert "not available" in body and "NO mesh password" in body
+    assert "--source pinned" in body
+
+
+def _bridge_scope(svc):
+    """Resolve the meshcom bridge listener's firewall scope directly — a loopback-bound
+    listener is not offered as a selectable candidate row, but its AUTH classification is what
+    the exposure model reasons with."""
+    st = svc.stack("meshcom")
+    for comp in st.components:
+        for ep in comp.endpoints:
+            if ep.kind == "tcp" and ep.role == "listener" and ep.firewall:
+                return svc._fw_resolve_scope(st, comp, ep)
+    return None
+
+
+def test_bridge_listener_is_password_auth_on_source(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    ep = _bridge_scope(svc)
+    assert ep is not None and ep["auth"] == "password"
+
+
+def test_bridge_listener_is_open_auth_on_binary(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    ep = _bridge_scope(svc)
+    assert ep is not None and ep["auth"] == "none"
+
+
+def test_clean_force_retires_binary(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path)
+    proof = tmp_path / svc.binary_spec("meshcom").proof_paths[0]
+    assert proof.exists()
+    svc.clean("meshcom", apply=True, purge=True)
+    assert not proof.exists()
+    assert brx.receipt_state(svc._paths, "meshcom")[0] == "absent"
+
+
+def test_uninstall_retires_binary(tmp_path, monkeypatch):
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path, stack="daemon")
+    proof = tmp_path / svc.binary_spec("daemon").proof_paths[0]
+    assert proof.exists()
+    res = svc.uninstall("daemon", apply=True)
+    assert not proof.exists()
+    assert brx.receipt_state(svc._paths, "daemon")[0] == "absent"
+    assert any("binary" in d for d in res.details)
+
+
+def test_clean_keeps_the_binary_when_a_component_started_mid_flight(tmp_path, monkeypatch):
+    """`clean` retires the artifact FORCEFULLY, so it must happen only after the authoritative
+    post-lock running recheck — otherwise a start that slipped in loses its binary and the
+    clean then aborts with nothing else done (audit finding)."""
+    from lhpc.core.model import RunState
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    _lay_down(svc, tmp_path, stack="daemon")
+    proof = tmp_path / svc.binary_spec("daemon").proof_paths[0]
+    real = svc.build_snapshot
+
+    def _started(fresh=False):
+        snap = real(fresh=fresh)
+        if fresh:                                  # the UNDER-LOCK read sees it running
+            for ss in snap.stacks:
+                for cid, cs in ss.components.items():
+                    if cid == "loraham-daemon":
+                        cs.run_state = RunState.RUNNING
+        return snap
+    monkeypatch.setattr(svc, "build_snapshot", _started)
+    res = svc.clean("daemon", apply=True, purge=True)
+    assert not res.ok and "started while" in res.summary
+    assert proof.exists()                          # ZERO mutation
+    assert brx.receipt_state(svc._paths, "daemon")[0] == "valid"
+
+
+def test_interrupted_install_restores_the_mesh_password(tmp_path, monkeypatch):
+    """The install switches meshcom to open auth BEFORE downloading. The journal is opened
+    first and carries the previous value, so an interrupted run puts password auth back —
+    the crash used to leave the bridge open with nothing to recover from (audit finding)."""
+    from lhpc.core import binary_install as bi
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    r = svc.hmac_set_secret("meshcom", "enable")
+    assert r.ok, r.summary
+    before = svc._resolved_param_value("meshcom", "run",
+                                       svc._hmac_component("meshcom").id, "password_file")
+    assert before
+    # exactly what binary_install does before touching anything else
+    bi.open_txn(svc._paths, "meshcom", "txnH", old_receipt=None,
+                auth={"param": "password_file", "previous": before})
+    assert svc.save_config_bundle("meshcom", values={"password_file": ""},
+                                  _allow_managed_params=frozenset({"password_file"})).ok
+    svc.invalidate_snapshot()
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == ""
+    ok, why = svc.binary_recover()                    # …the box comes back up
+    assert ok, why
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id,
+                                     "password_file") == before
+    assert bi.read_journal(svc._paths)[1] == "absent"
+
+
+def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
+    """Past the commit point the NEW install is the truth: recovery must NOT put the password
+    back (the installed firmware has none)."""
+    from lhpc.core import binary_install as bi
+    svc = _svc_binary_hmac_firewall(tmp_path, monkeypatch)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    prev = svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file")
+    bi.open_txn(svc._paths, "meshcom", "txnI", auth={"param": "password_file",
+                                                     "previous": prev})
+    assert svc.save_config_bundle("meshcom", values={"password_file": ""},
+                                  _allow_managed_params=frozenset({"password_file"})).ok
+    j, _st = bi.read_journal(svc._paths)
+    assert bi.write_journal(svc._paths, {**j, "state": "committed"})
+    ok, why = svc.binary_recover()
+    assert ok, why
+    svc.invalidate_snapshot()
+    assert svc._resolved_param_value("meshcom", "run",
+                                     svc._hmac_component("meshcom").id, "password_file") == ""

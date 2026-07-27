@@ -18,8 +18,8 @@ verifies it via the daemon's STATS counter — never a continuous transmission.
 from __future__ import annotations
 
 import json
-import secrets
 import os
+import secrets
 import shutil
 import signal
 import subprocess
@@ -27,17 +27,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import commands
-from . import procident
-from . import runtime_fs
-from . import validators
+from . import commands, procident, runtime_fs, validators
 from .config import Config
+from .jobs import JobResult, JobState, run_job, tail_log
 from .model import Component, Stack
 from .outcomes import CompResult, Outcome
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 from .probes import System
 from .probes.process import probe_process
-from .jobs import JobResult, JobState, run_job, tail_log
 
 # The ONE exact content a completion marker may hold; `is_built()` accepts nothing else. A build stamps
 # it only after EVERY step succeeds, and a rebuild invalidates it (fail-closed) before the first step.
@@ -1014,9 +1011,8 @@ class Lifecycle:
         if self._proc_ceased(pid):
             return True
         live = self._proc_identity(pid)
-        if live is not None and str(live.get("starttime")) != str(rec.get("starttime")):
-            return True                     # confirmed PID reuse -> original ceased
-        return False
+        # confirmed PID reuse -> original ceased
+        return bool(live is not None and str(live.get("starttime")) != str(rec.get("starttime")))
 
     def verify_owned(self, rec: dict) -> tuple[bool, str]:
         """All-or-nothing identity check before any signal is sent.

@@ -21,7 +21,7 @@ from .backends import (
 __all__ = [
     "CommandResult",
     "CommandRunner",
-    "System",
-    "RealSystem",
     "FakeSystem",
+    "RealSystem",
+    "System",
 ]

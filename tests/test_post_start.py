@@ -1,19 +1,19 @@
 """§7 — required vs optional post-start, and §5 typed start aggregation."""
+
+
 import pytest
-
 import time
-
 from lhpc.core.lifecycle import Lifecycle
-from conftest import real_spawn
+from conftest import real_spawn, set_call
 from lhpc.core.services import ControllerService
 from lhpc.core.config import Config, OperatorConfig
 from lhpc.core.model import Component, ComponentKind, Stack
 from lhpc.core.paths import Paths
 from lhpc.core.probes import RealSystem
 from lhpc.core.probes.backends import FakeSystem
-from conftest import set_call
 
 
+# ===== merged from test_post_start.py =====
 def _real_life(tmp_path):
     return Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
                      RealSystem())
@@ -73,8 +73,6 @@ def test_start_action_carries_typed_results(tmp_path):
     assert any(r.outcome.value in ("blocked", "failed") for r in res.results)
 
 
-# --- P0.1 integration: required post-start via ControllerService.start() ------
-
 def _fake_life_factory(svc):
     return Lifecycle(svc._paths, svc.stacks(), svc.config(), svc._system,
                      spawn=real_spawn)
@@ -117,8 +115,6 @@ def test_start_required_post_start_success_verifies(tmp_path, monkeypatch):
                for r in res.results)
     assert any("required post-start completed" in d for d in res.details)
 
-
-# --- P0.4 required post-start never raises past the typed boundary ------------
 
 def _req_comp():
     return Component(id="c", name="c", kind=ComponentKind.SERVICE, readiness="process",
@@ -255,8 +251,6 @@ def test_tcp_send_retry_render():
     assert "range(reps)" in script and "time.sleep(iv)" in script
 
 
-# --- PS1: truthful tcp_send retry semantics -------------------------------------------------
-
 def _free_port():
     import socket
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
@@ -346,8 +340,6 @@ def test_malformed_retry_fails_at_render():
         with pytest.raises(commands.CommandError):
             commands.render_post_launcher([step], _C(), {}, _Op(), "/rt", "/src", "")
 
-
-# --- PS4: stepped backoff schedule + terminal-outcome result sidecar --------------------------
 
 def _render_steps(steps, result_path="", runtime="/rt"):
     from lhpc.core import commands
@@ -458,8 +450,6 @@ def test_no_result_path_renders_inert_sidecar():
     assert "RESULT_REL = ()" in script
 
 
-# --- PS3: MeshCom N0CALL/empty placeholder-call guard (declarative) --------------------------
-
 def _meshcom_launcher(mc_callsign, saved=None):
     import tempfile, pathlib
     from lhpc.core.paths import Paths
@@ -507,8 +497,6 @@ def test_meshcom_ephemeral_overrides_saved_and_leaves_config():
     assert "setcall DJ0CHE-3" in script                       # ephemeral wins for this launch
     assert svc.stack_config("meshcom").get("mc_callsign") != "DJ0CHE-3"   # saved not mutated
 
-
-# --- PS2: detached post-start runners are owned + cancellable --------------------------------
 
 def _pr(port, data="A\n"):
     from lhpc.core.model import Component, ComponentKind, Stack
@@ -590,8 +578,6 @@ def test_optional_post_start_scheduling_non_gating(tmp_path):
     finally:
         p.terminate(); p.wait()
 
-
-# --- PB: main-launch binding, cleanup closure, and fail-closed metadata ----------------------
 
 def _self_binding(**override):
     import os
@@ -877,8 +863,6 @@ def test_render_rejects_malformed_binding_and_nonstring_skip_values():
     commands.render_post_launcher([ok], _C(), {}, _Op(), "/rt", "/src", "")   # valid -> no raise
 
 
-# --- corrections: retry spacing, arm-failure closure, strict falsey skip_values --------------
-
 def test_tcp_send_spaces_successful_deliveries_by_interval(tmp_path):
     # Three SUCCESSFUL deliveries (listener accepts every attempt) are measurably spaced by the
     # validated interval — the sleep applies after a success, not only after a failure.
@@ -997,8 +981,6 @@ def test_render_skip_values_strict_falsey_and_valid():
         render({**base, "skip_values": good})                  # valid -> no raise
     render(base)                                               # absent key defaults to [] -> valid
 
-
-# --- PS5: terminal-outcome surfacing (status) + the poststart re-apply verb -------------------
 
 def _sidecar_svc(tmp_path, steps, alive_pid=None):
     """A service whose runtime root carries a fabricated CEASED role='post' record with a
@@ -1171,8 +1153,6 @@ def test_cancel_post_runners_removes_result_and_launcher_sidecars(tmp_path):
         p.terminate(); p.wait()
 
 
-# --- Item B: post-start log discoverability ([log] tail lines) --------------------------------
-
 def test_required_post_start_announces_log(tmp_path, monkeypatch):
     # The synchronous required path forwards on_log_open into run_job -> the post log is
     # announced the moment it exists (before the possibly-long runner executes).
@@ -1214,8 +1194,6 @@ def test_start_details_announce_start_capture_log(tmp_path, monkeypatch):
     assert any("[log] loraham-igate -> tail -f" in d and "start-loraham-igate" in d
                for d in res.details), res.details
 
-
-# --- P1b: the poststart verb never claims more than it can prove ------------------------------
 
 def _running_meshcom_svc(tmp_path, monkeypatch):
     """A service whose meshcom-qemu reads RUNNING, with the lifecycle stubbed out."""
@@ -1298,8 +1276,6 @@ def test_run_post_start_strict_flag_only_changes_the_optional_failure(tmp_path, 
     assert s1 == s2 and "could NOT be scheduled" in s1
 
 
-# --- P2a: the result sidecar is written to the runtime-file standard --------------------------
-
 def test_result_tmp_is_exclusive_nofollow_and_mode_0600(tmp_path):
     # The generated runner must not clobber-open its temp leaf, and it must publish
     # DESCRIPTOR-RELATIVE: os.rename with src/dst dir-fds (os.rename is the call listed in
@@ -1353,8 +1329,6 @@ def test_result_leaf_symlink_is_refused_not_replaced(tmp_path):
     assert victim.read_text() == "KEEP"
     assert rp.is_symlink()                              # refused, not replaced
 
-
-# --- F1: exec/tcp_wait typed records + the required-run sidecar -------------------------------
 
 def test_exec_records_ok_failed_and_missing_binary(tmp_path):
     # Every effectful exec records a bounded typed result — a failed one can never leave a
@@ -1470,8 +1444,6 @@ def test_required_sidecar_leaf_is_unique_per_launch():
     assert "/" not in a and ".." not in a                # hashed: never shaped by the id
 
 
-# --- F5: a scheduled-but-incomplete re-run is STARTED, never VERIFIED -------------------------
-
 @pytest.mark.needs_session
 def test_poststart_detached_scheduling_is_started_not_verified(tmp_path, monkeypatch):
     from lhpc.core.outcomes import Outcome
@@ -1502,8 +1474,6 @@ def test_poststart_synchronous_required_run_stays_verified(tmp_path, monkeypatch
     row = next(r for r in res.results if r.component == "meshcom-qemu")
     assert row.outcome is Outcome.VERIFIED and row.verified is True
 
-
-# --- P2-2: the required post-start sidecar is looked up on the RUNNING BAND -------------------
 
 def _band_svc(tmp_path):
     """A service whose lifecycle spawns real processes, so ownership records are genuinely
@@ -1656,3 +1626,240 @@ def test_required_outcome_unchanged_for_a_bandless_stack(tmp_path):
         assert any("callsign applied" in ln for ln in svc._required_post_outcomes(comp.id))
     finally:
         p.terminate(); p.wait()
+
+
+# ===== merged from test_truthful_outcomes.py =====
+STATUS = b"STATUS RADIO=READY TXMODE=MANAGED\n"
+
+
+def _fake_life(svc):
+    # A lifecycle whose spawn "succeeds" without launching a real process.
+    return Lifecycle(svc._paths, svc.stacks(), svc.config(), svc._system,
+                     spawn=real_spawn)
+
+
+def _built_daemon(tmp_path):
+    d = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+    d.mkdir(parents=True)
+    (d / "loraham_daemon").write_text("#!bin")          # is_built -> True
+
+
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+def test_daemon_both_fails_when_one_band_never_comes_up(tmp_path, monkeypatch):
+    _built_daemon(tmp_path)
+    # Only 433 answers GET STATUS; 868's CONF socket never comes up.
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS}).system
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "_lifecycle", _fake_life)
+    res = svc.start("daemon", apply=True)              # --radio both (default)
+    assert not res.ok
+    assert any("868 CONF socket never came up" in d for d in res.details)
+
+
+def test_start_ok_when_daemon_serving_both(tmp_path, monkeypatch):
+    _built_daemon(tmp_path)
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
+                                   "/tmp/loraconf868.sock": STATUS}).system
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "_lifecycle", _fake_life)
+    res = svc.start("daemon", apply=True)
+    assert res.ok
+
+
+def test_dependent_not_started_when_daemon_unready(tmp_path):
+    # The daemon is not built -> readiness fails -> KISS must be skipped and the
+    # overall start must report FAILURE (not a false success).
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    res = svc.start("kiss", apply=True)
+    assert not res.ok
+    assert any("daemon" in d.lower() and ("not installed" in d.lower()
+               or "not built" in d.lower()) for d in res.details)
+    assert any("daemon not ready" in d for d in res.details)
+
+
+def _svc_with_daemon(tmp_path, status):
+    from lhpc.core.probes.backends import FakeSystem
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system
+    return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+
+
+def test_tx_mode_skips_when_already_matching(tmp_path):
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=DIRECT\n")
+    ok, detail = svc._apply_tx_mode("433", "DIRECT")
+    assert ok and "already DIRECT" in detail
+
+
+def test_tx_mode_fails_when_readback_mismatches(tmp_path):
+    # Daemon reports MANAGED and never changes -> requesting DIRECT must FAIL (gate),
+    # not warn. (Static fake: the SET read-back never shows DIRECT.)
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")
+    ok, detail = svc._apply_tx_mode("433", "DIRECT")
+    assert not ok and "DIRECT" in detail
+
+
+def test_tx_mode_succeeds_when_readback_matches(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    class Stateful:
+        def __init__(self): self.mode = b"MANAGED"
+        def _maybe_set(self, payload):
+            if payload.strip().startswith(b"SET TXMODE="):
+                self.mode = payload.split(b"=", 1)[1].strip()
+        def request(self, path, payload, timeout, max_bytes):
+            self._maybe_set(payload)
+            return b"STATUS RADIO=READY TXMODE=" + self.mode + b"\n"
+        def send(self, path, payload, timeout):
+            self._maybe_set(payload)
+    sys = FakeSystem().system
+    sys.unix = Stateful()
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    ok, detail = svc._apply_tx_mode("433", "DIRECT")
+    assert ok and "confirmed" in detail
+
+
+def test_cadidle_skips_when_already_matching(tmp_path):
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=0\n")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
+    assert ok and "already 0ms" in detail
+
+
+def test_cadidle_fails_when_readback_mismatches(tmp_path):
+    # Daemon stuck at CADIDLE=250 -> requesting 0 cannot be confirmed -> (False, ...).
+    # Reported but NON-GATING in _ensure_daemon (the start still proceeds).
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=250\n")
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
+    assert not ok and "0" in detail
+
+
+def test_cadidle_succeeds_when_readback_matches(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    class Stateful:
+        def __init__(self): self.idle = b"250"
+        def _maybe_set(self, payload):
+            if payload.strip().startswith(b"SET CADIDLE="):
+                self.idle = payload.split(b"=", 1)[1].strip()
+        def request(self, path, payload, timeout, max_bytes):
+            self._maybe_set(payload)
+            return b"STATUS RADIO=READY TXMODE=MANAGED CADIDLE=" + self.idle + b"\n"
+        def send(self, path, payload, timeout):
+            self._maybe_set(payload)
+    sys = FakeSystem().system
+    sys.unix = Stateful()
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    ok, detail = svc._apply_conf_param("433", "CADIDLE", "0")
+    assert ok and "confirmed" in detail
+
+
+def test_cadidle_numeric_equality_ignores_formatting(tmp_path):
+    # Readback "0" must match want "0" (and a non-numeric/absent reading must not).
+    from lhpc.core.services import ControllerService as CS
+    assert CS._cadidle_eq("0", "0") and CS._cadidle_eq("250", 250)
+    assert not CS._cadidle_eq(None, "0") and not CS._cadidle_eq("x", "0")
+
+
+def test_failed_tx_gating_blocks_dependent(tmp_path):
+    # meshcom needs the daemon in MANAGED; a daemon stuck in DIRECT must block it
+    # (no false success, no post-start).
+    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=DIRECT\n")
+    set_call(svc)
+    res = svc.start("meshcom", apply=True)
+    assert not res.ok
+    assert any("TXMODE" in d and ("!=" in d or "fail" in d.lower()) for d in res.details)
+
+
+def _endpoint_comp():
+    from lhpc.core.model import Component, ComponentKind, EndpointSpec
+    return Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     readiness="endpoint", run_argv=("./app",),
+                     endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),
+                                EndpointSpec(kind="tcp", address="127.0.0.1:1234", ready=False)))
+
+
+def test_ready_endpoint_absent_is_unverified(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    ok, ev = svc._ready_endpoints_present(_endpoint_comp())
+    assert not ok and any("9999: absent" in e for e in ev)
+
+
+def test_ready_endpoint_present_verifies(tmp_path):
+    from lhpc.core.probes.backends import FakeSystem, Listener
+    fake = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=9999, inode=1)])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    ok, ev = svc._ready_endpoints_present(_endpoint_comp())
+    assert ok and any("9999: present" in e for e in ev)
+
+
+def test_non_ready_endpoint_does_not_gate(tmp_path):
+    # Port 1234 is NOT marked ready; its absence must not affect readiness.
+    from lhpc.core.model import Component, ComponentKind, EndpointSpec
+    from lhpc.core.probes.backends import FakeSystem, Listener
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE, readiness="endpoint",
+                     run_argv=("./app",),
+                     endpoints=(EndpointSpec(kind="tcp", address="127.0.0.1:9999", ready=True),
+                                EndpointSpec(kind="tcp", address="127.0.0.1:1234", ready=False)))
+    fake = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=9999, inode=1)])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    ok, _ = svc._ready_endpoints_present(comp)
+    assert ok                                  # 1234 absent but not a ready endpoint
+
+
+def test_interactive_main_start_is_manual_required(tmp_path):
+    # Daemon serving 433 (so the dependent isn't gated) + chat source built+installed.
+    src = tmp_path / "src" / "LoRaHAM_Daemon"
+    src.mkdir(parents=True)
+    (src / "loraham_chat").write_text("#!bin")          # built artifact present
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")
+    set_call(svc)
+    res = svc.start("chat", apply=True)
+    assert not res.ok                                   # LHPC cannot launch the TUI
+    assert any("manual_required" in d and "loraham-chat" in d for d in res.details)
+    assert "manual start" in res.summary.lower()
+    # The start command must NOT be duplicated in the result — it lives on the dash card.
+    assert "run it in a terminal" not in res.summary.lower()
+    assert not any("loraham_chat" in d or "run it in a terminal" in d for d in res.details)
+
+
+def test_raw_launch_ok_does_not_decide_top_level_success(tmp_path):
+    # The raw launch "succeeds" (fake spawn returns a pid), but readiness=endpoint has
+    # no endpoint -> the TYPED result is UNVERIFIED and ActionResult.ok is False.
+    # i.e. StartLaunch.ok never overrides the typed CompResult authority.
+    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon").write_text("#bin")
+    svc = _svc_with_daemon(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED\n")
+    # kiss is readiness=endpoint (tcp 8001); no endpoint is present in the fake system
+    (tmp_path / "src" / "loraham-daemon").mkdir(parents=True, exist_ok=True)
+    res = svc.start("kiss", apply=True)
+    # whatever the raw launch did, the typed results drive ok
+    assert res.ok == all(r.ok and r.verified for r in res.results) if res.results else True
+    assert not res.ok or all(r.verified for r in res.results)
+
+
+@pytest.mark.needs_session  # spawns a real process; identity_complete needs sid>0 (skips under sid==0)
+def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypatch):
+    # A verified start whose running-band marker cannot persist must report UNVERIFIED,
+    # not VERIFIED — the marker drives multi-band decisions + dashboard state.
+    from conftest import real_spawn
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.outcomes import Outcome
+    # voice requires the daemon in DIRECT, so the fixture daemon must already report DIRECT
+    # for the start to clear the TX-mode gate and reach the running-band marker step.
+    DIRECT = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": DIRECT,
+                                   "/tmp/loraconf868.sock": DIRECT}).system
+    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
+    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
+    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [])
+    monkeypatch.setattr(type(svc), "_lifecycle",
+                        lambda self: Lifecycle(self._paths, self.stacks(), self.config(),
+                                               self._system, spawn=real_spawn))
+    monkeypatch.setattr(type(svc), "_set_running_band", lambda self, s, b: False)  # marker fails
+    set_call(svc)
+    res = svc.start("voice", apply=True, band="433")
+    assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
+               and "running-band marker" in (r.summary or "") for r in res.results)

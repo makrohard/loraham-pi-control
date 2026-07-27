@@ -16,7 +16,12 @@ from __future__ import annotations
 import re as _re
 from dataclasses import dataclass
 
-from .lifecycle import GUI_MISSING_HINT, GROUP_MISSING_HINT, GROUP_RESTART_CMD, GROUP_RESTART_HINT
+from .lifecycle import (
+    GROUP_MISSING_HINT,
+    GROUP_RESTART_CMD,
+    GROUP_RESTART_HINT,
+    GUI_MISSING_HINT,
+)
 
 NOT_EXECUTED_NOTE = "not executed by LHPC — run it yourself"
 

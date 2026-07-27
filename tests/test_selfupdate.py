@@ -169,6 +169,7 @@ def test_apply_refuses_dirty_by_default_then_force(env):
     assert "local edit" not in (env["work"] / "lhpc" / "version.py").read_text()   # discarded
 
 
+@pytest.mark.contract
 def test_apply_diverged_history_refused_without_force(env):
     _upstream_commit(env["up"])                                # origin/main advances
     (env["work"] / "diverge.txt").write_text("local commit\n")  # local commit -> diverged
@@ -928,6 +929,7 @@ def _fake_commands(root, *, clean_rc):
     }
 
 
+@pytest.mark.contract
 def test_apply_cleanup_failure_is_truthful_partial(tmp_path, monkeypatch):
     from lhpc.core.probes.backends import FakeSystem
     root = tmp_path / "repo"; root.mkdir()

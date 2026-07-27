@@ -12,10 +12,11 @@ import secrets as _secrets
 import sys
 import uuid
 
-from .snapshot_memo import invalidates_snapshot
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
-from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked as _SourceTxnBlocked
+from .service_base import ActionResult, AdmissionRefused
+from .service_base import SourceTxnBlocked as _SourceTxnBlocked
+from .snapshot_memo import invalidates_snapshot
 
 # Secret file (first line = the password) and the bridge run-param that points at it. `{runtime}` in the
 # param value is resolved by commands.expand_argv at start; an empty value emits no arg -> open auth.
@@ -72,7 +73,7 @@ class _StreamRedactor:
     last (maxlen-1) bytes of each flush are HELD as carry so a secret split over a chunk boundary is
     still masked before anything is written. Feeds/returns BYTES (redaction happens pre-decode)."""
 
-    __slots__ = ("_pats", "_maxlen", "_carry")
+    __slots__ = ("_carry", "_maxlen", "_pats")
     _MASK = b"****"
 
     def __init__(self, patterns):
@@ -239,7 +240,7 @@ class HmacOpsMixin:
             else:                                            # enable: idempotent — keep an existing secret
                 if not path.exists():
                     runtime_fs.atomic_write(self._paths, path, _secrets.token_hex(16) + "\n", 0o600)
-        except Exception as exc:                             # noqa: BLE001 — roll BOTH back
+        except Exception as exc:
             self.save_config_bundle(stack_id, values={_HMAC_PARAM: old_resolved},
                                     _allow_managed_params=frozenset({_HMAC_PARAM}))
             try:
@@ -248,7 +249,7 @@ class HmacOpsMixin:
                         runtime_fs.unlink(self._paths, path)
                 else:
                     runtime_fs.atomic_write_bytes(self._paths, path, old_secret, 0o600)
-            except Exception:                                # noqa: BLE001
+            except Exception:
                 pass
             return ActionResult(False, f"could not {action} HMAC password (secret file): {exc} — rolled back")
         verb = {"enable": "enabled", "disable": "disabled", "renew": "renewed"}[action]
@@ -351,9 +352,9 @@ class HmacOpsMixin:
             raw, text, size = self._read_named_log_chunk(
                 f"hmac-apply-{run_id}.log", offset, 64 * 1024)
             if raw <= 0:                         # absent (future)/unreadable/at-EOF -> no new bytes
-                return {"offset": offset, "data": "", "size": size if size > 0 else 0}
+                return {"offset": offset, "data": "", "size": max(0, size)}
             return {"offset": offset + raw, "data": self._hmac_redact(text), "size": size}
-        except Exception:                        # noqa: BLE001 — a GET must never 500
+        except Exception:
             return {"error": "run log temporarily unavailable", "offset": 0, "data": ""}
 
     def _hmac_initial_steps(self) -> list:
@@ -409,7 +410,7 @@ class HmacOpsMixin:
                     continue
                 break
             return {"index": index, "offset": offset, "data": "".join(parts)}
-        except Exception:                            # noqa: BLE001 — a GET must never 500
+        except Exception:
             return {"index": 0, "offset": 0, "data": "",
                     "error": "component-log stream temporarily unavailable"}
 
@@ -465,12 +466,11 @@ class HmacOpsMixin:
                     return ActionResult(False, "The HMAC apply state is unreadable or malformed — refusing "
                                         "to start (evidence preserved). Use Recover to archive it, then retry.",
                                         next_commands=[f"lhpc hmac recover {stack_id}"])
-                if st and st.get("phase") == "unsafe":
-                    if not self._hmac_try_auto_clear(st):
-                        return ActionResult(False, "The previous HMAC apply ended UNSAFELY — the build "
-                                            "could not be proven stopped. Inspect processes (ps) and use "
-                                            "Recover before starting a new run.",
-                                            next_commands=[f"lhpc hmac recover {stack_id}"])
+                if st and st.get("phase") == "unsafe" and not self._hmac_try_auto_clear(st):
+                    return ActionResult(False, "The previous HMAC apply ended UNSAFELY — the build "
+                                        "could not be proven stopped. Inspect processes (ps) and use "
+                                        "Recover before starting a new run.",
+                                        next_commands=[f"lhpc hmac recover {stack_id}"])
                 run_id = uuid.uuid4().hex
                 # `startup_unverified`: the detached driver clears it only AFTER it proves it was
                 # identity-tracked (see `_hmac_verify_tracked`). If tracking never lands (orphan), the driver
@@ -522,6 +522,7 @@ class HmacOpsMixin:
         1 to refuse. Only the detached driver calls this; the foreground CLI writes its own marker first."""
         import os
         import time
+
         from . import procident
         try:
             job = _hmac_log_base(run_id) + ".log"
@@ -556,10 +557,11 @@ class HmacOpsMixin:
         SIGTERM handlers (Ctrl-C aborts), and retires the job marker ONLY after the terminal marker.
         `disable` requires `confirm` (the typed-phrase gate) — this foreground path does NOT route
         through `hmac_apply_start`, so it enforces the same gate itself (bare `--yes` cannot bypass it)."""
-        from . import reslock, procident, runtime_fs, validators
         import os
         import signal
         import threading
+
+        from . import procident, reslock, runtime_fs, validators
         if (_blk := self.hmac_binary_block(stack_id)):
             emit(_blk + ".")
             return 1
@@ -683,6 +685,7 @@ class HmacOpsMixin:
         """AUTO-clear an unsafe block ONLY for the `session-unverified` scope and ONLY when the stored
         session is PROVEN ceased (never on driver-exit alone). Returns whether it is now clear."""
         import os
+
         from . import proctree
         if st.get("phase") != "unsafe":
             return True
@@ -700,6 +703,7 @@ class HmacOpsMixin:
         driver's handler stops the build and writes the truthful terminal state."""
         import os
         import signal
+
         from . import procident
         if not self.hmac_applies(stack_id):
             return ActionResult(False, f"HMAC password does not apply to '{stack_id}'")
@@ -774,12 +778,10 @@ class HmacOpsMixin:
         `startup_unverified` so a successfully persisted ordinary failure stays RETRYABLE."""
         steps = []
         for s in marker.get("steps", []):
-            s = dict(s)
-            if step_key is not None and s["key"] == step_key:
-                s["state"] = "failed"
-            elif s.get("state") == "running":
-                s["state"] = "failed"
-            steps.append(s)
+            step = dict(s)
+            if (step_key is not None and step["key"] == step_key) or step.get("state") == "running":
+                step["state"] = "failed"
+            steps.append(step)
         m = dict(marker, steps=steps, phase="failed", finished=True, detail=detail[:400])
         m.pop("startup_unverified", None)
         return self._hmac_write_marker(m)
@@ -838,7 +840,7 @@ class HmacOpsMixin:
 
         _note_secret()                       # PRE-RUN old secret (kept even if disable removes the file)
         _raw_emit = emit
-        def emit(line):                       # scrub ALL emitted lines (log + CLI stdout)  # noqa: E306
+        def emit(line):                       # scrub ALL emitted lines (log + CLI stdout)
             _raw_emit(_scrub(line))
 
         marker = {"run_id": run_id, "sid": stack_id, "action": action, "phase": "running",

@@ -3,6 +3,7 @@
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import time
@@ -10,17 +11,14 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from .lifecycle import GUI_MISSING_HINT
-from .snapshot_memo import invalidates_snapshot
-from . import runtime_fs
-from . import validators
+from . import lifecycle as lifecycle_mod
+from . import runtime_fs, validators
 from .abortflag import AbortFlag
+from .lifecycle import GUI_MISSING_HINT
 from .model import RunState
 from .paths import PathContainmentError
-import contextlib
-
-from . import lifecycle as lifecycle_mod
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .snapshot_memo import invalidates_snapshot
 
 # ---- cooperative Abort (shared AbortFlag): the detached driver installs SIGTERM/SIGINT handlers
 # that ONLY set a flag via `_auto_install_abort.request` (signal-safe, no I/O); the driver polls it
@@ -70,7 +68,7 @@ class StackWork:
     skipped: tuple = ()     # components excluded up-front (unavailable GUI deps) — NOT installed
 
     @classmethod
-    def of(cls, stack, skip=()) -> "StackWork":
+    def of(cls, stack, skip=()) -> StackWork:
         """`skip` names components excluded from ALL THREE lists. It is applied HERE, in the
         immutable planning partition, so the exclusion happens before source paths are collected,
         before any lock is taken and before any mutation — never by letting a build fail later."""
@@ -129,7 +127,8 @@ class AutoInstallOpsMixin:
     def _auto_install_gate_raw(self) -> str:
         """The typed reason itself. A DEAD lease, a dead/foreign auto-install-start reservation, and
         an interrupted/unsafe marker are all MUTATION-BLOCKING until explicitly acknowledged."""
-        from . import auto_install as ai_mod, procident
+        from . import auto_install as ai_mod
+        from . import procident
         rstate, res = ai_mod.read_reservation(self._paths)
         if rstate == "unsafe":
             return ("the auto-install-start reservation is unreadable or malformed — acknowledge "
@@ -185,7 +184,8 @@ class AutoInstallOpsMixin:
         """Claim (or, for a manual CLI run, create) the auto-install-start reservation for this
         driver process under the dedicated auto-install-start lock. Returns "" when the slot is
         bound to us, else a typed refusal. Handles every reservation state fail-closed."""
-        from . import auto_install as ai_mod, procident, reslock
+        from . import auto_install as ai_mod
+        from . import procident, reslock
         ident = procident.proc_identity(os.getpid()) or {}
         if not procident.identity_complete(ident):
             return "auto-install run refused: process identity incomplete"
@@ -253,6 +253,7 @@ class AutoInstallOpsMixin:
         log yields bounded safe `error` data — the external target is never followed or
         read. Both /auto-install and /api/auto-install stay GET-safe (HTTP 200)."""
         import stat as stat_mod
+
         from . import auto_install as ai_mod
         try:
             try:
@@ -292,7 +293,7 @@ class AutoInstallOpsMixin:
                         os.close(fd)
                     except OSError:
                         pass
-        except Exception:                        # noqa: BLE001 — a GET must never 500
+        except Exception:
             return {"error": "run log temporarily unavailable", "offset": 0, "data": ""}
 
     def _auto_install_component_log_list(self, st) -> list:
@@ -435,7 +436,7 @@ class AutoInstallOpsMixin:
             if error:
                 out["error"] = error
             return out
-        except Exception:                        # noqa: BLE001 — a GET must never 500
+        except Exception:
             return {"index": 0, "offset": 0, "data": "",
                     "error": "component-log stream temporarily unavailable"}
 
@@ -469,7 +470,7 @@ class AutoInstallOpsMixin:
                     break
             else:
                 truncated_reads = True                      # exhausted the read cap without draining
-        except Exception:                                   # noqa: BLE001 — a GET must never 500
+        except Exception:
             return "".join(parts)
         seed = "".join(parts)
         if len(seed) > self._COMPLOG_SEED_MAX_BYTES:        # front-trim, keep the tail (matches auto_install.js)
@@ -490,7 +491,8 @@ class AutoInstallOpsMixin:
         reverse order). A start racing this either completed first — then the LIVE
         reservation/lease makes this refuse — or waits on the lock and starts fresh
         afterwards. A live run's evidence is NEVER archived."""
-        from . import auto_install as ai_mod, procident, reslock
+        from . import auto_install as ai_mod
+        from . import procident, reslock
         inst = self._installer()
         try:
             with reslock.operation_lock(self._paths, "auto-install-start", "auto-install-ack", ""):
@@ -529,6 +531,7 @@ class AutoInstallOpsMixin:
                 # unreconstructable identity need the explicit post-inspection confirmation.
                 if st and not st.get("unsafe") and st.get("state") == "unsafe":
                     import os
+
                     from . import proctree
                     token = proctree.reconstruct_token(st.get("session_ident"))
                     if st.get("unsafe_scope") == "session-unverified" and token is not None:
@@ -570,7 +573,9 @@ class AutoInstallOpsMixin:
         reservation identity, then SIGTERM the driver pid ONLY (never killpg). Writes no marker — the
         driver's cooperative handler stops the run and records the truthful terminal state."""
         import signal
-        from . import auto_install as ai_mod, procident
+
+        from . import auto_install as ai_mod
+        from . import procident
         if not (run_id and ai_mod.RUN_ID_RE.match(run_id)):
             return ActionResult(False, "No live auto-install run matches — nothing to abort.")
         st = self.auto_install_status()
@@ -719,14 +724,14 @@ class AutoInstallOpsMixin:
                         pid, child_ident,
                         "child identity could not be captured/bound after spawn and "
                         f"cessation is unproven (pid {pid})")
-                except Exception as exc:            # noqa: BLE001 — settlement boundary
+                except Exception as exc:
                     if pid is None:
                         return None, settle_gone(
                             f"auto-install start failed before any child existed ({exc})")
                     proven = False
                     try:
                         proven = life._terminate_unobserved(pid, child_ident)
-                    except Exception:               # noqa: BLE001
+                    except Exception:
                         proven = False
                     if proven:
                         return None, settle_gone(
@@ -1031,10 +1036,9 @@ class AutoInstallOpsMixin:
             # plan conflicts, post-lock refusals, marker-write aborts, lock contention,
             # and exceptions alike. A failed reservation/lease clear is never silent.
             failed = getattr(self._lock_state, "auto_install_cleanup_failed", "")
-            if not failed:
-                if not ai_mod.clear_reservation(self._paths):
-                    failed = "auto-install-start reservation"
-                    self._lock_state.auto_install_cleanup_failed = failed
+            if not failed and not ai_mod.clear_reservation(self._paths):
+                failed = "auto-install-start reservation"
+                self._lock_state.auto_install_cleanup_failed = failed
         failed = getattr(self._lock_state, "auto_install_cleanup_failed", "")
         if failed:
             detail = (f"auto-install cleanup INCOMPLETE ({failed} could not be cleared) — "
@@ -1054,7 +1058,8 @@ class AutoInstallOpsMixin:
         return res
 
     def _auto_install_claimed(self, scope, selection, run_id, emit) -> ActionResult:
-        from . import auto_install as ai_mod, reslock
+        from . import auto_install as ai_mod
+        from . import reslock
         # PER-STACK selection {sid: {install, version, tests, tx}} drives this run: version is
         # resolved per stack (source_of), host tests are per stack, TX is the tx-capable stack's
         # choice. Summary fields go into the marker for display.
@@ -1126,10 +1131,10 @@ class AutoInstallOpsMixin:
                     return self._auto_install_running_refusal(running)
                 # own job marker (manual CLI runs; web spawns already tracked this pid)
                 job = ai_mod.log_name_for(run_id) + ".log"
-                if not self.log_running("all", job=job):
-                    if not self._write_job_marker(job, os.getpid(), "all", self.AUTO_INSTALL_OP):
-                        return ActionResult(False, "Refusing: the auto-install run could not be "
-                                            "identity-tracked (job marker not persisted).")
+                if (not self.log_running("all", job=job)
+                        and not self._write_job_marker(job, os.getpid(), "all", self.AUTO_INSTALL_OP)):
+                    return ActionResult(False, "Refusing: the auto-install run could not be "
+                                        "identity-tracked (job marker not persisted).")
                 # ONE immutable global plan (frozen selectors/remotes) + reconciliation —
                 # conflicts refuse BEFORE any marker/candidate/source mutation.
                 items = [(st, c) for st, w in scope for c in w.source]
@@ -1662,7 +1667,7 @@ class AutoInstallOpsMixin:
             kind = source_fs.leaf_kind(self._paths, dest)
         except PathContainmentError as exc:
             return "blocked", f"unsafe source path ({exc})"
-        rec_state, rec, rec_why = source_registry.record_state(self._paths, path)
+        rec_state, _rec, rec_why = source_registry.record_state(self._paths, path)
         if rec_state == "unsafe":
             return "blocked", f"unsafe ownership record — {rec_why}"
         if kind == "absent":
@@ -1737,7 +1742,7 @@ class AutoInstallOpsMixin:
                 except PathContainmentError:
                     return {"fresh": False, "recovery":
                             f"unsafe source path for {c.id} — inspect the runtime root"}
-                state, rec, why = source_registry.record_state(self._paths, c.source.path)
+                state, _rec, why = source_registry.record_state(self._paths, c.source.path)
                 if state == "unsafe":
                     return {"fresh": False, "recovery":
                             f"unsafe ownership record for {c.source.path} — {why}"}
@@ -1778,7 +1783,7 @@ class AutoInstallOpsMixin:
             if sid in seen or sid in chain:
                 return
             for dep in sorted(edges.get(sid, ())):
-                visit(dep, chain + (sid,))
+                visit(dep, (*chain, sid))
             seen.add(sid)
             ordered.append(sid)
         for st in stacks:
@@ -1817,33 +1822,34 @@ class AutoInstallOpsMixin:
         the re-entrant guards and validate the context; the lease is cleared and the
         context deactivated before the locks release. Lease-write failure aborts typed —
         the boundary never operates without durable evidence."""
-        from . import auto_install as ai_mod, procident
+        from . import auto_install as ai_mod
+        from . import procident
         # EXCLUSIVE config-stability for the WHOLE run: an atomic HMAC enable (or any config write) INSIDE
         # the boundary reuses this held lock instead of self-contending on a second descriptor. flock SH→EX
         # conversion is not atomic on Linux, so we take EXCLUSIVE from the start rather than upgrading.
-        with self._config_stable(exclusive=True):
-            with self._source_operation_guard(sorted(source_paths), op="auto-install"):
-                ident = procident.proc_identity(os.getpid()) or {}
-                if not procident.identity_complete(ident):
-                    raise SourceTxnBlocked(
-                        "auto-install lease refused: own process identity incomplete")
-                if not ai_mod.write_lease(self._paths, run_id, os.getpid(), ident,
-                                            stacks, source_paths):
-                    raise SourceTxnBlocked("auto-install lease could not be persisted — refusing "
-                                           "to operate without durable evidence")
-                ctx = ai_mod.AutoInstallOperationContext(run_id, source_paths)
-                self._lock_state.auto_install_ctx = ctx
-                try:
-                    self._lock_state.auto_install_cleanup_failed = ""
-                    yield ctx
-                finally:
-                    self._lock_state.auto_install_ctx = None
-                    fails = []
-                    if not ai_mod.clear_lease(self._paths):
-                        fails.append("lease")
-                    if not ai_mod.clear_reservation(self._paths):
-                        fails.append("auto-install-start reservation")
-                    if fails:
-                        # retained evidence blocks the next run until acknowledged; the
-                        # driver reads this flag and reports a truthful INCOMPLETE result.
-                        self._lock_state.auto_install_cleanup_failed = " + ".join(fails)
+        with (self._config_stable(exclusive=True),
+              self._source_operation_guard(sorted(source_paths), op="auto-install")):
+            ident = procident.proc_identity(os.getpid()) or {}
+            if not procident.identity_complete(ident):
+                raise SourceTxnBlocked(
+                    "auto-install lease refused: own process identity incomplete")
+            if not ai_mod.write_lease(self._paths, run_id, os.getpid(), ident,
+                                        stacks, source_paths):
+                raise SourceTxnBlocked("auto-install lease could not be persisted — refusing "
+                                       "to operate without durable evidence")
+            ctx = ai_mod.AutoInstallOperationContext(run_id, source_paths)
+            self._lock_state.auto_install_ctx = ctx
+            try:
+                self._lock_state.auto_install_cleanup_failed = ""
+                yield ctx
+            finally:
+                self._lock_state.auto_install_ctx = None
+                fails = []
+                if not ai_mod.clear_lease(self._paths):
+                    fails.append("lease")
+                if not ai_mod.clear_reservation(self._paths):
+                    fails.append("auto-install-start reservation")
+                if fails:
+                    # retained evidence blocks the next run until acknowledged; the
+                    # driver reads this flag and reports a truthful INCOMPLETE result.
+                    self._lock_state.auto_install_cleanup_failed = " + ".join(fails)

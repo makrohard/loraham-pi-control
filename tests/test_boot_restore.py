@@ -377,18 +377,18 @@ def test_boot_config_default_on(tmp_path):
     assert _svc(tmp_path).boot_restore_enabled() == (True, "")
 
 
-def test_boot_config_off(tmp_path):
+@pytest.mark.parametrize("toml_text,reason_fragment", [
+    pytest.param("[boot]\nrestore = false\n", "disabled", id="explicit-off"),
+    pytest.param('[boot]\nrestore = "true"\n', "non-boolean", id="non-bool-fails-closed"),
+    # A local.toml that cannot be parsed loses the operator's switch — the autonomous starter
+    # must NOT fall back to the default-ON (plan §3; every other consumer stays fail-soft).
+    pytest.param("this is { not toml", "fail closed", id="malformed-toml-fails-closed"),
+])
+def test_boot_config_off_or_fails_closed(tmp_path, toml_text, reason_fragment):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text("[boot]\nrestore = false\n")
+    (tmp_path / "config" / "local.toml").write_text(toml_text)
     on, reason = _svc(tmp_path).boot_restore_enabled()
-    assert on is False and "disabled" in reason
-
-
-def test_boot_config_non_bool_fails_closed(tmp_path):
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text('[boot]\nrestore = "true"\n')
-    on, reason = _svc(tmp_path).boot_restore_enabled()
-    assert on is False and "non-boolean" in reason
+    assert on is False and reason_fragment in reason
 
 
 def test_set_boot_restore_round_trip(tmp_path):
@@ -882,6 +882,7 @@ def test_banner_running_with_live_driver(tmp_path):
 
 # --- CLI ----------------------------------------------------------------------------------------
 
+@pytest.mark.contract
 def test_cli_autostart_show_and_toggle(tmp_path, monkeypatch, capsys):
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
@@ -911,6 +912,7 @@ def test_cli_run_service_disabled_path_exits_zero(tmp_path, monkeypatch, capsys)
     assert j["state"] == "disabled"
 
 
+@pytest.mark.contract
 def test_cli_run_service_unsafe_journal_exits_nonzero(tmp_path, monkeypatch, capsys):
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
@@ -936,6 +938,7 @@ def _csrf_of(client):
     return m.group(1)
 
 
+@pytest.mark.contract
 def test_web_toggle_round_trip(tmp_path):
     svc = _svc(tmp_path)
     c = _web_client(svc)
@@ -950,6 +953,7 @@ def test_web_toggle_round_trip(tmp_path):
     assert svc.boot_restore_enabled() == (True, "")
 
 
+@pytest.mark.contract
 def test_web_toggle_requires_csrf(tmp_path):
     c = _web_client(_svc(tmp_path))
     assert c.post("/boot-restore", data={"restore": "on"}).status_code == 400
@@ -1123,13 +1127,8 @@ def test_banner_failed_is_dismissible_truncated_is_not(tmp_path):
 
 # --- audit-round fixes --------------------------------------------------------------------------
 
-def test_boot_config_malformed_local_toml_fails_closed(tmp_path):
-    # A local.toml that cannot be parsed loses the operator's switch — the autonomous starter
-    # must NOT fall back to the default-ON (plan §3; every other consumer stays fail-soft).
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text("this is { not toml")
-    on, reason = _svc(tmp_path).boot_restore_enabled()
-    assert on is False and "fail closed" in reason
+# (the malformed-local.toml fail-closed case now lives in the parametrized
+# test_boot_config_off_or_fails_closed above)
 
 
 def test_hook_claim_write_failure_leaves_item_restorable(tmp_path, monkeypatch):

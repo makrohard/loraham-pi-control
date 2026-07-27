@@ -8,29 +8,27 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from .snapshot_memo import invalidates_snapshot
-from . import daemon_control
-from . import runtime_fs
-from . import validators
-from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
+from . import daemon_control, runtime_fs, validators
 from .config import (
     ConfigError,
-    apply_config_transaction,
-    merge_stack_values,
+    _load_runtime_toml,
     _patch_local_table,
+    _stack_config_path,
+    apply_config_transaction,
+    load_stack_config,
+    merge_stack_values,
+    render_keyval,
     render_local_tables,
     render_stack_config,
     update_stack_config,
-    _load_runtime_toml,
-    _stack_config_path,
-    load_stack_config,
-    render_keyval,
     update_toml,
     update_yaml,
 )
+from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
 from .model import ComponentKind, RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, ConfigWrite
+from .snapshot_memo import invalidates_snapshot
 
 
 class ParamsConfigMixin:
@@ -129,7 +127,8 @@ class ParamsConfigMixin:
         """Persisted operator overrides for a stack's daemon params, read from the stack's
         runtime-local config as flat `dp_<band>_<PARAM>` keys (dot-free, so TOML never nests
         them). Only validated keys are returned; {} when none."""
-        from . import daemon_params, config as cfgmod
+        from . import config as cfgmod
+        from . import daemon_params
         stored = cfgmod.load_stack_config(self._paths, self._owner_stack_id(stack_id))
         out: dict[str, str] = {}
         for name in daemon_params.ALL_PARAMS:
@@ -430,7 +429,9 @@ class ParamsConfigMixin:
         identifiable + owned in the CURRENT manifest (current metadata is a safety gate only)."""
         import tomllib
         from pathlib import Path
-        from . import selfupdate, manifest as manifest_mod
+
+        from . import manifest as manifest_mod
+        from . import selfupdate
         root = selfupdate.repo_root()
         if root is None:
             return None
@@ -972,7 +973,11 @@ class ParamsConfigMixin:
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
         if (auto_set or auto_remove) and cfg_band:
             # SECOND transactional target: autostart flags land in the band-less file.
-            def _render_auto(pth, tgt=sid, setv=dict(auto_set), rmv=set(auto_remove)):
+            def _render_auto(pth, tgt=sid, setv=None, rmv=None):
+                if rmv is None:
+                    rmv = set(auto_remove)
+                if setv is None:
+                    setv = dict(auto_set)
                 merged = merge_stack_values(pth, tgt, "", setv, clear_empty=False)
                 for k in rmv:
                     merged.pop(k, None)
@@ -1024,7 +1029,8 @@ class ParamsConfigMixin:
         licensed stack inherits via each identity param's `{callsign}` default. An explicit empty
         string clears it. Validates format; preserves any other `[operator]` scalar keys."""
         from . import config as _config
-        from .validators import callsign as _v_call, ValidationError
+        from .validators import ValidationError
+        from .validators import callsign as _v_call
         if callsign is None:
             return ActionResult(False, "nothing to set — pass --callsign")
         try:
@@ -1039,7 +1045,7 @@ class ParamsConfigMixin:
         return ActionResult(True, "operator identity saved",
                             details=[f"  callsign = {new_call or '(unset)'}"])
 
-    def boot_restore_enabled(self) -> "tuple[bool, str]":
+    def boot_restore_enabled(self) -> tuple[bool, str]:
         """(enabled, reason). FAIL-CLOSED: enabled only when the [boot] config is VALID and
         restore is true — a malformed/mistyped switch disables restoration with the reason."""
         cfg = self.config().boot
@@ -1171,7 +1177,7 @@ class ParamsConfigMixin:
         group = ([d.id for d in self._path_declarers(comp.source.path)]
                  if comp is not None and comp.source else [component_id])
         try:
-            save_component_remotes(self._paths, {cid: url for cid in group})
+            save_component_remotes(self._paths, dict.fromkeys(group, url))
         except validators.ValidationError as exc:
             return ActionResult(False, "Remote override rejected.", details=[str(exc)])
         except ConfigError as exc:
@@ -1456,7 +1462,7 @@ class ParamsConfigMixin:
         return params, file_over, None
 
     def write_config_files(self, target: str, band: str = "",
-                           overrides: dict | None = None) -> list["ConfigWrite"]:
+                           overrides: dict | None = None) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         linked-readonly / no-base / failed) so an auto-start can block on a generation
@@ -1569,7 +1575,7 @@ class ParamsConfigMixin:
                 return SimpleNamespace(status="failed", policy="runtime", path=None,
                                        detail=f"runtime path escapes root: {exc}", detail_path=raw)
             return SimpleNamespace(status="ok", policy="runtime", path=p, detail="", detail_path=raw)
-        if raw.startswith("/") or raw.startswith("{") or ".." in raw.split("/"):
+        if raw.startswith(("/", "{")) or ".." in raw.split("/"):
             return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
                                    detail="config path must be {runtime}/... or a relative source path")
         # relative -> managed source destination
@@ -1681,11 +1687,10 @@ class ParamsConfigMixin:
         try:
             stored = load_stack_config(self._paths, target, cfg_band)
             normal = [k for k in stored
-                      if k in run_names or k.startswith("file_") or k.startswith("autostart_")
-                      or k.startswith("__r__") or k.startswith("__f__")]
+                      if k in run_names or k.startswith(("file_", "autostart_", "__r__", "__f__"))]
             if normal:
                 # Clear ONLY the normal-owned keys under the config lock; dp_* + unrelated stay.
-                update_stack_config(self._paths, target, {k: "" for k in normal}, cfg_band)
+                update_stack_config(self._paths, target, dict.fromkeys(normal, ""), cfg_band)
                 self._invalidate_config()
         except (ConfigError, PathContainmentError, validators.ValidationError, OSError) as exc:
             return ActionResult(False, f"Config reset blocked for {label}: unsafe/malformed "

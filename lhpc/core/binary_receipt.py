@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runtime_fs, source_registry, validators
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 RECEIPT_VERSION = 1
 # 4 MiB: a receipt legitimately lists every file of a provisioned virtualenv
@@ -77,7 +77,7 @@ def receipt_path(paths: Paths, stack_id: str) -> Path:
 
 def _safe_rel(p: str) -> bool:
     """Runtime-root-relative, non-escaping (mirrors the manifest's own path rule)."""
-    if not isinstance(p, str) or not p or p.startswith("/") or p.startswith("~"):
+    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
         return False
     return all(seg not in ("", ".", "..") for seg in p.split("/"))
 

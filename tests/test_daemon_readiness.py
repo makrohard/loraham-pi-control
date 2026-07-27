@@ -70,6 +70,8 @@ def test_failed_radio_blocks_dependent_launch(tmp_path):
     assert any("not READY" in dt or "RADIO=FAILED" in dt for dt in res.details)
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_tx_test_refuses_when_radio_not_ready(tmp_path):
     # A TX test transmits real RF -> requires RADIO=READY, not mere reachability.
     d = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
@@ -104,6 +106,18 @@ def test_radio_overview_occupied_vs_usable(tmp_path):
                             paths=Paths(runtime_root=tmp_path)).radio_overview()
     d = next(r["daemon"] for r in off if r["band"] == "433")
     assert not d["occupied"] and not d["usable"] and d["state_label"] == "offline"
+
+
+def test_radio_overview_reports_binary_installed_daemon_as_installed(tmp_path, monkeypatch):
+    # Operator report: a daemon installed from the BINARY channel (source-LESS) and running fine
+    # rendered "Daemon not installed" on the dashboard, because `installed` was derived from
+    # source_state alone. `binary_covers` is the canonical "provided by a binary artifact"
+    # primitive; a binary-covered daemon must read as installed even with no source tree.
+    monkeypatch.setattr(ControllerService, "binary_covers",
+                        lambda self, cid: cid == self.DAEMON_ID)
+    ov = ControllerService(system=FakeSystem().system,
+                           paths=Paths(runtime_root=tmp_path)).radio_overview()
+    assert ov and all(r["daemon"]["installed"] is True for r in ov)
 
 
 # --- #5: served/usable summaries exclude FAILED/UNINITIALIZED -----------------

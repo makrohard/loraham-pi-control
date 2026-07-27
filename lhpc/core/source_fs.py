@@ -18,15 +18,31 @@ import contextlib
 import os
 import stat as _stat
 from pathlib import Path
+from typing import Self
 
 from . import runtime_fs
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
-__all__ = ["rmtree_at", "rename_child", "leaf_kind", "pinned_parent",
-           "create_candidate_dir", "ManagedSourceTransaction", "CandidateHandle", "LinkHandle",
-           "SourceLeafHandle", "capture_leaf", "detach_and_remove", "quarantine_siblings",
-           "race_seam", "verify_leaf_path", "require_atomic_rename", "remove_bound",
-           "AtomicRenameUnavailable", "PathContainmentError"]
+__all__ = [
+    "AtomicRenameUnavailable",
+    "CandidateHandle",
+    "LinkHandle",
+    "ManagedSourceTransaction",
+    "PathContainmentError",
+    "SourceLeafHandle",
+    "capture_leaf",
+    "create_candidate_dir",
+    "detach_and_remove",
+    "leaf_kind",
+    "pinned_parent",
+    "quarantine_siblings",
+    "race_seam",
+    "remove_bound",
+    "rename_child",
+    "require_atomic_rename",
+    "rmtree_at",
+    "verify_leaf_path",
+]
 
 
 def race_seam(point: str, path: str = "") -> None:
@@ -134,7 +150,7 @@ def _rename_noreplace_at(parent_fd: int, old: str, new: str) -> None:
 _ATOMIC_OK_DEVS: set = set()
 
 
-def require_atomic_rename(paths: Paths = None, parent: Path = None) -> str:
+def require_atomic_rename(paths: Paths = None, parent: Path | None = None) -> str:
     """Pre-mutation gate: '' when renameat2(RENAME_NOREPLACE) PROVABLY WORKS for the managed
     source parent's filesystem, else a typed actionable reason — callers refuse BEFORE any
     candidate, journal, source, registry, or cleanup mutation.
@@ -332,7 +348,7 @@ class ManagedSourceTransaction:
         self.fd = -1
         self._handles: list[CandidateHandle] = []
 
-    def __enter__(self) -> "ManagedSourceTransaction":
+    def __enter__(self) -> Self:
         # `_walk_parent` opens `parent` no-follow and yields its fd (the ".txn" leaf need not
         # exist — we only use the parent fd, held for the whole `with`).
         self._walk = runtime_fs._walk_parent(self._paths, self._parent / ".txn", create=False)
@@ -369,7 +385,7 @@ class ManagedSourceTransaction:
         directory) is never silently replaced."""
         _rename_noreplace_at(self.fd, old_name, new_name)
 
-    def capture_leaf(self, name: str) -> "SourceLeafHandle":
+    def capture_leaf(self, name: str) -> SourceLeafHandle:
         """Capture the EXISTING leaf `name` (no-follow) under the held fd: a directory leaf
         retains an O_RDONLY|O_NOFOLLOW fd; a symlink leaf records dev/ino + readlink. Any
         other kind fails closed (never a destructible target)."""
@@ -384,7 +400,7 @@ class ManagedSourceTransaction:
                                     target=os.readlink(name, dir_fd=self.fd))
         raise PathContainmentError(f"leaf {name!r} is not a capturable source leaf")
 
-    def verify_leaf(self, handle: "SourceLeafHandle", name: str = None) -> bool:
+    def verify_leaf(self, handle: SourceLeafHandle, name: str | None = None) -> bool:
         """Leaf `name` (default the captured name) is STILL the captured leaf — the identity
         proof every irreversible archive/detach/removal re-runs at its own step."""
         return _verify_leaf_at(self.fd, name or handle.name, handle)
@@ -415,7 +431,7 @@ class ManagedSourceTransaction:
         self._handles.append(handle)
         return handle
 
-    def verify_candidate(self, handle: CandidateHandle, name: str = None) -> bool:
+    def verify_candidate(self, handle: CandidateHandle, name: str | None = None) -> bool:
         """The candidate leaf `name` (default the created name; the DEST name after the
         activation rename) under the held parent must STILL be a real directory with the
         recorded device/inode — i.e. it was not swapped (for a symlink, regular file, or a
@@ -437,7 +453,7 @@ class ManagedSourceTransaction:
         cannot be redirected by a parent-path swap."""
         return f"{self.pinned_path()}/{name}"
 
-    def create_link(self, target, name: str) -> "LinkHandle":
+    def create_link(self, target, name: str) -> LinkHandle:
         """Create the link-strategy runtime symlink leaf `name` -> `target` via the held fd and
         capture a `LinkHandle` recording its no-follow device/inode, the exact readlink string,
         and the validated local target — so activation can prove the leaf is still OUR symlink
@@ -449,7 +465,7 @@ class ManagedSourceTransaction:
         self._handles.append(handle)
         return handle
 
-    def verify_link(self, handle: "LinkHandle", name: str = None) -> bool:
+    def verify_link(self, handle: LinkHandle, name: str | None = None) -> bool:
         """The link leaf `name` (default the created name; the DEST name after the activation
         rename) is STILL our exact symlink: same no-follow device/inode, still a symlink, its
         readlink still equals the recorded target, and that target resolves to a directory."""

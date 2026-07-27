@@ -1,6 +1,8 @@
 """Host/family-aware TCP readiness: a wrong-family/host listener on the same port
 must not satisfy a loopback ready endpoint (one shared parser/probe)."""
 
+import pytest
+
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.probes.endpoints import parse_endpoint, tcp_endpoint_present
 
@@ -28,15 +30,13 @@ def test_ipv4_listener_does_not_satisfy_ipv6_endpoint():
     assert not ok
 
 
-def test_ipv4_any_satisfies_loopback_v4():
-    sys = _sys(Listener(family="ipv4", ip="0.0.0.0", port=9999, inode=1))
-    ok, _ = tcp_endpoint_present(sys, "127.0.0.1:9999")
-    assert ok
-
-
-def test_v6_wildcard_satisfies_loopback_v6():
-    sys = _sys(Listener(family="ipv6", ip="::", port=9999, inode=1))
-    ok, _ = tcp_endpoint_present(sys, "[::1]:9999")
+@pytest.mark.parametrize("family,ip,endpoint", [
+    pytest.param("ipv4", "0.0.0.0", "127.0.0.1:9999", id="ipv4-any-satisfies-loopback-v4"),
+    pytest.param("ipv6", "::", "[::1]:9999", id="v6-wildcard-satisfies-loopback-v6"),
+])
+def test_wildcard_bind_satisfies_loopback(family, ip, endpoint):
+    sys = _sys(Listener(family=family, ip=ip, port=9999, inode=1))
+    ok, _ = tcp_endpoint_present(sys, endpoint)
     assert ok
 
 
@@ -62,8 +62,6 @@ def test_wrong_family_lingering_not_counted_on_stop(tmp_path):
 
 
 # --- 4.1: STATUS agrees with startup (status used to be port-only) -----------
-
-import pytest
 
 
 def _status_present(sys, address, tmp_path):

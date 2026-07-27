@@ -35,7 +35,7 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from . import runtime_fs, validators
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 _TLS = ("config", "tls")
 _SERVER_CA, _CLIENT_CA, _SERVER, _EXPORTS = "server-ca", "client-ca", "server", "exports"
@@ -116,7 +116,7 @@ def _exists(paths: Paths, path: Path) -> bool:
 
 
 def _now() -> _dt.datetime:
-    return _dt.datetime.now(_dt.timezone.utc)
+    return _dt.datetime.now(_dt.UTC)
 
 
 def _sha256_hex(data: bytes) -> str:

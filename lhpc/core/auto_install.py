@@ -26,8 +26,8 @@ import json
 import re
 import time
 
-from .paths import Paths, PathContainmentError
 from . import runtime_fs
+from .paths import PathContainmentError, Paths
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -257,6 +257,7 @@ def archive(paths: Paths, which, suffix: str) -> tuple:
     followed. Evidence is retained, never deleted. Returns (ok, detail); an unprovable
     archive is a truthful (False, reason)."""
     import os
+
     from . import source_fs
     src = paths.under(*which)
     try:

@@ -79,7 +79,7 @@ class BootRestoreOpsMixin:
                 cand = known_working.read_candidate(self._paths, stack_id)
                 started = cand.get("started_at") if cand else None
                 if (cand is None or not isinstance(started, (int, float))
-                        or isinstance(started, bool) or not (started == started)  # NaN guard
+                        or isinstance(started, bool) or started != started  # NaN guard: NaN != NaN  # noqa: PLR0124
                         or started in (float("inf"), float("-inf"))):
                     ls_state = "unsafe"
                 else:
@@ -217,7 +217,7 @@ class BootRestoreOpsMixin:
                                        "systemctl --user restart lhpc-boot-restore.service",
                                 data={"admission_blocked": adm.tag},
                                 next_commands=["systemctl --user restart lhpc-boot-restore.service"])
-        except Exception as exc:                           # noqa: BLE001 — fail-closed boundary
+        except Exception as exc:
             # A driver defect must surface as a CLEAN nonzero integrity failure (unit red,
             # journal/evidence in whatever durable state the crash point left — the recovery
             # phase handles that), never a raw traceback that hides the remedy.
@@ -455,7 +455,7 @@ class BootRestoreOpsMixin:
                               "(/proc/sys/kernel/random/boot_id unreadable) — automatic "
                               "restore is blocked until it can be read",
                     "run_id": "", "finished_at": None,
-                    "counts": {s: 0 for s in boot_restore.ITEM_STATES}, "skipped": 0}
+                    "counts": dict.fromkeys(boot_restore.ITEM_STATES, 0), "skipped": 0}
         journal, jstate = boot_restore.load_journal(self._paths)
         if jstate == "absent":
             return None

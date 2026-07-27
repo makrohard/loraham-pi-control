@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 from . import runtime_fs
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 STORE_VERSION = 1
 KEEP = 3                        # newest N distinct compositions per stack

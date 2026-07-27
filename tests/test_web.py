@@ -61,6 +61,7 @@ def _client(tmp_path: Path, manifest: Path | None = None):
     return create_app(service_factory=factory).test_client()
 
 
+@pytest.mark.contract
 def test_dashboard_ok_and_headers(tmp_path):
     resp = _client(tmp_path).get("/")
     assert resp.status_code == 200
@@ -88,6 +89,8 @@ def test_non_get_405(tmp_path):
     assert _client(tmp_path).post("/stacks/meshcom").status_code == 405
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_stranded_get_on_action_url_redirects_home(tmp_path):
     """A browser reload of a POST-only action URL (the redirect got lost when an apply
     restarted nginx mid-response) must land on the overview, not an 'Error 405' dead end."""
@@ -123,6 +126,8 @@ def test_html_escaping(tmp_path):
     assert b"&lt;script&gt;" in resp.data
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_page_load_is_read_only(tmp_path):
     # If any page handler called a mutating service method, ReadOnlyGuard would
     # raise and these requests would 500. 200 proves the load was read-only.
@@ -146,6 +151,8 @@ def _is_network(argv: list[str]) -> bool:
     return False
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_get_routes_make_no_network_calls(tmp_path):
     """P0.6 — every GET route must run no network/git-remote command. A recording
     runner captures every subprocess invocation during each GET; none may be a
@@ -358,8 +365,8 @@ def test_daemon_config_page_has_live_settings(tmp_path):
     assert 'type="number"' in body and 'min="-130"' in body   # int -> ranged input
 
 
-def test_old_monitor_page_is_gone(tmp_path):
-    assert _daemon_client(tmp_path).get("/daemon/433").status_code == 404
+# (the /daemon/433 old-monitor-page absence check is now a case of
+# test_retired_routes_remain_unavailable)
 
 
 def test_daemon_api_json(tmp_path):
@@ -403,6 +410,8 @@ def test_config_path_cannot_escape_via_band_or_id(tmp_path):
     assert stacks in p.resolve().parents
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_get_daemon_config_is_read_only(tmp_path):
     # daemon_set is in _MUTATING; a GET of the config page must never call it.
     assert _daemon_client(tmp_path, guard=True).get("/stacks").status_code == 200
@@ -449,6 +458,7 @@ def test_install_confirm_offers_source_versions(tmp_path, monkeypatch):
         and "Latest stable" in cf and "Binary (prebuilt)" in cf
 
 
+@pytest.mark.contract
 def test_install_confirm_defaults_to_the_stacks_default_channel(tmp_path, monkeypatch):
     """A bare Install click must resolve the SAME channel the CLI would: binary wherever it is
     published. Defaulting to "dev" here started a multi-hour source compile nobody asked for
@@ -472,6 +482,7 @@ def test_install_confirm_keeps_dev_where_no_binary_is_published(tmp_path, monkey
     assert 'value="dev" selected' in flat
 
 
+@pytest.mark.contract
 def test_refused_binary_plan_offers_the_source_channel(tmp_path, monkeypatch):
     """A refused binary install must not be a dead end: the settled decision is an explicit
     "build from source instead?" — offered right here, never a silent fallback."""
@@ -561,6 +572,7 @@ def test_start_daemon_only_on_a_band(tmp_path):
     assert 'type="hidden" name="p_radio" value="868"' in body
 
 
+@pytest.mark.contract
 def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
     # Fresh runtime: igate source absent -> starting it refuses and forwards to IGATE's OWN Install
     # section (which has the Install button) with a warning — not to whatever row the page last had
@@ -592,6 +604,7 @@ def test_install_runs_as_live_logged_job(tmp_path):
     assert "job=" in r.headers["Location"]
 
 
+@pytest.mark.contract
 def test_action_plan_then_confirm(tmp_path):
     c = _real_app(tmp_path)
     token = _csrf(c)
@@ -613,6 +626,8 @@ def test_log_api_returns_lines(tmp_path):
     assert "lines" in j and isinstance(j["lines"], list)
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_system_api_is_read_only_json(tmp_path):
     # ReadOnlyGuard client: proves the GET touches no mutating service method; contract minimum
     # is a monotonic ts (raw counters are host-dependent and covered in test_sysstats.py).
@@ -1183,6 +1198,8 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
     assert not (files / "sib.conf").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.6")
 def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path):
     c = _daemon_client(tmp_path)                       # 433 CONF socket reachable
     j = c.get("/api/daemon/433/socket").get_json()
@@ -1242,10 +1259,17 @@ def test_settings_embedded_post_persists(tmp_path):                          # (
     assert svc.stack_config("igate").get("call") == "DJ0CHE-7"   # embedded form persists (unique->flat)
 
 
-def test_settings_old_config_routes_stay_removed(tmp_path):                  # (6)
-    c = _client(tmp_path)
-    assert c.get("/config").status_code == 404                # config hub gone
-    assert c.get("/stacks/igate/config").status_code == 302   # GET config page gone (POST remains)
+@pytest.mark.parametrize("client_kind,path,status", [
+    pytest.param("app", "/config", 404, id="config-hub-page-removed"),
+    pytest.param("app", "/stacks/igate/config", 302, id="per-stack-config-GET-removed-post-save-remains"),
+    pytest.param("daemon", "/daemon/433", 404, id="old-per-band-daemon-monitor-page-removed"),
+    pytest.param("app", "/self-update", 404, id="standalone-self-update-page-removed"),
+])
+def test_retired_routes_remain_unavailable(tmp_path, client_kind, path, status):
+    # Negative contract: every formerly-served page/route stays retired (must not silently return).
+    # The WHY of each retirement is carried in its param id.
+    c = _daemon_client(tmp_path) if client_kind == "daemon" else _client(tmp_path)
+    assert c.get(path).status_code == status
 
 
 def test_settings_partial_loads_and_renders(tmp_path):                       # (7)
@@ -1319,11 +1343,11 @@ def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
     assert "Self-Update" not in b                                   # renamed to just "Update"
 
 
-def test_standalone_self_update_page_is_gone(tmp_path):
-    # No backward-compat standalone page — the Update UI lives only on /stacks.
-    assert _client(tmp_path).get("/self-update").status_code == 404
+# (the /self-update standalone-page absence check is now a case of
+# test_retired_routes_remain_unavailable — the Update UI lives only on /stacks)
 
 
+@pytest.mark.contract
 def test_self_update_check_post_csrf(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService, ActionResult
     monkeypatch.setattr(ControllerService, "self_update_check", lambda self: ActionResult(True, "Up to date."))
@@ -1375,6 +1399,7 @@ def test_clean_tree_confirm_shows_neither_banner_nor_checkbox(tmp_path, monkeypa
     assert "These paths would be discarded" not in body
 
 
+@pytest.mark.contract
 def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
     """Stage 1 warns about the automatic stop/update/restart (fresh CLEAN tree -> no discard
     checkbox); stage 2 starts the NORMAL updater unit and renders the STATIC updating page."""
@@ -1508,6 +1533,7 @@ def test_self_update_apply_get_redirects_not_405(tmp_path):
     assert r.status_code == 302 and r.headers["Location"].endswith("#controller-update")
 
 
+@pytest.mark.contract
 def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):
     """A FRESH dirty check drives the confirm warning; ticking the discard consent selects the
     fixed overwrite unit; without the tick the normal unit runs (dirty apply then refuses)."""
@@ -2266,6 +2292,8 @@ def test_dashboard_wsbox_collapsed_with_firewall_line(tmp_path):
     assert "Firewall" in body and "#firewall-row" in body        # linked firewall line
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_firewall_settings_section_present(tmp_path):
     body = _client(tmp_path).get("/stacks?open=kiss").get_data(as_text=True)
     assert 'id="firewall-row"' in body
@@ -2277,6 +2305,8 @@ def test_firewall_settings_section_present(tmp_path):
     assert "unauthenticated" in body
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_firewall_configure_get_redirects(tmp_path):
     resp = _client(tmp_path).get("/firewall/configure")
     assert resp.status_code == 302 and resp.headers["Location"].endswith("#firewall-row")

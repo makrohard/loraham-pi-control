@@ -27,13 +27,31 @@ import stat as _stat
 from contextlib import contextmanager
 from pathlib import Path
 
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 __all__ = [
-    "PathContainmentError", "mkdir", "ensure_dir", "atomic_write", "atomic_write_bytes",
-    "write_marker", "write_launcher", "open_marker_excl", "open_existing_marker", "OwnedMarker", "open_log_append", "open_log_truncate", "open_lock",
-    "unlink", "chmod", "replace_symlink", "read_bytes", "read_text", "tail", "listdir",
-    "scandir_nofollow", "rename_leaf",
+    "OwnedMarker",
+    "PathContainmentError",
+    "atomic_write",
+    "atomic_write_bytes",
+    "chmod",
+    "ensure_dir",
+    "listdir",
+    "mkdir",
+    "open_existing_marker",
+    "open_lock",
+    "open_log_append",
+    "open_log_truncate",
+    "open_marker_excl",
+    "read_bytes",
+    "read_text",
+    "rename_leaf",
+    "replace_symlink",
+    "scandir_nofollow",
+    "tail",
+    "unlink",
+    "write_launcher",
+    "write_marker",
 ]
 
 
@@ -267,7 +285,7 @@ class OwnedMarker:
                 setattr(self, attr, -1)
 
 
-def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> "OwnedMarker":
+def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> OwnedMarker:
     """Create a NEW marker EXCLUSIVELY (`O_CREAT|O_EXCL|O_NOFOLLOW`) under a descriptor-walked
     parent, RETAINING both the journal file fd and a dup of the parent dir fd. Raises
     `FileExistsError` if ANY leaf already exists (regular/symlink/special/stale) — never
@@ -299,7 +317,7 @@ def open_marker_excl(paths: Paths, path: Path, text: str, mode: int = 0o600) -> 
     return marker
 
 
-def open_existing_marker(paths: Paths, path: Path) -> "OwnedMarker":
+def open_existing_marker(paths: Paths, path: Path) -> OwnedMarker:
     """Open an EXISTING regular marker for owned handling: walk the parent no-follow, open the
     leaf `O_RDWR|O_NOFOLLOW`, RETAIN the file fd + a dup of the parent fd, and capture its
     device/inode. Raises OSError if the leaf is absent, a symlink, or non-regular. Used by
@@ -394,10 +412,7 @@ def read_bytes(paths: Paths, path: Path, *, max_bytes: int = _DEFAULT_READ_MAX) 
     PathContainmentError on escape, OSError if missing/symlinked/non-regular/oversize."""
     with _walk_parent(paths, path, create=False) as (parent_fd, name):
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
-        try:
-            _require_regular_fd(fd, path)   # closes fd + raises on non-regular
-        except OSError:
-            raise
+        _require_regular_fd(fd, path)   # closes fd + raises on non-regular
         try:
             return _read_fd_bounded(fd, max_bytes, path)
         finally:

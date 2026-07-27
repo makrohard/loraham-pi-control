@@ -1,0 +1,52 @@
+diff --git a/lhpc/core/service_lifecycle_ops.py b/lhpc/core/service_lifecycle_ops.py
+index 3dc85ec..941822d 100644
+--- a/lhpc/core/service_lifecycle_ops.py
++++ b/lhpc/core/service_lifecycle_ops.py
+@@ -3276,8 +3276,13 @@ class LifecycleOpsMixin:
+         dstat = live.get(self.DAEMON_ID)
+         daemon_proc = dstat.run_state.value if dstat else "unknown"
+         daemon_up = bool(dstat and dstat.run_state in up)
+-        daemon_installed = bool(dstat and dstat.source_state.value
+-                                in ("match", "dirty", "differs", "unknown", "not-a-repo"))
++        # "Installed" is not only a SOURCE tree: the daemon can be installed from the binary
++        # channel (source-less), and anything RUNNING is installed by definition. Keying this off
++        # source_state alone made a binary-installed, running daemon render "Daemon not installed".
++        daemon_installed = bool(dstat) and (
++            dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
++            or self.binary_covers(self.DAEMON_ID)
++            or daemon_up)
+         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
+         # OCCUPIED = reachable (may physically hold SPI, used for conflict reasoning);
+         # USABLE = RADIO=READY (a working radio service). User-facing "served" summaries are
+diff --git a/tests/test_daemon_readiness.py b/tests/test_daemon_readiness.py
+index 25f3975..2f12177 100644
+--- a/tests/test_daemon_readiness.py
++++ b/tests/test_daemon_readiness.py
+@@ -70,6 +70,8 @@ def test_failed_radio_blocks_dependent_launch(tmp_path):
+     assert any("not READY" in dt or "RADIO=FAILED" in dt for dt in res.details)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
+     # A TX test transmits real RF -> requires RADIO=READY, not mere reachability.
+     d = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+@@ -106,6 +108,18 @@ def test_radio_overview_occupied_vs_usable(tmp_path):
+     assert not d["occupied"] and not d["usable"] and d["state_label"] == "offline"
+ 
+ 
++def test_radio_overview_reports_binary_installed_daemon_as_installed(tmp_path, monkeypatch):
++    # Operator report: a daemon installed from the BINARY channel (source-LESS) and running fine
++    # rendered "Daemon not installed" on the dashboard, because `installed` was derived from
++    # source_state alone. `binary_covers` is the canonical "provided by a binary artifact"
++    # primitive; a binary-covered daemon must read as installed even with no source tree.
++    monkeypatch.setattr(ControllerService, "binary_covers",
++                        lambda self, cid: cid == self.DAEMON_ID)
++    ov = ControllerService(system=FakeSystem().system,
++                           paths=Paths(runtime_root=tmp_path)).radio_overview()
++    assert ov and all(r["daemon"]["installed"] is True for r in ov)
++
++
+ # --- #5: served/usable summaries exclude FAILED/UNINITIALIZED -----------------
+ 
+ def test_served_summary_excludes_failed(tmp_path):

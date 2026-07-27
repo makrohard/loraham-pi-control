@@ -271,7 +271,7 @@ class StackWebProxy:
     Keeping `swc.scheme` (listener) and `upstream_scheme` apart is deliberate: MeshCom's upstream is
     plain http on loopback, and that must not talk anyone into dropping TLS on the public listener."""
 
-    swc: "object"                    # config.StackWebConfig
+    swc: object                    # config.StackWebConfig
     upstream_address: str            # "127.0.0.1:18083"
     upstream_scheme: str             # "http" | "https"
 
@@ -333,7 +333,7 @@ def listener_scope(system, port: int) -> str:
     has no bind knob) is reachable directly on the LAN, bypassing this proxy's authentication."""
     try:
         listeners = system.procfs.tcp_listeners()
-    except Exception:                                    # noqa: BLE001 — evidence, never fatal
+    except Exception:
         return "absent"
     found = False
     for ln in listeners:
@@ -753,7 +753,7 @@ EVIDENCE_SCHEMA = 1
 
 
 def _now_iso() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+    return _dt.datetime.now(_dt.UTC).isoformat()
 
 
 def read_evidence(paths: Paths) -> dict:

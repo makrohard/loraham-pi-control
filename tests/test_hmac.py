@@ -4,6 +4,8 @@ and the auto-apply run (driver step-runner + marker + redacted log)."""
 import json
 from pathlib import Path
 
+import pytest
+
 from lhpc.core import model, runtime_fs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -612,6 +614,7 @@ def test_hmac_disable_cli_gate_fires_before_the_step_runner(tmp_path, monkeypatc
     assert svc.hmac_apply_cli("meshcom", "disable", emit=lambda s: None, confirm=True) == 0 and ran == [1]
 
 
+@pytest.mark.contract
 def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
     client, svc = _web(tmp_path)
     tok = _csrf(client)
@@ -626,6 +629,7 @@ def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
     assert "confirm_phrase" in client.get("/stacks/meshcom/hmac/disable").get_data(as_text=True)
 
 
+@pytest.mark.contract
 def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch):
     client, svc = _web(tmp_path)
     tok = _csrf(client)
@@ -706,6 +710,7 @@ def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
     assert "/stacks/meshcom/hmac/renew" in body
 
 
+@pytest.mark.contract
 def test_hmac_apply_page_is_the_warning_with_an_apply_button(tmp_path):
     client, _ = _web(tmp_path)
     r = client.get("/stacks/meshcom/hmac/renew")
@@ -731,12 +736,14 @@ def test_hmac_apply_page_reoffers_apply_after_an_interrupted_run(tmp_path, monke
     assert "hmac.js" not in body                               # no poller on a terminal run
 
 
+@pytest.mark.contract
 def test_hmac_apply_page_rejects_bad_action_and_stack(tmp_path):
     client, _ = _web(tmp_path)
     assert client.get("/stacks/meshcom/hmac/bogus").status_code == 404
     assert client.get("/stacks/kiss/hmac/enable").status_code == 404      # HMAC does not apply
 
 
+@pytest.mark.contract
 def test_hmac_apply_post_requires_csrf_and_starts_the_run(tmp_path, monkeypatch):
     client, svc = _web(tmp_path)
     assert client.post("/stacks/meshcom/hmac/enable/apply").status_code == 400   # no CSRF
@@ -764,6 +771,7 @@ def test_hmac_api_is_get_safe_tristate(tmp_path, monkeypatch):
 
 # ---- Part F: CLI parity ---------------------------------------------------------------------------
 
+@pytest.mark.contract
 def test_cli_hmac_status_and_gate(tmp_path, monkeypatch, capsys):
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
@@ -781,6 +789,7 @@ def test_cli_hmac_status_and_gate(tmp_path, monkeypatch, capsys):
     assert "does not apply" in capsys.readouterr().out
 
 
+@pytest.mark.contract
 def test_cli_hmac_apply_flips_state_without_printing_the_secret(tmp_path, monkeypatch, capsys):
     from lhpc.adapters.cli.main import main
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
@@ -822,6 +831,7 @@ def test_run_steps_unsafe_build_persists_blocking_marker(tmp_path, monkeypatch):
     assert st["session_ident"]["pid"] == 123 and st.get("finished_at")
 
 
+@pytest.mark.contract
 def test_unsafe_blocks_new_run_and_two_recovery_scopes(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
 

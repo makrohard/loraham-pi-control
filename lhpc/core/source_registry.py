@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import runtime_fs, validators
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 REGISTRY_VERSION = 2
 _SELECTORS = ("pinned", "dev", "stable", "backfilled")
@@ -30,7 +30,7 @@ _SELECTORS = ("pinned", "dev", "stable", "backfilled")
 # readable across upgrades — accept the historical value on read and normalize it to
 # "backfilled" in the in-memory record, so any later record rewrite persists the new name.
 # Writers use _SELECTORS only; "legacy" is never written again.
-_SELECTORS_READ = _SELECTORS + ("legacy",)
+_SELECTORS_READ = (*_SELECTORS, "legacy")
 _STRATEGIES = ("", "adopt", "copy", "link")
 
 
@@ -367,8 +367,7 @@ def _norm_remote(url: str) -> str:
     """Compare remotes ignoring trivial spelling differences (trailing `/`, `.git`,
     `https://` vs `git@host:` forms)."""
     u = url.strip().rstrip("/")
-    if u.endswith(".git"):
-        u = u[:-4]
+    u = u.removesuffix(".git")
     if u.startswith("git@") and ":" in u:
         host, _, path = u[4:].partition(":")
         u = f"https://{host}/{path}"

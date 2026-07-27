@@ -39,7 +39,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from . import runtime_fs
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 INDEX_SCHEMA = 2
 _INDEX_MAX_BYTES = 1 << 20            # index.json is a few KiB; 1 MiB is a generous ceiling
@@ -292,7 +292,7 @@ def validate_and_extract(tar_path, stage_dir, publish_roots) -> list:
                         "artifact expands beyond the accepted size limit")
                 # NOT `lstrip("./")`: that strips a CHARACTER SET and would rewrite
                 # "../../x" into "x", making the traversal check below dead code.
-                name = m.name[2:] if m.name.startswith("./") else m.name
+                name = m.name.removeprefix("./")
                 if not name or name == ".":
                     continue
                 if m.issym() or m.islnk():
@@ -336,7 +336,7 @@ def validate_and_extract(tar_path, stage_dir, publish_roots) -> list:
 
 def safe_rel(p: str) -> bool:
     """A runtime-root-relative path that cannot escape (same rule the manifest parser uses)."""
-    if not isinstance(p, str) or not p or p.startswith("/") or p.startswith("~"):
+    if not isinstance(p, str) or not p or p.startswith(("/", "~")):
         return False
     return all(seg not in ("", ".", "..") for seg in p.split("/"))
 
@@ -599,7 +599,8 @@ def run_probe(paths: Paths, argv) -> str:
         raise BinaryInstallError(f"installed binary {argv[0]} is missing or not executable")
     cmd = [str(binary), *argv[1:]]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S,
+                             check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         raise BinaryInstallError(f"could not run {argv[0]} ({exc})") from None
     out = (res.stdout or "").strip() or (res.stderr or "").strip()

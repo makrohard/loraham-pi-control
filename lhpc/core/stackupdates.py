@@ -20,7 +20,7 @@ import threading
 import time
 
 from . import runtime_fs
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 _MARKER = ("state", "stackupdates.json")
 
@@ -68,9 +68,7 @@ def _valid_entry(e) -> bool:
     for k in ("remote", "source_path"):
         if k in e and not _is_str(e[k]):
             return False
-    if "checked_at" in e and not _is_int(e["checked_at"]):
-        return False
-    return True
+    return not ("checked_at" in e and not _is_int(e["checked_at"]))
 
 
 def _clean_components(comps) -> dict:
@@ -93,17 +91,16 @@ def _valid_cache(data) -> bool:
             return False
     if "checked_at" in data and not _is_int(data["checked_at"]):
         return False
-    if "components" in data and not isinstance(data["components"], dict):
-        return False
-    return True
+    return not ("components" in data and not isinstance(data["components"], dict))
 
 
 def read_cache(paths: Paths) -> dict:
     """FILE-SAFE AND SCHEMA-SAFE cached read (the ONLY thing GET pages touch). Regular-file only,
     no-follow, size-gated BEFORE the bounded read (so an oversized cache is rejected, never
     truncated). Any unsafe / missing / malformed payload returns `{}` — rendered as unchecked."""
-    from . import runtime_fs as _rfs
     import stat as _stat
+
+    from . import runtime_fs as _rfs
     try:
         # `paths.under()` realpath-checks the leaf and raises PathContainmentError (a ValueError)
         # for an ESCAPING symlink — it MUST be inside the try, so that case returns {} rather than

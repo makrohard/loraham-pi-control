@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .assets import asset_path
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 # Tracked defaults shipped with the controller (package data, wheel-safe).
 _DEFAULTS_PATH = asset_path("defaults.toml")
@@ -69,6 +69,7 @@ def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
     thread until the run ended; repeated retries could freeze the whole UI. Failing fast
     with a truthful 'busy, retry shortly' keeps the server responsive."""
     import time as _time
+
     from . import runtime_fs
     # Single safe API: contained path + O_NOFOLLOW open (a symlinked .lock leaf or an
     # escaping parent raises here, blocking mutation rather than being bypassed).
@@ -83,7 +84,7 @@ def config_lock(paths: Paths, timeout: float = CONFIG_LOCK_TIMEOUT_S):
                 if _time.monotonic() >= deadline:
                     raise ConfigLockBusy(
                         "config is busy — a long-running operation holds it; "
-                        "try again shortly")
+                        "try again shortly") from None
                 _time.sleep(_CONFIG_LOCK_POLL_S)
         yield
     finally:
@@ -151,7 +152,7 @@ class BootConfig:
     reason: str = ""
 
 
-def _parse_boot(merged: dict, diagnostics: list) -> "BootConfig":
+def _parse_boot(merged: dict, diagnostics: list) -> BootConfig:
     raw = merged.get("boot")
     if raw is None:
         return BootConfig()
@@ -325,7 +326,7 @@ class Config:
     webserver: WebserverConfig = field(default_factory=WebserverConfig)
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
-    boot: "BootConfig" = field(default_factory=lambda: BootConfig())
+    boot: BootConfig = field(default_factory=BootConfig)
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -406,7 +407,7 @@ def _valid_ip_san(tok: str):
     return str(ip)
 
 
-def _parse_webserver(merged: dict, diagnostics: list) -> "WebserverConfig":
+def _parse_webserver(merged: dict, diagnostics: list) -> WebserverConfig:
     """Structure-validate the merged `[webserver]` section into a typed, NORMALIZED
     `WebserverConfig`. A wrong-typed section or field becomes a diagnostic + safe default;
     malformed list entries (CIDR/SAN) are DROPPED with a diagnostic. Never crashes, never
@@ -488,7 +489,7 @@ def _parse_webserver(merged: dict, diagnostics: list) -> "WebserverConfig":
         client_cert_days=_days("client_cert_days", d.client_cert_days))
 
 
-def _parse_firewall(merged: dict, diagnostics: list) -> "FirewallConfig":
+def _parse_firewall(merged: dict, diagnostics: list) -> FirewallConfig:
     """Parse [firewall]; a wrong-typed section falls back to safe defaults (a hand-edit must
     never crash config load). AP stays disabled unless BOTH interface and cidr are present."""
     raw = merged.get("firewall", {})
@@ -724,8 +725,9 @@ def web_session_secret(paths: Paths) -> bytes:
     at 0600 if absent/short. Survives restarts (so sessions/CSRF tokens are not invalidated on
     every process restart) and is NEVER cleared by 'Reset to default'. Never logged. An
     unsafe/symlinked leaf raises out of `atomic_write_bytes` (the caller fails safe)."""
-    from . import runtime_fs
     import secrets as _secrets
+
+    from . import runtime_fs
     p = _web_session_path(paths)
     try:
         raw = runtime_fs.read_bytes(paths, p)
@@ -750,8 +752,9 @@ def web_session_secret(paths: Paths) -> bytes:
 def rotate_web_session_secret(paths: Paths) -> bytes:
     """Explicitly rotate the persistent session secret — a deliberate operator action that
     invalidates every existing session (all clients must re-establish)."""
-    from . import runtime_fs
     import secrets as _secrets
+
+    from . import runtime_fs
     secret = _secrets.token_bytes(48)
     runtime_fs.atomic_write_bytes(paths, _web_session_path(paths), secret, mode=0o600)
     return secret
@@ -1044,7 +1047,7 @@ def save_firewall_config(paths: Paths, *, mode=None, allow_endpoints=None, ssh_p
 
 
 def _reject_http_with_cert_auth(paths: Paths, patch: dict, what: str,
-                                current: "WebserverConfig | StackWebConfig | None" = None) -> None:
+                                current: WebserverConfig | StackWebConfig | None = None) -> None:
     """A client certificate is presented during the TLS handshake, so a plain-http listener has
     nothing to verify. Refuse `scheme=http` together with a cert-based access mode — checking the
     EFFECTIVE result (patch merged over what is already stored), so neither half can sneak in alone."""
@@ -1256,7 +1259,7 @@ def recover_config_transaction(paths: Paths) -> str | None:
 
 def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, int]]) -> None:
     """Write several config files all-or-recoverable under one lock. Each target is
-    (logical-kind, path, content, mode). Steps: recover/​block any pending journal;
+    (logical-kind, path, content, mode). Steps: recover/\u200bblock any pending journal;
     journal each pre-image with a logical kind + runtime-relative path; atomically
     replace each; roll back all on failure; remove the journal only on success.
     Raises ConfigError("recovery-required: …") if a restore fails (journal kept)."""
@@ -1286,14 +1289,14 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
         except FileNotFoundError:
             pre, existed = None, False
         except (OSError, PathContainmentError) as exc:   # unreadable/unsafe -> NOT "nonexistent"
-            raise ConfigError(f"config target exists but is unreadable: {p} ({exc})")
+            raise ConfigError(f"config target exists but is unreadable: {p} ({exc})") from exc
         journal["targets"].append({"kind": kind, "rel": rel, "pre": pre,
                                    "existed": existed, "mode": mode})
     for rec in journal["targets"]:        # prove every target resolves safely first
         _resolve_journal_target(paths, rec)
     _atomic_write(paths, jp, json.dumps(journal), 0o600)   # anchored write creates parents
     try:
-        for kind, p, content, mode in targets:
+        for _kind, p, content, mode in targets:
             # `content` may be a callable rendered INSIDE this lock (merge-in-transaction),
             # so it reads the LATEST file and preserves keys owned by another writer. A raise
             # here (e.g. an unsupported manual value) triggers the rollback below.
@@ -1431,7 +1434,7 @@ def _render_stack_config(stack_id: str, values: dict) -> str:
         parsed = tomllib.loads(rendered)
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"generated stack config is not valid TOML (refused): {exc}") from exc
-    if set(parsed) != {k for k in values}:       # a key became nested/dotted -> refuse
+    if set(parsed) != set(values):       # a key became nested/dotted -> refuse
         raise ConfigError("generated stack config changed the key set (unsafe key); refused")
     return rendered
 
@@ -1457,7 +1460,7 @@ def merge_stack_values(paths: Paths, stack_id: str, band: str, updates: dict,
         if clear_empty and value in (None, ""):
             current.pop(key, None)
         else:
-            current[key] = value if not isinstance(value, str) else value
+            current[key] = value
     return current
 
 

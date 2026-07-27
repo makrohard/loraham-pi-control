@@ -1,0 +1,869 @@
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 99c0ffb..03ea816 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -27,6 +27,16 @@ def pytest_configure(config):
+         "markers", "requires_zstd: crosses the production extraction boundary (`zstd -dc`), so it "
+                    "needs the host `zstd` binary. Skipped (with reason) where it is absent; the target "
+                    "and CI install it, so it normally runs.")
++    config.addinivalue_line(
++        "markers", "contract: Tier 0 — the readable core, one lane that states what LHPC PROMISES. "
++                   "Each tagged case goes through the widest public seam (CLI verb / Flask route / "
++                   "typed ActionResult) and expresses a happy path or the refusal that defines a "
++                   "boundary. Run it with `-m contract`; it must be green and quick.")
++    config.addinivalue_line(
++        "markers", "safety(id): a contract case that guards a named SAFETY invariant. The id is the "
++                   "docs/hardening-0.1.md P0.x/P1.x where one exists (P0.5 uninstall, P0.6 GET-no-"
++                   "network), else a descriptive slug (RF-TX-opt-in / firewall-fail-closed / "
++                   "exposure-fail-closed). Run the invariant set with `-m safety`.")
+ 
+ 
+ def pytest_collection_modifyitems(config, items):
+diff --git a/tests/test_auto_install.py b/tests/test_auto_install.py
+index df27275..e2d6b3f 100644
+--- a/tests/test_auto_install.py
++++ b/tests/test_auto_install.py
+@@ -118,6 +118,8 @@ def test_dry_run_names_scope_and_flags(tmp_path):
+     assert any("TX test: off" in d for d in r.details)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_requires_tests(tmp_path):
+     svc = _svc(tmp_path)
+     r = svc.auto_install(apply=True, tests=False, tx=True)
+@@ -389,6 +391,8 @@ def test_tx_stop_failure_never_claims_stopped(tmp_path, monkeypatch):
+     assert "may still be RUNNING" in marker["tx_phase"]["detail"]
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_refused_without_callsign(tmp_path, monkeypatch):
+     svc, marker, calls = _tx_env(tmp_path, monkeypatch, callsign="")
+     svc._auto_install_tx_phase(marker, None, lambda s: None, lambda: None)
+@@ -1080,6 +1084,8 @@ def _tx_run_env(tmp_path, monkeypatch, build_ok=True, test_ok=True):
+     return svc, lifecycle
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ @pytest.mark.needs_session
+ def test_tx_no_callsign_driver_refuses_before_any_mutation(tmp_path):
+     svc = _svc(tmp_path)                                          # no callsign configured
+@@ -1166,6 +1172,8 @@ def test_tx_allowed_when_only_independent_stack_fails(tmp_path, monkeypatch):
+     assert not r.ok and "REMAIN installed" in r.summary
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ @pytest.mark.needs_session
+ def test_tx_happy_path_still_runs(tmp_path, monkeypatch):
+     svc, lifecycle = _tx_run_env(tmp_path, monkeypatch)
+diff --git a/tests/test_boot_restore.py b/tests/test_boot_restore.py
+index 5e3b6c9..88affa3 100644
+--- a/tests/test_boot_restore.py
++++ b/tests/test_boot_restore.py
+@@ -882,6 +882,7 @@ def test_banner_running_with_live_driver(tmp_path):
+ 
+ # --- CLI ----------------------------------------------------------------------------------------
+ 
++@pytest.mark.contract
+ def test_cli_autostart_show_and_toggle(tmp_path, monkeypatch, capsys):
+     from lhpc.adapters.cli.main import main
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+@@ -911,6 +912,7 @@ def test_cli_run_service_disabled_path_exits_zero(tmp_path, monkeypatch, capsys)
+     assert j["state"] == "disabled"
+ 
+ 
++@pytest.mark.contract
+ def test_cli_run_service_unsafe_journal_exits_nonzero(tmp_path, monkeypatch, capsys):
+     from lhpc.adapters.cli.main import main
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+@@ -936,6 +938,7 @@ def _csrf_of(client):
+     return m.group(1)
+ 
+ 
++@pytest.mark.contract
+ def test_web_toggle_round_trip(tmp_path):
+     svc = _svc(tmp_path)
+     c = _web_client(svc)
+@@ -950,6 +953,7 @@ def test_web_toggle_round_trip(tmp_path):
+     assert svc.boot_restore_enabled() == (True, "")
+ 
+ 
++@pytest.mark.contract
+ def test_web_toggle_requires_csrf(tmp_path):
+     c = _web_client(_svc(tmp_path))
+     assert c.post("/boot-restore", data={"restore": "on"}).status_code == 400
+diff --git a/tests/test_clean.py b/tests/test_clean.py
+index 336f76f..84928b6 100644
+--- a/tests/test_clean.py
++++ b/tests/test_clean.py
+@@ -6,6 +6,8 @@ records. Never follows symlinks; local.toml/secrets/other stacks untouched."""
+ import json
+ import time
+ 
++import pytest
++
+ from lhpc.core import known_working, source_registry
+ from lhpc.core.paths import Paths
+ from lhpc.core.probes.backends import FakeSystem
+@@ -93,6 +95,8 @@ def test_clean_dry_run_names_removals_without_mutation(tmp_path):
+     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()          # nothing mutated
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_clean_requires_purge_flag(tmp_path):
+     _seed_kiss(tmp_path)
+     svc = _svc(tmp_path)
+@@ -101,6 +105,8 @@ def test_clean_requires_purge_flag(tmp_path):
+     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_clean_refuses_while_running(tmp_path):
+     _seed_kiss(tmp_path)
+     svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
+@@ -109,6 +115,8 @@ def test_clean_refuses_while_running(tmp_path):
+     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_clean_removes_exact_set_and_preserves_the_rest(tmp_path):
+     paths = _seed_kiss(tmp_path)
+     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc", _KISS_REMOTE)
+diff --git a/tests/test_config.py b/tests/test_config.py
+index 1c99548..87a8527 100644
+--- a/tests/test_config.py
++++ b/tests/test_config.py
+@@ -63,6 +63,7 @@ def test_save_stack_config_validates(tmp_path):
+     assert good.ok and svc.stack_config("daemon")["radio"] == "868"
+ 
+ 
++@pytest.mark.contract
+ def test_save_operator_writes_callsign_locally(tmp_path):
+     from lhpc.core.config import save_operator_config
+     paths = _paths(tmp_path)
+diff --git a/tests/test_controller.py b/tests/test_controller.py
+index 83ace64..4d215a1 100644
+--- a/tests/test_controller.py
++++ b/tests/test_controller.py
+@@ -789,6 +789,7 @@ def test_controller_system_deps_shape_and_required_flags(tmp_path, monkeypatch):
+     assert flat["cryptography"]["satisfied"] is True and flat["flask"]["satisfied"] is True
+ 
+ 
++@pytest.mark.contract
+ def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+     svc = _svc(tmp_path)
+@@ -812,6 +813,7 @@ def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
+                            "(no init, no network, no RF).")
+ 
+ 
++@pytest.mark.contract
+ def test_doctor_ok_when_only_optional_dep_missing(tmp_path, monkeypatch):
+     # Optional-only missing (nginx) must NOT flip doctor.ok, and the summary stays the base string.
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+diff --git a/tests/test_daemon_params_web.py b/tests/test_daemon_params_web.py
+index 0d4c56c..858d1ef 100644
+--- a/tests/test_daemon_params_web.py
++++ b/tests/test_daemon_params_web.py
+@@ -3,6 +3,8 @@ LBT), save + reset. Backed by a fake-system service (daemon unreachable)."""
+ 
+ import re
+ 
++import pytest
++
+ from htmlq import parse
+ from lhpc.core.paths import Paths
+ from lhpc.core.probes.backends import FakeSystem
+@@ -38,6 +40,7 @@ def test_server_side_validation_rejects_bad_values(tmp_path):
+     assert svc.save_daemon_params("daemon", "433", {"MODE": "FSK"}).ok         # valid enum member
+ 
+ 
++@pytest.mark.contract
+ def test_live_mode_fsk_confirm_warns(tmp_path):
+     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
+     c = _app(tmp_path)
+@@ -51,6 +54,7 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
+     assert "break LoRa" not in body2
+ 
+ 
++@pytest.mark.contract
+ def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
+     c = _app(tmp_path)
+     # Panels live in the (lazy) stack bodies — fetch each row force-opened.
+@@ -61,6 +65,7 @@ def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
+     assert disabled not in _row(dm, "daemon")      # daemon: always on
+ 
+ 
++@pytest.mark.contract
+ def test_apply_live_rejected_server_side_when_not_running(tmp_path):
+     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+     r = svc.apply_daemon_params("meshcom", "433")            # not running -> refused
+@@ -80,6 +85,7 @@ def test_daemon_panel_follows_upper_band_switch(tmp_path):
+     assert "(868 MHz)" in c.get("/stacks?open=meshcore&band=868").get_data(as_text=True)  # 868-band stack
+ 
+ 
++@pytest.mark.contract
+ def test_apply_live_saves_then_reports(tmp_path):
+     # Daemon unreachable in tests: Apply persists the values, then reports it can't reach it.
+     c = _app(tmp_path)
+@@ -147,6 +153,7 @@ def test_save_rejects_out_of_range(tmp_path):
+     assert 'value="99999"' not in body                       # rejected, not stored
+ 
+ 
++@pytest.mark.contract
+ def test_save_requires_csrf(tmp_path):
+     c = _app(tmp_path)
+     r = c.post("/stacks/meshcom/daemon-params",
+@@ -183,6 +190,7 @@ def test_apply_live_full_success(tmp_path):
+     assert r.ok and not r.data["failed"] and r.data["band"] == "433"
+ 
+ 
++@pytest.mark.contract
+ def test_apply_live_total_failure_is_not_success(tmp_path):
+     # Radio not READY -> every set fails -> ok=False (never green), nothing applied.
+     svc = _svc(tmp_path, b"STATUS RADIO=UNINITIALIZED\n")
+diff --git a/tests/test_daemon_readiness.py b/tests/test_daemon_readiness.py
+index 25f3975..2f12177 100644
+--- a/tests/test_daemon_readiness.py
++++ b/tests/test_daemon_readiness.py
+@@ -70,6 +70,8 @@ def test_failed_radio_blocks_dependent_launch(tmp_path):
+     assert any("not READY" in dt or "RADIO=FAILED" in dt for dt in res.details)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
+     # A TX test transmits real RF -> requires RADIO=READY, not mere reachability.
+     d = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+@@ -106,6 +108,18 @@ def test_radio_overview_occupied_vs_usable(tmp_path):
+     assert not d["occupied"] and not d["usable"] and d["state_label"] == "offline"
+ 
+ 
++def test_radio_overview_reports_binary_installed_daemon_as_installed(tmp_path, monkeypatch):
++    # Operator report: a daemon installed from the BINARY channel (source-LESS) and running fine
++    # rendered "Daemon not installed" on the dashboard, because `installed` was derived from
++    # source_state alone. `binary_covers` is the canonical "provided by a binary artifact"
++    # primitive; a binary-covered daemon must read as installed even with no source tree.
++    monkeypatch.setattr(ControllerService, "binary_covers",
++                        lambda self, cid: cid == self.DAEMON_ID)
++    ov = ControllerService(system=FakeSystem().system,
++                           paths=Paths(runtime_root=tmp_path)).radio_overview()
++    assert ov and all(r["daemon"]["installed"] is True for r in ov)
++
++
+ # --- #5: served/usable summaries exclude FAILED/UNINITIALIZED -----------------
+ 
+ def test_served_summary_excludes_failed(tmp_path):
+diff --git a/tests/test_firewall.py b/tests/test_firewall.py
+index e86d86d..1c2ad75 100644
+--- a/tests/test_firewall.py
++++ b/tests/test_firewall.py
+@@ -419,6 +419,8 @@ def _expected_live_json(cand, ownership="fixedid01", **kw):
+     return _json.dumps({"nftables": [{"metainfo": {"version": "1.1.3"}}, *listing]})
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_apply_happy_path_writes_snapshot_and_verified_receipt(tmp_path):
+     import json as _json
+     from lhpc.core import firewall_helper as fh
+@@ -472,6 +474,8 @@ def test_apply_transition_then_cleanup(tmp_path):
+     assert not (tmp_path / "etc" / "firewall.transition.json").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_apply_refuses_invalid_candidate_and_not_owned_table(tmp_path):
+     import json as _json
+     from lhpc.core import firewall_helper as fh
+@@ -1045,6 +1049,8 @@ def test_gate_noop_when_integration_absent(tmp_path, monkeypatch):
+     assert allowed and msg == "" and cmds == []
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_gate_partial_install_fails_closed(tmp_path, monkeypatch):
+     # P1-1: a half-installed firewall must not be trusted — refuse remote activation.
+     svc = _svc_fw_installed(tmp_path, monkeypatch, state="partial")
+@@ -1052,6 +1058,8 @@ def test_gate_partial_install_fails_closed(tmp_path, monkeypatch):
+     assert not allowed and "partially installed" in msg
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_gate_refuses_even_already_exposed_when_unverified(tmp_path, monkeypatch):
+     # P1-1: an already-socket-exposed port is NOT evidence of firewall protection. When the
+     # firewall is installed but not verified-current, activating a remote listener is refused
+@@ -1066,11 +1074,15 @@ def test_gate_allows_when_no_remote_listener(tmp_path, monkeypatch):
+     assert svc.firewall_gate_activation(set())[0]          # nothing remote -> allowed
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_gate_allows_remote_listener_when_firewall_verified(tmp_path, monkeypatch):
+     svc = _svc_fw_installed(tmp_path, monkeypatch, live_ok=True, config_ok=True)
+     assert svc.firewall_gate_activation({8443})[0]         # verified + current -> allowed
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_webserver_apply_blocked_by_pending_firewall(tmp_path, monkeypatch):
+     from lhpc.core import config as cfgmod
+     svc = _svc(tmp_path)
+diff --git a/tests/test_hardware.py b/tests/test_hardware.py
+index 289c341..76d74e1 100644
+--- a/tests/test_hardware.py
++++ b/tests/test_hardware.py
+@@ -98,6 +98,7 @@ def test_migrates_legacy_hw_preset_to_loraham(tmp_path):
+     assert any("legacy" in d and "loraham" in d for d in c.diagnostics)
+ 
+ 
++@pytest.mark.contract
+ def test_save_rejects_invalid_setup(tmp_path):
+     with pytest.raises(config.ConfigError):
+         config.save_hardware_setup(Paths(runtime_root=tmp_path), "nope")
+@@ -143,6 +144,7 @@ def test_daemon_hidden_injected_params_exist(tmp_path):
+ 
+ # ---- M2: refuse-to-start when no hardware is configured -----------------------------------------
+ 
++@pytest.mark.contract
+ def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
+     svc = _svc(tmp_path)                                            # default: unset
+     for target in ("daemon", "meshcore", "chat"):
+@@ -153,6 +155,7 @@ def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
+             assert "lhpc hardware" in " ".join(r.next_commands)
+ 
+ 
++@pytest.mark.contract
+ def test_hardware_block_clears_once_configured(tmp_path):
+     svc = _svc(tmp_path)
+     _setup(svc, "loraham")
+@@ -170,6 +173,7 @@ def test_start_refuses_absent_band_stack_after_configured(tmp_path):
+ 
+ # ---- retained invariants: one process per band, serve-bands never 'both' ------------------------
+ 
++@pytest.mark.contract
+ def test_daemon_serve_bands_never_both(tmp_path):
+     svc = _svc(tmp_path)
+     _setup(svc, "loraham")
+@@ -259,6 +263,7 @@ def test_probe_present_when_daemon_stays_up(tmp_path):
+     assert env["LORAHAM_SOCKET_DIR"] == "/tmp"
+ 
+ 
++@pytest.mark.contract
+ def test_probe_absent_captures_chip_diagnostic(tmp_path):
+     runner = _Runner(CommandResult(
+         returncode=1, stdout="",
+@@ -269,6 +274,7 @@ def test_probe_absent_captures_chip_diagnostic(tmp_path):
+     assert "antwortet nicht" in pr.diagnostic
+ 
+ 
++@pytest.mark.contract
+ def test_probe_busy_when_band_already_served(tmp_path):
+     runner = _Runner(CommandResult(returncode=3, stdout="", stderr="instance lock busy\n",
+                                    timed_out=False))
+@@ -353,6 +359,7 @@ def test_probe_message_uses_friendly_label_not_wire_name(tmp_path):
+     assert pr.present and "LoRaHAM" in pr.message and "legacy" not in pr.message
+ 
+ 
++@pytest.mark.contract
+ def test_probe_result_renders_inline_and_is_consumed_once(tmp_path):
+     # The Detect result is stashed in the session and rendered INLINE (under the Detect button on the
+     # daemon Hardware settings), not as a top-level flash; a reload does not re-show it.
+diff --git a/tests/test_hmac.py b/tests/test_hmac.py
+index 92d6aa3..67af4c6 100644
+--- a/tests/test_hmac.py
++++ b/tests/test_hmac.py
+@@ -4,6 +4,8 @@ and the auto-apply run (driver step-runner + marker + redacted log)."""
+ import json
+ from pathlib import Path
+ 
++import pytest
++
+ from lhpc.core import model, runtime_fs
+ from lhpc.core.paths import Paths
+ from lhpc.core.probes.backends import FakeSystem
+@@ -612,6 +614,7 @@ def test_hmac_disable_cli_gate_fires_before_the_step_runner(tmp_path, monkeypatc
+     assert svc.hmac_apply_cli("meshcom", "disable", emit=lambda s: None, confirm=True) == 0 and ran == [1]
+ 
+ 
++@pytest.mark.contract
+ def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
+     client, svc = _web(tmp_path)
+     tok = _csrf(client)
+@@ -626,6 +629,7 @@ def test_hmac_disable_web_requires_phrase(tmp_path, monkeypatch):
+     assert "confirm_phrase" in client.get("/stacks/meshcom/hmac/disable").get_data(as_text=True)
+ 
+ 
++@pytest.mark.contract
+ def test_hmac_disable_web_starts_with_the_correct_phrase(tmp_path, monkeypatch):
+     client, svc = _web(tmp_path)
+     tok = _csrf(client)
+@@ -706,6 +710,7 @@ def test_stacks_shows_hmac_row_and_flag_for_meshcom_only(tmp_path):
+     assert "/stacks/meshcom/hmac/renew" in body
+ 
+ 
++@pytest.mark.contract
+ def test_hmac_apply_page_is_the_warning_with_an_apply_button(tmp_path):
+     client, _ = _web(tmp_path)
+     r = client.get("/stacks/meshcom/hmac/renew")
+@@ -731,12 +736,14 @@ def test_hmac_apply_page_reoffers_apply_after_an_interrupted_run(tmp_path, monke
+     assert "hmac.js" not in body                               # no poller on a terminal run
+ 
+ 
++@pytest.mark.contract
+ def test_hmac_apply_page_rejects_bad_action_and_stack(tmp_path):
+     client, _ = _web(tmp_path)
+     assert client.get("/stacks/meshcom/hmac/bogus").status_code == 404
+     assert client.get("/stacks/kiss/hmac/enable").status_code == 404      # HMAC does not apply
+ 
+ 
++@pytest.mark.contract
+ def test_hmac_apply_post_requires_csrf_and_starts_the_run(tmp_path, monkeypatch):
+     client, svc = _web(tmp_path)
+     assert client.post("/stacks/meshcom/hmac/enable/apply").status_code == 400   # no CSRF
+@@ -764,6 +771,7 @@ def test_hmac_api_is_get_safe_tristate(tmp_path, monkeypatch):
+ 
+ # ---- Part F: CLI parity ---------------------------------------------------------------------------
+ 
++@pytest.mark.contract
+ def test_cli_hmac_status_and_gate(tmp_path, monkeypatch, capsys):
+     from lhpc.adapters.cli.main import main
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+@@ -781,6 +789,7 @@ def test_cli_hmac_status_and_gate(tmp_path, monkeypatch, capsys):
+     assert "does not apply" in capsys.readouterr().out
+ 
+ 
++@pytest.mark.contract
+ def test_cli_hmac_apply_flips_state_without_printing_the_secret(tmp_path, monkeypatch, capsys):
+     from lhpc.adapters.cli.main import main
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+@@ -822,6 +831,7 @@ def test_run_steps_unsafe_build_persists_blocking_marker(tmp_path, monkeypatch):
+     assert st["session_ident"]["pid"] == 123 and st.get("finished_at")
+ 
+ 
++@pytest.mark.contract
+ def test_unsafe_blocks_new_run_and_two_recovery_scopes(tmp_path, monkeypatch):
+     svc = _svc(tmp_path)
+ 
+diff --git a/tests/test_install_dep_gate.py b/tests/test_install_dep_gate.py
+index 48a7309..ed19948 100644
+--- a/tests/test_install_dep_gate.py
++++ b/tests/test_install_dep_gate.py
+@@ -72,6 +72,7 @@ def _patch_gate(monkeypatch, mapping):
+                         lambda self, t: mapping.get(t, {"block": [], "warn": []}))
+ 
+ 
++@pytest.mark.contract
+ def test_cli_install_refuses_on_mandatory_and_never_installs(tmp_path, monkeypatch, capsys):
+     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
+     cli.main(["bootstrap", "--yes"]); capsys.readouterr()
+@@ -116,6 +117,7 @@ def _csrf(c, path="/stacks"):
+     return c.get(path).get_data(as_text=True).split('name="_csrf" value="')[1].split('"')[0]
+ 
+ 
++@pytest.mark.contract
+ def test_confirm_page_blocks_apply_on_mandatory(tmp_path):
+     c = _real_app(tmp_path)
+     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+@@ -124,6 +126,7 @@ def test_confirm_page_blocks_apply_on_mandatory(tmp_path):
+     assert 'name="confirmed" value="yes"' not in cf          # Apply form suppressed
+ 
+ 
++@pytest.mark.contract
+ def test_confirm_page_warns_but_allows_apply_on_optional(tmp_path, _socat_absent):
+     c = _real_app(tmp_path)
+     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
+diff --git a/tests/test_resource_coord.py b/tests/test_resource_coord.py
+index a154646..73cb626 100644
+--- a/tests/test_resource_coord.py
++++ b/tests/test_resource_coord.py
+@@ -1,6 +1,8 @@
+ """Cross-stack resource-claim coordination: a start/stop/restart of one stack must
+ serialize against a DIFFERENT stack claiming the same EXCLUSIVE/PROVIDER resource."""
+ 
++import pytest
++
+ from lhpc.core import reslock
+ from lhpc.core.services import ControllerService
+ from lhpc.core.paths import Paths
+@@ -23,6 +25,7 @@ def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
+     assert "loraham.radio.868" in keys and keys == sorted(keys)
+ 
+ 
++@pytest.mark.contract
+ def test_cross_stack_shared_radio_blocks_start(tmp_path):
+     # meshtastic and meshcore both claim loraham.radio.868 (different stacks).
+     svc = _svc(tmp_path)
+diff --git a/tests/test_selfupdate.py b/tests/test_selfupdate.py
+index 6672adc..92ca2de 100644
+--- a/tests/test_selfupdate.py
++++ b/tests/test_selfupdate.py
+@@ -169,6 +169,7 @@ def test_apply_refuses_dirty_by_default_then_force(env):
+     assert "local edit" not in (env["work"] / "lhpc" / "version.py").read_text()   # discarded
+ 
+ 
++@pytest.mark.contract
+ def test_apply_diverged_history_refused_without_force(env):
+     _upstream_commit(env["up"])                                # origin/main advances
+     (env["work"] / "diverge.txt").write_text("local commit\n")  # local commit -> diverged
+@@ -928,6 +929,7 @@ def _fake_commands(root, *, clean_rc):
+     }
+ 
+ 
++@pytest.mark.contract
+ def test_apply_cleanup_failure_is_truthful_partial(tmp_path, monkeypatch):
+     from lhpc.core.probes.backends import FakeSystem
+     root = tmp_path / "repo"; root.mkdir()
+diff --git a/tests/test_source.py b/tests/test_source.py
+index c29050a..8783f49 100644
+--- a/tests/test_source.py
++++ b/tests/test_source.py
+@@ -305,6 +305,7 @@ def test_get_stacks_never_probes_even_with_a_populated_cache(tmp_path):
+     assert not any("ls-remote" in " ".join(call) for call in fake.calls)
+ 
+ 
++@pytest.mark.contract
+ def test_source_check_post_does_probe_and_lands_on_install(tmp_path):
+     ds = _repo(tmp_path, "src/loraham-daemon")
+     rl = _repo(tmp_path, "src/RadioLib")
+@@ -328,6 +329,7 @@ def test_source_check_component_target_returns_to_its_stack(tmp_path):
+     assert r.status_code == 302 and r.headers["Location"].endswith("#stack-install-daemon")
+ 
+ 
++@pytest.mark.contract
+ def test_source_check_requires_csrf_and_a_known_target(tmp_path):
+     fake = FakeSystem()
+     c = _client(tmp_path, fake)
+diff --git a/tests/test_uninstall_safety.py b/tests/test_uninstall_safety.py
+index af4142c..8c531ec 100644
+--- a/tests/test_uninstall_safety.py
++++ b/tests/test_uninstall_safety.py
+@@ -5,6 +5,8 @@ of an affected source is running."""
+ 
+ import time
+ 
++import pytest
++
+ from lhpc.core import source_registry
+ from lhpc.core.services import ControllerService
+ from lhpc.core.paths import Paths
+@@ -63,6 +65,8 @@ def _own(tmp_path, rel, comps=("x",)):
+                                        "", tuple(comps)))
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_uninstall_keeps_source_shared_by_another_stack(tmp_path):
+     # chat and iGate share src/LoRaHAM_Daemon. Uninstalling chat must KEEP it.
+     _mksrc(tmp_path, "LoRaHAM_Daemon")
+@@ -83,6 +87,8 @@ def test_uninstall_keeps_source_shared_within_stack(tmp_path):
+     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_uninstall_refuses_while_running(tmp_path):
+     _mksrc(tmp_path, "LoRaHAM_Daemon")
+     # a chat process is running
+@@ -92,6 +98,8 @@ def test_uninstall_refuses_while_running(tmp_path):
+     assert (tmp_path / "src" / "LoRaHAM_Daemon").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_uninstall_removes_unshared_owned_source(tmp_path):
+     # Uninstalling the whole kiss stack (both consumers) removes the REGISTERED checkout,
+     # and drops its ownership record.
+@@ -131,6 +139,8 @@ def test_uninstall_fails_toward_dirty_when_status_unprovable(tmp_path):
+     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.5")
+ def test_uninstall_refuses_identity_drift(tmp_path):
+     # A registered tree whose ORIGIN no longer matches the record/config, or whose HEAD
+     # moved to a different commit, is NOT LHPC's anymore: refused, tree unchanged.
+diff --git a/tests/test_web.py b/tests/test_web.py
+index 04c5618..d33ec9c 100644
+--- a/tests/test_web.py
++++ b/tests/test_web.py
+@@ -61,6 +61,7 @@ def _client(tmp_path: Path, manifest: Path | None = None):
+     return create_app(service_factory=factory).test_client()
+ 
+ 
++@pytest.mark.contract
+ def test_dashboard_ok_and_headers(tmp_path):
+     resp = _client(tmp_path).get("/")
+     assert resp.status_code == 200
+@@ -88,6 +89,8 @@ def test_non_get_405(tmp_path):
+     assert _client(tmp_path).post("/stacks/meshcom").status_code == 405
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_stranded_get_on_action_url_redirects_home(tmp_path):
+     """A browser reload of a POST-only action URL (the redirect got lost when an apply
+     restarted nginx mid-response) must land on the overview, not an 'Error 405' dead end."""
+@@ -123,6 +126,8 @@ def test_html_escaping(tmp_path):
+     assert b"&lt;script&gt;" in resp.data
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_page_load_is_read_only(tmp_path):
+     # If any page handler called a mutating service method, ReadOnlyGuard would
+     # raise and these requests would 500. 200 proves the load was read-only.
+@@ -146,6 +151,8 @@ def _is_network(argv: list[str]) -> bool:
+     return False
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_get_routes_make_no_network_calls(tmp_path):
+     """P0.6 — every GET route must run no network/git-remote command. A recording
+     runner captures every subprocess invocation during each GET; none may be a
+@@ -403,6 +410,8 @@ def test_config_path_cannot_escape_via_band_or_id(tmp_path):
+     assert stacks in p.resolve().parents
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_get_daemon_config_is_read_only(tmp_path):
+     # daemon_set is in _MUTATING; a GET of the config page must never call it.
+     assert _daemon_client(tmp_path, guard=True).get("/stacks").status_code == 200
+@@ -449,6 +458,7 @@ def test_install_confirm_offers_source_versions(tmp_path, monkeypatch):
+         and "Latest stable" in cf and "Binary (prebuilt)" in cf
+ 
+ 
++@pytest.mark.contract
+ def test_install_confirm_defaults_to_the_stacks_default_channel(tmp_path, monkeypatch):
+     """A bare Install click must resolve the SAME channel the CLI would: binary wherever it is
+     published. Defaulting to "dev" here started a multi-hour source compile nobody asked for
+@@ -472,6 +482,7 @@ def test_install_confirm_keeps_dev_where_no_binary_is_published(tmp_path, monkey
+     assert 'value="dev" selected' in flat
+ 
+ 
++@pytest.mark.contract
+ def test_refused_binary_plan_offers_the_source_channel(tmp_path, monkeypatch):
+     """A refused binary install must not be a dead end: the settled decision is an explicit
+     "build from source instead?" — offered right here, never a silent fallback."""
+@@ -561,6 +572,7 @@ def test_start_daemon_only_on_a_band(tmp_path):
+     assert 'type="hidden" name="p_radio" value="868"' in body
+ 
+ 
++@pytest.mark.contract
+ def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
+     # Fresh runtime: igate source absent -> starting it refuses and forwards to IGATE's OWN Install
+     # section (which has the Install button) with a warning — not to whatever row the page last had
+@@ -592,6 +604,7 @@ def test_install_runs_as_live_logged_job(tmp_path):
+     assert "job=" in r.headers["Location"]
+ 
+ 
++@pytest.mark.contract
+ def test_action_plan_then_confirm(tmp_path):
+     c = _real_app(tmp_path)
+     token = _csrf(c)
+@@ -613,6 +626,8 @@ def test_log_api_returns_lines(tmp_path):
+     assert "lines" in j and isinstance(j["lines"], list)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_system_api_is_read_only_json(tmp_path):
+     # ReadOnlyGuard client: proves the GET touches no mutating service method; contract minimum
+     # is a monotonic ts (raw counters are host-dependent and covered in test_sysstats.py).
+@@ -1183,6 +1198,8 @@ def test_config_saved_values_launch_per_component(tmp_path, monkeypatch):
+     assert not (files / "sib.conf").exists()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("P0.6")
+ def test_daemon_socket_stream_endpoint_read_only_and_bounded(tmp_path):
+     c = _daemon_client(tmp_path)                       # 433 CONF socket reachable
+     j = c.get("/api/daemon/433/socket").get_json()
+@@ -1330,6 +1347,7 @@ def test_apps_leads_with_controller_row_and_embedded_update_ui(tmp_path):
+ # test_retired_routes_remain_unavailable — the Update UI lives only on /stacks)
+ 
+ 
++@pytest.mark.contract
+ def test_self_update_check_post_csrf(tmp_path, monkeypatch):
+     from lhpc.core.services import ControllerService, ActionResult
+     monkeypatch.setattr(ControllerService, "self_update_check", lambda self: ActionResult(True, "Up to date."))
+@@ -1381,6 +1399,7 @@ def test_clean_tree_confirm_shows_neither_banner_nor_checkbox(tmp_path, monkeypa
+     assert "These paths would be discarded" not in body
+ 
+ 
++@pytest.mark.contract
+ def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch):
+     """Stage 1 warns about the automatic stop/update/restart (fresh CLEAN tree -> no discard
+     checkbox); stage 2 starts the NORMAL updater unit and renders the STATIC updating page."""
+@@ -1514,6 +1533,7 @@ def test_self_update_apply_get_redirects_not_405(tmp_path):
+     assert r.status_code == 302 and r.headers["Location"].endswith("#controller-update")
+ 
+ 
++@pytest.mark.contract
+ def test_self_update_dirty_confirm_consent_selects_overwrite_unit(tmp_path, monkeypatch):
+     """A FRESH dirty check drives the confirm warning; ticking the discard consent selects the
+     fixed overwrite unit; without the tick the normal unit runs (dirty apply then refuses)."""
+@@ -2272,6 +2292,8 @@ def test_dashboard_wsbox_collapsed_with_firewall_line(tmp_path):
+     assert "Firewall" in body and "#firewall-row" in body        # linked firewall line
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_firewall_settings_section_present(tmp_path):
+     body = _client(tmp_path).get("/stacks?open=kiss").get_data(as_text=True)
+     assert 'id="firewall-row"' in body
+@@ -2283,6 +2305,8 @@ def test_firewall_settings_section_present(tmp_path):
+     assert "unauthenticated" in body
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("firewall-fail-closed")
+ def test_firewall_configure_get_redirects(tmp_path):
+     resp = _client(tmp_path).get("/firewall/configure")
+     assert resp.status_code == 302 and resp.headers["Location"].endswith("#firewall-row")
+diff --git a/tests/test_web_auto_install.py b/tests/test_web_auto_install.py
+index 48ad0d2..71c9ecd 100644
+--- a/tests/test_web_auto_install.py
++++ b/tests/test_web_auto_install.py
+@@ -48,6 +48,7 @@ def _sel(svc, source="pinned", tests=True, tx=False):
+             for st in svc.stacks() if any(c.source for c in st.components)}
+ 
+ 
++@pytest.mark.contract
+ def test_form_defaults_and_install_mode(tmp_path):
+     c, _ = _client(tmp_path)
+     body = c.get("/auto-install").data.decode()
+@@ -69,6 +70,7 @@ def test_post_requires_csrf(tmp_path):
+     assert c.post("/auto-install/ack").status_code == 400
+ 
+ 
++@pytest.mark.contract
+ def test_post_refused_while_component_running(tmp_path, monkeypatch):
+     c, svc = _client(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
+     called = []
+@@ -83,6 +85,7 @@ def test_post_refused_while_component_running(tmp_path, monkeypatch):
+     assert called
+ 
+ 
++@pytest.mark.contract
+ def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
+     paths = Paths(runtime_root=tmp_path)
+     m = ai_mod.new_marker("a" * 32, "install", "pinned", True, False,
+@@ -102,6 +105,7 @@ def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
+     assert r.status_code == 200
+ 
+ 
++@pytest.mark.contract
+ def test_ack_flow_unblocks(tmp_path):
+     paths = Paths(runtime_root=tmp_path)
+     m = ai_mod.new_marker("b" * 32, "install", "pinned", True, False,
+@@ -116,6 +120,8 @@ def test_ack_flow_unblocks(tmp_path):
+     assert list((tmp_path / "state").glob("auto-install.json.*.acked"))
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
+     c, svc = _client(tmp_path)
+     spawned = []
+@@ -142,6 +148,8 @@ def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
+     assert len(spawned) == 1
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_tx_without_tests_refused(tmp_path, monkeypatch):
+     c, svc = _client(tmp_path)
+     spawned = []
+@@ -286,6 +294,7 @@ def test_wrong_token_refused_and_consumes_staged_state(tmp_path, monkeypatch):
+     assert b"RF confirmation refused" in r2.data and not spawned
+ 
+ 
++@pytest.mark.contract
+ def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
+     # Dead reservation evidence with an ABSENT run marker: the page still shows the
+     # acknowledgement control and the POST recovery works.
+@@ -304,6 +313,8 @@ def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
+     assert "Acknowledge &amp; recover" not in c.get("/auto-install").data.decode()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("RF-TX-opt-in")
+ def test_confirmed_tx_post_refused_without_callsign(tmp_path):
+     # The RF disclosure page may render, but the CONFIRMED POST refuses before any child
+     # is spawned when no callsign is configured (spawn_auto_install_job gate) — zero mutation.
+diff --git a/tests/test_webserver.py b/tests/test_webserver.py
+index b1119e8..b47a9e1 100644
+--- a/tests/test_webserver.py
++++ b/tests/test_webserver.py
+@@ -428,6 +428,8 @@ def test_controller_component_isolation(tmp_path):
+         assert not r.ok and "self-update" in " ".join(r.next_commands)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_configure_apply_remote_no_auth_needs_elevated_confirmation(tmp_path):
+     # Single Apply must STILL refuse remote no-auth without the elevated typed confirmation, and save
+     # nothing (the safety invariant survives the Save+Apply merge).
+@@ -449,6 +451,8 @@ def test_configure_apply_saves_remote_with_elevated_confirmation(tmp_path):
+     assert list(cfg.allowed_cidrs) == ["0.0.0.0/0"]
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_configure_apply_loopback_needs_no_confirmation(tmp_path):
+     # A loopback config derives remote_exposed=False and applies with no confirmation gate.
+     svc = _svc(tmp_path)
+@@ -1507,6 +1511,8 @@ def test_webserver_logs_page_and_component_link(tmp_path):
+     assert "[emerg] mkdir failed" in c.get("/webserver/logs?src=../etc").data.decode()
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
+     # A remote-exposure (bind off-loopback) with a valid phrase but no CIDR is refused via the unified
+     # Apply: the failure detail is shown and, critically, the listener is NOT exposed.
+@@ -1520,12 +1526,16 @@ def test_expose_failure_without_cidr_is_refused_and_not_exposed(tmp_path):
+     assert svc.config().webserver.remote_exposed is False         # not exposed (the safety fact)
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_post_requires_csrf(tmp_path):
+     app, _ = _app_svc(tmp_path)
+     c = app.test_client()
+     assert c.post("/webserver/configure", data={"access_mode": "no-auth"}).status_code == 400
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_configure_via_post(tmp_path):
+     app, svc = _app_svc(tmp_path)
+     c = app.test_client()
+@@ -1535,6 +1545,8 @@ def test_configure_via_post(tmp_path):
+     assert svc.config().webserver.access_mode == "auth-everywhere"
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_expose_requires_confirmation(tmp_path):
+     app, svc = _app_svc(tmp_path)
+     c = app.test_client()
+@@ -1544,6 +1556,8 @@ def test_expose_requires_confirmation(tmp_path):
+     assert svc.config().webserver.remote_exposed is False
+ 
+ 
++@pytest.mark.contract
++@pytest.mark.safety("exposure-fail-closed")
+ def test_p12_download_is_loopback_only(tmp_path):
+     app, svc = _app_svc(tmp_path)
+     c = app.test_client()

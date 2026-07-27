@@ -6,6 +6,8 @@ records. Never follows symlinks; local.toml/secrets/other stacks untouched."""
 import json
 import time
 
+import pytest
+
 from lhpc.core import known_working, source_registry
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -93,6 +95,8 @@ def test_clean_dry_run_names_removals_without_mutation(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()          # nothing mutated
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_clean_requires_purge_flag(tmp_path):
     _seed_kiss(tmp_path)
     svc = _svc(tmp_path)
@@ -101,6 +105,8 @@ def test_clean_requires_purge_flag(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_clean_refuses_while_running(tmp_path):
     _seed_kiss(tmp_path)
     svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
@@ -109,6 +115,8 @@ def test_clean_refuses_while_running(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("P0.5")
 def test_clean_removes_exact_set_and_preserves_the_rest(tmp_path):
     paths = _seed_kiss(tmp_path)
     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc", _KISS_REMOTE)

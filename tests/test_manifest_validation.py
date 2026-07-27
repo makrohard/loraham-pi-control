@@ -77,20 +77,63 @@ def _ok(comp: dict):
     return parse_manifest(_manifest(comp))
 
 
-def test_unknown_readiness_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "bogus"})
-
-
-def test_missing_readiness_on_runnable_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"]})
-
-
-def test_endpoint_readiness_without_ready_endpoint_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "endpoint",
-             "endpoint": [{"kind": "tcp", "address": "127.0.0.1:9", "ready": False}]})
+@pytest.mark.parametrize("comp,msg", [
+    pytest.param({"run_argv": ["./app"], "readiness": "bogus"}, None,
+                 id="test_unknown_readiness_rejected"),
+    pytest.param({"run_argv": ["./app"]}, None,
+                 id="test_missing_readiness_on_runnable_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "endpoint",
+                  "endpoint": [{"kind": "tcp", "address": "127.0.0.1:9", "ready": False}]}, None,
+                 id="test_endpoint_readiness_without_ready_endpoint_rejected"),
+    pytest.param({"run_argv": ["./app", "a{b"], "readiness": "process"}, None,
+                 id="test_malformed_command_token_rejected"),
+    pytest.param({"run_argv": ["./app", "{param:nope}"], "readiness": "process"}, None,
+                 id="test_unknown_parameter_placeholder_rejected"),
+    pytest.param({"run_argv": ["./app", "{operator:secret}"], "readiness": "process"}, None,
+                 id="test_unknown_operator_placeholder_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "pre_steps": [{"kind": "danger"}]}, None,
+                 id="test_invalid_pre_step_kind_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "post_steps": [{"kind": "danger"}]}, None,
+                 id="test_invalid_post_step_kind_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "run_env": {"BAD NAME": "x"}}, None,
+                 id="test_invalid_env_name_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process", "interactive": True}, None,
+                 id="test_interactive_must_be_manual"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "endpoint": [{"kind": "tcp", "address": "not-an-address"}]}, None,
+                 id="test_malformed_tcp_endpoint_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "endpoint",
+                  "endpoint": [{"kind": "tcp", "address": "8.8.8.8:443", "ready": True}]}, None,
+                 id="test_ready_tcp_endpoint_must_be_loopback"),
+    pytest.param({"run_argv": ["./app"], "readiness": "endpoint",
+                  "endpoint": [{"kind": "unix", "address": "/tmp/x.sock",
+                                "ready": True, "external": True}]}, None,
+                 id="test_external_endpoint_cannot_be_ready_gate"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "endpoint": [{"kind": "carrier-pigeon", "address": "x"}]}, None,
+                 id="test_unknown_endpoint_kind_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 9999}, None,
+                 id="test_readiness_timeout_out_of_range_rejected"),
+    pytest.param({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": -1}, None,
+                 id="test_readiness_timeout_negative_rejected"),
+    # Eager: a typo'd placeholder fails at manifest load, not minutes into a build.
+    pytest.param({"run_argv": ["./app"], "readiness": "process",
+                  "build_steps": [{"argv": ["make"], "announce": "watch {root}/build grow"}]}, None,
+                 id="test_build_step_announce_unknown_placeholder_rejected"),
+    # FAIL CLOSED on the TOML last-table trap: a component-level key (note/test/…) placed AFTER
+    # a [[…param]] table binds to that table and used to be silently swallowed — a shipped
+    # component note was lost exactly this way. The loader must reject it loudly instead.
+    pytest.param({"run_argv": ["./app", "{param:rate}"], "readiness": "process",
+                  "param": [{"name": "rate", "kind": "str", "arg": "--rate",
+                             "note": "I belong to the component, not this param"}]}, "unknown key",
+                 id="test_param_stray_key_rejected"),
+])
+def test_manifest_component_rejected(comp, msg):
+    with pytest.raises(ManifestError, match=msg):
+        _ok(comp)
 
 
 def test_endpoint_readiness_with_ready_endpoint_ok():
@@ -98,57 +141,7 @@ def test_endpoint_readiness_with_ready_endpoint_ok():
          "endpoint": [{"kind": "tcp", "address": "127.0.0.1:9", "ready": True}]})
 
 
-def test_malformed_command_token_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app", "a{b"], "readiness": "process"})
-
-
-def test_unknown_parameter_placeholder_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app", "{param:nope}"], "readiness": "process"})
-
-
-def test_unknown_operator_placeholder_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app", "{operator:secret}"], "readiness": "process"})
-
-
-def test_invalid_pre_step_kind_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "pre_steps": [{"kind": "danger"}]})
-
-
-def test_invalid_post_step_kind_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "post_steps": [{"kind": "danger"}]})
-
-
-def test_invalid_env_name_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "run_env": {"BAD NAME": "x"}})
-
-
-def test_interactive_must_be_manual():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process", "interactive": True})
-
-
 # --- §11 endpoint validation -------------------------------------------------
-
-def test_malformed_tcp_endpoint_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "endpoint": [{"kind": "tcp", "address": "not-an-address"}]})
-
-
-def test_ready_tcp_endpoint_must_be_loopback():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "endpoint",
-             "endpoint": [{"kind": "tcp", "address": "8.8.8.8:443", "ready": True}]})
-
 
 def test_ready_loopback_ipv4_ok():
     _ok({"run_argv": ["./app"], "readiness": "endpoint",
@@ -158,29 +151,6 @@ def test_ready_loopback_ipv4_ok():
 def test_ready_loopback_ipv6_bracketed_ok():
     _ok({"run_argv": ["./app"], "readiness": "endpoint",
          "endpoint": [{"kind": "tcp", "address": "[::1]:4403", "ready": True}]})
-
-
-def test_external_endpoint_cannot_be_ready_gate():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "endpoint",
-             "endpoint": [{"kind": "unix", "address": "/tmp/x.sock",
-                           "ready": True, "external": True}]})
-
-
-def test_unknown_endpoint_kind_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "endpoint": [{"kind": "carrier-pigeon", "address": "x"}]})
-
-
-def test_readiness_timeout_out_of_range_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": 9999})
-
-
-def test_readiness_timeout_negative_rejected():
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process", "readiness_timeout": -1})
 
 
 def test_readiness_timeout_in_range_ok():
@@ -193,13 +163,6 @@ def test_build_step_announce_valid_placeholders_ok():
                           "announce": "[resolve] watch {runtime}/build grow ({source})"}]})
 
 
-def test_build_step_announce_unknown_placeholder_rejected():
-    # Eager: a typo'd placeholder fails at manifest load, not minutes into a build.
-    with pytest.raises(ManifestError):
-        _ok({"run_argv": ["./app"], "readiness": "process",
-             "build_steps": [{"argv": ["make"], "announce": "watch {root}/build grow"}]})
-
-
 def test_build_step_announce_non_string_rejected():
     with pytest.raises(ManifestError):
         _ok({"run_argv": ["./app"], "readiness": "process",
@@ -207,16 +170,6 @@ def test_build_step_announce_non_string_rejected():
     with pytest.raises(ManifestError):
         _ok({"run_argv": ["./app"], "readiness": "process",
              "build_steps": [{"argv": ["make"], "announce": "   "}]})
-
-
-def test_param_stray_key_rejected():
-    # FAIL CLOSED on the TOML last-table trap: a component-level key (note/test/…) placed AFTER
-    # a [[…param]] table binds to that table and used to be silently swallowed — a shipped
-    # component note was lost exactly this way. The loader must reject it loudly instead.
-    with pytest.raises(ManifestError, match="unknown key"):
-        _ok({"run_argv": ["./app", "{param:rate}"], "readiness": "process",
-             "param": [{"name": "rate", "kind": "str", "arg": "--rate",
-                        "note": "I belong to the component, not this param"}]})
 
 
 def test_param_known_keys_ok():

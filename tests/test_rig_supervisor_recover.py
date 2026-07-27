@@ -12,6 +12,8 @@ P1 regressions covered:
 import importlib.util
 import pathlib
 
+import pytest
+
 _RS_PATH = pathlib.Path(__file__).resolve().parents[1] / "tools" / "rig_supervisor.py"
 _spec = importlib.util.spec_from_file_location("rig_supervisor_under_test", _RS_PATH)
 rs = importlib.util.module_from_spec(_spec)
@@ -113,23 +115,15 @@ def test_supervise_success_with_banner(monkeypatch, tmp_path):
     assert rc == 0 and started["run"] is False                       # authoritative SUCCESS, no run
 
 
-def test_supervise_nonzero_status_rc_is_inconclusive(monkeypatch, tmp_path):
-    st = _clean_state(status_rc=1)
-    started = _wire(monkeypatch, tmp_path, st)
-    assert rs.supervise(once=True) == 4
-    assert started["run"] is False
-
-
-def test_supervise_empty_status_is_inconclusive(monkeypatch, tmp_path):
-    st = _clean_state(status_text="")
-    started = _wire(monkeypatch, tmp_path, st)
-    assert rs.supervise(once=True) == 4
-    assert started["run"] is False
-
-
-def test_supervise_unrecognized_status_is_inconclusive(monkeypatch, tmp_path):
+@pytest.mark.parametrize("kwargs", [
+    pytest.param({"status_rc": 1}, id="test_supervise_nonzero_status_rc_is_inconclusive"),
+    pytest.param({"status_text": ""}, id="test_supervise_empty_status_is_inconclusive"),
     # rc 0 + non-empty output but ZERO recognizable component rows (garbled/foreign output).
-    st = _clean_state(status_text="something went sideways\nbut exit code lied\n")
+    pytest.param({"status_text": "something went sideways\nbut exit code lied\n"},
+                 id="test_supervise_unrecognized_status_is_inconclusive"),
+])
+def test_supervise_inconclusive_status_is_never_a_verdict(monkeypatch, tmp_path, kwargs):
+    st = _clean_state(**kwargs)
     started = _wire(monkeypatch, tmp_path, st)
     assert rs.supervise(once=True) == 4
     assert started["run"] is False

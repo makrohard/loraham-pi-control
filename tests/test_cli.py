@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lhpc.adapters.cli.main import main
 from lhpc.core.services import ControllerService
 
 
+@pytest.mark.contract
 def test_list_exits_zero(capsys):
     assert main(["list"]) == 0
     assert "stacks defined" in capsys.readouterr().out
 
 
+@pytest.mark.contract
 def test_status_exits_zero_even_when_services_stopped(capsys):
     # Probing succeeded -> success, even though nothing is installed/running here.
     assert main(["status"]) == 0
@@ -18,10 +22,12 @@ def test_status_exits_zero_even_when_services_stopped(capsys):
     assert "Status collected" in out
 
 
+@pytest.mark.contract
 def test_status_unknown_stack_exits_one(capsys):
     assert main(["status", "does-not-exist"]) == 1
 
 
+@pytest.mark.contract
 def test_explain_shows_direct_default(capsys):
     assert main(["explain", "meshcom"]) == 0
     assert "DIRECT" in capsys.readouterr().out
@@ -38,6 +44,7 @@ def test_update_shows_plan(capsys):
     assert "Update plan" in out and "refresh" in out
 
 
+@pytest.mark.contract
 def test_install_plan_is_dry_run(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     main(["bootstrap", "--yes"])
@@ -85,6 +92,7 @@ def test_repair_and_rollback_are_not_commands(monkeypatch):
             main([verb, "daemon"])
 
 
+@pytest.mark.contract
 def test_start_plan_is_dry_run_without_yes(tmp_path, monkeypatch, capsys):
     # Nothing installed in a fresh runtime root -> start plans nothing and does
     # not error or transmit.
@@ -100,6 +108,7 @@ def test_help_topic(capsys):
     assert "never auto-enables TX" in capsys.readouterr().out
 
 
+@pytest.mark.contract
 def test_bootstrap_and_install_check(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     # This test exercises bootstrap ordering, not the dep gate — neutralise the gate so the outcome
@@ -114,6 +123,7 @@ def test_bootstrap_and_install_check(tmp_path, monkeypatch, capsys):
     assert "planned" in out or "change(s) planned" in out
 
 
+@pytest.mark.contract
 def test_install_requires_bootstrap_first(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "absent"))
     # Neutralise the dep gate (host-independent): this asserts bootstrap ordering, not the gate.
@@ -122,6 +132,7 @@ def test_install_requires_bootstrap_first(tmp_path, monkeypatch, capsys):
     assert "bootstrap" in capsys.readouterr().out.lower()
 
 
+@pytest.mark.contract
 def test_install_gate_reports_on_check_but_refuses_on_apply(tmp_path, monkeypatch, capsys):
     # N-2: the dep gate must not preempt the bootstrap precondition or the --check plan. With one
     # mandatory dep stubbed missing:
@@ -195,6 +206,7 @@ def test_self_update_repair_and_recover_cli(capsys, monkeypatch):
     assert "recovered" in capsys.readouterr().out
 
 
+@pytest.mark.contract
 def test_self_update_apply_cli_yes(capsys, monkeypatch):
     # DETERMINISM: `self_update_apply_operator` REFUSES inside a managed systemd unit, which it
     # detects via INVOCATION_ID. A hosted CI runner executes under systemd and therefore has that
@@ -230,6 +242,7 @@ def test_self_update_overwrite_implies_apply(capsys, monkeypatch):
     assert "Update applied" in capsys.readouterr().out and seen["force"] is True
 
 
+@pytest.mark.contract
 def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
     # non-interactive stdin -> _confirm returns False -> aborts, never calls apply
     from lhpc.core.services import ControllerService
@@ -240,6 +253,7 @@ def test_self_update_apply_cli_aborts_without_yes(capsys, monkeypatch):
     assert "Aborted." in capsys.readouterr().out and called["apply"] is False
 
 
+@pytest.mark.contract
 def test_self_update_busy_cli(capsys, monkeypatch):
     # See test_self_update_apply_cli_yes: strip the ambient systemd INVOCATION_ID so the managed-unit
     # refusal cannot pre-empt the busy path this test is about.
@@ -367,29 +381,11 @@ def test_config_set_and_show(tmp_path, monkeypatch, capsys):
     assert "W1ABC-7" in capsys.readouterr().out
 
 
-def test_config_set_invalid_value_rejected(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "mc_callsign", "bad!!call"]) == 1
-    assert "invalid callsign" in capsys.readouterr().out
-
-
 def test_config_set_n0call_warns(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["config", "meshcom", "mc_callsign", "N0CALL"]) == 0
     out = capsys.readouterr().out
     assert "WARN" in out and "valid callsign is required" in out
-
-
-def test_config_unknown_param(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "nosuchparam"]) == 1
-    assert "unknown parameter" in capsys.readouterr().out
-
-
-def test_config_unknown_stack(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "does-not-exist", "call", "W1ABC"]) == 1
-    assert "unknown stack" in capsys.readouterr().out
 
 
 def test_config_operator_sets_and_normalizes_callsign(tmp_path, monkeypatch, capsys):
@@ -400,28 +396,26 @@ def test_config_operator_sets_and_normalizes_callsign(tmp_path, monkeypatch, cap
     assert op.callsign == "W1ABC"
 
 
-def test_config_operator_reserved_rejects_positional(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("argv,rc,msg", [
+    pytest.param(["config", "meshcom", "mc_callsign", "bad!!call"], 1, "invalid callsign",
+                 id="test_config_set_invalid_value_rejected"),
+    pytest.param(["config", "meshcom", "nosuchparam"], 1, "unknown parameter",
+                 id="test_config_unknown_param"),
+    pytest.param(["config", "does-not-exist", "call", "W1ABC"], 1, "unknown stack",
+                 id="test_config_unknown_stack"),
+    pytest.param(["config", "operator", "call", "X"], 2, "only --callsign",
+                 id="test_config_operator_reserved_rejects_positional"),
+    pytest.param(["config", "meshcom", "--callsign", "X"], 2, "applies only to 'lhpc config operator'",
+                 id="test_config_stack_rejects_operator_flags"),
+    pytest.param(["config", "meshcom", "--reset", "mc_callsign", "X"], 2, "conflicting options",
+                 id="test_config_conflicting_modes_rejected"),
+    pytest.param(["config", "daemon", "--daemon-param", "NOPE=1"], 2, "unknown daemon parameter",
+                 id="test_config_daemon_param_unknown_key_rejected"),
+])
+def test_config_cli_rejected(tmp_path, monkeypatch, capsys, argv, rc, msg):
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "operator", "call", "X"]) == 2
-    assert "only --callsign" in capsys.readouterr().out
-
-
-def test_config_stack_rejects_operator_flags(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "--callsign", "X"]) == 2
-    assert "applies only to 'lhpc config operator'" in capsys.readouterr().out
-
-
-def test_config_conflicting_modes_rejected(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "--reset", "mc_callsign", "X"]) == 2
-    assert "conflicting options" in capsys.readouterr().out
-
-
-def test_config_daemon_param_unknown_key_rejected(tmp_path, monkeypatch, capsys):
-    _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "daemon", "--daemon-param", "NOPE=1"]) == 2
-    assert "unknown daemon parameter" in capsys.readouterr().out
+    assert main(argv) == rc
+    assert msg in capsys.readouterr().out
 
 
 def test_config_daemon_param_saves(tmp_path, monkeypatch, capsys):
@@ -474,6 +468,7 @@ def test_config_ambiguous_param_refuses_without_mutating():
 # restart, source-check, known-working, and the broken-hint regression guard
 # --------------------------------------------------------------------------------------------------
 
+@pytest.mark.contract
 def test_stack_restart_is_a_command(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
     assert main(["stack", "restart", "meshcom"]) == 0        # not argparse rc 2
@@ -590,6 +585,7 @@ def _dead_reservation(rt):
     assert ok
 
 
+@pytest.mark.contract
 def test_auto_install_status_reports_recovery_and_names_the_command(tmp_path, monkeypatch, capsys):
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
@@ -602,6 +598,7 @@ def test_auto_install_status_reports_recovery_and_names_the_command(tmp_path, mo
     assert "lhpc auto-install --recover" in out                # names the exact command
 
 
+@pytest.mark.contract
 def test_auto_install_recover_clears_all_state_in_one_action(tmp_path, monkeypatch, capsys):
     from lhpc.core import auto_install as ai_mod
     from lhpc.core.paths import Paths
@@ -631,6 +628,7 @@ def test_auto_install_start_refusal_names_the_recover_command(tmp_path, monkeypa
     assert "lhpc auto-install --recover" in out
 
 
+@pytest.mark.contract
 def test_auto_install_recover_orphan_risk_needs_confirm_orphan(tmp_path, monkeypatch, capsys):
     # The confirm_orphan path: a run whose spawned child's termination was never proven (ORPHAN
     # RISK) must NOT be cleared by a plain --recover — a possibly-live process requires the explicit

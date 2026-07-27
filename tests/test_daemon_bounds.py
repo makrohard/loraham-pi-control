@@ -135,17 +135,11 @@ def test_bare_token_among_valid_rejects_whole_response():
     assert not _view(b"STATUS RADIO=READY GARBAGE TXMODE=MANAGED\n").reachable
 
 
-def test_empty_key_rejected():
-    assert not _view(b"STATUS =READY TXMODE=MANAGED\n").reachable
-
-
-def test_empty_value_rejected():
-    assert not _view(b"STATUS RADIO= TXMODE=MANAGED\n").reachable
-
-
-def test_duplicate_key_rejected():
-    assert not _view(b"STATUS RADIO=READY RADIO=BUSY\n").reachable
-
-
-def test_control_char_value_rejected():
-    assert not _view(b"STATUS RADIO=RE\x01DY TXMODE=MANAGED\n").reachable
+@pytest.mark.parametrize("reply", [
+    pytest.param(b"STATUS =READY TXMODE=MANAGED\n", id="test_empty_key_rejected"),
+    pytest.param(b"STATUS RADIO= TXMODE=MANAGED\n", id="test_empty_value_rejected"),
+    pytest.param(b"STATUS RADIO=READY RADIO=BUSY\n", id="test_duplicate_key_rejected"),
+    pytest.param(b"STATUS RADIO=RE\x01DY TXMODE=MANAGED\n", id="test_control_char_value_rejected"),
+])
+def test_status_reply_grammar_violation_rejected(reply):
+    assert not _view(reply).reachable

@@ -286,7 +286,7 @@ class BinaryOpsMixin:
                 # by the previous install must never satisfy them.
                 _fileset = set(files)
                 _missing = sorted({p for p in spec.proof_paths if p not in _fileset}
-                                  | {list(a)[0] for a in spec.probes if list(a)[0] not in _fileset})
+                                  | {next(iter(a)) for a in spec.probes if next(iter(a)) not in _fileset})
                 if _missing:
                     raise bi.BinaryInstallError(
                         "the artifact did not provide " + ", ".join(_missing))
@@ -333,13 +333,7 @@ class BinaryOpsMixin:
             self.invalidate_snapshot()
             return ActionResult(
                 True, f"Installed '{stack_id}' from the published binary ({size_mb:.1f} MB).",
-                details=clone_notes +
-                        [("  open auth (binary channel): the published firmware has no mesh "
-                          "password") if _auth_restore is not None else
-                         (f"  {probe_out}" if probe_out else "  installed"),
-                         "  provenance: " + ", ".join(f"{k}@{v[:9]}"
-                                                      for k, v in sorted(entry.components.items())),
-                         f"  artifact sha256 {entry.sha256[:12]}…"],
+                details=[*clone_notes, "  open auth (binary channel): the published firmware has no mesh " "password" if _auth_restore is not None else f"  {probe_out}" if probe_out else "  installed", "  provenance: " + ", ".join(f"{k}@{v[:9]}" for k, v in sorted(entry.components.items())), f"  artifact sha256 {entry.sha256[:12]}…"],
                 next_commands=[f"lhpc status {stack_id}", f"lhpc stack start {stack_id}"],
                 data={"channel": "binary", "changes": 1})
 
@@ -537,10 +531,7 @@ class BinaryOpsMixin:
         artifact published into it — it is not a checkout and not a foreign tree. Setting the
         artifact aside empties it (the retirement prunes it), so the ordinary adoption path
         clones there. Judging it as an unprovable checkout would refuse every first switch."""
-        for rel in self._rel_files_under(rel_dir):
-            if rel not in owned:
-                return False
-        return True
+        return all(rel in owned for rel in self._rel_files_under(rel_dir))
 
     def switch_source_plan(self, groups, owned_files=()) -> tuple:
         """PRE-FLIGHT for a binary -> source switch: `(paths_to_replace, refusals)`.

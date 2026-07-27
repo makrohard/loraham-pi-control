@@ -26,14 +26,14 @@ from .model import (
 )
 from .paths import Paths
 from .probes import System
-from .probes.process import probe_process
 from .probes.endpoints import tcp_endpoint_match
+from .probes.process import probe_process
 from .probes.source import SourceProbe, probe_source
 
 _NA_SOURCE = SourceProbe(state=SourceState.NOT_APPLICABLE)
+from . import resources as resources_mod
 from .probes.systemd import UnitState, probe_unit
 from .probes.unixsock import probe_daemon_status, probe_socket
-from . import resources as resources_mod
 
 
 @dataclass
@@ -163,7 +163,7 @@ class StatusProber:
             status.pids = pm.pids
             status.evidence.update({f"process.{k}": v for k, v in pm.evidence.items()})
 
-        endpoints, all_ready, any_present, has_expected = self._assess_endpoints(comp)
+        endpoints, all_ready, _any_present, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints
 
         status.run_state = _run_state_for_service(

@@ -19,14 +19,34 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees "
                    "the true fresh-install default (no radio hardware configured).")
+    config.addinivalue_line(
+        "markers", "slow: a genuinely slow test (real bash sub-process building a real venv, or a "
+                   "timed retry loop). Excluded by the fast lane `-m 'not slow'`; always run by the "
+                   "complete coverage gate.")
+    config.addinivalue_line(
+        "markers", "requires_zstd: crosses the production extraction boundary (`zstd -dc`), so it "
+                   "needs the host `zstd` binary. Skipped (with reason) where it is absent; the target "
+                   "and CI install it, so it normally runs.")
+    config.addinivalue_line(
+        "markers", "contract: Tier 0 — the readable core, one lane that states what LHPC PROMISES. "
+                   "Each tagged case goes through the widest public seam (CLI verb / Flask route / "
+                   "typed ActionResult) and expresses a happy path or the refusal that defines a "
+                   "boundary. Run it with `-m contract`; it must be green and quick.")
+    config.addinivalue_line(
+        "markers", "safety(id): a contract case that guards a named SAFETY invariant. The id is the "
+                   "docs/hardening-0.1.md P0.x/P1.x where one exists (P0.5 uninstall, P0.6 GET-no-"
+                   "network), else a descriptive slug (RF-TX-opt-in / firewall-fail-closed / "
+                   "exposure-fail-closed). Run the invariant set with `-m safety`.")
 
 
 def pytest_collection_modifyitems(config, items):
     # Skip (with a reason) in degenerate environments so the product's CORRECT strictness
     # (sid>0 identity, non-root perm fixtures) is not misread as a code failure. Never fires on a
     # normal desktop or the Raspberry Pi target (sid>0, non-root).
+    import shutil
     no_session = os.getsid(0) == 0
     is_root = os.geteuid() == 0
+    no_zstd = shutil.which("zstd") is None
     for it in items:
         if no_session and it.get_closest_marker("needs_session"):
             it.add_marker(pytest.mark.skip(
@@ -34,6 +54,10 @@ def pytest_collection_modifyitems(config, items):
         if is_root and it.get_closest_marker("needs_nonroot"):
             it.add_marker(pytest.mark.skip(
                 reason="running as root; the chmod permission fixture does not bind for root"))
+        if no_zstd and it.get_closest_marker("requires_zstd"):
+            it.add_marker(pytest.mark.skip(
+                reason="host `zstd` binary not installed; the extraction boundary cannot be crossed "
+                       "(install it with: sudo apt install -y zstd)"))
 
 from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle

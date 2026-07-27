@@ -72,6 +72,7 @@ def _patch_gate(monkeypatch, mapping):
                         lambda self, t: mapping.get(t, {"block": [], "warn": []}))
 
 
+@pytest.mark.contract
 def test_cli_install_refuses_on_mandatory_and_never_installs(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
     cli.main(["bootstrap", "--yes"]); capsys.readouterr()
@@ -116,6 +117,7 @@ def _csrf(c, path="/stacks"):
     return c.get(path).get_data(as_text=True).split('name="_csrf" value="')[1].split('"')[0]
 
 
+@pytest.mark.contract
 def test_confirm_page_blocks_apply_on_mandatory(tmp_path):
     c = _real_app(tmp_path)
     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",
@@ -124,6 +126,7 @@ def test_confirm_page_blocks_apply_on_mandatory(tmp_path):
     assert 'name="confirmed" value="yes"' not in cf          # Apply form suppressed
 
 
+@pytest.mark.contract
 def test_confirm_page_warns_but_allows_apply_on_optional(tmp_path, _socat_absent):
     c = _real_app(tmp_path)
     cf = c.post("/action", data={"_csrf": _csrf(c), "op": "install",

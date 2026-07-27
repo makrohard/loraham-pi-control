@@ -606,7 +606,7 @@ def compare_live(live_json_text, model):
     if stripped == expected:
         return "verified", ""
     # Name the first divergence for the receipt — bounded, never the whole listing.
-    for i, (a, b) in enumerate(zip(expected, stripped)):
+    for i, (a, b) in enumerate(zip(expected, stripped, strict=False)):
         if a != b:
             return "mismatch", f"entry {i} diverges"
     return "mismatch", f"entry count differs (expected {len(expected)}, live {len(stripped)})"
@@ -620,13 +620,13 @@ def compare_live(live_json_text, model):
 # receipt that is written ONLY by this helper, atomically, with boot-id + CLOCK_BOOTTIME
 # freshness evidence (wall-clock is carried for display, never for freshness).
 
-import errno      # noqa: E402
-import fcntl      # noqa: E402
-import os         # noqa: E402
-import stat       # noqa: E402
+import errno  # noqa: E402
+import fcntl  # noqa: E402
+import os  # noqa: E402
+import stat  # noqa: E402
 import subprocess  # noqa: E402
-import tempfile   # noqa: E402
-import time       # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
 
 ETC_DIR = "/etc/lhpc"
 RUN_DIR = "/run/lhpc-firewall"
@@ -648,7 +648,7 @@ class Sys:
     def run(self, argv, timeout=30.0, stdin_text=None):
         try:
             p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                               input=stdin_text)
+                               input=stdin_text, check=False)
             return p.returncode, p.stdout, p.stderr
         except FileNotFoundError:
             return 127, "", f"{argv[0]}: not found"
@@ -751,7 +751,7 @@ def append_log(run_dir, line):
                 prev = f.read()
         except OSError:
             pass
-        lines = (prev.splitlines() + [line])[-200:]
+        lines = ([*prev.splitlines(), line])[-200:]
         atomic_write(path, "\n".join(lines) + "\n", 0o644)
     except OSError:
         pass                                           # logging is best-effort, never fatal

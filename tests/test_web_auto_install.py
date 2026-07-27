@@ -48,6 +48,7 @@ def _sel(svc, source="pinned", tests=True, tx=False):
             for st in svc.stacks() if any(c.source for c in st.components)}
 
 
+@pytest.mark.contract
 def test_form_defaults_and_install_mode(tmp_path):
     c, _ = _client(tmp_path)
     body = c.get("/auto-install").data.decode()
@@ -69,6 +70,7 @@ def test_post_requires_csrf(tmp_path):
     assert c.post("/auto-install/ack").status_code == 400
 
 
+@pytest.mark.contract
 def test_post_refused_while_component_running(tmp_path, monkeypatch):
     c, svc = _client(tmp_path, cmdlines={555: ["loraham-kiss-tnc"]})
     called = []
@@ -83,6 +85,7 @@ def test_post_refused_while_component_running(tmp_path, monkeypatch):
     assert called
 
 
+@pytest.mark.contract
 def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker("a" * 32, "install", "pinned", True, False,
@@ -102,6 +105,7 @@ def test_post_blocked_by_unacked_interrupted_marker(tmp_path, monkeypatch):
     assert r.status_code == 200
 
 
+@pytest.mark.contract
 def test_ack_flow_unblocks(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     m = ai_mod.new_marker("b" * 32, "install", "pinned", True, False,
@@ -116,6 +120,8 @@ def test_ack_flow_unblocks(tmp_path):
     assert list((tmp_path / "state").glob("auto-install.json.*.acked"))
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
     c, svc = _client(tmp_path)
     spawned = []
@@ -142,6 +148,8 @@ def test_tx_post_renders_second_stage_confirmation(tmp_path, monkeypatch):
     assert len(spawned) == 1
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_tx_without_tests_refused(tmp_path, monkeypatch):
     c, svc = _client(tmp_path)
     spawned = []
@@ -286,6 +294,7 @@ def test_wrong_token_refused_and_consumes_staged_state(tmp_path, monkeypatch):
     assert b"RF confirmation refused" in r2.data and not spawned
 
 
+@pytest.mark.contract
 def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
     # Dead reservation evidence with an ABSENT run marker: the page still shows the
     # acknowledgement control and the POST recovery works.
@@ -304,6 +313,8 @@ def test_dead_reservation_shows_ack_button_and_recovers(tmp_path):
     assert "Acknowledge &amp; recover" not in c.get("/auto-install").data.decode()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
 def test_confirmed_tx_post_refused_without_callsign(tmp_path):
     # The RF disclosure page may render, but the CONFIRMED POST refuses before any child
     # is spawned when no callsign is configured (spawn_auto_install_job gate) — zero mutation.

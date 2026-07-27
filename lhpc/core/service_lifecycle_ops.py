@@ -4,23 +4,20 @@ Mixin of ControllerService (state/constants on the facade). Adapters import lhpc
 from __future__ import annotations
 
 import json
+import re as _re
 import time
 from pathlib import Path
 
-from .lifecycle import GUI_MISSING_HINT
-from .snapshot_memo import invalidates_snapshot
-from . import daemon_control
-from . import procident
+from . import daemon_control, procident, runtime_fs, validators
 from . import resources as resources_mod
-from . import runtime_fs
-from . import validators
 from .config import load_stack_config
+from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
+from .snapshot_memo import invalidates_snapshot
 
-import re as _re
 # A HMAC-apply build-log base is a strict controller-generated prefix bound to the FULL 32-hex run id;
 # validated in build() BEFORE any path is constructed (marker-time validation alone is too late).
 _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
@@ -86,7 +83,7 @@ class LifecycleOpsMixin:
         snap = self.build_snapshot()
         limited, running, running_ids = self._band_limited_running(snap)
         target = limited(comp, {band} if band else set())
-        conflicts = resources_mod.interpret_conflicts(running + [target], running_ids | {comp.id})
+        conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id})
         return [c.message for c in conflicts if comp.id in c.holders and c.observed]
 
     def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
@@ -990,7 +987,7 @@ class LifecycleOpsMixin:
         mode is returned as None so callers can treat it conservatively."""
         import posixpath
         modes = []
-        for _pid, argv in self._system.procfs.cmdlines().items():
+        for argv in self._system.procfs.cmdlines().values():
             if not argv or posixpath.basename(argv[0]) != "loraham_daemon":
                 continue
             radio = None
@@ -1371,7 +1368,8 @@ class LifecycleOpsMixin:
             persisting a redundant override, and e.g. `fsk` is stored/displayed as `FSK`.
         Persisted via the LOCKED merge, so normal params, other-band dp_*, remotes and autostart
         all survive. Never applies live."""
-        from . import daemon_params, config as cfgmod
+        from . import config as cfgmod
+        from . import daemon_params
         sid = self._owner_stack_id(target)                     # persist into the OWNER stack config
         band = self._effective_daemon_band(target, band)
         if not self._has_daemon_params(target):
@@ -1456,7 +1454,7 @@ class LifecycleOpsMixin:
     def reset_daemon_params(self, target: str, band: str) -> ActionResult:
         """Clear all daemon-param overrides for a stack+band (back to source defaults)."""
         from . import daemon_params
-        return self.save_daemon_params(target, band, {k: "" for k in daemon_params.ALL_PARAMS})
+        return self.save_daemon_params(target, band, dict.fromkeys(daemon_params.ALL_PARAMS, ""))
 
     def _verify_band_up(self, band: str) -> bool:
         """Poll a band's CONF socket until the daemon reports RADIO=READY, up to the
@@ -1751,7 +1749,7 @@ class LifecycleOpsMixin:
                 ok = False
                 summary = (f"Stop for '{target}' applied but the known-working candidate "
                            f"could not be retired — see details.")
-                details = list(details) + [f"  [candidate] not cleared: {why}"]
+                details = [*list(details), f"  [candidate] not cleared: {why}"]
             self._clear_restart_required(target)
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
@@ -1882,8 +1880,7 @@ class LifecycleOpsMixin:
             # the failed-stop typed results as the restart evidence.
             return ActionResult(False,
                                 f"Restart aborted for '{target}': stop was not verified.",
-                                details=list(stopped.details) + ["  [aborted] not starting "
-                                "after an unverified stop — resolve the stop first"],
+                                details=[*list(stopped.details), "  [aborted] not starting " "after an unverified stop — resolve the stop first"],
                                 results=tuple(stopped.results),
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
@@ -2106,8 +2103,9 @@ class LifecycleOpsMixin:
         ("admitted", "") | ("blocked", detail) | ("pending", ""). The parent reserved THIS exact attempt
         before spawning, so an absent/mismatched-attempt marker means it was superseded → blocked immediately.
         Admission is decided by the persisted `admitted` flag (NOT a free-text detail prefix)."""
-        from . import jobresult
         import time as _t
+
+        from . import jobresult
         deadline = _t.monotonic() + self._web_admit_timeout()
         while True:
             rec = jobresult.read_one(self._paths, log)
@@ -2156,11 +2154,12 @@ class LifecycleOpsMixin:
         infers "started" from a returned log. PRIMARY-FIRST: the main job's admission is handshaked before
         any secondary component job is spawned; a blocked primary spawns none. Each job carries an attempt
         reservation (green/red banner) gated on parent identity tracking."""
-        from . import commands, reslock, runtime_fs, jobresult, procident
-        import sys
         import os
-        import uuid
+        import sys
         import time as _time
+        import uuid
+
+        from . import commands, jobresult, procident, reslock, runtime_fs
         life = self._lifecycle()
         import contextlib as _contextlib
         _adm_stack = _contextlib.ExitStack()
@@ -2333,10 +2332,11 @@ class LifecycleOpsMixin:
         touching a log that belongs to an active job (so live evidence is preserved)
         and never following a symlink. Returns the number removed. Called at operation
         boundaries; there is no background cleaner."""
+        from . import auto_install as ai_mod
+        from . import jobresult
         from .paths import PathContainmentError
-        from . import auto_install as ai_mod, jobresult
         protected = {j.get("log") for j in self.active_jobs() if j.get("log")}
-        protected = {f"{n}.log" for n in protected} | {n for n in protected}
+        protected = {f"{n}.log" for n in protected} | set(protected)
         # Housekeeping: drop `done` job-result markers older than the banner expiry (failed/unsafe stay),
         # and PROTECT the log of every undismissed failed/unsafe/incomplete-derived result so its banner's
         # View → /logs link is never dead. Naturally bounded — result markers reuse the finite job-log
@@ -2350,7 +2350,7 @@ class LifecycleOpsMixin:
                 # incomplete) keep their log while the banner is up.
                 if rec.get("state") != "done" or log in live:
                     protected.add(log)
-        except Exception:                                # noqa: BLE001 — pruning must never fail
+        except Exception:
             pass
         # Protect the LIVE auto-install run's own component build/test logs (requirement #7): its
         # durable descriptors are this run's evidence — a mid-run prune must never remove a
@@ -2358,7 +2358,7 @@ class LifecycleOpsMixin:
         # Retired runs' logs carry no such protection and age out normally.
         try:
             st = self.auto_install_status()
-        except Exception:                        # noqa: BLE001 — pruning must never fail
+        except Exception:
             st = None
         auto_install_prefix = ""
         if st and not st.get("unsafe") and st.get("state") in ("preparing", "running"):
@@ -2373,7 +2373,7 @@ class LifecycleOpsMixin:
         hmac_prefix = ""
         try:
             hst = self.hmac_apply_status()
-        except Exception:                            # noqa: BLE001 — pruning must never fail
+        except Exception:
             hst = None
         import re as _re2
         if (hst and not hst.get("unsafe") and hst.get("phase") in ("running", "unsafe")
@@ -2441,6 +2441,7 @@ class LifecycleOpsMixin:
         subdir returns a safe zero for that subdir and leaves external sentinels untouched.
         Only regular files are candidates; any uncertainty is retained."""
         import stat as _stat
+
         from .paths import PathContainmentError
         try:
             d = self._paths.under(*subdir)
@@ -2543,8 +2544,9 @@ class LifecycleOpsMixin:
         evidence — never blocks, never trusted as active, never followed, and never
         auto-deleted merely for being malformed. No exception escapes into the callers
         (`prune_logs`/`build`/`test`/`spawn_web_job`)."""
-        import tomllib
         import stat as _stat
+        import tomllib
+
         from .paths import PathContainmentError
         d = self._jobs_dir()
         # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping jobs dir
@@ -3011,7 +3013,7 @@ class LifecycleOpsMixin:
         never finished) — correctly reads NOT built."""
         if comp.build_marker and (comp.build_cmd or comp.build_steps):
             from . import runtime_fs
-            from .lifecycle import BUILD_MARKER_TEXT, _BUILD_MARKER_MAX
+            from .lifecycle import _BUILD_MARKER_MAX, BUILD_MARKER_TEXT
             marker = self._lifecycle().source_dir(comp) / comp.build_marker
             try:
                 # Descriptor-anchored O_NOFOLLOW regular-file read: a symlink, directory, FIFO/device,
@@ -3053,6 +3055,7 @@ class LifecycleOpsMixin:
         SAME structured command spec, shell-quoted — values are individual argv
         tokens, never interpolated into shell syntax."""
         import shlex
+
         from . import commands
         if not comp.run_argv:
             return "(no run command)"
@@ -3273,8 +3276,13 @@ class LifecycleOpsMixin:
         dstat = live.get(self.DAEMON_ID)
         daemon_proc = dstat.run_state.value if dstat else "unknown"
         daemon_up = bool(dstat and dstat.run_state in up)
-        daemon_installed = bool(dstat and dstat.source_state.value
-                                in ("match", "dirty", "differs", "unknown", "not-a-repo"))
+        # "Installed" is not only a SOURCE tree: the daemon can be installed from the binary
+        # channel (source-less), and anything RUNNING is installed by definition. Keying this off
+        # source_state alone made a binary-installed, running daemon render "Daemon not installed".
+        daemon_installed = bool(dstat) and (
+            dstat.source_state.value in ("match", "dirty", "differs", "unknown", "not-a-repo")
+            or self.binary_covers(self.DAEMON_ID)
+            or daemon_up)
         dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
         # OCCUPIED = reachable (may physically hold SPI, used for conflict reasoning);
         # USABLE = RADIO=READY (a working radio service). User-facing "served" summaries are
@@ -3338,8 +3346,8 @@ class LifecycleOpsMixin:
                     if not active:
                         startable.append(entry)                    # in the dropdown
                         continue
-                    col = mark_band or (self.running_band(s.id, sorted(sbands)[0])
-                                        if running_up else sorted(sbands)[0])
+                    col = mark_band or (self.running_band(s.id, min(sbands))
+                                        if running_up else min(sbands))
                     if col != band:
                         continue                                   # block lives in its own column
                     entry["running"] = running_up
@@ -3351,7 +3359,7 @@ class LifecycleOpsMixin:
                 # A running multi-band stack belongs to the column of the band it
                 # was actually started on (tracked at start time).
                 if multi and running_up:
-                    if self.running_band(s.id, sorted(sbands)[0]) != band:
+                    if self.running_band(s.id, min(sbands)) != band:
                         continue
                     is_up = True
                 elif multi:
@@ -3438,8 +3446,8 @@ class LifecycleOpsMixin:
         the parsed dict, or None for a missing/symlinked/oversized/malformed marker. NEVER deletes or
         mutates evidence (a caller that needs to signal validates identity/op/target on the returned dict
         immediately before acting)."""
-        import tomllib
         import stat as _stat
+        import tomllib
         try:
             slug = validators.path_component(job, field="job log")
             f = self._paths.under("state", "jobs", slug + ".job")
@@ -3476,7 +3484,7 @@ class LifecycleOpsMixin:
                 return st.run_state in (RunState.RUNNING, RunState.DEGRADED)
         return False
 
-    def start_notes(self, result: "ActionResult") -> list[str]:
+    def start_notes(self, result: ActionResult) -> list[str]:
         """Per-component `start_note` strings for components that actually started
         (verified / already-healthy) in this result — e.g. how to connect a just-
         launched GUI to its node. Shown as a transient green dashboard note."""

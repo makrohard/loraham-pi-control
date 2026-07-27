@@ -197,6 +197,7 @@ def test_install_refuses_symlinked_ancestor(tmp_path):
     assert r.returncode != 0 and "symlink" in (r.stdout + r.stderr)
 
 
+@pytest.mark.slow
 def test_install_allows_config_only_remainder(tmp_path):
     """A reinstall over a preserved config-only remainder is permitted (freshness OK)."""
     home = tmp_path / "home"; home.mkdir()
@@ -255,6 +256,7 @@ def test_install_refuses_symlinked_src(tmp_path):
     assert not (outside / "loraham-pi-control").exists()
 
 
+@pytest.mark.slow
 def test_install_full_creates_usable_layout_and_identity_ok(tmp_path):
     home = tmp_path / "home"; home.mkdir()
     root = home / "loraham-pi-control"
@@ -294,6 +296,7 @@ def test_install_full_creates_usable_layout_and_identity_ok(tmp_path):
     assert v.stdout.strip() == "ok", v.stdout + v.stderr
 
 
+@pytest.mark.slow
 def test_template_and_generated_unit_have_equivalent_security_semantics(tmp_path):
     """The generated unit is the SAME canonical render as the shipped template — they differ
     only in %h vs the literal target (the single source of truth)."""
@@ -422,6 +425,7 @@ def test_uninstall_refuses_unsafe_target(tmp_path, bad):
 
 # =============================================================================== updater helpers
 
+@pytest.mark.slow
 def test_install_generates_canonical_updater_units(tmp_path):
     """install.sh writes the escape-proof one-click set: a sandboxed, bus-blocked, declarative
     helper (no ExecStopPost/systemctl) + the request-watcher .path; no overwrite variant."""
@@ -444,6 +448,7 @@ def test_install_generates_canonical_updater_units(tmp_path):
     assert "Unit=lhpc-selfupdate.service" in path_unit
 
 
+@pytest.mark.slow
 def test_install_enables_boot_restore_without_starting_it(tmp_path):
     """install.sh renders + plain-`enable`s the boot-restore oneshot: armed for the NEXT boot,
     never started during install (only `enable --now` or `start` would run it)."""
@@ -463,6 +468,7 @@ def test_install_enables_boot_restore_without_starting_it(tmp_path):
     assert not any("--now" in ln or ln[1] in ("start", "restart") for ln in boot)
 
 
+@pytest.mark.slow
 def test_install_boot_enable_failure_is_unmistakable(tmp_path):
     """Only the boot-restore enable fails (working session otherwise): install must NOT report a
     clean success — restore would silently never run. The INCOMPLETE result names the fix."""

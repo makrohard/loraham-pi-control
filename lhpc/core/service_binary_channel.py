@@ -62,7 +62,7 @@ class BinaryChannelMixin:
     def allowed_channels(self, stack_id: str) -> tuple[str, ...]:
         """Selectors this stack may be installed/updated with, binary first when available."""
         ok, _why = self.binary_available(stack_id)
-        return ((self.BINARY_CHANNEL,) + self.SOURCE_CHOICES) if ok else self.SOURCE_CHOICES
+        return ((self.BINARY_CHANNEL, *self.SOURCE_CHOICES)) if ok else self.SOURCE_CHOICES
 
     def default_channel(self, stack_id: str) -> str:
         """The channel a bare `install`/`update` uses. Binary WHERE AVAILABLE (that is the

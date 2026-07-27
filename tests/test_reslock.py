@@ -92,6 +92,7 @@ def test_concurrent_lifecycle_op_is_blocked(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
     # hold the daemon's lifecycle lock -> an external start must be refused (not race)
     with reslock.operation_lock(svc._paths, "lifecycle.daemon", "stop", "daemon"):
         res = svc.run_action("start", "daemon", apply=True)

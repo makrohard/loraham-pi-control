@@ -98,6 +98,7 @@ def test_migrates_legacy_hw_preset_to_loraham(tmp_path):
     assert any("legacy" in d and "loraham" in d for d in c.diagnostics)
 
 
+@pytest.mark.contract
 def test_save_rejects_invalid_setup(tmp_path):
     with pytest.raises(config.ConfigError):
         config.save_hardware_setup(Paths(runtime_root=tmp_path), "nope")
@@ -143,6 +144,7 @@ def test_daemon_hidden_injected_params_exist(tmp_path):
 
 # ---- M2: refuse-to-start when no hardware is configured -----------------------------------------
 
+@pytest.mark.contract
 def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
     svc = _svc(tmp_path)                                            # default: unset
     for target in ("daemon", "meshcore", "chat"):
@@ -153,6 +155,7 @@ def test_hardware_block_refuses_daemon_and_radio_stacks_when_unset(tmp_path):
             assert "lhpc hardware" in " ".join(r.next_commands)
 
 
+@pytest.mark.contract
 def test_hardware_block_clears_once_configured(tmp_path):
     svc = _svc(tmp_path)
     _setup(svc, "loraham")
@@ -170,6 +173,7 @@ def test_start_refuses_absent_band_stack_after_configured(tmp_path):
 
 # ---- retained invariants: one process per band, serve-bands never 'both' ------------------------
 
+@pytest.mark.contract
 def test_daemon_serve_bands_never_both(tmp_path):
     svc = _svc(tmp_path)
     _setup(svc, "loraham")
@@ -259,6 +263,7 @@ def test_probe_present_when_daemon_stays_up(tmp_path):
     assert env["LORAHAM_SOCKET_DIR"] == "/tmp"
 
 
+@pytest.mark.contract
 def test_probe_absent_captures_chip_diagnostic(tmp_path):
     runner = _Runner(CommandResult(
         returncode=1, stdout="",
@@ -269,6 +274,7 @@ def test_probe_absent_captures_chip_diagnostic(tmp_path):
     assert "antwortet nicht" in pr.diagnostic
 
 
+@pytest.mark.contract
 def test_probe_busy_when_band_already_served(tmp_path):
     runner = _Runner(CommandResult(returncode=3, stdout="", stderr="instance lock busy\n",
                                    timed_out=False))
@@ -353,6 +359,7 @@ def test_probe_message_uses_friendly_label_not_wire_name(tmp_path):
     assert pr.present and "LoRaHAM" in pr.message and "legacy" not in pr.message
 
 
+@pytest.mark.contract
 def test_probe_result_renders_inline_and_is_consumed_once(tmp_path):
     # The Detect result is stashed in the session and rendered INLINE (under the Detect button on the
     # daemon Hardware settings), not as a top-level flash; a reload does not re-show it.

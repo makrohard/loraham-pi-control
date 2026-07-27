@@ -308,7 +308,7 @@ def validate_param(param, value) -> str:
     kind = getattr(param, "kind", "str")
     if kind == "flag":
         return str(value)
-    if kind in ("int",):
+    if kind == "int":
         s = str(value).strip()
         if not re.fullmatch(r"-?[0-9]{1,9}", s):
             raise ValidationError(f"{name}: not an integer ({value!r})")

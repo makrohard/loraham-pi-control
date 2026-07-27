@@ -13,6 +13,8 @@ ModuleNotFoundError at start. This covers the fixes:
 
 from pathlib import Path
 
+import pytest
+
 from lhpc.core import lifecycle as lifecycle_mod
 from lhpc.core.jobs import run_job, JobResult, JobState, tail_log
 from lhpc.core.paths import Paths
@@ -249,28 +251,33 @@ def test_is_built_requires_exact_regular_marker_content(tmp_path):
     m.write_text("");                        assert not svc.is_built(comp)      # empty
 
 
-def test_is_built_rejects_oversize_marker(tmp_path):
-    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+def _oversize_marker(m):
     m.write_text("lhpc build complete\n" + "x" * 200)
-    assert not svc.is_built(comp)
 
 
-def test_is_built_rejects_directory_marker(tmp_path):
-    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+def _directory_marker(m):
     m.mkdir()
-    assert not svc.is_built(comp)
 
 
-def test_is_built_rejects_fifo_marker(tmp_path):
-    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+def _fifo_marker(m):
     _os.mkfifo(m)
-    assert not svc.is_built(comp)
 
 
-def test_is_built_rejects_symlink_marker_even_to_valid_file(tmp_path):
-    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+def _symlink_marker_to_valid_file(m):
     real = m.parent / "real-marker"; real.write_text("lhpc build complete\n")
     m.symlink_to(real)                                       # symlink -> a VALID regular file
+
+
+@pytest.mark.parametrize("make_bad", [
+    pytest.param(_oversize_marker, id="test_is_built_rejects_oversize_marker"),
+    pytest.param(_directory_marker, id="test_is_built_rejects_directory_marker"),
+    pytest.param(_fifo_marker, id="test_is_built_rejects_fifo_marker"),
+    pytest.param(_symlink_marker_to_valid_file,
+                 id="test_is_built_rejects_symlink_marker_even_to_valid_file"),
+])
+def test_is_built_rejects_bad_marker(tmp_path, make_bad):
+    svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
+    make_bad(m)
     assert not svc.is_built(comp)                            # ...still NOT built (non-regular leaf)
 
 

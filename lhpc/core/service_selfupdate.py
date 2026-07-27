@@ -7,7 +7,7 @@ import json
 import os
 
 from .paths import PathContainmentError
-from .service_base import ActionResult, _StopRun, _proc_ceased, _proc_start_time
+from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
 
 
 class SelfUpdateOpsMixin:
@@ -73,9 +73,10 @@ class SelfUpdateOpsMixin:
         controller System-dependencies panel (/stacks) and `lhpc doctor`, so the two never drift.
         GET-SAFE: presence probes only — `shutil.which` / `System.fs.exists` / `importlib.util.find_spec`
         — never a subprocess (git/nginx/systemctl are NOT executed)."""
+        import importlib.util
         import shutil
         import sys
-        import importlib.util
+
         from . import webserver as _ws
         # Python venv deps must be (re)installed into the SAME interpreter that runs LHPC — never a bare
         # `pip install` (wrong env / PEP-668). Version floors mirror pyproject.toml.
@@ -240,9 +241,9 @@ class SelfUpdateOpsMixin:
                                             data={"identity_unsafe": True, "identity": idv})
                 # controller-runtime EXCLUSIVE (so the running web server, holding it SHARED, can never
                 # have its source mutated underneath it), THEN the self-update lock. Both non-blocking.
-                with selfupdate.controller_runtime_lock(self._paths, exclusive=True):
-                    with selfupdate.update_lock(self._paths):
-                        return self._self_update_locked(force)
+                with (selfupdate.controller_runtime_lock(self._paths, exclusive=True),
+                      selfupdate.update_lock(self._paths)):
+                    return self._self_update_locked(force)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
         except reslock.ResourceBusy:
@@ -275,6 +276,7 @@ class SelfUpdateOpsMixin:
         pip failure returns `ok=False` + `venv_sync_failed=True`, preserving the apply-result data."""
         import dataclasses as _dc
         import sys as _sys
+
         from . import selfupdate
         res = self.self_update_apply(force=force)
         if not (res.ok and not res.data.get("already")):
@@ -301,6 +303,7 @@ class SelfUpdateOpsMixin:
         only difference is no service control. Admission is NEVER released between apply and sync in
         either case. REFUSES inside a managed unit (a managed process must never drive systemctl)."""
         import os as _os
+
         from . import reslock, updater_units
         from .service_base import AdmissionRefused
         if _os.environ.get("INVOCATION_ID"):
@@ -596,6 +599,7 @@ class SelfUpdateOpsMixin:
                                 f"({idv.get('reason', '')}).", data={"identity_unsafe": True})
         mode = "overwrite" if overwrite else "normal"
         import contextlib
+
         from . import reslock
         # Hold task admission through the EXCLUSIVE request-marker creation (lock order #1): a new task
         # cannot start while we create it. Recheck the uninstall guard + request state AND run the
@@ -641,6 +645,7 @@ class SelfUpdateOpsMixin:
         strict request self-check would wrongly refuse it — but it is still reentrant, so the inner
         `self_update_apply` reuses the SAME lock. A concurrent holder -> typed busy, zero mutation."""
         import contextlib
+
         from . import reslock
         with contextlib.ExitStack() as adm:
             try:
@@ -655,6 +660,7 @@ class SelfUpdateOpsMixin:
         claim -> prove ownership -> apply -> venv sync -> durable record -> in-flight release."""
         import sys
         import time as _time
+
         from . import runtime_fs, selfupdate, updater_units
         req_path = self._paths.under(*updater_units.REQUEST_REL)
         inflight = self._paths.under(*updater_units.INFLIGHT_REL)
@@ -711,13 +717,13 @@ class SelfUpdateOpsMixin:
                     if _time.monotonic() >= deadline:
                         res = ActionResult(False, "The console did not release the controller-runtime "
                                            "lock — no changes made.", data={"web_running": True})
-                        raise _StopRun()
+                        raise _StopRun() from None
                     _time.sleep(0.5)
                 except selfupdate.ControllerRuntimeLockError:
                     res = ActionResult(False, "Could not acquire the controller-runtime lock "
                                        "(unsafe runtime state) — no changes made.",
                                        data={"lock_error": True})
-                    raise _StopRun()
+                    raise _StopRun() from None
             res = self.self_update_apply(force=force)
             if res.ok and not res.data.get("already"):
                 root = selfupdate.repo_root()
@@ -758,7 +764,7 @@ class SelfUpdateOpsMixin:
         try:
             rec = json.loads(runtime_fs.read_text_regular(
                 self._paths, self._paths.under(*updater_units.INFLIGHT_REL), max_bytes=4096))
-        except Exception:                                  # noqa: BLE001 — cannot prove -> not owner
+        except Exception:
             return False
         if not isinstance(rec, dict):
             return False
@@ -788,7 +794,7 @@ class SelfUpdateOpsMixin:
         return runtime_fs.guard_state(
             self._paths, self._paths.under(updater_units.UNINSTALL_GUARD)) != "absent"
 
-    def _task_admission_blocked(self) -> "tuple[str, str] | None":
+    def _task_admission_blocked(self) -> tuple[str, str] | None:
         """STRICT reason a NEW task start is refused under admission — `(reason, tag)` or None. Blocks
         when the uninstall guard is present/unsafe (strict) OR a self-update request is pending/in
         flight/malformed. Runs UNDER the held admission lock. Absent runtime root -> no markers -> None
@@ -798,7 +804,7 @@ class SelfUpdateOpsMixin:
                     "new work. Let it finish, or recover it.", "uninstalling")
         try:
             req = self.classify_request()
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> refuse
+        except Exception as exc:
             return (f"Could not verify controller update state ({exc}) — refusing to start new work.",
                     "unverifiable")
         if req in ("pending", "in_flight", "malformed"):
@@ -806,7 +812,7 @@ class SelfUpdateOpsMixin:
                     "until it completes (`lhpc self-update --recover-request` if stuck).", req)
         return None
 
-    def _self_update_blockers(self) -> "tuple[str, str] | None":
+    def _self_update_blockers(self) -> tuple[str, str] | None:
         """The COMPLETE strict blocker scan SHARED by self_update_trigger and self_update_apply so both
         gate on identical logic. Blocks on: an active OR unprovable job (active_jobs(include_unsafe=True)
         — unsafe jobs dir / symlinked / non-regular / oversized / disappeared / malformed marker),
@@ -815,13 +821,13 @@ class SelfUpdateOpsMixin:
         those are the admission (trigger) / request-ownership (apply) concern of each caller."""
         try:
             jobs = self.active_jobs(include_unsafe=True)
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+        except Exception as exc:
             return (f"could not inspect running jobs ({exc})", "jobs")
         if jobs:
             return ("an lhpc build/test/web job is running or its state cannot be proven safe", "jobs")
         try:
             ai = self._auto_install_gate()
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+        except Exception as exc:
             ai = f"unverifiable ({exc})"
         if ai:
             return (f"an auto-install run is unresolved — {ai}", "auto_install")
@@ -829,7 +835,7 @@ class SelfUpdateOpsMixin:
             hst = self.hmac_apply_status()
             if hst and (hst.get("unsafe") or hst.get("phase") in ("running", "interrupted")):
                 return ("an HMAC apply is running or its state is unresolved/unsafe", "hmac")
-        except Exception as exc:                          # noqa: BLE001 — cannot prove safe -> block
+        except Exception as exc:
             return (f"could not inspect HMAC state ({exc})", "hmac")
         return None
 
@@ -868,12 +874,12 @@ class SelfUpdateOpsMixin:
         # being attempted — each converts to a typed failed result instead of propagating.
         try:
             req_res = self._recover_update_state()
-        except Exception as exc:                    # noqa: BLE001 — isolate; the guard half still runs
+        except Exception as exc:
             req_res = ActionResult(False, f"Update-state recovery failed unexpectedly: {exc}",
                                    data={"request_recovery_error": True})
         try:
             guard_res = self._recover_uninstall_guard()
-        except Exception as exc:                    # noqa: BLE001 — isolate; report truthfully
+        except Exception as exc:
             guard_res = ActionResult(False, f"Uninstall-guard recovery failed unexpectedly: {exc}",
                                      data={"guard": "error"})
         if guard_res is None:
@@ -972,7 +978,7 @@ class SelfUpdateOpsMixin:
         or when an existing unit is not provably this deployment's."""
         from . import runtime_fs, updater_units
         root = str(self._paths.runtime_root)
-        _, checkout, venv = updater_units.deployment_paths(root)
+        _, checkout, _venv = updater_units.deployment_paths(root)
         import os.path as _op
         if not _op.isdir(_op.join(checkout, ".git")):
             return ActionResult(False, "Not a self-hosted deployment (no checkout at "
@@ -992,7 +998,7 @@ class SelfUpdateOpsMixin:
         # Without this the web unit fails to start on `append:` open.
         try:
             runtime_fs.mkdir(self._paths, "logs")
-        except Exception:                                    # noqa: BLE001 — best effort, never fatal
+        except Exception:
             pass
         try:
             actions = updater_units.write_set(ud, root)
@@ -1104,7 +1110,7 @@ class SelfUpdateOpsMixin:
         import getpass
         try:
             user = getpass.getuser()
-        except Exception:                                    # noqa: BLE001 — no pwent / no env
+        except Exception:
             return "  linger: could not resolve the user — run: loginctl enable-linger $USER"
         r = self._system.runner.run(["loginctl", "enable-linger", user], timeout=timeout)
         if getattr(r, "not_found", False) or r.returncode != 0:
@@ -1214,8 +1220,9 @@ class SelfUpdateOpsMixin:
         return self.self_update_trigger(overwrite=overwrite)
 
     def _write_root_marker(self) -> None:
-        from . import runtime_fs, updater_units
         import time as _time
+
+        from . import runtime_fs, updater_units
         payload = json.dumps({"schema_version": 1, "root": str(self._paths.runtime_root),
                               "created": int(_time.time())})
         runtime_fs.write_marker(self._paths, self._paths.under(updater_units.ROOT_MARKER), payload)

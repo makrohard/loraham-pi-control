@@ -4,16 +4,9 @@
 
 - Managed firewall
 - System monitor
-- Boot auto-restore: stacks that were running before a reboot are restarted at boot
-  (`lhpc autostart on|off`, default on; new `lhpc-boot-restore.service` user unit)
-- Binary install channel: prebuilt, sha256-verified artifacts for daemon/meshtastic/meshcom
-  (`lhpc install <stack>` uses it where published; `--source pinned|dev|stable` builds from
-  source). Provenance-pinned to the manifest commits, smoke-gated, never a silent fallback.
-- Binary channel: switching to a source channel sets the artifact aside locally instead of
-  deleting it — a failed source install restores the previous binary without touching the network
-- Source transactions: a checkout that a stack RUNS FROM may hold a runtime socket (MeshCom's
-  `.run/`). Archiving it no longer aborts the cleanup halfway — which used to leave the archived
-  copy unremovable and every source operation on the box blocked.
+- Boot auto-restore
+- Test hygiene — plus a readable Tier 0 `-m contract` lane (what LHPC promises) and `-m safety` invariants
+- Fix: a binary-installed, running daemon no longer shows "Daemon not installed" on the radio dashboard
 
 ## 0.1.5
 - Hardware setups: `lhpc hardware` selects the radio rig (LoRaHAM / Uputronics dual / Waveshare); daemon v112 multi-hardware, per-band arbitration

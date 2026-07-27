@@ -27,7 +27,6 @@ from pathlib import Path
 from . import validators
 from .model import emit_param
 
-
 _PKG_RE = re.compile(r"[A-Za-z0-9._+-]+")
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -109,7 +108,7 @@ def build_env(env_items, runtime: str, source: str, band: str = "") -> dict:
                 env[key] = ""                    # optional secret: absent -> disabled
             except OSError as exc:
                 raise CommandError(
-                    f"optional secret file for {key} is unreadable: {exc}")
+                    f"optional secret file for {key} is unreadable: {exc}") from exc
             continue
         if v.startswith("@file:"):
             path = _paths_subst(v[len("@file:"):], runtime, source, band)
@@ -163,7 +162,7 @@ def run_pre_steps(steps, runtime: str, source: str, band: str = "") -> None:
     engine the generated wrappers use (`wrapper_runtime.apply_steps`) — never a shell.
     Raises CommandError on failure (which blocks the launch)."""
     from . import wrapper_runtime
-    from .paths import Paths, PathContainmentError
+    from .paths import PathContainmentError, Paths
     try:
         tuples = normalize_pre_steps(steps, runtime, source, band)
         wrapper_runtime.apply_steps(Paths(runtime_root=Path(runtime)), tuples)
@@ -255,7 +254,7 @@ def _post_interval(v) -> float:
         try:
             f = float(v)
         except ValueError:
-            raise CommandError(f"tcp_send: interval must be a number (got {v!r})")
+            raise CommandError(f"tcp_send: interval must be a number (got {v!r})") from None
     else:
         raise CommandError(f"tcp_send: interval must be a number (got {v!r})")
     if not (math.isfinite(f) and f >= 0):

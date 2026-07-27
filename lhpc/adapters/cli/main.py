@@ -664,6 +664,7 @@ def _run(argv: list[str] | None = None) -> int:
                         "_uninstall-guard-release"):
         if getattr(args, "root", ""):
             from pathlib import Path as _Path
+
             from lhpc.core.paths import Paths as _Paths
             svc = ControllerService(paths=_Paths(runtime_root=_Path(args.root)))
         if args.command == "_controller-uninstall-prep":
@@ -723,6 +724,7 @@ def _run(argv: list[str] | None = None) -> int:
         # admitted) before finishing, so a no-op reports admitted+done, never a false "blocked". One terminal
         # result across all exits.
         import os as _os
+
         from lhpc.core import jobresult, webjob_gate
         aid = getattr(args, "attempt_id", "") or ""
         if web != f"install-{args.stack}.log":                 # strictly bound to install-<stack>.log
@@ -746,6 +748,7 @@ def _run(argv: list[str] | None = None) -> int:
         return rc
     if args.command == "auto-install":
         import signal as _signal
+
         from lhpc.core.service_auto_install import _auto_install_abort
 
         def _run_apply(**kw):
@@ -853,6 +856,7 @@ def _run(argv: list[str] | None = None) -> int:
         # assignment; the runner polls it and terminates the build via its local session token, and THIS
         # driver then writes the truthful terminal marker).
         import signal
+
         from lhpc.core.service_hmac import _hmac_abort
         _hmac_abort.reset()                  # reset BEFORE install — a fresh run is never pre-aborted,
         signal.signal(signal.SIGTERM, _hmac_abort.request)   # and a signal after install isn't erased
@@ -903,7 +907,7 @@ def _run(argv: list[str] | None = None) -> int:
         else:
             when = st.get("finished_at")
             import datetime as _dt
-            ts = (_dt.datetime.fromtimestamp(when).strftime(" @ %Y-%m-%d %H:%M:%S")
+            ts = (_dt.datetime.fromtimestamp(when).strftime(" @ %Y-%m-%d %H:%M:%S")  # noqa: DTZ006
                   if isinstance(when, (int, float)) else "")
             c = st.get("counts", {})
             print(f"  last result: {st['state']}{ts} — "
@@ -921,6 +925,7 @@ def _run(argv: list[str] | None = None) -> int:
         return _render(svc.set_hardware_setup(args.setup))
     if args.command == "firewall":
         import json as _json
+
         from lhpc.core import firewall as _fw_mod
         if args.script:
             print(_fw_mod.render_apply_script(_json.dumps(svc.firewall_candidate(),

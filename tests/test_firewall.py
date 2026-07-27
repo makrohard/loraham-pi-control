@@ -419,6 +419,8 @@ def _expected_live_json(cand, ownership="fixedid01", **kw):
     return _json.dumps({"nftables": [{"metainfo": {"version": "1.1.3"}}, *listing]})
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_apply_happy_path_writes_snapshot_and_verified_receipt(tmp_path):
     import json as _json
     from lhpc.core import firewall_helper as fh
@@ -472,6 +474,8 @@ def test_apply_transition_then_cleanup(tmp_path):
     assert not (tmp_path / "etc" / "firewall.transition.json").exists()
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_apply_refuses_invalid_candidate_and_not_owned_table(tmp_path):
     import json as _json
     from lhpc.core import firewall_helper as fh
@@ -1045,6 +1049,8 @@ def test_gate_noop_when_integration_absent(tmp_path, monkeypatch):
     assert allowed and msg == "" and cmds == []
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     # P1-1: a half-installed firewall must not be trusted — refuse remote activation.
     svc = _svc_fw_installed(tmp_path, monkeypatch, state="partial")
@@ -1052,6 +1058,8 @@ def test_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     assert not allowed and "partially installed" in msg
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_gate_refuses_even_already_exposed_when_unverified(tmp_path, monkeypatch):
     # P1-1: an already-socket-exposed port is NOT evidence of firewall protection. When the
     # firewall is installed but not verified-current, activating a remote listener is refused
@@ -1066,11 +1074,15 @@ def test_gate_allows_when_no_remote_listener(tmp_path, monkeypatch):
     assert svc.firewall_gate_activation(set())[0]          # nothing remote -> allowed
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_gate_allows_remote_listener_when_firewall_verified(tmp_path, monkeypatch):
     svc = _svc_fw_installed(tmp_path, monkeypatch, live_ok=True, config_ok=True)
     assert svc.firewall_gate_activation({8443})[0]         # verified + current -> allowed
 
 
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
 def test_webserver_apply_blocked_by_pending_firewall(tmp_path, monkeypatch):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
@@ -1841,24 +1853,27 @@ def test_boot_gate_partial_install_goes_loopback_only(tmp_path, monkeypatch):
 def test_integration_state_classification(tmp_path, monkeypatch):
     # P1-3: 'present' requires ALL required artifacts and NO journal; a missing required artifact
     # or a present journal (pending recovery / unsafe) is 'partial'; nothing at all is 'absent'.
-    import os
     from lhpc.core import firewall as fwm
     from lhpc.core.service_firewall import FirewallOpsMixin
-    svc = _svc(tmp_path)
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    (tmp_path / "config").mkdir(exist_ok=True)
+    fake = FakeSystem()                                # presence driven via the filesystem seam
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     # the hermetic conftest fixture defaults this reader to "absent" suite-wide (host /etc
-    # isolation); THIS test exercises the real classification, so bind the mixin original.
+    # isolation); THIS test exercises the REAL classification, so bind the mixin original. Artifact
+    # presence is expressed through FakeSystem.paths — no global os.path.exists monkeypatch.
     monkeypatch.setattr(svc, "_fw_integration_state",
                         FirewallOpsMixin._fw_integration_state.__get__(svc))
-    files = {}   # simulated filesystem presence
-    monkeypatch.setattr(os.path, "exists", lambda p: files.get(p, False))
     assert svc._fw_integration_state() == "absent"
     for p in svc._fw_required_artifacts():
-        files[p] = True
+        fake.paths.add(p)
     assert svc._fw_integration_state() == "present"
-    files[fwm.JOURNAL_DEST] = True                      # pending-recovery journal
+    fake.paths.add(fwm.JOURNAL_DEST)                    # pending-recovery journal
     assert svc._fw_integration_state() == "partial"
-    del files[fwm.JOURNAL_DEST]
-    del files[fwm.SNAPSHOT_DEST]                        # a required artifact missing
+    fake.paths.discard(fwm.JOURNAL_DEST)
+    fake.paths.discard(fwm.SNAPSHOT_DEST)              # a required artifact missing
     assert svc._fw_integration_state() == "partial"
 
 
@@ -1971,10 +1986,28 @@ def test_settings_view_writes_no_scripts_on_get(tmp_path):
 
 
 def test_units_enabled_reads_symlinks_not_systemctl(tmp_path, monkeypatch):
-    svc = _svc(tmp_path)
+    from lhpc.core import firewall as fwm
+    from lhpc.core.service_firewall import FirewallOpsMixin
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    (tmp_path / "config").mkdir(exist_ok=True)
+    fake = FakeSystem()
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    # exercise the REAL reader (conftest defaults it to False suite-wide); a subprocess is a hard
+    # failure — enablement is a pure filesystem WantedBy-symlink check, driven via FakeSystem.paths.
+    monkeypatch.setattr(svc, "_fw_units_enabled",
+                        FirewallOpsMixin._fw_units_enabled.__get__(svc))
     monkeypatch.setattr(svc._system.runner, "run",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("subprocess!")))
-    assert svc._fw_units_enabled() is False               # no symlinks, no subprocess
+    assert svc._fw_units_enabled() is False               # no symlinks -> not enabled (no subprocess)
+    wants = ("/etc/systemd/system/multi-user.target.wants/" + fwm.LOADER_UNIT,
+             "/etc/systemd/system/timers.target.wants/" + fwm.CHECKER_TIMER)
+    for w in wants:
+        fake.paths.add(w)
+    assert svc._fw_units_enabled() is True                # both WantedBy symlinks present
+    fake.paths.discard(wants[0])
+    assert svc._fw_units_enabled() is False               # one missing -> not fully enabled
 
 
 def test_dhcp_rules_are_family_scoped():

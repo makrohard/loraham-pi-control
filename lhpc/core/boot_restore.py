@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import runtime_fs
-from .paths import Paths, PathContainmentError
+from .paths import PathContainmentError, Paths
 
 JOURNAL_VERSION = 1
 JOURNAL_REL = ("state", "boot-restore.json")

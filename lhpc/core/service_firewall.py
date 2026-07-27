@@ -174,7 +174,7 @@ class FirewallOpsMixin:
             fam, addr = _classify_bind(ws.bind)
             out.append({"proto": "tcp", "family": fam, "addr": addr, "port": int(ws.port),
                         "allow_cidrs": _norm_cidrs(ws.allowed_cidrs, fam)})
-        for _sid, swc in (cfg.stackweb or {}).items():
+        for swc in (cfg.stackweb or {}).values():
             if swc.enabled and swc.remote:
                 # A remote stack proxy is rendered by nginx as `listen 0.0.0.0:<port>` (IPv4
                 # wildcard) — independent of the console bind. Match that exactly.
@@ -192,7 +192,7 @@ class FirewallOpsMixin:
         try:
             candidate = self.firewall_candidate()
             intent = _fw.intent_hash(candidate)
-        except Exception:                              # noqa: BLE001 — status must never raise
+        except Exception:
             candidate, intent = None, ""
         receipt = self._fw_read_receipt()
         installed = self._fw_integration_present()
@@ -385,9 +385,13 @@ class FirewallOpsMixin:
         present meaning recovery is pending / the state is unsafe). The gate and uninstall both
         fail closed on 'partial' so a half-installed or mid-recovery integration is never
         mistaken for absent (which would ungate nginx) or for a healthy install."""
-        req_present = [os.path.exists(p) for p in self._fw_required_artifacts()]
-        journal_present = os.path.exists(_fw.JOURNAL_DEST)
-        any_artifact = any(req_present) or journal_present or os.path.exists(_fw.TRANSITION_DEST)
+        # Existence is read through the injected filesystem seam (the real backend IS
+        # os.path.exists — backends.py) so a test can drive the classification with a
+        # FakeSystem(paths=...) instead of monkeypatching the global os.path.exists.
+        ex = self._system.fs.exists
+        req_present = [ex(p) for p in self._fw_required_artifacts()]
+        journal_present = ex(_fw.JOURNAL_DEST)
+        any_artifact = any(req_present) or journal_present or ex(_fw.TRANSITION_DEST)
         if not any_artifact:
             return "absent"
         if all(req_present) and not journal_present:
@@ -404,7 +408,8 @@ class FirewallOpsMixin:
         WantedBy unit has a symlink under the target's `.wants` directory."""
         wants = ("/etc/systemd/system/multi-user.target.wants/" + _fw.LOADER_UNIT,
                  "/etc/systemd/system/timers.target.wants/" + _fw.CHECKER_TIMER)
-        return all(os.path.exists(w) for w in wants)
+        # filesystem seam (real backend is os.path.exists); still NOT a `systemctl` subprocess.
+        return all(self._system.fs.exists(w) for w in wants)
 
     # ---- consolidated security pill (dashboard summary) -------------------------------------
 
@@ -561,7 +566,7 @@ class FirewallOpsMixin:
         ports = set()
         if cfg.webserver.remote_exposed:
             ports.add(int(cfg.webserver.port))
-        for _sid, swc in (cfg.stackweb or {}).items():
+        for swc in (cfg.stackweb or {}).values():
             if swc.enabled and swc.remote:
                 ports.add(int(swc.port))
         return ports
@@ -615,7 +620,7 @@ class FirewallOpsMixin:
             return notes
         try:
             self.firewall_render()                         # (B) scripts match the updated helper
-        except Exception:                                  # noqa: BLE001 — best effort
+        except Exception:
             pass
         try:
             integ = self.updater_integration()
@@ -639,7 +644,7 @@ class FirewallOpsMixin:
             else:                                          # interactive -> we have the bus
                 self._system.runner.run(["systemctl", "--user", "daemon-reload"], timeout=20.0)
                 notes.append("Updated the nginx unit (firewall boot gate) and reloaded systemd.")
-        except Exception:                                  # noqa: BLE001 — best effort
+        except Exception:
             pass
         return notes
 
@@ -653,7 +658,7 @@ class FirewallOpsMixin:
         try:
             runtime_fs.write_marker(self._paths,
                                     self._paths.under(_FW_POSTUPDATE_MARKER), "1")
-        except Exception:                                  # noqa: BLE001 — best effort
+        except Exception:
             pass
 
     def firewall_post_update_reconcile(self) -> list:
@@ -667,7 +672,7 @@ class FirewallOpsMixin:
         notes = self.firewall_update_after_advance()
         try:
             runtime_fs.unlink(self._paths, self._paths.under(_FW_POSTUPDATE_MARKER))
-        except Exception:                                  # noqa: BLE001 — best effort
+        except Exception:
             pass
         return notes
 
@@ -704,7 +709,7 @@ class FirewallOpsMixin:
             scopes.append({"id": sc["id"], "proto": sc["proto"], "family": sc["family"],
                            "addr": sc["addr"], "port": int(sc["port"]),
                            "allow_cidrs": list(sc["allow_cidrs"]), "band": cfg_band})
-        for stk, comp, ep in unmapped:
+        for _stk, comp, ep in unmapped:
             if comp.id not in comp_ids:
                 continue
             host, _, sport = str(ep.address).rpartition(":")
@@ -1138,11 +1143,11 @@ def _norm_cidrs(cidrs, family=None):
     family via its allow-list."""
     out = []
     for c in cidrs or ():
-        c = str(c).strip()
-        if not c:
+        raw = str(c).strip()
+        if not raw:
             continue
         try:
-            net = ipaddress.ip_network(c, strict=False)   # accepts a bare host as /32 or /128
+            net = ipaddress.ip_network(raw, strict=False)   # accepts a bare host as /32 or /128
         except ValueError:
             continue
         if int(net.prefixlen) == 0:                       # 0.0.0.0/0 or ::/0 -> no narrowing

@@ -3,6 +3,8 @@ LBT), save + reset. Backed by a fake-system service (daemon unreachable)."""
 
 import re
 
+import pytest
+
 from htmlq import parse
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -38,6 +40,7 @@ def test_server_side_validation_rejects_bad_values(tmp_path):
     assert svc.save_daemon_params("daemon", "433", {"MODE": "FSK"}).ok         # valid enum member
 
 
+@pytest.mark.contract
 def test_live_mode_fsk_confirm_warns(tmp_path):
     # The live-setting confirm page for MODE=FSK must carry the break-LoRa warning.
     c = _app(tmp_path)
@@ -51,6 +54,7 @@ def test_live_mode_fsk_confirm_warns(tmp_path):
     assert "break LoRa" not in body2
 
 
+@pytest.mark.contract
 def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
     c = _app(tmp_path)
     # Panels live in the (lazy) stack bodies — fetch each row force-opened.
@@ -61,6 +65,7 @@ def test_apply_live_disabled_unless_running_or_daemon(tmp_path):
     assert disabled not in _row(dm, "daemon")      # daemon: always on
 
 
+@pytest.mark.contract
 def test_apply_live_rejected_server_side_when_not_running(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     r = svc.apply_daemon_params("meshcom", "433")            # not running -> refused
@@ -80,6 +85,7 @@ def test_daemon_panel_follows_upper_band_switch(tmp_path):
     assert "(868 MHz)" in c.get("/stacks?open=meshcore&band=868").get_data(as_text=True)  # 868-band stack
 
 
+@pytest.mark.contract
 def test_apply_live_saves_then_reports(tmp_path):
     # Daemon unreachable in tests: Apply persists the values, then reports it can't reach it.
     c = _app(tmp_path)
@@ -147,6 +153,7 @@ def test_save_rejects_out_of_range(tmp_path):
     assert 'value="99999"' not in body                       # rejected, not stored
 
 
+@pytest.mark.contract
 def test_save_requires_csrf(tmp_path):
     c = _app(tmp_path)
     r = c.post("/stacks/meshcom/daemon-params",
@@ -183,6 +190,7 @@ def test_apply_live_full_success(tmp_path):
     assert r.ok and not r.data["failed"] and r.data["band"] == "433"
 
 
+@pytest.mark.contract
 def test_apply_live_total_failure_is_not_success(tmp_path):
     # Radio not READY -> every set fails -> ok=False (never green), nothing applied.
     svc = _svc(tmp_path, b"STATUS RADIO=UNINITIALIZED\n")
@@ -261,6 +269,7 @@ def test_rejected_save_leaves_prior_config_intact(tmp_path):
 def test_apply_live_respects_same_band_lock(tmp_path):
     from lhpc.core import reslock
     svc = _svc(tmp_path, b"STATUS RADIO=READY TXMODE=MANAGED CADWAIT=1500 CADIDLE=250\n")
+    svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the busy result)
     with reslock.operation_lock(svc._paths, "claim.loraham.radio.433", "start", "other"):
         r = svc.apply_daemon_params("daemon", "433")
     assert not r.ok and r.data.get("busy")                 # typed busy, not a race

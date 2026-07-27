@@ -438,7 +438,7 @@ def _has_dropin(user_dir: Path, name: str) -> bool:
         try:
             if _stat.S_ISLNK(os.lstat(str(d)).st_mode):
                 return True                                  # a symlinked drop-in dir is unsafe too
-            if _stat.S_ISDIR(os.stat(str(d)).st_mode):
+            if _stat.S_ISDIR(os.stat(str(d)).st_mode):  # noqa: SIM102
                 # only count it if it actually holds a .conf
                 if any(f.endswith(".conf") for f in os.listdir(str(d))):
                     return True
@@ -514,7 +514,7 @@ def verify(user_dir: Path, kind: str, root: str, checkout: str, venv: str) -> st
     except OSError as exc:
         # ELOOP / symlink leaf (e.g. a mask → /dev/null) is O_NOFOLLOW-rejected → unsafe;
         # other read errors → unreadable.
-        return UNSAFE if getattr(exc, "errno", None) in (_errno.ELOOP,) else UNREADABLE
+        return UNSAFE if getattr(exc, "errno", None) == _errno.ELOOP else UNREADABLE
     if text is None:
         return MISSING
     if _has_dropin(user_dir, kind):

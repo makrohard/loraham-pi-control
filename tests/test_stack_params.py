@@ -429,23 +429,18 @@ def test_direct_unknown_file_override_fails_typed(tmp_path):
     assert svc._normalize_file_overrides("meshcom-qemu", {"node_name": "x"})[1]
 
 
-def test_invalid_ordinary_run_param_rejected_before_lifecycle(tmp_path, monkeypatch):
+@pytest.mark.parametrize("params,msg", [
+    pytest.param({"call": "DJ0CHE-10", "tx_freq": "not-a-frequency"}, "invalid parameter",
+                 id="test_invalid_ordinary_run_param_rejected_before_lifecycle"),
+    pytest.param({"call": "DJ0CHE-10", "nope": "x"}, "unknown parameter",
+                 id="test_unknown_ordinary_run_param_rejected"),
+    pytest.param("not-a-dict", "must be a mapping",
+                 id="test_non_mapping_run_params_rejected"),
+])
+def test_ordinary_run_param_rejected_before_lifecycle(tmp_path, monkeypatch, params, msg):
     svc = _seam_svc(tmp_path, monkeypatch)
-    res = svc._start_impl("igate", apply=True,
-                          params={"call": "DJ0CHE-10", "tx_freq": "not-a-frequency"})
-    assert not res.ok and "invalid parameter" in res.summary                       # no _Seam
-
-
-def test_unknown_ordinary_run_param_rejected(tmp_path, monkeypatch):
-    svc = _seam_svc(tmp_path, monkeypatch)
-    res = svc._start_impl("igate", apply=True, params={"call": "DJ0CHE-10", "nope": "x"})
-    assert not res.ok and "unknown parameter" in res.summary
-
-
-def test_non_mapping_run_params_rejected(tmp_path, monkeypatch):
-    svc = _seam_svc(tmp_path, monkeypatch)
-    res = svc._start_impl("igate", apply=True, params="not-a-dict")
-    assert not res.ok and "must be a mapping" in res.summary
+    res = svc._start_impl("igate", apply=True, params=params)
+    assert not res.ok and msg in res.summary                                       # no _Seam
 
 
 def test_stack_target_and_daemon_behavior_unchanged(tmp_path):
@@ -470,22 +465,18 @@ def _lock_seam_svc(tmp_path, monkeypatch):
     return svc
 
 
-def test_public_start_non_mapping_params_returns_typed_before_lock(tmp_path, monkeypatch):
+@pytest.mark.parametrize("target,params,msg", [
+    pytest.param("daemon", "not-a-dict", "must be a mapping",
+                 id="test_public_start_non_mapping_params_returns_typed_before_lock"),
+    pytest.param("igate", {"nope": "x"}, "unknown parameter",
+                 id="test_public_start_unknown_params_fail_before_lock"),
+    pytest.param("daemon", {"radio": "999"}, "invalid parameter",          # invalid daemon radio
+                 id="test_public_start_invalid_radio_fails_before_lock"),
+])
+def test_public_start_rejected_before_lock(tmp_path, monkeypatch, target, params, msg):
     svc = _lock_seam_svc(tmp_path, monkeypatch)
-    res = svc.start("daemon", apply=True, params="not-a-dict")             # must NOT raise
-    assert res.ok is False and "must be a mapping" in res.summary          # no _Seam reached
-
-
-def test_public_start_unknown_params_fail_before_lock(tmp_path, monkeypatch):
-    svc = _lock_seam_svc(tmp_path, monkeypatch)
-    res = svc.start("igate", apply=True, params={"nope": "x"})
-    assert res.ok is False and "unknown parameter" in res.summary
-
-
-def test_public_start_invalid_radio_fails_before_lock(tmp_path, monkeypatch):
-    svc = _lock_seam_svc(tmp_path, monkeypatch)
-    res = svc.start("daemon", apply=True, params={"radio": "999"})         # invalid daemon radio
-    assert res.ok is False and "invalid parameter" in res.summary
+    res = svc.start(target, apply=True, params=params)                     # must NOT raise
+    assert res.ok is False and msg in res.summary                          # no _Seam reached
 
 
 def test_public_start_valid_params_reach_lock_seam(tmp_path, monkeypatch):
@@ -530,6 +521,7 @@ def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
     assert res.ok is False and res.data.get("enforce_field") == "p_call"
 
 
+@pytest.mark.contract
 def test_public_restart_valid_reaches_lock_seam(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     with pytest.raises(_Seam):                                             # preflight passed

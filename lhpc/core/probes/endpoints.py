@@ -66,9 +66,7 @@ def _matched_listeners(listeners, port: int, family: str | None) -> list:
     for lis in listeners:
         if lis.port != port:
             continue
-        if family in (None, "ipv4") and lis.family == "ipv4" and lis.ip in _V4_LOOPBACK:
-            out.append(lis)
-        elif family in (None, "ipv6") and lis.family == "ipv6" and lis.ip in _V6_LOOPBACK:
+        if (family in (None, "ipv4") and lis.family == "ipv4" and lis.ip in _V4_LOOPBACK) or (family in (None, "ipv6") and lis.family == "ipv6" and lis.ip in _V6_LOOPBACK):
             out.append(lis)
     return out
 
@@ -80,7 +78,7 @@ def tcp_endpoint_match(system: System, address: str,
     The owner PID, when resolved, is that of the MATCHED loopback listener — never a
     wrong-family listener that merely shares the port."""
     try:
-        host, port, family = parse_endpoint(address)
+        _host, port, family = parse_endpoint(address)
     except ValueError as exc:
         return False, f"{address}: invalid ({exc})", None, False
     matched = _matched_listeners(system.procfs.tcp_listeners(), port, family)

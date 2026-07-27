@@ -41,7 +41,7 @@ def _step_timeout() -> float:
         return t
     except (TypeError, ValueError):
         sys.stderr.write("invalid LHPC_BUILD_STEP_TIMEOUT_S (must be a positive number)\n")
-        raise SystemExit(3)
+        raise SystemExit(3) from None
 
 
 def _lock_tries() -> int:
@@ -71,7 +71,7 @@ def _bias_child_oom() -> None:
         return
     try:
         with open("/proc/self/oom_score_adj", "w") as fh:
-            fh.write("%d\n" % adj)
+            fh.write(f"{adj}\n")
     except OSError:
         pass
     # CPU-deprioritize the detached build child too (mirror of the streaming runner's build nice):
@@ -100,12 +100,13 @@ def _resolve_argv(tokens: list) -> list:
         if t.startswith("{pkgconfig:") and t.endswith("}"):
             try:
                 r = subprocess.run(["pkg-config", "--cflags", "--libs", t[11:-1]],
-                                   capture_output=True, text=True, timeout=_PKGCONFIG_TIMEOUT)
+                                   capture_output=True, text=True, timeout=_PKGCONFIG_TIMEOUT,
+                                   check=False)
             except subprocess.TimeoutExpired:
-                sys.stderr.write("pkg-config timed out for %s\n" % t)
-                raise SystemExit(1)
+                sys.stderr.write(f"pkg-config timed out for {t}\n")
+                raise SystemExit(1) from None
             if r.returncode != 0:
-                sys.stderr.write("pkg-config failed for %s: %s\n" % (t, r.stderr))
+                sys.stderr.write(f"pkg-config failed for {t}: {r.stderr}\n")
                 raise SystemExit(1)
             argv += r.stdout.split()
         else:
@@ -133,8 +134,8 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
     # unsupported ionice can never prevent the build step itself from running.
     try:
         subprocess.run(["ionice", "-c", "3", "-p", str(p.pid)],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-    except Exception:                                # noqa: BLE001 — strictly best-effort
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    except Exception:
         pass
     token = proctree.capture_session_token(p.pid)   # FULL ownership token captured at spawn
     try:
@@ -146,9 +147,9 @@ def _run_step(argv: list, cwd: str, env: dict, timeout: float):
         except subprocess.TimeoutExpired:
             pass
         if not result.ok:                # UNVERIFIED or INCOMPLETE -> surface, don't hide
-            sys.stderr.write("WARNING: step termination %s (surviving processes possible): "
-                             "%s\n" % (result.value, " ".join(argv)))
-        sys.stderr.write("step timed out after %ss: %s\n" % (timeout, " ".join(argv)))
+            sys.stderr.write("WARNING: step termination {} (surviving processes possible): "
+                             "{}\n".format(result.value, " ".join(argv)))
+        sys.stderr.write("step timed out after {}s: {}\n".format(timeout, " ".join(argv)))
         return 124, (not result.ok)
 
 
@@ -162,8 +163,9 @@ def run(spec: dict) -> None:
     released in `finally` (including partial-acquisition/failure paths). Raises SystemExit on
     any blocked/failed condition."""
     from pathlib import Path
-    from .paths import Paths, PathContainmentError
+
     from . import runtime_fs
+    from .paths import PathContainmentError, Paths
     steps = spec["steps"]
     cwd = spec["cwd"]
     paths = Paths(runtime_root=Path(spec["runtime_root"]))
@@ -212,8 +214,8 @@ def run(spec: dict) -> None:
                     idx = _open(index_name)
                 except (PathContainmentError, OSError) as e:
                     detail[0] = "blocked: source-transaction index lock unsafe"
-                    sys.stderr.write("source-transaction index lock open failed (unsafe path?): %s\n" % e)
-                    raise SystemExit(3)
+                    sys.stderr.write(f"source-transaction index lock open failed (unsafe path?): {e}\n")
+                    raise SystemExit(3) from None
                 if not _flock_bounded(idx.fileno(), tries):
                     detail[0] = "blocked: another source operation is in progress"
                     sys.stderr.write("source-transaction index busy — another source operation is "
@@ -223,8 +225,8 @@ def run(spec: dict) -> None:
                     entries = runtime_fs.scandir_nofollow(paths, paths.under("state", "source-txn"))
                 except PathContainmentError as e:
                     detail[0] = "blocked: unsafe source-transaction directory"
-                    sys.stderr.write("blocked: unsafe source-transaction directory (%s)\n" % e)
-                    raise SystemExit(3)
+                    sys.stderr.write(f"blocked: unsafe source-transaction directory ({e})\n")
+                    raise SystemExit(3) from None
                 if any(n.endswith(".json") for n, _is_link in entries):
                     detail[0] = "blocked: an unresolved source-transaction journal is present"
                     sys.stderr.write("blocked: an unresolved source-transaction journal is present "
@@ -237,13 +239,13 @@ def run(spec: dict) -> None:
                     f = _open(name)
                 except (PathContainmentError, OSError) as e:
                     detail[0] = "blocked: source lock unsafe"
-                    sys.stderr.write("source lock open failed (%s): %s\n" % (name, e))
-                    raise SystemExit(3)
+                    sys.stderr.write(f"source lock open failed ({name}): {e}\n")
+                    raise SystemExit(3) from None
                 if not _flock_bounded(f.fileno(), tries):
                     f.close()
                     detail[0] = "blocked: another source operation holds the source lock"
-                    sys.stderr.write("could not acquire source lock %s — another source operation "
-                                     "is in progress\n" % name)
+                    sys.stderr.write(f"could not acquire source lock {name} — another source operation "
+                                     "is in progress\n")
                     raise SystemExit(3)
                 held.append(f)
             if idx is not None:              # source lock(s) held -> handoff complete
@@ -258,7 +260,7 @@ def run(spec: dict) -> None:
                 sys.stderr.write("web job: attempt superseded — refusing to run\n")
                 raise SystemExit(3)
 
-            from .commands import build_env, CommandError
+            from .commands import CommandError, build_env
             for s in steps:
                 argv = _resolve_argv(s["argv"])
                 # Resolve env (incl. @file: secrets) HERE, on-host at exec time — the secret
@@ -267,8 +269,8 @@ def run(spec: dict) -> None:
                     step_env = build_env(s.get("env_items", ()), spec["runtime_root"], cwd)
                 except CommandError as exc:
                     detail[0] = "build env/pkg-config error"
-                    sys.stderr.write("build env error: %s\n" % exc)
-                    raise SystemExit(1)
+                    sys.stderr.write(f"build env error: {exc}\n")
+                    raise SystemExit(1) from None
                 if s.get("announce"):
                     # Quiet-step preamble (render-time-substituted static text): printed
                     # BEFORE the argv echo so a silent-for-minutes step's log leads with

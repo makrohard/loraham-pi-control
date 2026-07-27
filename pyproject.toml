@@ -29,13 +29,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Pinned to the locally-proven versions and consumed by CI via `pip install .[dev]` — ONE source
-# of truth, so local runs reproduce CI exactly. Bump deliberately (a ruff release changed the
-# default rule set and turned CI red with zero code changes).
+# Consumed by CI via `pip install .[dev]`. Unpinned — versions float. What keeps CI green is the
+# frozen CONFIG, not a frozen tool: ruff's rule set is declared in `[tool.ruff.lint] select`, and
+# bandit runs high-severity-only (`-lll`). Pin here only if a specific version ever misbehaves.
 dev = [
-    "pytest==9.1.1",
-    "ruff==0.15.22",
-    "bandit==1.9.4",
+    "pytest",
+    "ruff",
+    "bandit",
+    # Coverage plugin — the coverage gate compares per-file executed-line and branch coverage
+    # against a baseline; not enforced via a global --cov-fail-under (kept out of ini_options on
+    # purpose), only invoked explicitly by the coverage gate wrapper.
+    "pytest-cov",
+    # In-process Zstandard (genuine .zst) for the binary-channel archive tests, so they no longer
+    # shell out to build fixtures. Production extraction still uses the host `zstd`.
+    "zstandard",
 ]
 
 [project.scripts]
@@ -60,6 +67,59 @@ testpaths = ["tests"]
 # An unhandled exception in a test's thread is a HARD failure, never a swallowed warning (a leaked/racy
 # test thread must be fixed, not tolerated). Complements the session-wide propagator in tests/conftest.py.
 filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+
+[tool.ruff.lint]
+# The rule set is FROZEN EXPLICITLY so the ruff version can float without CI going red — a ruff
+# release that changes its DEFAULT selection can't add rules behind our back. This is the modern
+# curated set (roughly ruff 0.16's effective default) minus the opinionated/noisy PLR-refactor and
+# docstring/naming/pathlib families; add or drop a family here deliberately.
+select = [
+    "E4", "E7", "E9", "F",   # pyflakes + import/statement/syntax (the real-bug core)
+    "W",                      # pycodestyle warnings
+    "I",                      # import sorting
+    "UP",                     # pyupgrade
+    "B",                      # flake8-bugbear (mutable defaults, etc.)
+    "S",                      # flake8-bandit security
+    "SIM",                    # flake8-simplify
+    "RUF",                    # ruff-specific
+    "PIE", "PERF", "FURB", "C4", "ISC", "PYI", "EXE", "DTZ", "TRY", "BLE",
+    "PLE", "PLW", "PLR0124",  # pylint errors + warnings + comparison-with-itself
+]
+ignore = [
+    # Intentional patterns / false positives for a system-orchestration tool — the reason ruff's
+    # own curated default leaves these off. Each is a deliberate design choice, not a latent bug:
+    "S101",   # `assert` for an internal invariant (not user-input validation)
+    "S108",   # `/tmp/loraconf…` is the daemon's FIXED CONF-socket protocol path, not a temp file
+    "S310",   # the binary channel opens only sha256-verified HTTPS URLs (scheme is checked)
+    "S404",   # subprocess IS the point of an installer/orchestrator
+    "S603",   # subprocess calls are argv-list (no shell); inputs are controlled
+    "S607",   # tools invoked by PATH name (git / zstd / nft / systemctl) on purpose
+    "S608",   # false positive — there is no SQL anywhere in this codebase
+    "RUF001", "RUF002", "RUF003",  # intentional typographic non-ASCII (en-dash etc.) in UI/help text
+    # Opinionated tryceratops/simplify rules that ruff's OWN curated default also leaves off — they
+    # demand custom exception classes / contextlib.suppress and often make this code less clear:
+    "TRY003",  # long messages in raise(...) — we do not maintain a message-per-exception-class taxonomy
+    "TRY300",  # "move to else" — the straight-line form reads better here
+    "TRY301",  # "raise within try" — deliberate in the transaction/recovery flows
+    "SIM105",  # try/except/pass over contextlib.suppress — the explicit form is clearer in probes
+    # Deliberate architectural patterns for a status-probing orchestrator (a probe must never crash a
+    # read; exposure binds are the product's gated feature) — pervasive, so configured not per-line:
+    "BLE001",  # blind except — status/probe/fallback paths intentionally never propagate
+    "S110",    # try/except/pass — same deliberate fallback swallow
+    "S112",    # try/except/continue — same
+    "S104",    # bind 0.0.0.0 — the remote-exposure feature, gated + covered by the exposure tests
+    "ISC004",  # implicit string concat in a collection — used deliberately to wrap long help/tail
+               # messages across lines (verified: none are missing-comma bugs)
+    "ISC001",  # single-line implicit concat — ruff itself recommends disabling when not using the
+               # ruff formatter; same intentional wrapped-string pattern
+    "UP042",   # `class X(str, Enum)` -> StrEnum changes `str(member)` semantics; the current form is
+               # intentional and correct — modernise deliberately, not via a blanket rule
+    "PERF401", # manual-list-comprehension — perf micro-opt in non-hot orchestrator paths; the loops
+               # ruff can't auto-rewrite are non-trivial (guards/side effects), churn > value
+    "PLW1509", # preexec_fn in Popen is deliberate (session-leadership for ownable process groups)
+    "EXE001",  # firewall_helper.py's SOURCE is deployed byte-for-byte as the 0755 root helper — the
+               # shebang is mandatory; the in-repo module itself needn't carry the executable bit
+]
 
 [tool.ruff.lint.per-file-ignores]
 # These modules place a few imports AFTER module-level setup ON PURPOSE — load-order that avoids an
