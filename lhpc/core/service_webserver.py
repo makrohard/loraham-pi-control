@@ -4,6 +4,8 @@ Mixin: these methods run on a ControllerService instance (state/constants live o
 Adapters must import lhpc.core.services, never this module."""
 from __future__ import annotations
 
+import dataclasses as _dc
+
 from .paths import PathContainmentError
 from .service_base import ActionResult
 
@@ -388,6 +390,14 @@ class WebserverOpsMixin:
                             else "an unencrypted (http) listener")
                     missing.append(f"elevated confirmation required ({what}): "
                                    "--confirm-phrase enable-remote-danger")
+                    if plan["no_auth"]:
+                        # The danger phrase is the wrong first answer here: the operator usually
+                        # wants the listener AUTHENTICATED, not the warning waived. Name that way
+                        # out too — live-found, where the documented proxy recipe hit this refusal
+                        # and reaching for the danger phrase would have exposed an unauthenticated
+                        # meshtasticd UI to the LAN.
+                        missing.append("or keep the client-certificate requirement instead: "
+                                       "--auth local-open-remote-auth")
             elif not confirm:
                 missing.append("confirmation required: --confirm-phrase enable-remote")
         return missing
@@ -674,6 +684,17 @@ class WebserverOpsMixin:
         from . import pki as _pki
         return _pki.read_export(self._paths, label)
 
+    @staticmethod
+    def _with_gate_note(res, gate_msg: str, gate_cmds) -> ActionResult:
+        """Carry an ALLOWED gate's warning (and its remedy) onto whatever result the operation
+        produced. The gate can permit an exposure REDUCTION while reporting that the firewall
+        scripts could not be regenerated; without this the operator sees the applied change and
+        never learns the apply script is stale (audit). No-op when the gate said nothing."""
+        if not gate_msg:
+            return res
+        return _dc.replace(res, details=[gate_msg, *res.details],
+                           next_commands=[*res.next_commands, *(gate_cmds or [])])
+
     def webserver_apply(self) -> ActionResult:
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
         activate an invalid one), then reload an already-running LHPC-owned nginx master, then
@@ -699,6 +720,15 @@ class WebserverOpsMixin:
         if not allowed:
             return ActionResult(False, gate_msg, next_commands=gate_cmds,
                                 data={"firewall_gate": "pending"})
+        # An ALLOWED gate can still carry a warning (exposure reduced, but the firewall scripts
+        # could not be regenerated). Attaching it HERE — once, around the whole operation — is what
+        # keeps it on every later outcome without touching a dozen return statements.
+        return self._with_gate_note(self._webserver_apply_after_gate(cfg), gate_msg, gate_cmds)
+
+    def _webserver_apply_after_gate(self, cfg) -> ActionResult:
+        """Everything `webserver_apply()` does once the firewall gate has allowed activation.
+        Split out so an allowed gate's warning attaches to EVERY outcome in one place."""
+        from . import webserver as _ws
         # Stage + validate BEFORE touching the live config; promote atomically only on success
         # (a failed nginx -t leaves the previous proven live config byte-for-byte intact).
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg,
@@ -897,6 +927,13 @@ class WebserverOpsMixin:
         if not allowed:
             return ActionResult(False, gate_msg, next_commands=gate_cmds,
                                 data={"firewall_gate": "pending"})
+        return self._with_gate_note(self._start_service_after_gate(cfg, proxies),
+                                    gate_msg, gate_cmds)
+
+    def _start_service_after_gate(self, cfg, proxies) -> ActionResult:
+        """Everything `webserver_start_service()` does once the gate has allowed activation —
+        same split as `_webserver_apply_after_gate`, for the same reason."""
+        from . import webserver as _ws
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg, proxies)
         if not ok:
             return ActionResult(False, f"nginx config invalid — not starting ({msg})")

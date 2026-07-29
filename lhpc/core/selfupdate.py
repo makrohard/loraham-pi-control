@@ -829,8 +829,25 @@ def apply_update(system: System, paths: Paths, *, force: bool = False, branch: s
         m = _git(system, root, ["merge", "--ff-only", ref], _LOCAL_TIMEOUT)
     if m.returncode != 0:
         detail = _summarize_output(m.stderr)
-        return {"ok": False, "message": "Update could not be applied — the local branch has diverged "
-                "from upstream." + (f" {detail}" if detail else "")}
+        # THREE distinct outcomes share this branch — conflating them offered a DESTRUCTIVE remedy
+        # for faults it cannot repair (audit): `--overwrite` runs `reset --hard` + `clean -ffd`, so
+        # a lock file, a read-only filesystem, a full disk or a corrupt index would have cost the
+        # operator their untracked work while leaving the real fault in place.
+        if force:
+            # The forced path already IS the reset; its failure is not a divergence.
+            return {"ok": False,
+                    "message": "Update could not be applied — resetting the checkout to upstream "
+                    "failed." + (f" {detail}" if detail else "")}
+        if up.get("ff_blocked") is True:
+            # POSITIVELY proven by the freshly fetched ancestry (`merge-base --is-ancestor` exit 1,
+            # fail-soft otherwise): only here is the reset path the actual remedy, and saying so is
+            # what keeps the refusal from being a dead end (live-found after an upstream force-push).
+            return {"ok": False, "needs_overwrite": True,
+                    "message": "Update could not be applied — the local branch has diverged "
+                    "from upstream." + (f" {detail}" if detail else "")}
+        return {"ok": False,
+                "message": "Update could not be applied — git refused the fast-forward."
+                + (f" {detail}" if detail else "")}
     refresh_cache(system, paths, br)
     out = {"ok": True, "deps_changed": bool(up.get("deps_changed", False)),
            "new_head_short": up.get("upstream_head_short", ""),

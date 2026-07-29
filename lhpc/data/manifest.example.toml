@@ -1224,7 +1224,11 @@ main = "meshcom-qemu"
   # runs the stack OPEN-AUTH and disables HMAC password changes.
   [stack.binary]
   index_url = "https://github.com/makrohard/lhpc-binaries/releases/download/binaries/index.json"
-  covers = ["meshcom-qemu", "meshcom-bridge"]
+  # `meshcom-firmware` IS covered: the artifact ships its built `flash.bin`, so the pin gate must
+  # verify the firmware commit too. Without it the gate compared only qemu+bridge, and an artifact
+  # whose firmware came from a DIFFERENT (here: rebased-away) commit was accepted silently — the
+  # index records every source component, so the drift was visible yet unchecked.
+  covers = ["meshcom-qemu", "meshcom-bridge", "meshcom-firmware"]
   clone_required = ["meshcom-qemu"]
   publish_roots = [
     "build/tool-cache/qemu-xtensa",
@@ -1665,9 +1669,15 @@ main = "meshcom-qemu"
   optional = true
 
     [stack.component.source]
+    # The QEMU build CLONES this repo BY REF (see meshcom-qemu's `setup.sh --ref` step), so the
+    # pin records the commit that ref was proven at rather than driving the checkout. Refreshed
+    # 2026-07-30: the fork was cleaned (branch rebased for an upstream PR), which ORPHANED the
+    # previous pin — it survives only on `backup/pre-rebase-extradio`, so CI's reachability gate
+    # would have reddened. The external-radio build surface is unchanged
+    # (EXTERNAL_RADIO_HOST/PORT/PASSWORD) and the QEMU overlay patch still applies cleanly.
     path = "src/MeshCom-Firmware"
-    pin_commit = "302e3aaff46cbefa29ac651640559b920dd3b713"
-    pin_tag = "v4.35p.06.24-17-g302e3aa"
+    pin_commit = "67c13ac202e145dace65eb57ef4ceaa84b6699d8"
+    pin_tag = "v4.35p-g67c13ac"
     remote = "https://github.com/makrohard/MeshCom-Firmware.git"
     branch = "feature/external-radio-tcp-draft"
 

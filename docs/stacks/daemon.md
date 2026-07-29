@@ -11,6 +11,10 @@ The hardware owner for all daemon-backed stacks. One component, one process per 
 | Locks | `/run/lock/loraham/` |
 | Hardware | SPI `/dev/spidev0.0`, GPIO `/dev/gpiochip0` |
 
+**Install:** the binary channel is the default here (a prebuilt, sha256-verified artifact —
+minutes instead of hours); `--source pinned|dev|stable` builds from source instead. See [Binary
+channel](../../README.md#binary-channel-prebuilt).
+
 ## TX modes
 
 `MANAGED` (bounded CAD/LBT, returns `CHANNEL_BUSY` on a busy channel) or `DIRECT`

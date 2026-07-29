@@ -15,8 +15,9 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 ## Use it
 
 - [CLI reference](cli.md) — every command. The web console is a front-end to these.
-- [Operations & safety](operations.md) — operating rules, TX safety, secrets,
+- [Operations & safety](operations.md) — operating rules, install channels, TX safety, secrets,
   backup & restore.
+- [Maintenance](maintenance.md) — routine upkeep of an installed box.
 - [Field notes](field-notes.md) — fresh-install checklist, Pi Zero 2 W vs Pi 5 build
   durations, QEMU-stack expectations, log naming, and per-board `gpiochip`/GPIO notes.
 
@@ -48,7 +49,3 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - [Hardening & safety model](hardening-0.1.md) — what the controller guarantees and
   how each guarantee is enforced.
 - [Source provenance policy](provenance.md) — supply-chain rules for managed source.
-
-## Project records
-
-- [Live-test log](live-test-2026-07-14.md) — dated end-to-end test runs (newest first).

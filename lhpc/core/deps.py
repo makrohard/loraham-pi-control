@@ -41,10 +41,26 @@ class DepItem:
     #                      --with-gui). Still SHOWN — it is warn-level, never a mandatory core miss.
 
 
-def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> list:
+def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
+                 build_free=None, classify=None, artifact_note="", artifact_repair=None) -> list:
     """Every dependency of `stack_id`'s components, grouped by kind. `lifecycle`
     supplies the bounded `missing_requirements` probe; `comp_index` maps component
-    id -> Component manifest-wide (for build/runtime edge resolution)."""
+    id -> Component manifest-wide (for build/runtime edge resolution).
+
+    `build_free(component_id) -> bool` reports that a component's build is provided by a
+    prebuilt artifact (the binary channel). Its BUILD prerequisites are then not merely
+    satisfied-by-other-means, they are IRRELEVANT: `build` is refused on that channel, so a
+    missing compiler input is nothing the operator can or should act on. Without this the
+    dashboard demanded a RadioLib checkout and PlatformIO on a box that had installed the
+    daemon and MeshCom as binaries (live-found on a fresh Zero)."""
+    _free = build_free if callable(build_free) else (lambda _cid: False)
+    # `classify(comp_id, req) -> "blocker"|"irrelevant"|"artifact-missing"` is the SAME predicate
+    # the start gate uses (`ControllerService.binary_requirement_class`). Absent (tests, non-binary
+    # callers) it degrades to the historical behaviour: provisioned + build-free == not needed.
+    _classify = classify if callable(classify) else (
+        lambda cid, _req: "irrelevant" if _free(cid) else "blocker")
+    _artifact_note = artifact_note
+    _repair = artifact_repair if callable(artifact_repair) else (lambda _cid: "")
     stack = next((s for s in stacks if s.id == stack_id), None)
     if stack is None:
         return []
@@ -83,6 +99,22 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
                 detail = GUI_MISSING_HINT
             else:
                 detail = f"missing: {req.check_file or req.cmd or req.module}"
+            _fix = req.install or ""
+            if not sat and getattr(req, "provisioned", False):
+                # THE SHARED CLASSIFIER decides — this report and the start gate must never
+                # disagree. They did: everything provisioned read "not needed" here while the start
+                # gate refused to start without the artifact-delivered ones (audit).
+                verdict = _classify(c.id, req)
+                if verdict == "irrelevant":
+                    # A pure BUILD tool (PlatformIO, the QEMU toolchain). There is no build on the
+                    # binary channel, so it is nothing the operator can or should act on.
+                    sat, detail = True, "not needed — this component came from a binary artifact"
+                elif verdict == "artifact-missing":
+                    # The artifact was supposed to deliver this and it is gone. Cheap receipt
+                    # validation only restats proof paths, so nothing else would notice — and the
+                    # remedy is NOT the source-build command the manifest carries.
+                    detail = _artifact_note or detail
+                    _fix = _repair(c.id) or _fix
             out.append(DepItem(
                 kind="system", component=c.id,
                 label=req.note or req.cmd or req.check_file or req.absent_file or req.module,
@@ -90,13 +122,22 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict) -> l
                 detail=detail,
                 # restart-pending shows the copyable restart command (re-running usermod would not help);
                 # a genuinely-missing grant shows the usermod grant command.
-                install_cmd=GROUP_RESTART_CMD if pending else (req.install or ""),
+                install_cmd=GROUP_RESTART_CMD if pending else _fix,
                 runtime=bool(req.groups or req.absent_file), restart_pending=pending,
                 gui=bool(gui_eff.get(key))))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)
             present = bool(dep and dep.source
                            and paths.resolve_source(dep.source.path).is_dir())
+            if _free(c.id):
+                out.append(DepItem(
+                    kind="build", component=c.id,
+                    label=f"{dep_id} source checkout"
+                          + (f" ({dep.source.path})" if dep and dep.source else ""),
+                    satisfied=True,
+                    detail="not needed — this component came from a binary artifact",
+                    note="build is provided by the artifact"))
+                continue
             out.append(DepItem(
                 kind="build", component=c.id,
                 label=f"{dep_id} source checkout"
@@ -978,5 +1019,6 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         ' proceed without it (builds may be OOM-killed)." >&2',
         "\texit 4",
         "fi",
-        'echo "[bootstrap-deps] done. Reboot (SPI/groups), then: clone loraham-pi-control, ./install.sh."')
+        'echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies '
+        'SPI + groups + PATH — see README steps 4-5."')
     return "\n".join(L) + "\n"

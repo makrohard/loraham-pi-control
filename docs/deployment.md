@@ -1,9 +1,10 @@
 # LoRaHAM Pi Control — local web deployment
 
-The web console is a **local operator tool**, bound to **loopback only** (`127.0.0.1`).
-It is not a public web service. This document describes the supported way to run it
-persistently. **lhpc never installs, enables, or starts any systemd unit for you** — every
-step below is manual and under your control.
+The console process itself is a **local operator tool**: it serves either a protected Unix
+socket or loopback TCP, never a public address. Reaching it from another machine is a separate,
+opt-in step through the nginx + mTLS front end ([webserver.md](webserver.md)). This document
+covers running it persistently. **lhpc never installs, enables, or starts any systemd unit for
+you** — every step below is manual and under your control.
 
 ## Contents
 
@@ -19,18 +20,17 @@ step below is manual and under your control.
 
 ## Serving model
 
-`lhpc web` prefers a production-capable WSGI server (**waitress**): one process,
-multi-threaded, no debug, no reloader. If waitress is not installed it falls back to the
-Flask development server (fine for quick interactive use only) and prints a warning.
+`lhpc web` serves through **waitress** (a declared dependency, installed with lhpc): one
+process, multi-threaded, no debug, no reloader.
 
-Install the supported server into the deployment venv (manual, one-time):
+- **Productive** (`lhpc web --socket`, what the managed unit runs): a protected Unix socket at
+  `state/run/lhpc-web.sock`, mode `0600`, no TCP listener at all. Waitress is mandatory here — if
+  it is missing the console **fails closed** rather than falling back.
+- **Interactive** (`lhpc web`): loopback TCP (default `:8770`) for quick local use; without
+  waitress this one does fall back to Flask's development server, with a warning.
 
-```bash
-~/loraham-pi-control/venv/lhpc/bin/pip install waitress
-```
-
-Loopback-only is a **hard invariant**: `run_server` refuses any non-loopback `--host`
-(`127.0.0.1` / `::1` only). There is no debug mode, no reloader, and no public bind.
+Loopback-only is a hard invariant for the TCP mode: `run_server` refuses any non-loopback
+`--host` (`127.0.0.1` / `::1`). There is no debug mode, no reloader, and no public bind.
 
 Use **one** process. The console keeps per-request state and CSRF assumptions that are only
 safe single-process; do not run multiple workers without explicitly re-designing that.

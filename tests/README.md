@@ -114,9 +114,8 @@ read top-to-bottom. A change is understood through the contract; it is *protecte
 .venv/bin/python -m pytest -q -p no:cacheprovider -m safety      # the invariant subset
 ```
 
-The contract lane is deliberately tagged on isolation-robust cases only; `docs/consolidation/part2-contract.md`
-records the promise→case map and the CONTRACT-GAPS (promises whose widest-seam case is missing — e.g.
-a real firewall-apply route test, a sandbox-safe boot-restore case).
+The contract lane is deliberately tagged on isolation-robust cases only. Two promises still lack a
+widest-seam case: a real firewall-apply route test, and a sandbox-safe boot-restore case.
 
 ## Running — three tiers
 

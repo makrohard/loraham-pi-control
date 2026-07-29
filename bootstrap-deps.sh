@@ -563,4 +563,4 @@ if [ -n "$_SWAP_FAILED" ]; then
 	echo "[bootstrap-deps] swap was REQUIRED on this low-memory host but could not be provisioned (see above). Fix the reported problem and re-run, or pass --no-swapfile to proceed without it (builds may be OOM-killed)." >&2
 	exit 4
 fi
-echo "[bootstrap-deps] done. Reboot (SPI/groups), then: clone loraham-pi-control, ./install.sh."
+echo "[bootstrap-deps] done. Next: install lhpc (install.sh), then ONE reboot applies SPI + groups + PATH — see README steps 4-5."

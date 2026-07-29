@@ -6,6 +6,7 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 ## Contents
 
 - [Selections](#selections)
+- [The binary channel](#the-binary-channel)
 - [Verification status](#verification-status-truthful)
 - [Signed commits/tags](#signed-commitstags-optional)
 - [Remote overrides](#remote-overrides)
@@ -27,12 +28,28 @@ under the runtime root as a managed clone). The link machinery is retained so a 
 runtime symlink leaf is still recognized and refused safely.
 
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
-resolved commit, transaction id — written inside the activation transaction (journal v3),
-completable by recovery. Update/uninstall/clean require ownership (a pre-registry tree must
+resolved commit, transaction id — written inside the activation transaction and completable by
+recovery. Update/uninstall/clean require ownership (a pre-registry tree must
 origin-match its configured remote to be backfilled); update also requires the affected
 stacks stopped and refuses dirty trees (tracked or non-ignored untracked changes).
 `lhpc clean <stack> --purge` is the explicit destructive escape hatch (typed confirm on
 the web); normal uninstall retains config, logs and history.
+
+## The binary channel
+
+Three long-compiling stacks (daemon, meshtastic, meshcom) can be installed as a **prebuilt
+artifact** instead of a source build. Same policy, different medium:
+
+- trust anchor: **HTTPS + sha256** (size verified too), checked **before** anything is unpacked;
+- the artifact's per-component commits must equal this lhpc's **manifest pins** exactly — a
+  lagging artifact is refused, never installed "close enough";
+- it must have passed the builder's mandatory smoke test on a clean image;
+- provenance is recorded per install in `state/binary/<stack>.json` and shown as
+  `binary@<sha>` by `lhpc status --versions`.
+
+Any failed check is a typed refusal that offers the source channel — never a silent fallback.
+Artifacts are built and published by
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries).
 
 ## Verification status (truthful)
 

@@ -1790,11 +1790,35 @@ class Installer:
                     return line.strip()
         return ""
 
+    # Slow-box budgets. A Pi 5 clones RadioLib (94k objects, 114 MB) in ~15 s and checks the
+    # pin out in <1 s; a Zero 2W over Wi-Fi is roughly an order of magnitude slower on both, and
+    # a checkout that writes the whole worktree to an SD card is not a 30-second operation. Both
+    # stay BOUNDED — a hung git is still killed, just not a working one.
+    _CLONE_TIMEOUT_S = 900.0
+    _CHECKOUT_TIMEOUT_S = 300.0
+
     def _clone(self, spec, dest: Path, source: str, remote: str | None = None,
                expected_pin: str = "", log_fh=None) -> bool:
         from . import validators
         run = self.system.runner.run
         run_streaming = getattr(self.system.runner, "run_streaming", None)
+
+        def step(argv, timeout, what: str):
+            """A post-clone git step (checkout/rev-parse/describe). Records WHY it failed in the
+            adoption log: the caller can only report "clone failed", which reads as a network
+            fault even when the clone finished and a LATER step timed out (live-found — a switch
+            failed after 'Resolving deltas: 100%')."""
+            res = run(argv, timeout)
+            if res.returncode != 0 and log_fh is not None:
+                why = (f"timed out after {timeout:.0f}s" if getattr(res, "timed_out", False)
+                       else f"exit {res.returncode}")
+                try:
+                    log_fh.write(f"\n[fail] {what}: {why}\n"
+                                 + (res.stderr.strip()[-400:] + "\n" if res.stderr.strip() else ""))
+                    log_fh.flush()
+                except (OSError, ValueError):
+                    pass
+            return res
 
         def clone(argv, timeout):
             # Stream `git clone --progress` LIVE into the adoption log when the runner supports
@@ -1802,8 +1826,18 @@ class Installer:
             # hung with its output buffered invisibly until completion. checkout/rev-parse/
             # describe stay on the buffered run() — their stdout is parsed.
             if log_fh is not None and run_streaming is not None:
-                return run_streaming([*argv[:2], "--progress", *argv[2:]], timeout, log_fh)
-            return run(argv, timeout)
+                res = run_streaming([*argv[:2], "--progress", *argv[2:]], timeout, log_fh)
+            else:
+                res = run(argv, timeout)
+            if res.returncode != 0 and log_fh is not None and getattr(res, "timed_out", False):
+                # git's own output is already in the log; a KILLED clone would otherwise just
+                # stop mid-progress with no reason given.
+                try:
+                    log_fh.write(f"\n[fail] clone: timed out after {timeout:.0f}s\n")
+                    log_fh.flush()
+                except (OSError, ValueError):
+                    pass
+            return res
 
         remote = remote or spec.remote
         # Revalidate the remote IMMEDIATELY before Git — a hand-edited local.toml override
@@ -1819,18 +1853,19 @@ class Installer:
         if expected_pin:
             # FROZEN exact identity (any selector): full clone + exact checkout + verify —
             # the remote's CURRENT refs are irrelevant; no selector lookup happens here.
-            if clone(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
+            if clone(["git", "clone", remote, str(dest)],
+                     timeout=self._CLONE_TIMEOUT_S).returncode == 0 \
                     and dest.exists():
-                ok = run(["git", "-C", str(dest), "checkout", expected_pin],
-                         30.0).returncode == 0
+                ok = step(["git", "-C", str(dest), "checkout", expected_pin],
+                          self._CHECKOUT_TIMEOUT_S, f"checkout {expected_pin[:12]}").returncode == 0
                 if ok:
-                    head = run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
+                    head = step(["git", "-C", str(dest), "rev-parse", "HEAD"], 15.0, "rev-parse")
                     ok = head.returncode == 0 and head.stdout.strip() == expected_pin
         elif spec.artifact:
             # Declared artifact source: EVERY selector resolves to the same declared artifact
             # (the maintainer's default branch) — no pin/branch/tag semantics are invented.
             ok = (clone(["git", "clone", "--depth", "1", remote, str(dest)],
-                        timeout=120.0).returncode == 0 and dest.exists())
+                        timeout=self._CLONE_TIMEOUT_S).returncode == 0 and dest.exists())
         elif source == "dev":
             # STRICT branch semantics: with a configured branch, `--branch` makes git fail
             # when it does not exist — dev NEVER silently falls back to another ref.
@@ -1838,10 +1873,11 @@ class Installer:
             if spec.branch:
                 argv += ["--branch", spec.branch]
             argv += [remote, str(dest)]
-            ok = clone(argv, timeout=120.0).returncode == 0 and dest.exists()
+            ok = clone(argv, timeout=self._CLONE_TIMEOUT_S).returncode == 0 and dest.exists()
         else:
             # full clone so an arbitrary tag/commit can be checked out
-            if clone(["git", "clone", remote, str(dest)], timeout=240.0).returncode == 0 \
+            if clone(["git", "clone", remote, str(dest)],
+                     timeout=self._CLONE_TIMEOUT_S).returncode == 0 \
                     and dest.exists():
                 if source == "pinned":
                     # P0.5: 'Known working' REQUIRES an exact expected commit — the newest
@@ -1852,10 +1888,11 @@ class Installer:
                     if not pin:
                         ok = False
                     else:
-                        ok = run(["git", "-C", str(dest), "checkout", pin],
-                                 30.0).returncode == 0
+                        ok = step(["git", "-C", str(dest), "checkout", pin],
+                                  self._CHECKOUT_TIMEOUT_S, f"checkout {pin[:12]}").returncode == 0
                         if ok:
-                            head = run(["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
+                            head = step(["git", "-C", str(dest), "rev-parse", "HEAD"], 15.0,
+                                        "rev-parse")
                             ok = head.returncode == 0 and head.stdout.strip() == pin
                 elif source == "stable":
                     # Latest stable, GIT-ONLY: newest version-shaped tag ("release") ->
@@ -1865,15 +1902,17 @@ class Installer:
                     if not tag:
                         ok = True                      # no tags at all -> default-branch HEAD
                     else:
-                        ok = run(["git", "-C", str(dest), "checkout", tag], 30.0).returncode == 0
+                        ok = step(["git", "-C", str(dest), "checkout", tag],
+                                  self._CHECKOUT_TIMEOUT_S, f"checkout {tag}").returncode == 0
                         if ok:
-                            chk = run(["git", "-C", str(dest), "describe", "--tags",
-                                       "--exact-match"], 10.0)
+                            chk = step(["git", "-C", str(dest), "describe", "--tags",
+                                        "--exact-match"], 15.0, "describe")
                             ok = chk.returncode == 0 and chk.stdout.strip() == tag
                 else:                       # dev
                     ref = spec.branch or ""
                     ok = (not ref or
-                          run(["git", "-C", str(dest), "checkout", ref], 30.0).returncode == 0)
+                          step(["git", "-C", str(dest), "checkout", ref],
+                               self._CHECKOUT_TIMEOUT_S, f"checkout {ref}").returncode == 0)
         # On failure the CALLER (`_stage_and_activate`) discards the real `staging` leaf via
         # the descriptor-safe path — `dest` here is the controller-pinned `/proc/<pid>/fd/…`
         # path, which is NOT a runtime-root path, so cleaning it here would be a no-op. Leave

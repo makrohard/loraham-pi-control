@@ -471,41 +471,143 @@ class FirewallOpsMixin:
         firewall is applied. Returns (allowed: bool, message: str, next_commands: list).
 
         - Integration ABSENT  -> allowed (behavior preserved exactly when firewall is off).
-        - Integration PARTIAL -> fail closed (a broken/half-installed firewall cannot be
-          trusted to protect a remote listener).
+        - Integration PARTIAL -> fail closed for a REMOTE listener (a broken/half-installed
+          firewall cannot be trusted to protect one); a loopback-only activation still proceeds,
+          since it activates nothing that needs protecting.
         - No prospective non-loopback listener at all -> allowed (exposure-reducing / local).
         - A remote listener would activate -> allowed ONLY when the firewall is live-verified
           AND its receipt matches the CURRENT saved intent (config_ok — so a widened CIDR on an
           already-open port is covered too, since the intent hash changed). A live-but-stale
           receipt, or one that predates the current intent, does NOT pass. Otherwise refuse.
+        - EXCEPTION: removing the console's remote ingress, proven against the receipt by
+          `_narrowing_is_console_removal_only()` — closing the console must not be blocked because
+          some other stack's proxy keeps the prospective set non-empty. When allowed this way the
+          message may still carry a WARNING (allowed=True with a non-empty message).
+
+        INVARIANT: no result names `firewall-apply.sh` unless `firewall_render()` SUCCEEDED in this
+        same call. Naming a script that is stale — or was never written — sends the operator to
+        apply the wrong intent, or to a file that does not exist (audit).
         """
         state = self._fw_integration_state()
         if state == "absent":
             return True, "", []
-        base = self._paths.under("config/files/firewall/firewall-apply.sh")
         if state == "partial":
+            rendered = self.firewall_render()
+            if not prospective_ports:
+                # A half-installed integration cannot protect a REMOTE listener — but nothing
+                # remote is activating here. Refusing a loopback-only config stranded an operator
+                # who was REDUCING exposure (they could not even close the console until the
+                # firewall was repaired), and the refusal said "refusing to activate a remote
+                # listener" about a change that activates none.
+                return (True, "", []) if rendered.ok else (True, self._render_warning(rendered),
+                                                           ["lhpc firewall --script"])
             return (False,
                     "Firewall integration is partially installed — refusing to activate a "
-                    "remote listener until it is repaired.",
-                    [f"sudo bash {base}"])
-        if not prospective_ports:
-            return True, "", []                            # nothing remote to protect
+                    "remote listener until it is repaired."
+                    + ("" if rendered.ok else f" Also: {rendered.summary}."),
+                    self._fw_apply_commands(rendered))
         st = self.firewall_status()
         # config_ok proves the receipt's intent == the CURRENT saved intent (ports AND CIDRs);
         # live_ok proves that intent is actually loaded this boot. Both are required — a
         # port that is already socket-exposed is NOT evidence of firewall protection.
         if st.get("config_ok") and st.get("live_ok"):
-            return True, "", []
-        # DEADLOCK FIX: regenerate the apply script NOW so it embeds the CURRENT candidate —
-        # otherwise a firewall-relevant webserver change (new intent hash) would send the
-        # operator to run a stale firewall-apply.sh that can never satisfy the new intent. The
-        # gate is only ever called from a mutation (webserver apply/start), so this write is
-        # GET-safe. Best-effort: a render failure still yields the command + a check hint.
-        self.firewall_render()
+            return True, "", []                            # receipt already matches; nothing to redo
+        # From here the saved intent DIFFERS from the receipt, so the apply script no longer embeds
+        # it: regenerate before returning on ANY path — otherwise the operator runs a stale
+        # firewall-apply.sh that can never satisfy the new intent. This check used to sit AFTER the
+        # empty-set return, so closing the LAST remote listener left the script advertising an
+        # ingress that no longer exists (audit).
+        rendered = self.firewall_render()
+        if not prospective_ports:
+            # Nothing remote left to protect: a local-only activation is always allowed. The intent
+            # still changed, hence the render above.
+            return (True, "", []) if rendered.ok else (True, self._render_warning(rendered),
+                                                       ["lhpc firewall --script"])
+        # A change that OPENS nothing new must never be blocked. The gate exists to stop a port
+        # binding ahead of a verified firewall — not to stop one being CLOSED. Refusing here left
+        # `webserver disable-remote` + apply with the console still on 0.0.0.0 while telling the
+        # operator the remote listener "was NOT activated" (live-found on a Zero: another stack's
+        # proxy kept the prospective set non-empty, so narrowing the console was refused too).
+        if self._narrowing_is_console_removal_only():
+            if rendered.ok:
+                return True, "", []
+            # An exposure REDUCTION is never blocked — but say that firewall reconciliation could
+            # not be written, or the operator is left with a stale script and no hint why.
+            return True, self._render_warning(rendered), ["lhpc firewall --script"]
         return (False,
                 "Firewall changes pending — the remote listener was NOT activated. Apply the "
-                f"firewall first, then {action_hint}.",
-                [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service"])
+                f"firewall first, then {action_hint}."
+                + ("" if rendered.ok else f" The apply script could NOT be regenerated "
+                                          f"({rendered.summary}) — do not run the stale one."),
+                self._fw_apply_commands(rendered))
+
+    @staticmethod
+    def _render_warning(rendered) -> str:
+        """The one wording for "the exposure change went through, the firewall scripts did not"."""
+        return (f"exposure reduced, but the firewall scripts could not be regenerated "
+                f"({rendered.summary}) — re-render them before applying the firewall.")
+
+    def _fw_apply_commands(self, rendered) -> list:
+        """The operator commands for a refused activation. Names the apply script ONLY when this
+        operation actually (re)wrote it; otherwise offers the regeneration step instead."""
+        if not rendered.ok:
+            return ["lhpc firewall --script"]
+        base = self._paths.under("config/files/firewall/firewall-apply.sh")
+        return [f"sudo bash {base}", "sudo systemctl start lhpc-firewall-check.service"]
+
+    def _narrowing_is_console_removal_only(self) -> bool:
+        """True only when the ONE firewall-relevant change is REMOVING the console's remote
+        ingress, proven against the root-owned receipt.
+
+        Proving the DELTA beats proving the state: the previous version of this check trusted
+        `state/webserver.json` — `desired_snapshot.remote_exposed` is an INTENT that
+        `webserver verify` writes without activating anything, the file carries no boot binding,
+        and bare port numbers ignore address, family and CIDRs. It could therefore let a genuinely
+        new listener through on stale evidence (audit).
+
+        Instead: rebuild the candidate the firewall was last applied for — the current candidate
+        plus the removed console ingress — and require the receipt's own `intent_hash` to match it.
+        Any other simultaneous change (proxy port/CIDR, added/removed proxy, mode, endpoint
+        selection, SSH/AP/extra rules, a console port or CIDR change) alters that hash and refuses,
+        with no extra comparison code and no new durable state."""
+        from . import webserver as _ws
+        ws = self.config().webserver
+        if ws.remote_exposed:
+            return False                       # console still remote -> not a removal
+        receipt = self._fw_read_receipt()
+        if receipt is None or not self._fw_receipt_fresh(receipt):
+            return False                       # no receipt, wrong boot, or too old
+        if receipt.get("verdict") != "verified":
+            return False
+        if receipt.get("integration_rev") != _fw.integration_rev():
+            return False
+        # `transitional` is deliberately NOT disqualifying: firewall_status() treats a transitional
+        # receipt as live-verified (with a warning), so demanding otherwise would block an exposure
+        # REDUCTION — the failure this exception exists to remove.
+        #
+        # The desired bind is already loopback, so the previous one comes from the live listener:
+        # the console may have been bound to a CONCRETE address, and the candidate scopes the rule
+        # to exactly that address.
+        live = _ws.listener_addresses(self._system, int(ws.port))
+        if len(live) != 1:
+            return False                       # absent or ambiguous -> refuse rather than guess
+        # Canonicalize: /proc reports a wildcard as 0.0.0.0 while the candidate stores addr="*".
+        family, addr = _classify_bind(live[0])
+        try:
+            cand = self.firewall_candidate()
+        except Exception:
+            return False
+        # `canonical_intent` sorts proxy_ingress and each CIDR list, so insertion order is
+        # irrelevant. `intent_hash` RAISES on a malformed candidate — fail closed.
+        previous = {**cand, "proxy_ingress": [
+            {"proto": "tcp", "family": family, "addr": addr, "port": int(ws.port),
+             "allow_cidrs": _norm_cidrs(ws.allowed_cidrs, family)},
+            *(cand.get("proxy_ingress") or [])]}
+        try:
+            want = _fw.intent_hash(previous)
+        except (ValueError, TypeError, KeyError):
+            return False
+        return bool(want) and receipt.get("intent_hash") == want
 
     def firewall_boot_gate(self):
         """nginx ExecStartPre boot gate. Runs as the lhpc user before nginx binds. If firewall
@@ -533,6 +635,7 @@ class FirewallOpsMixin:
         # the firewall cannot be trusted to protect a remote listener this boot, and a bounded
         # wait can never turn a half-installed integration green — go straight to loopback-only.
         # Only a fully 'present' integration is given the bounded wait for a verified receipt.
+        st = {}
         if state == "present":
             deadline = _t.monotonic() + _fw.BOOT_GATE_WAIT_S
             while True:
@@ -551,7 +654,17 @@ class FirewallOpsMixin:
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, loopback, ())
         if ok:
             _ws.promote_config(self._paths)
-            return ActionResult(True, "firewall not verified this boot — nginx started "
+            # NAME the dimension that refused. One message for every cause (no receipt, stale
+            # receipt, changed intent, half-installed integration) cost a live debugging session:
+            # the operator saw "not verified" while `lhpc firewall` in their own shell said the
+            # opposite, and nothing pointed at the difference.
+            why = (f"integration {state}" if state != "present"
+                   else "; ".join(w for w in (
+                       ("" if st.get("config_ok") else "saved intent differs from the applied "
+                        "receipt"),
+                       ("" if st.get("live_ok") else
+                        f"live rules unverified ({st.get('reason') or 'no fresh receipt'})")) if w))
+            return ActionResult(True, f"firewall not verified this boot ({why}) — nginx started "
                                 "LOOPBACK-ONLY; apply the firewall then re-apply the webserver")
         # FAIL CLOSED: could not establish the loopback-only fallback, so refuse to start nginx
         # (starting now would bind the promoted REMOTE config ahead of a verified firewall).
@@ -992,17 +1105,33 @@ def _own_cgroup_text():
         return f.read()
 
 
-def _in_managed_web_unit():
-    """Positive proof this process's systemd user unit is EXACTLY lhpc-web.service. The unit is the
-    innermost cgroup-v2 component (the path leaf), matched for EQUALITY — never a substring: a user
-    can name a transient scope so its cgroup path merely CONTAINS 'lhpc-web.service' (e.g.
-    'x-lhpc-web.service.scope' — systemd-run permits caller-chosen unit names). Containing names,
-    prefix/suffix lookalikes, and an unreadable/ambiguous cgroup all fail closed."""
+# The lhpc-owned user units whose sandbox unmaps host root (an unprivileged user unit cannot get a
+# mount namespace without a user namespace, so a root-owned receipt reads as the overflow uid there).
+# EVERY unit that consults the receipt must be listed, or its verdict silently inverts:
+#   * lhpc-web.service       — renders firewall status in the console
+#   * lhpc-nginx.service     — ExecStartPre boot gate: may a remote listener bind this boot?
+#   * lhpc-boot-restore.service — restarts stacks through the gated start(), whose FW-R8 exposure
+#     gate refuses a non-loopback listener without a verified firewall
+# Leaving the nginx unit out forced the console back to loopback on every restart (live-found on a
+# Zero); boot-restore would have refused every externally-listening stack after a reboot the same
+# way. lhpc-selfupdate.service is deliberately NOT here: its preflight reads artifacts and config,
+# never the receipt.
+_MANAGED_SANDBOXED_UNITS = ("lhpc-web.service", "lhpc-nginx.service",
+                            "lhpc-boot-restore.service")
+
+
+def _in_managed_lhpc_unit():
+    """Positive proof this process's systemd user unit is EXACTLY one of lhpc's own sandboxed units
+    (`_MANAGED_SANDBOXED_UNITS`). The unit is the innermost cgroup-v2 component (the path leaf),
+    matched for EQUALITY — never a substring: a user can name a transient scope so its cgroup path
+    merely CONTAINS 'lhpc-web.service' (e.g. 'x-lhpc-web.service.scope' — systemd-run permits
+    caller-chosen unit names). Containing names, prefix/suffix lookalikes, and an
+    unreadable/ambiguous cgroup all fail closed."""
     try:
         text = _own_cgroup_text()
     except OSError:
         return False
-    return _managed_unit_leaf(text) == "lhpc-web.service"
+    return _managed_unit_leaf(text) in _MANAGED_SANDBOXED_UNITS
 
 
 def _owner_is_host_root(st_uid, *, canonical_path):
@@ -1015,11 +1144,13 @@ def _owner_is_host_root(st_uid, *, canonical_path):
     trust it. So a mapped uid 0 is accepted ONLY when our uid_map is EXACTLY the initial-namespace
     identity map (0 0 4294967295); every other map (0 0 1, 0 1000 1, nested, multi-row) fails closed.
 
-    LHPC's own web-console sandbox maps only its own uid (e.g. 1000 1000 1), so host root is unmapped
-    and a root receipt shows the overflow (nobody) uid. Overflow identifies ANY unmapped owner, not
-    uniquely root, so it is accepted ONLY under a positively-proven managed context: the exact
-    single-user same-ID map (host 0 unmapped) AND the canonical receipt path AND our cgroup being the
-    managed web unit. Anything else fails closed.
+    LHPC's own sandboxed user units map only their own uid (e.g. 1000 1000 1) — an unprivileged user
+    unit cannot get a mount namespace without a user namespace — so host root is unmapped and a root
+    receipt shows the overflow (nobody) uid. Overflow identifies ANY unmapped owner, not uniquely
+    root, so it is accepted ONLY under a positively-proven managed context: the exact single-user
+    same-ID map (host 0 unmapped) AND the canonical receipt path AND our cgroup being one of lhpc's
+    own units (`_MANAGED_SANDBOXED_UNITS`: the console, and the nginx front-end whose ExecStartPre
+    gate decides whether a remote listener may bind). Anything else fails closed.
 
     KNOWN RESIDUAL (accepted, not fixed — deliberate). The uid_map / cgroup / overflow evidence is
     read via ordinary /proc pathname opens, which resolve through the CALLER's MOUNT namespace. A
@@ -1045,7 +1176,7 @@ def _owner_is_host_root(st_uid, *, canonical_path):
     ns_start, host_start, count = uid_map[0]
     host0_mapped = any(h <= 0 < h + c for (_n, h, c) in uid_map)
     return (ns_start == host_start and count == 1 and not host0_mapped
-            and st_uid == _overflow_uid() and _in_managed_web_unit())
+            and st_uid == _overflow_uid() and _in_managed_lhpc_unit())
 
 
 def _fw_allowed_unauth_ports(candidate):

@@ -33,59 +33,47 @@ is not retried — the dashboard banner and `lhpc autostart` name the stacks to 
 
 ## Install channels
 
-Each stack is installed either from **source** (`pinned` / `dev` / `stable` — a git checkout lhpc
-adopts and builds) or, for the three long-compiling stacks, from a **binary** artifact published
-by lhpc-binaries. The channel is a per-install choice, not a stored preference: what a stack is
-running on right now is recorded in `state/binary/<stack>.json` (its receipt) and shown as
-`src: binary  binary@<sha>` in status.
+A stack is installed either from **source** (`pinned` / `dev` / `stable` — a git checkout lhpc
+adopts and builds) or, for the three long-compiling stacks (daemon, meshtastic, meshcom), from a
+**binary** artifact. The channel is a per-install choice, not a stored preference: what a stack
+runs on now is recorded in its receipt (`state/binary/<stack>.json`) and shown as `binary@<sha>`
+by `lhpc status --versions`.
 
-The binary channel accepts an artifact only when it verifies by sha256 AND size, was built from
-exactly the commits this lhpc pins (per component, not a single "built from" field), matches this
-platform, and passed the builder's mandatory smoke test. Anything else is a typed refusal that
-offers the source channel — never a silent source build.
+An artifact is accepted only when it verifies by sha256 **and** size, was built from exactly the
+commits this lhpc pins (per component), matches this platform, and passed the builder's mandatory
+smoke test. Anything else is a typed refusal that offers the source channel — never a silent
+source build. Policy detail: [provenance](provenance.md#the-binary-channel).
 
-Consequences worth knowing before you rely on it:
+What it means in practice:
 
-- **No source tree.** Build and host tests refuse (they need the checkout); the bounded TX test
-  still works, since it exercises the running stack.
+- **No source tree**, so `build` and host tests refuse; the bounded TX test still works (it
+  exercises the running stack).
 - **meshcom runs open auth** — the published firmware has no mesh password, so the bridge runs
-  without one and HMAC changes are refused until you install from source. The managed firewall
-  models that listener as unauthenticated accordingly.
-- **No binary rollback.** The release keeps the latest artifact per stack; going back means
-  installing from source (`lhpc install <stack> --source pinned --yes`), which also retires the
-  binary install.
-- Switching to source retires the artifact first, and refuses if you have edited an installed
-  file by hand rather than overwriting your change.
-- **Every binary mutation is a stopped-stack operation.** Install, update, retire, uninstall and
-  clean all refuse while a component of that stack is running (checked again under the operation
-  locks, so a start that slips in mid-flight still cannot be overwritten).
+  without one, password changes are refused, and the firewall models that listener as
+  unauthenticated.
+- **Every binary mutation needs the stack stopped** — install, update, retire, uninstall and
+  clean recheck under the operation locks, so a start slipping in mid-flight cannot be overwritten.
 - **A failed install never costs you the previous one.** The mesh-password switch, the file
-  promotion, the meshtastic CLI provisioning, the executable probes and the receipt write are ONE
-  journaled transaction, opened before the first change: if any step fails, the previous artifact
-  (including files only the old artifact shipped), its receipt and the previous mesh-password
-  setting are all restored. While that journal is open — during a run, or after a power cut in the
-  middle of one — the receipt is **not** treated as authoritative: status reports the stack as
-  needing attention, and the next binary operation recovers it. `clean --purge` is the escape
-  hatch when a journal is damaged beyond recovery.
-- **Switching to source cannot cost you the binary.** The artifact is set aside — locally, inside
-  the same journaled transaction — so the clone meets a clean destination; if the adoption then
-  fails, the exact previous install is restored from disk. No download, no release lookup and no
-  pin re-check: switching to source is often done *because* the published binary is behind, and a
-  restore that re-downloaded would refuse for that very reason. The retirement becomes final only
-  once the source install has succeeded.
-- **meshcom keeps its pinned source checkout** even on the binary channel (its run scripts live
-  there). lhpc verifies that checkout is ours and at the pin before reusing it, and adopts it if
-  absent — a stale or foreign tree is refused rather than combined with pinned binaries.
-- **meshtastic provisions its managed CLI locally** after extraction: that virtualenv embeds
-  absolute paths and cannot be shipped in an artifact, yet the stack cannot start without it
-  (it applies the LoRa region after every start). lhpc owns it as a whole DIRECTORY — half a
-  virtualenv is symlinks pointing outside the runtime root — so it is moved aside intact during
-  an install, restored intact if the install fails, and removed intact at retirement.
-- **A broken binary install is named by `lhpc doctor`.** If the artifact's files are removed
-  behind lhpc's back (a source adoption of a shared checkout does exactly that), ordinary status
-  still shows the stack's source state; `doctor` reports the receipt as unsafe or superseded,
-  with the reason and the command that repairs it. Re-installing IS the repair — only a receipt
-  that cannot be read at all refuses, because then lhpc cannot know what the old install owned.
+  promotion, the CLI provisioning, the probes and the receipt write are ONE journaled transaction:
+  any failure restores the previous artifact, its receipt and the previous password setting.
+  While that journal is open — mid-run, or after a power cut — the receipt is not authoritative:
+  `lhpc doctor` names the stack, and the next binary operation recovers it.
+- **Switching to source is transactional too.** The requested selector is enforced: a checkout at
+  a different commit is replaced through the normal source transaction, and a dirty, foreign or
+  wrong-remote tree refuses the switch with the artifact untouched. The artifact is set aside
+  locally until the whole switch (every source group, its ownership record, and the MeshCom
+  password step) has succeeded — a failure restores it from disk, with no download and no pin
+  re-check.
+- **No binary rollback**: the release keeps the latest artifact per stack, so going back means
+  installing from source.
+- **meshcom keeps its pinned clone** even on this channel (its run scripts live there), and
+  **meshtastic provisions its CLI virtualenv locally** after extraction (it embeds absolute paths,
+  so it cannot ship in an artifact, and the stack cannot apply its region without it). lhpc owns
+  that virtualenv as a whole directory.
+- **A broken binary install is named by `lhpc doctor`** — if the artifact's files disappear behind
+  lhpc's back, ordinary status still shows a source state, so `doctor` reports the receipt as
+  unsafe or superseded with the command that repairs it. Re-installing *is* the repair; only an
+  unreadable receipt refuses, because then lhpc cannot know what the old install owned.
 
 ## Fast vs explicit
 
@@ -166,7 +154,8 @@ Mutating routes follow one pattern — **POST + CSRF token + explicit confirm**,
 dispatched through the same service layer as the CLI: stack/component actions show
 a dry-run plan first (TX-capable ones add an RF/dummy-load warning); daemon live
 settings apply only a whitelisted non-RF tuning (TX mode, CAD/LBT). Security
-headers (incl. `Content-Security-Policy: default-src 'self'`) on every response.
+headers (incl. `Content-Security-Policy: default-src 'self'`) on every response. Exposing the
+console to your LAN is opt-in and gated: [webserver](webserver.md), [firewall](firewall.md).
 
 ## Daemon radio parameters
 
@@ -181,25 +170,16 @@ components (CLI and web share this path); params the app re-SETs on connect (rad
 **greyed**. MODE=FSK triggers a browser-only OK/Cancel warning. The daemon page also has per-parameter
 **live** controls prefilled with reported values, and closable STATUS/STATS readouts.
 
-**Apply live** is truthful: `ok` only when every set is applied; `PARTIAL`/total failure is a warning;
-radio params the daemon does not echo are reported SENT, not confirmed. It takes the band
-lifecycle/radio lock (re-entrant with an in-progress Start; a contended band returns a typed busy
-result); a failure leaves the saved profile persisted.
+**Apply live** is truthful: `ok` only when every set was applied; a partial or total failure is a
+warning, and params the daemon does not echo are reported SENT, not confirmed. A contended band
+returns a typed busy result and leaves the saved profile intact.
 
-**Start-confirm** shows one panel per band the launch touches (two when both bands are requested), with
-band-scoped `dp_<band>_<PARAM>` fields applied for **that start only** (never persisted). Every
-`dp_*` field is strictly parsed and validated (band/param/value) before any launch or CONF `SET`; a
-malformed, duplicated, unknown, wrong-band or invalid field fails the start. Blank/absent = no
-override; **Reset to defaults** submits the defaults.
+**Start-confirm** shows one panel per band the launch touches, whose values apply to **that start
+only** (never persisted). Every field is validated before any launch or CONF `SET` — a malformed,
+duplicated, unknown or wrong-band field fails the start.
 
-**Local config (`local.toml`).** Writes are type-safe and fail-closed: scalars and flat tables keep
-their exact types (bool/int/finite-float/string, quotes, control chars, Unicode, quoted keys all
-round-trip), validated by re-parse before the atomic write. A managed update **patches only its own
-keys** — an operator save touches only `callsign`, a remote save only that component's key
-(blank clears it); everything else is preserved. An unsupported structure (array, nested table,
-datetime, NaN/inf, control-char key, invalid Unicode) or a wrong table shape (`operator = "text"`,
-`remotes = "x"`) refuses the save and preserves the file byte-for-byte. A remote may be changed only
-for a source component of the target stack.
+Config writes are type-safe and fail-closed, and a managed save patches only its own keys: an
+unsupported structure or wrong table shape refuses the save and preserves the file byte-for-byte.
 
 ## Safety
 

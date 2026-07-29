@@ -176,6 +176,19 @@ def test_auto_install_preflight_helper_classifies_block_vs_warn(tmp_path, _socat
     assert any(s["stack"] == "kiss" for s in pf["warn"])      # socat -> warn only
 
 
+def test_preflight_skips_rows_that_install_as_a_binary(tmp_path, monkeypatch):
+    """Build dependencies do not gate a download, so a binary-channel row must not be announced as
+    "will be SKIPPED" — the run would never skip it (same channel-before-dep-gate rule the driver
+    and the confirm page follow)."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "default_channel",
+                        lambda self, sid: self.BINARY_CHANNEL if sid == "chat" else "dev")
+    pf = svc.auto_install_dep_preflight()
+    assert not any(s["stack"] == "chat" for s in pf["block"])       # binary row -> not gated
+    pf_src = svc.auto_install_dep_preflight(source="pinned")        # explicit source run
+    assert any(s["stack"] == "chat" for s in pf_src["block"])       # gated again
+
+
 @pytest.mark.needs_session
 def test_auto_install_gate_blocks_before_any_source_work(tmp_path, monkeypatch):
     # Stub freeze/adopt/build/test so the run reaches the per-stack loop fast — but leave the REAL

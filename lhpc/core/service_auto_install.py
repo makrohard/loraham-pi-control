@@ -746,13 +746,19 @@ class AutoInstallOpsMixin:
         except reslock.ResourceBusy:
             return None, "a auto-install start is already in progress"
 
-    def auto_install_dep_preflight(self) -> dict:
+    def auto_install_dep_preflight(self, source: str = "") -> dict:
         """Per-stack install-time dependency gate across the auto-install scope, for the /auto-install page.
         Returns {"block": [{stack, name, deps}], "warn": [{stack, name, deps}]} — `block` = stacks
         that WILL BE SKIPPED (a mandatory dep of a non-optional component is missing), `warn` =
-        stacks with only optional deps missing. GET-safe (install_dep_gate runs no subprocess)."""
+        stacks with only optional deps missing. GET-safe (install_dep_gate runs no subprocess).
+
+        These are BUILD dependencies, so a row that installs from a binary artifact is not gated by
+        them — the page must not announce a skip the run will never make. `source` is the run-wide
+        channel when one is chosen; otherwise each row's own preselected default decides."""
         block, warn = [], []
         for st, _comps in self._auto_install_scope():
+            if (source or self.default_channel(st.id)) == self.BINARY_CHANNEL:
+                continue
             gate = self.install_dep_gate(st.id)
             if gate["block"]:
                 block.append({"stack": st.id, "name": st.name, "deps": gate["block"]})
@@ -793,7 +799,7 @@ class AutoInstallOpsMixin:
         for c in st.components:
             if getattr(c, "optional", False):
                 continue
-            for req in life.missing_requirements(c):
+            for req in self.start_blocking_requirements(c):
                 pending = bool(req.groups) and life.group_grant_pending(req)
                 out.append(lifecycle_mod.req_remediation(req, pending))
         return out
@@ -938,14 +944,18 @@ class AutoInstallOpsMixin:
             details = [f"  [{self.auto_install_mode()}] {st.id}: "
                        f"{', '.join(c.id for c in (w.source or w.build or st.components))}"
                        for st, w in scope]
+            # No run-wide `--source` means every row uses its OWN default (binary where published,
+            # else dev) — say so instead of printing an empty value (live-found on the Zero).
             details.append(f"  host tests: {'on' if tests else 'off'}; "
                            f"TX test: {'ON (real RF!)' if tx else 'off'}; "
-                           f"source: {source}")
+                           f"source: {source or 'per stack (binary where published, else dev)'}")
             # PRE-FLIGHT dep gate: mandatory-missing stacks will be SKIPPED at run time; optional
             # missing deps only warn. Surfaced here so the operator can abort (answer N) and install
             # the copyable commands first, or continue to skip the blocked stacks.
             blocked_any = False
             for st, _comps in scope:
+                if (source or self.default_channel(st.id)) == self.BINARY_CHANNEL:
+                    continue        # a download needs no toolchain (channel before dep gate)
                 gate = self.install_dep_gate(st.id)
                 if gate["block"]:
                     blocked_any = True
@@ -1749,6 +1759,14 @@ class AutoInstallOpsMixin:
                 if kind != "absent":
                     if state == "valid":
                         return None                       # managed install exists
+                    if self.binary_covers(c.id):
+                        # BINARY channel: the artifact publishes INTO the component's source path
+                        # (the daemon binary lives under src/loraham-daemon/), and no source was
+                        # ever adopted — so there is no ownership record by design. That is a
+                        # managed install, not an unmanaged tree; calling it one told the operator
+                        # to "move it away or Clean", which would have destroyed a working binary
+                        # install (live-found on a fresh box).
+                        return None
                     return {"fresh": False, "recovery":
                             f"unmanaged tree at {c.source.path} — move it away or Clean"}
                 if kind == "absent" and state == "valid":

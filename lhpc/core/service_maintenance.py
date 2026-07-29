@@ -438,8 +438,14 @@ class MaintenanceOpsMixin:
         command, clearly marked as NOT executed by LHPC."""
         from . import deps
         comp_index = {c.id: c for s in self.stacks() for c in s.components}
+        # `build_free` stays as it is (it governs the synthesized build_requires source-checkout
+        # entries); `classify` is the SAME predicate the start gate uses, so this report and a start
+        # refusal can no longer contradict each other on a binary-managed runtime dependency.
         report = deps.stack_report(self._lifecycle(), self._paths, self.stacks(),
-                                   stack_id, comp_index)
+                                   stack_id, comp_index, build_free=self.binary_covers,
+                                   classify=self.binary_requirement_class,
+                                   artifact_note=self.ARTIFACT_MISSING_NOTE,
+                                   artifact_repair=self.binary_artifact_repair)
         return deps.grouped(report)
 
     def _declared_dep_commands(self) -> list[str]:

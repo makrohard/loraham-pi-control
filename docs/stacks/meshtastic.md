@@ -16,6 +16,10 @@ the conflict).
 The runtime data dir (`-d …`) is writable, so the web TLS cert is generated there.
 Region and node name are applied once after start via the device API.
 
+**Install:** the binary channel is the default here (a prebuilt, sha256-verified artifact —
+minutes instead of hours); `--source pinned|dev|stable` builds from source instead. See [Binary
+channel](../../README.md#binary-channel-prebuilt).
+
 ## Server-only build (no display stack)
 
 `meshtasticd` is **built from a pinned upstream checkout**, not installed from the Meshtastic OBS apt
@@ -29,9 +33,9 @@ LHPC builds upstream's **`native`** environment instead — the same source, min
 Everything the stack actually uses is unaffected: the ulfius web server (9443), the TCP API (4403)
 and direct RF95 SPI/GPIO.
 
-- **Source**: a normal managed Git source, so the usual **pinned / stable / dev** selectors and the
-  Check / Update / Build flows all apply. Pinned (the known-good default) is the exact commit behind
-  the OBS build it replaced.
+- **Source**: a normal managed Git source, so the **pinned / stable / dev** selectors and the
+  Check / Update / Build flows all apply when you build here. Pinned is the exact commit behind the
+  OBS build it replaced — and the published binary is built from exactly that commit.
 - **Artifacts** live under the runtime root: `build/tools/meshtasticd/meshtasticd`, its web UI at
   `build/tools/meshtasticd/web`, and the managed Meshtastic CLI.
 - **Web UI follows the source.** The required release is read from the checkout's `bin/web.version`.

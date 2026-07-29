@@ -1029,3 +1029,167 @@ def test_committed_transaction_keeps_open_auth(tmp_path, monkeypatch):
     svc.invalidate_snapshot()
     assert svc._resolved_param_value("meshcom", "run",
                                      svc._hmac_component("meshcom").id, "password_file") == ""
+
+
+def test_welcome_banner_does_not_call_a_binary_install_an_unmanaged_tree(tmp_path, monkeypatch):
+    """A binary artifact publishes INTO the component's source path and adopts no source, so there
+    is no ownership record by design. Calling that an "unmanaged tree" told the operator to "move
+    it away or Clean" — which would destroy a working binary install (live-found on a fresh Zero)."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    rec = _receipt_for(svc, tmp_path)
+    assert brx.write_receipt(svc._paths, rec)
+    # the artifact's own file under the daemon's source path, with NO registry record
+    src = tmp_path / "src" / "loraham-daemon" / "loraham_daemon"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "loraham_daemon").write_bytes(b"ELF")
+    svc.invalidate_snapshot()
+    assert svc.auto_install_welcome() is None, "a covered binary install is a managed install"
+
+
+def test_welcome_banner_still_flags_a_truly_unmanaged_tree(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    d = tmp_path / "src" / "loraham-daemon"
+    d.mkdir(parents=True)
+    (d / "somebody-elses-checkout").write_text("x")
+    svc.invalidate_snapshot()
+    w = svc.auto_install_welcome()
+    assert w and w["fresh"] is False and "unmanaged tree" in w["recovery"]
+
+
+def _unmet(svc, sid):
+    g = svc.deps_report(sid)
+    return {d.label for d in g["system"] + g["build"] if not d.satisfied}
+
+
+def test_binary_channel_drops_build_only_prerequisites(tmp_path, monkeypatch):
+    """`build` is REFUSED on the binary channel, so demanding its inputs is asking the operator
+    for something they cannot act on. A fresh Zero was told to install a RadioLib checkout and
+    PlatformIO for stacks it had just installed as binaries (live-found)."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    before = _unmet(svc, "daemon")
+    assert any("radiolib source checkout" in lbl for lbl in before)
+    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    svc.invalidate_snapshot()
+    after = _unmet(svc, "daemon")
+    assert not any("radiolib source checkout" in lbl for lbl in after), after
+    # the RUNTIME/system prerequisites are untouched — they still gate a start
+    assert len(after) == len(before) - 1
+
+
+def test_binary_channel_separates_build_tools_from_artifact_delivered_runtime_deps(
+        tmp_path, monkeypatch):
+    """The dependency report and the START gate must classify a provisioned requirement the SAME
+    way (audit): a pure BUILD tool the artifact never ships is irrelevant on the binary channel,
+    while a path the receipt OWNS is a real, missing runtime dependency — cheap receipt validation
+    only restats proof paths, so nothing else would notice it is gone."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    _QEMU = "qemu-system-xtensa (headless"      # PROVISIONED *and* a receipt proof path
+    _PIO = "PlatformIO CLI"                     # PROVISIONED build tool, never shipped
+    before = _unmet(svc, "meshcom")
+    assert any(lbl.startswith(_QEMU) for lbl in before), before
+
+    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path, stack_id="meshcom"))
+    svc.invalidate_snapshot()
+    assert svc.on_binary_channel("meshcom")
+    report = [d for g in svc.deps_report("meshcom").values() for d in g]
+    after = [d.label for d in report if not d.satisfied]
+
+    assert not any(lbl.startswith(_PIO) for lbl in after), after      # build-only -> irrelevant
+    comp_q = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-qemu")
+    pio_req = next(r for r in comp_q.requires if (r.note or "").startswith(_PIO))
+    assert svc.binary_requirement_class("meshcom-qemu", pio_req) == "irrelevant"
+    qemu = next(d for d in report if d.label.startswith(_QEMU))
+    assert not qemu.satisfied                                         # artifact-owned -> still real
+    assert "reinstall the binary artifact" in qemu.detail
+    assert qemu.install_cmd == "lhpc install meshcom --source binary --yes"
+
+    # ...and the start gate says exactly the same thing, with the same command.
+    blocking = svc.start_blocking_requirements(comp_q)
+    qreq = next(r for r in blocking if (r.note or "").startswith("binary-managed runtime"))
+    assert qreq.install == qemu.install_cmd
+    assert not any((r.note or "").startswith("PlatformIO") for r in blocking)
+    assert any("libpixman-1-dev" in lbl for lbl in after)   # plain packages untouched
+
+
+def test_source_channel_still_demands_its_build_inputs(tmp_path, monkeypatch):
+    """The suppression is conditional — a source-channel stack must still be told what it needs."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert any("radiolib source checkout" in lbl for lbl in _unmet(svc, "daemon"))
+    assert any(lbl.startswith("qemu-system-xtensa (headless")
+               for lbl in _unmet(svc, "meshcom"))
+
+
+def test_is_installed_rests_on_the_receipt_not_on_a_lucky_directory(tmp_path, monkeypatch):
+    """Every artifact today happens to create something under the main source path, so the
+    directory probe is accidentally right. Make it intentional: with a valid receipt the stack is
+    installed even if no source directory exists at all."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    assert svc.is_installed("daemon") is False
+    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    svc.invalidate_snapshot()
+    assert svc.is_installed("daemon") is True
+
+
+def test_doctor_counts_binary_covered_sources_as_provided_not_missing(tmp_path, monkeypatch):
+    """A binary-covered component has no checkout BY DESIGN. Counting it as a missing source made
+    a healthy binary install read half-installed (live-found on a fresh box)."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    before = next(d for d in svc.doctor().details if "configured sources" in d)
+    assert "missing" in before
+    assert brx.write_receipt(svc._paths, _receipt_for(svc, tmp_path))
+    svc.invalidate_snapshot()
+    after = next(d for d in svc.doctor().details if "configured sources" in d)
+    assert "provided by a binary artifact" in after
+
+
+def test_prune_empty_dirs_clears_a_whole_emptied_tree(tmp_path, monkeypatch):
+    """Retiring an artifact must leave no empty skeleton behind: a parent is tried only after
+    its children (live-found — build/tools/meshtasticd/web/i18n/locales survived a retire).
+    Shared and non-empty directories stay, and so does the runtime root's own top level."""
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    rels = ["build/tools/mt/web/i18n/locales/de.json",      # short name, deep
+            "build/tools/mt/web/static/a-very-long-file-name.js",   # long name, shallower
+            "build/tools/mt/bin/mt",
+            "src/checkout/keep/binary-file"]                # sits next to a foreign file
+    for rel in rels:
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    (tmp_path / "src/checkout/keep/NOT-OURS").write_bytes(b"x")
+    (tmp_path / "build/tools/other").mkdir(parents=True, exist_ok=True)
+    for rel in rels:
+        (tmp_path / rel).unlink()
+    svc._prune_empty_dirs(rels)
+    assert not (tmp_path / "build/tools/mt").exists()        # the whole emptied tree is gone
+    assert (tmp_path / "src/checkout/keep").is_dir()         # foreign file -> untouched
+    assert (tmp_path / "build/tools/other").is_dir()         # sibling -> untouched
+    assert (tmp_path / "build").is_dir()                     # runtime skeleton -> never pruned
+
+
+def test_start_gate_uses_the_shared_classifier(tmp_path, monkeypatch):
+    """`start_blocking_requirements()` returns real `Requirement` objects (downstream renderers
+    depend on that) and drops only what the shared classifier calls irrelevant."""
+    from lhpc.core.model import Requirement
+
+    class _Comp:
+        id = "meshcom-qemu"
+
+    svc = _svc(tmp_path, monkeypatch=monkeypatch)
+    owned = Requirement(check_file="{runtime}/build/tool-cache/x/qemu", provisioned=True,
+                        install="lhpc build meshcom", note="QEMU")
+    build_only = Requirement(check_file="{runtime}/build/tools/platformio/.venv/bin/pio",
+                             provisioned=True, install="lhpc build meshcom", note="PlatformIO CLI")
+    plain = Requirement(check_file="/usr/include/pixman-1/pixman.h", install="sudo apt install x",
+                        note="pixman headers")
+    monkeypatch.setattr(type(svc._lifecycle()), "missing_requirements",
+                        lambda self, comp: [owned, build_only, plain], raising=False)
+    monkeypatch.setattr(ControllerService, "binary_covers", lambda self, cid: True)
+    monkeypatch.setattr(ControllerService, "binary_requirement_class",
+                        lambda self, cid, req: {"QEMU": "artifact-missing",
+                                                "PlatformIO CLI": "irrelevant"}.get(
+                                                    req.note, "blocker"))
+    out = svc.start_blocking_requirements(_Comp())
+    assert [r.note for r in out] == [svc.ARTIFACT_MISSING_NOTE, "pixman headers"]
+    assert out[0].install == "lhpc install meshcom --source binary --yes"   # artifact remedy
+    assert out[1].install == "sudo apt install x"                           # untouched
+

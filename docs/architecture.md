@@ -49,19 +49,28 @@ lhpc/
     install.py           # adopt/verify/update sources (git, pinned)
     jobs.py              # detached job spawn + bounded log tail
     probes/              # read-only bounded probes (process, net, unixsock, systemd, source, hardware)
+    binary_install.py    # binary-channel download/verify/publish transaction + crash journal
+    binary_receipt.py    # per-stack binary ownership record (absent|valid|superseded|unsafe)
+    firewall.py          # nftables ruleset model + rendering
+    boot_restore.py      # what to restart after a reboot
     services.py            # ControllerService facade: init/state/locks, manifest, status,
                            # bootstrap/install plans — composes the service_* mixins below
     service_base.py        # shared types: ActionResult, ConfigWrite, typed exceptions
     service_webserver.py   # nginx/TLS/mTLS console + per-stack proxy operations
     service_selfupdate.py  # controller self-update orchestration + updater integration
-    service_auto_install.py        # auto-install / ai-run driver, markers, log streaming
+    service_auto_install.py  # auto-install / ai-run driver, markers, log streaming
     service_maintenance.py # source update / uninstall / clean / known-working / source-check
     service_params.py      # param & config resolution, saves, config-file generation, daemon params
     service_lifecycle_ops.py # start/stop/restart/build/test orchestration, jobs, dashboards
+    service_binary_ops.py  # binary install/retire/recover; service_binary_channel.py resolves it
+    service_firewall.py    # firewall candidates, apply/verify; service_hmac.py the MeshCom password
+    service_boot_restore.py  # boot-restore driver; service_system.py the system monitor
   adapters/
     cli/main.py          # argparse  → ControllerService → render ActionResult
     web/app.py           # Flask HTTP → ControllerService → server-rendered pages
 ```
+
+Not every module is listed — `lhpc/core/` holds ~55 files; the rule below is what matters.
 
 Dependency rule: `adapters/*` import `core/*`; `core/*` never imports `adapters/*`.
 Adapters import only `lhpc.core.services`; the `service_*` modules are internal mixins of
@@ -119,24 +128,23 @@ behind a typed confirmation), not by binding the app to a public address — see
 
 ## Safety hardening
 
-All normal lifecycle execution is **structured argv with `shell=False`** (`core/commands.py`
-builds argv from a manifest token template; typed pre/post steps run in Python or a
-generated launcher — no shell). User values are validated by type (`core/validators.py`)
-and become individual argv tokens; they cannot inject. Each launch is recorded with
-full process identity (`state/owned/`); `stop` is record-driven and identity-verified,
-signalling only an LHPC-owned session leader whose pid/start-time/pgid/sid/exec/argv
-still match (the daemon/iGate run foreground, no `-d`). `resolve_source` confines source
-dirs lexically (links allowed, observe-only, never built/tested into); `under` adds
-symlink-escape rejection for mutable runtime paths, and atomic writes / log opens refuse
-a pre-existing symlink leaf (`O_NOFOLLOW`). A per-stack Settings save is one validate-first,
-all-or-recoverable bundle transaction; its journal uses logical target kinds + an
-allowlist and blocks fail-closed on any malformed/malicious journal. Lifecycle stop is
-typed (`core/outcomes.py`): a verified stop requires process cessation AND ready-endpoint
-disappearance, markers clear only on a verified stop, and restart/owner-stop/cascade
-propagate typed failures. End-to-end `CompResult` aggregation through the start loop remains
-open — see `docs/hardening-0.1.md`. Manual `start/` wrappers are RETIRED: lhpc starts
-services itself, interactive components get their copy-paste command on the dashboard
-(rendered from the same structured spec), and bootstrap prunes legacy wrapper files.
+Full detail (and what is still open) in [`hardening-0.1.md`](hardening-0.1.md); the shape:
+
+- **No shell.** `core/commands.py` builds argv from a manifest token template; typed pre/post
+  steps run in Python or a generated launcher. A validated user value is always its own argv
+  token — it cannot inject.
+- **Identity-verified stopping.** Each launch records full process identity (`state/owned/`), and
+  `stop` signals only an LHPC-owned session leader whose pid/start-time/pgid/sid/exec/argv still
+  match.
+- **Containment.** `resolve_source` confines source dirs lexically (links observe-only, never
+  built into); `under` adds symlink-escape rejection for mutable paths; atomic writes and log
+  opens refuse a pre-existing symlink leaf (`O_NOFOLLOW`).
+- **Config as a transaction.** A Settings save is validate-first and all-or-recoverable; a
+  malformed or malicious journal blocks fail-closed.
+- **Typed outcomes.** A verified stop needs process cessation AND ready-endpoint disappearance;
+  markers clear only then, and restart/owner-stop/cascade propagate typed failures.
+- Manual `start/` wrappers are retired — lhpc starts services itself, and interactive components
+  get their copy-paste command from the same structured spec.
 
 ## Controller identity & self-update
 

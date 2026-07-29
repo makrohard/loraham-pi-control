@@ -456,12 +456,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
 
+    # Mirrors config.FIREWALL_MODES exactly, like _WS_MODES below — the CLI never invents policy
+    # vocabulary of its own.
+    _FW_MODES = ["secure-default", "compatibility"]
     p_fw = sub.add_parser("firewall",
-                          help="Managed firewall status + render the apply/reset scripts")
+                          help="Managed firewall status, policy settings + the apply/reset scripts")
     p_fw.add_argument("--script", action="store_true",
                       help="Print the apply script to stdout (run it yourself with sudo)")
     p_fw.add_argument("--reset-script", action="store_true",
                       help="Print the reset script to stdout")
+    # POLICY settings — the same fields the console's firewall panel writes, so a headless box is
+    # not a second-class citizen. This matters most for the AP: without its DHCP/DNS allowance a
+    # phone cannot even join, and the console you would need to fix that is only reachable OVER
+    # that AP. Every flag omitted = unchanged; a list flag given REPLACES that list ("" clears it).
+    p_fw.add_argument("--mode", choices=_FW_MODES,
+                      help="Policy mode: secure-default (deny unwanted) | compatibility")
+    p_fw.add_argument("--ap", choices=("on", "off"),
+                      help="Access-Point DHCP/DNS server rules (needs --ap-interface + --ap-cidr)")
+    p_fw.add_argument("--ap-interface", help="AP interface, e.g. wlan0")
+    p_fw.add_argument("--ap-cidr", help="AP IPv4 subnet, e.g. 10.42.0.0/24")
+    p_fw.add_argument("--ssh-ports",
+                      help="SSH ports to keep reachable, comma/space separated; \"\" = clear "
+                           "(back to automatic detection)")
+    p_fw.add_argument("--allow-endpoints",
+                      help="Endpoint ids allowed DIRECT access, comma/space separated; \"\" = none")
+    p_fw.add_argument("--recommended", action="store_true",
+                      help="Safe preset: secure-default, no direct access, AP off, overrides cleared")
 
     p_daemon = sub.add_parser("daemon", help="Monitor a daemon band, or apply a live setting")
     p_daemon.add_argument("band", help="433 or 868")
@@ -927,12 +947,43 @@ def _run(argv: list[str] | None = None) -> int:
         import json as _json
 
         from lhpc.core import firewall as _fw_mod
-        if args.script:
-            print(_fw_mod.render_apply_script(_json.dumps(svc.firewall_candidate(),
-                                                          sort_keys=True)), end="")
-            return 0
-        if args.reset_script:
-            print(_fw_mod.render_reset_script(), end="")
+        # POLICY settings first: the same fields the console's firewall panel writes, with the
+        # SAME semantics — an omitted flag leaves the value alone, a given list REPLACES it, and
+        # an empty string clears it (the panel's blank field). `firewall_configure` validates,
+        # re-renders the scripts and persists under one lock; it never runs anything privileged.
+        _fw_set = {k: getattr(args, k, None) for k in
+                   ("mode", "ap", "ap_interface", "ap_cidr", "ssh_ports", "allow_endpoints")}
+        if args.recommended or any(v is not None for v in _fw_set.values()):
+            if args.recommended and any(v is not None for v in _fw_set.values()):
+                print("--recommended resets every firewall setting — do not combine it with the "
+                      "individual flags.")
+                return 2
+            def _split(v):                      # accepts "22,2222" or "22 2222"; "" clears
+                return None if v is None else [x for x in v.replace(",", " ").split() if x]
+            r = svc.firewall_configure(
+                recommended=args.recommended,
+                mode=args.mode,
+                allow_endpoints=_split(args.allow_endpoints),
+                ssh_ports=_split(args.ssh_ports),
+                ap_enabled=(None if args.ap is None else args.ap == "on"),
+                ap_interface=args.ap_interface,
+                ap_cidr=args.ap_cidr)
+            rc = _render(r)
+            if rc or not (args.script or args.reset_script):
+                return rc
+        if args.script or args.reset_script:
+            # An EXPLICIT operator request also WRITES the canonical scripts. Rendering used to
+            # happen only on mutation paths (the exposure gate, a helper revision, saving the web
+            # panel), so a CLI-only operator was told by `lhpc firewall` to run a
+            # firewall-apply.sh that had never been created (live-found on a fresh box).
+            _r = svc.firewall_render()
+            if args.script:
+                print(_fw_mod.render_apply_script(_json.dumps(svc.firewall_candidate(),
+                                                              sort_keys=True)), end="")
+            else:
+                print(_fw_mod.render_reset_script(), end="")
+            if not _r.ok:
+                print(f"WARN {_r.summary}", file=sys.stderr)
             return 0
         st = svc.firewall_status()
         print(f"OK    {st['line']}")
@@ -945,6 +996,10 @@ def _run(argv: list[str] | None = None) -> int:
                   f"(an lhpc allow does not guarantee reachability — a foreign chain may drop)")
         if not st["live_ok"]:
             paths = svc._fw_script_paths()     # paths only — `status` must not write files
+            import os as _os
+            if not _os.path.exists(paths["firewall-apply.sh"]):
+                print("\nThe apply script has not been rendered yet — create it with:"
+                      "\n  lhpc firewall --script | less        # writes it and shows what it does")
             print(f"\nApply:\n  sudo bash {paths['firewall-apply.sh']}"
                   f"\n  sudo systemctl start lhpc-firewall-check.service")
         return 0

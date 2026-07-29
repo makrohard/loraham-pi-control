@@ -2,11 +2,11 @@
 
 ## unreleased
 
+- Binary install channel: prebuilt, smoke-gated artifacts for daemon/meshtastic/meshcom — minutes instead of hours, and the default where published (`--source binary`); pins must match the manifest, switching back to source is non-destructive
 - Managed firewall
 - System monitor
 - Boot auto-restore
-- Test hygiene — plus a readable Tier 0 `-m contract` lane (what LHPC promises) and `-m safety` invariants
-- Fix: a binary-installed, running daemon no longer shows "Daemon not installed" on the radio dashboard
+- Test hygiene
 
 ## 0.1.5
 - Hardware setups: `lhpc hardware` selects the radio rig (LoRaHAM / Uputronics dual / Waveshare); daemon v112 multi-hardware, per-band arbitration

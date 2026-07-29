@@ -147,3 +147,44 @@ def test_dash_signature_D_segment_excludes_failed(tmp_path):
     sig = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path)).dash_signature()
     dseg = next(s for s in sig.split(";") if s.startswith("D:"))
     assert "433" not in dseg                            # a FAILED band is not "served"
+
+
+def test_radio_not_ready_hint_names_a_running_hardware_claimant(tmp_path, monkeypatch):
+    """A bare RADIO=FAILED gave the operator nothing to act on (live-found: a MeshCom start blocked
+    on it). Name the running process that shares the radio hardware when there is one, else point
+    at the power cycle a wedged front-end needs — a warm reboot does not clear it."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    monkeypatch.setattr(ControllerService, "build_snapshot",
+                        lambda self, fresh=False: (_ for _ in ()).throw(RuntimeError("no snap")))
+    hint = svc._radio_not_ready_hint("433")
+    assert "POWER-CYCLE" in hint and "433" in hint          # nothing observable -> the real remedy
+
+    class _St:
+        from lhpc.core.model import RunState as _R
+        run_state = _R.RUNNING
+    class _Comp:
+        from lhpc.core.model import ResourceClaim, ResourceKind
+        id = "meshtastic"
+        resources = (ResourceClaim(key="loraham.radio.868", kind=ResourceKind.RADIO_BAND),)
+    class _Stack:
+        components = (_Comp(),)
+    class _SS:
+        stack = _Stack()
+        components = {"meshtastic": _St()}
+    class _Snap:
+        stacks = (_SS(),)
+    monkeypatch.setattr(ControllerService, "build_snapshot", lambda self, fresh=False: _Snap())
+    hint = svc._radio_not_ready_hint("433")
+    assert "meshtastic" in hint and "shared SPI bus" in hint
+
+    # DEGRADED means "running, but an endpoint/readiness is missing" — the process still holds the
+    # radio, so it must be named too. Missing it sent the operator to power-cycle the Pi over a
+    # process they could simply stop (audit).
+    from lhpc.core.model import RunState as _RS
+    _St.run_state = _RS.DEGRADED
+    hint = svc._radio_not_ready_hint("433")
+    assert "meshtastic" in hint and "POWER-CYCLE" not in hint

@@ -13,6 +13,7 @@ import copy
 import pytest
 
 from lhpc.core import firewall as fw
+from lhpc.core.service_base import ActionResult
 
 
 def _ep(**over):
@@ -880,7 +881,7 @@ def test_owner_is_host_root_userns_translation(monkeypatch):
     canonical path + a positively-proven managed cgroup."""
     from lhpc.core import service_firewall as m
     monkeypatch.setattr(m, "_overflow_uid", lambda: 65534)
-    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: True)        # default: in the managed unit
+    monkeypatch.setattr(m, "_in_managed_lhpc_unit", lambda: True)        # default: in the managed unit
 
     def use_map(rows):
         monkeypatch.setattr(m, "_read_uid_map", lambda: rows)
@@ -905,15 +906,35 @@ def test_owner_is_host_root_userns_translation(monkeypatch):
     assert m._owner_is_host_root(65534, canonical_path=True) is True    # canonical + managed cgroup
     assert m._owner_is_host_root(65534, canonical_path=False) is False  # non-canonical
     assert m._owner_is_host_root(1000, canonical_path=True) is False    # our own uid, not overflow
-    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: False)
+    monkeypatch.setattr(m, "_in_managed_lhpc_unit", lambda: False)
     assert m._owner_is_host_root(65534, canonical_path=True) is False   # wrong context (not managed)
-    monkeypatch.setattr(m, "_in_managed_web_unit", lambda: True)
+    monkeypatch.setattr(m, "_in_managed_lhpc_unit", lambda: True)
 
     # fail closed: unreadable map, and any multi-row / non-exact map
     use_map(None)
     assert m._owner_is_host_root(0, canonical_path=True) is False
     use_map([(0, 0, 4294967295), (1000, 1000, 1)])
     assert m._owner_is_host_root(0, canonical_path=True) is False
+
+
+def test_nginx_unit_is_a_trusted_sandbox_for_the_receipt(monkeypatch):
+    """The boot gate runs inside lhpc-nginx.service, whose sandbox unmaps host root exactly like the
+    console's — so the root receipt shows the overflow uid there too. Excluding that unit made the
+    gate permanently unable to see a verified firewall, forcing the console back to loopback on
+    every restart (live-found on a Zero). Foreign units stay untrusted."""
+    from lhpc.core import service_firewall as m
+    monkeypatch.setattr(m, "_overflow_uid", lambda: 65534)
+    monkeypatch.setattr(m, "_read_uid_map", lambda: [(1000, 1000, 1)])   # same-ID sandbox map
+    base = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/"
+    for unit in ("lhpc-nginx.service", "lhpc-web.service", "lhpc-boot-restore.service"):
+        monkeypatch.setattr(m, "_own_cgroup_text", lambda u=unit: base + u)
+        assert m._in_managed_lhpc_unit() is True
+        assert m._owner_is_host_root(65534, canonical_path=True) is True
+    for foreign in ("lhpc-firewall.service", "lhpc-selfupdate.service",
+                    "x-lhpc-nginx.service.scope", "nginx.service"):
+        monkeypatch.setattr(m, "_own_cgroup_text", lambda u=foreign: base + u)
+        assert m._in_managed_lhpc_unit() is False
+        assert m._owner_is_host_root(65534, canonical_path=True) is False
 
 
 def test_managed_web_unit_exact_identity(monkeypatch):
@@ -930,15 +951,15 @@ def test_managed_web_unit_exact_identity(monkeypatch):
     assert m._managed_unit_leaf("") is None
     assert m._managed_unit_leaf("1:name=systemd:/a\n0::/b") is None
 
-    # _in_managed_web_unit drives the EXACT check via the (mockable) cgroup read
+    # _in_managed_lhpc_unit drives the EXACT check via the (mockable) cgroup read
     monkeypatch.setattr(m, "_own_cgroup_text", lambda: real)
-    assert m._in_managed_web_unit() is True
+    assert m._in_managed_lhpc_unit() is True
     monkeypatch.setattr(m, "_own_cgroup_text", lambda: "0::/user.slice/x-lhpc-web.service.scope")
-    assert m._in_managed_web_unit() is False
+    assert m._in_managed_lhpc_unit() is False
     def boom():
         raise OSError()
     monkeypatch.setattr(m, "_own_cgroup_text", boom)
-    assert m._in_managed_web_unit() is False
+    assert m._in_managed_lhpc_unit() is False
 
 
 def test_receipt_reader_userns_translation_end_to_end(tmp_path, monkeypatch):
@@ -1054,8 +1075,21 @@ def test_gate_noop_when_integration_absent(tmp_path, monkeypatch):
 def test_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     # P1-1: a half-installed firewall must not be trusted — refuse remote activation.
     svc = _svc_fw_installed(tmp_path, monkeypatch, state="partial")
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(True, "regenerated"))
     allowed, msg, _cmds = svc.firewall_gate_activation({8443})
     assert not allowed and "partially installed" in msg
+
+    # ...but a LOOPBACK-ONLY activation activates nothing that needs protecting. Refusing it
+    # stranded an operator who was reducing exposure while the integration was broken — and the
+    # refusal spoke of "a remote listener" that this change does not create.
+    allowed, msg, cmds = svc.firewall_gate_activation(set())
+    assert allowed and msg == "" and cmds == []
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(False, "could not render firewall scripts: EACCES"))
+    allowed, msg, cmds = svc.firewall_gate_activation(set())
+    assert allowed and "could not be regenerated" in msg
+    assert not any("firewall-apply.sh" in c for c in cmds)
 
 
 @pytest.mark.contract
@@ -1070,8 +1104,30 @@ def test_gate_refuses_even_already_exposed_when_unverified(tmp_path, monkeypatch
 
 
 def test_gate_allows_when_no_remote_listener(tmp_path, monkeypatch):
+    """Closing the LAST remote listener is always allowed — and must still regenerate the firewall
+    scripts, because the intent changed. Returning early on the empty set left firewall-apply.sh
+    advertising an ingress that no longer exists (audit)."""
     svc = _svc_fw_installed(tmp_path, monkeypatch, live_ok=False, config_ok=False)
-    assert svc.firewall_gate_activation(set())[0]          # nothing remote -> allowed
+    rendered = []
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: rendered.append(1) or ActionResult(True, "regenerated"))
+    allowed, msg, cmds = svc.firewall_gate_activation(set())
+    assert allowed and msg == "" and cmds == []
+    assert rendered, "an intent change must regenerate the scripts even with nothing left remote"
+
+    # Render failure: still allowed (the exposure only shrank), but say so and offer the re-render.
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(False, "could not render firewall scripts: EACCES"))
+    allowed, msg, cmds = svc.firewall_gate_activation(set())
+    assert allowed and "could not be regenerated" in msg and cmds == ["lhpc firewall --script"]
+    assert not any("firewall-apply.sh" in c for c in cmds)
+
+    # Receipt already matches the current intent -> nothing changed, nothing to regenerate.
+    svc2 = _svc_fw_installed(tmp_path, monkeypatch, live_ok=True, config_ok=True)
+    calls = []
+    monkeypatch.setattr(type(svc2), "firewall_render",
+                        lambda self: calls.append(1) or ActionResult(True, "regenerated"))
+    assert svc2.firewall_gate_activation(set())[0] and not calls
 
 
 @pytest.mark.contract
@@ -1483,6 +1539,32 @@ def test_boot_gate_falls_back_to_loopback_when_unverified(tmp_path, monkeypatch)
     r = svc.firewall_boot_gate()
     assert r.ok and "LOOPBACK-ONLY" in r.summary
     assert promoted["bind"] == "127.0.0.1" and promoted["promoted"] is True
+
+
+def test_boot_gate_refusal_names_the_failing_dimension(tmp_path, monkeypatch):
+    """One message for every cause (no receipt, stale receipt, changed intent, half-installed
+    integration) is what made this unreadable live: the operator's own shell said verified while
+    the gate said the opposite, with nothing naming the difference."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core import firewall as fwm
+    svc = _svc(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0", port=8443, remote_exposed=True)
+    svc._invalidate_config()
+    monkeypatch.setattr(fwm, "BOOT_GATE_WAIT_S", 0)
+    monkeypatch.setattr("lhpc.core.webserver.stage_and_validate", lambda *a, **k: (True, "", "s"))
+    monkeypatch.setattr("lhpc.core.webserver.promote_config", lambda paths: None)
+
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False, "reason": "no-receipt"})
+    assert "live rules unverified (no-receipt)" in svc.firewall_boot_gate().summary
+
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": False, "live_ok": True, "reason": ""})
+    assert "saved intent differs" in svc.firewall_boot_gate().summary
+
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "partial")
+    assert "integration partial" in svc.firewall_boot_gate().summary
 
 
 def test_boot_gate_allows_when_verified(tmp_path, monkeypatch):
@@ -2174,3 +2256,129 @@ def test_ap_dhcp_server_rule_is_family_scoped():
                                       "port": 22}])
     disc = next(fh._rule_spec(r)[0] for r in m["rules"] if r.get("match") == "ap-dhcp-server")
     assert "meta nfproto ipv4" in disc and 'iifname "wlan0"' in disc
+
+
+def _narrowing_env(tmp_path, monkeypatch, *, console_bind="0.0.0.0", cidrs="192.168.0.0/24"):
+    """A box whose firewall receipt was applied WITH the console exposed, and whose saved config has
+    since removed that exposure. Returns (svc, applied_intent_hash)."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core import firewall as fwm
+    svc = _svc(tmp_path)
+    cfgmod.save_stackweb_config(svc._paths, "meshtastic", mode="lan", port=8445,
+                                allowed_cidrs=[cidrs])
+    cfgmod.save_webserver_config(svc._paths, bind=console_bind, port=8443, remote_exposed=True,
+                                 allowed_cidrs=[cidrs])
+    svc._invalidate_config()
+    applied = fwm.intent_hash(svc.firewall_candidate())          # what the firewall was applied for
+    cfgmod.save_webserver_config(svc._paths, bind="127.0.0.1", remote_exposed=False)
+    svc._invalidate_config()
+    monkeypatch.setattr(type(svc), "_fw_integration_state", lambda self: "present")
+    monkeypatch.setattr(type(svc), "firewall_status",
+                        lambda self: {"config_ok": False, "live_ok": False})   # intent changed
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(True, "firewall scripts regenerated"))
+    monkeypatch.setattr(type(svc), "_fw_receipt_fresh", lambda self, r: True)
+    monkeypatch.setattr(fwm, "integration_rev", lambda: "REV")
+    monkeypatch.setattr(type(svc), "_fw_read_receipt",
+                        lambda self, path=None: {"verdict": "verified", "integration_rev": "REV",
+                                                 "intent_hash": applied})
+    return svc, applied
+
+
+def _listeners(monkeypatch, addrs):
+    from lhpc.core import webserver as wsm
+    monkeypatch.setattr(wsm, "listener_addresses", lambda system, port: list(addrs))
+
+
+def test_narrowing_allowed_only_when_console_removal_is_the_whole_change(tmp_path, monkeypatch):
+    """The gate must stop a port BINDING ahead of a verified firewall, never one being CLOSED — but
+    it may only conclude that from the receipt's own intent hash. Proving the DELTA (current
+    candidate + the removed console ingress == what the firewall was applied for) is what makes
+    every stale-evidence bypass impossible (audit P1)."""
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch)
+    _listeners(monkeypatch, ["0.0.0.0"])
+    ok, msg, _cmds = svc.firewall_gate_activation({8445})
+    assert ok, msg                                              # the real bug: closing the console
+
+
+def test_narrowing_refused_when_anything_else_changed_too(tmp_path, monkeypatch):
+    from lhpc.core import config as cfgmod
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch)
+    _listeners(monkeypatch, ["0.0.0.0"])
+    cfgmod.save_stackweb_config(svc._paths, "meshtastic", allowed_cidrs=["10.0.0.0/8"])  # widened
+    svc._invalidate_config()
+    ok, msg, _cmds = svc.firewall_gate_activation({8445})
+    assert not ok and "changes pending" in msg
+
+
+def test_narrowing_refused_on_stale_or_foreign_receipt(tmp_path, monkeypatch):
+    """A previous boot, a replaced helper, an unverified readback or a missing receipt must all fail
+    closed — none of them prove the rules currently loaded."""
+    svc, applied = _narrowing_env(tmp_path, monkeypatch)
+    _listeners(monkeypatch, ["0.0.0.0"])
+
+    monkeypatch.setattr(type(svc), "_fw_receipt_fresh", lambda self, r: False)   # previous boot
+    assert not svc.firewall_gate_activation({8445})[0]
+    monkeypatch.setattr(type(svc), "_fw_receipt_fresh", lambda self, r: True)
+
+    for bad in ({"verdict": "mismatch", "integration_rev": "REV", "intent_hash": applied},
+                {"verdict": "verified", "integration_rev": "OLD", "intent_hash": applied},
+                {"verdict": "verified", "integration_rev": "REV", "intent_hash": "deadbeef"},
+                None):
+        monkeypatch.setattr(type(svc), "_fw_read_receipt", lambda self, path=None, b=bad: b)
+        assert not svc.firewall_gate_activation({8445})[0]
+
+
+def test_narrowing_refused_when_the_previous_bind_is_unknown_or_ambiguous(tmp_path, monkeypatch):
+    """The previous console bind comes from the LIVE listener, because the saved bind is already
+    loopback. No listener, or more than one, means it cannot be reconstructed — refuse."""
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch)
+    for addrs in ([], ["0.0.0.0", "192.168.0.5"]):
+        _listeners(monkeypatch, addrs)
+        assert not svc.firewall_gate_activation({8445})[0]
+
+
+def test_narrowing_handles_a_concrete_console_bind(tmp_path, monkeypatch):
+    """A concrete remote bind is legal and the candidate scopes the rule to that exact address, so
+    the reconstruction uses the live address — canonicalized, since /proc reports a wildcard as
+    0.0.0.0 while the candidate stores '*'."""
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch, console_bind="192.168.0.5")
+    _listeners(monkeypatch, ["192.168.0.5"])
+    assert svc.firewall_gate_activation({8445})[0]
+    _listeners(monkeypatch, ["0.0.0.0"])                        # wrong address -> different hash
+    assert not svc.firewall_gate_activation({8445})[0]
+
+
+def test_console_still_remote_is_never_a_narrowing(tmp_path, monkeypatch):
+    """Desired remote exposure that was verified but never activated must NOT open the gate — the
+    exact stale-evidence bypass the audit described."""
+    from lhpc.core import config as cfgmod
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch)
+    _listeners(monkeypatch, ["0.0.0.0"])
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0", remote_exposed=True)
+    svc._invalidate_config()
+    assert not svc.firewall_gate_activation({8443, 8445})[0]
+
+
+def test_gate_never_names_a_script_it_could_not_render(tmp_path, monkeypatch):
+    """No result may point at firewall-apply.sh unless THIS call rewrote it — a stale or missing
+    script applies the wrong intent (audit P2a). Holds for the narrowing, the refusal and the
+    partially-installed branch."""
+    from lhpc.core import config as cfgmod
+    svc, _applied = _narrowing_env(tmp_path, monkeypatch)
+    _listeners(monkeypatch, ["0.0.0.0"])
+    monkeypatch.setattr(type(svc), "firewall_render",
+                        lambda self: ActionResult(False, "could not render firewall scripts: EACCES"))
+
+    ok, msg, cmds = svc.firewall_gate_activation({8445})          # narrowing + render failure
+    assert ok and "could not be regenerated" in msg and cmds == ["lhpc firewall --script"]
+
+    cfgmod.save_stackweb_config(svc._paths, "meshtastic", allowed_cidrs=["10.0.0.0/8"])
+    svc._invalidate_config()
+    ok, msg, cmds = svc.firewall_gate_activation({8445})          # refusal + render failure
+    assert not ok and "could NOT be regenerated" in msg
+    assert not any("firewall-apply.sh" in c for c in cmds)
+
+    monkeypatch.setattr(type(svc), "_fw_integration_state", lambda self: "partial")
+    ok, msg, cmds = svc.firewall_gate_activation({8445})          # partial + render failure
+    assert not ok and not any("firewall-apply.sh" in c for c in cmds)

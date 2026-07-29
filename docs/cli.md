@@ -13,9 +13,9 @@ does is available here too.
 
 ## Commands
 
-- [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [source-check](#source-check)
+- [list](#list) · [status](#status) · [explain](#explain) · [doctor](#doctor) · [deps](#deps) · [source-check](#source-check)
 - [bootstrap](#bootstrap) · [install](#install) · [auto-install](#auto-install)
-- [config](#config) · [hardware](#hardware) · [autostart](#autostart) · [firewall](#firewall)
+- [config](#config) · [hardware](#hardware) · [autostart](#autostart) · [firewall](#firewall) · [hmac](#hmac)
 - [stack](#stack) · [build](#build) · [test](#test) · [update](#update) · [uninstall](#uninstall) · [clean](#clean) · [known-working](#known-working)
 - [daemon](#daemon) · [logs](#logs)
 - [web](#web) · [webserver](#webserver)
@@ -81,10 +81,27 @@ dependencies change (CI shell-syntax-checks the committed snapshot).
 `lhpc bootstrap [--yes]` — create the runtime root and a starter config.
 
 ### install
-`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack: download the published **binary** artifact, or adopt/verify managed sources into the runtime root. Without `--source`, a named stack uses its default channel (binary where one is published for this platform, else `dev`); the all-stacks form stays on the source channel. A failed binary install asks **explicitly** whether to build from source — it never falls back silently. `--check` is a dry run: it always shows the plan and *reports* any missing mandatory system dependencies (the apply run refuses until they are installed).
+`lhpc install [<stack>] [--check] [--source binary|pinned|dev|stable] [--yes]` — install a stack:
+download the published **binary** artifact, or adopt/verify managed sources into the runtime root.
+
+- Without `--source`, a named stack uses its default channel — binary where one is published for
+  this platform, else `dev`. The all-stacks form stays on the source channel.
+- A failed binary install asks **explicitly** whether to build from source; it never falls back
+  silently.
+- `--check` is a dry run: it shows the plan and reports missing mandatory system dependencies
+  (the apply run refuses until they are installed).
 
 ### auto-install
-`lhpc auto-install [--source binary|pinned|dev|stable] [--tests] [--tx] [--status] [--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one guided run. Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and transmits one bounded test frame per ready band (real RF — dummy loads). `--status` prints the run state and any recovery reason, then exits. `--recover` acknowledges a crashed/interrupted run and clears all its leftover state (reservation + lease + run marker) so a new run can start — the CLI equivalent of the web console's recover button; add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect/terminate it first).
+`lhpc auto-install [--source binary|pinned|dev|stable] [--tests] [--tx] [--status]
+[--recover [--confirm-orphan]] [--yes]` — install/update, build and test **all** stacks in one
+guided run.
+
+- Host tests are **off by default**; `--tests` runs them, and `--tx` implies `--tests` and
+  transmits one bounded frame per ready band (real RF — dummy loads).
+- `--status` prints the run state and any recovery reason, then exits.
+- `--recover` acknowledges a crashed run and clears its leftover state so a new run can start.
+  Add `--confirm-orphan` only when a spawned child's termination could not be proven (inspect and
+  terminate it first).
 
 ---
 
@@ -162,6 +179,13 @@ your existing configuration is preserved).
 lhpc firewall                 # status: mode + Config/Boot/Live dimensions + foreign-table note
 lhpc firewall --script        # print the apply script (run it yourself with sudo)
 lhpc firewall --reset-script  # print the reset script (removes only lhpc-owned artifacts)
+
+# policy (same fields as the console's Firewall panel; omitted flag = unchanged)
+lhpc firewall --mode secure-default|compatibility
+lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24   # AP DHCP/DNS rules
+lhpc firewall --ssh-ports "22,2222"        # "" = back to automatic detection
+lhpc firewall --allow-endpoints "id1,id2"  # "" = no direct-access exceptions
+lhpc firewall --recommended                # safe preset; not combinable with the flags above
 ```
 
 - **Config/Boot/Live** are independent: the dashboard turns the firewall green ONLY with a
@@ -187,7 +211,14 @@ after a slow QEMU cold boot outlived its retry window (`lhpc status <stack>` sho
 `lhpc test <target> [--tx] [--yes]` — run host tests, or a bounded TX test with `--tx` (real RF, dummy loads).
 
 ### update
-`lhpc update [<target>] [--source binary|pinned|dev|stable] [--yes]` — update a stack/component to the selected source. Without `--source` the target KEEPS its current channel: a binary-installed stack updates binary→binary, everything else defaults to `dev`. When the published binary lags this lhpc's pins, the update refuses and names the source build as the only way forward — cancelling keeps the working binary.
+`lhpc update [<target>] [--source binary|pinned|dev|stable] [--yes]` — update a stack/component to
+the selected source.
+
+- Without `--source` the target KEEPS its current channel: a binary-installed stack updates
+  binary→binary, everything else defaults to `dev`.
+- When the published binary lags this lhpc's pins, the update refuses and names the source build as
+  the only way forward — cancelling keeps the working binary.
+- Switching channels is an `install`, not an update, and the CLI says so.
 
 ### uninstall
 `lhpc uninstall [<target>] [--yes]` — uninstall a stack/component.
@@ -246,7 +277,20 @@ lhpc webserver cert discard-export <label>
 `lhpc self-update [--apply] [--overwrite] [--repair-integration] [--recover-request] [--yes]` — check for, or apply, lhpc's own update. `--apply` fast-forwards and restarts the console; `--overwrite` resets a diverged/dirty checkout; `--repair-integration` reinstalls the managed console + updater units.
 
 ### hmac
-`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — MeshCom HMAC (bridge↔firmware) password. `status` prints enabled/disabled (default stack: meshcom). `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes) — without `--yes` they warn and print the confirm hint; with `--yes` they apply, streaming each step (secret → firmware → bridge → node). `disable` additionally requires `--confirm-phrase disable-hmac-auth` (it downgrades the link to unauthenticated). The secret value is never printed. Password-auth is on by default at install. `abort` cooperatively cancels a running apply (SIGTERM to the driver, which stops the build and writes the terminal state). `recover` clears a blocking `unsafe` state left when a cancelled/timed-out build could not be proven stopped — auto for a `session-unverified` scope once the session is proven gone, or as your explicit acknowledgement (after inspecting `ps`) for an `escaped-or-output-unverified` scope.
+`lhpc hmac status|enable|disable|renew|abort|recover [<stack>] [--yes]` — the MeshCom HMAC
+password between bridge and firmware (default stack: meshcom).
+
+- `enable`/`disable`/`renew` **rebuild the firmware and restart the link** (several minutes).
+  Without `--yes` they warn and print the confirm hint; with `--yes` they stream each step
+  (secret → firmware → bridge → node). The secret value is never printed.
+- `disable` also requires `--confirm-phrase disable-hmac-auth` — it downgrades the link to
+  unauthenticated.
+- Password auth is on by default for a **source** install. On the **binary** channel the
+  published firmware has no password, so meshcom runs open auth and every change here is refused
+  until you install from source.
+- `abort` cancels a running apply; `recover` clears a blocking `unsafe` state left when a
+  cancelled build could not be proven stopped — automatically once the session is proven gone, or
+  as your explicit acknowledgement after inspecting `ps`.
 
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.

@@ -179,7 +179,11 @@ The web console exposes the same actions per stack, each with a plan + confirmat
 ## Maintain an existing stack
 
 - **Bump a version:** change `source.pin_commit` (and `pin_tag`), then
-  `lhpc update <stack> --yes` and re-`build`.
+  `lhpc update <stack> --yes` and re-`build`. If the stack declares `[stack.binary]`
+  (daemon, meshtastic, meshcom), the published artifact now lags the new pin: installs of it
+  refuse the binary and offer source until [lhpc-binaries](https://github.com/makrohard/lhpc-binaries)
+  republishes from the new commits. Pin equality is the whole gate — see
+  [provenance](provenance.md#the-binary-channel).
 - **Fix a flaky "did not start/verify":** if the app is slow to open its port, raise
   `readiness_timeout`; if a wrapper backgrounds the real process, make sure `process.exec_name`
   matches the process that owns the ready endpoint.

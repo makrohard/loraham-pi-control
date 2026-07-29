@@ -75,7 +75,13 @@ sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
 
 That script (rendered by `lhpc`, executed by you) installs a small **root-owned** helper and
 three systemd units, then applies the ruleset and runs an immediate live check. `lhpc` itself
-never runs a privileged command. To verify on demand:
+never runs a privileged command.
+
+**Until you run it, nothing is filtered.** There is no `table inet lhpc`, every listener a stack
+opens is reachable from your network, and both `lhpc firewall` and the dashboard say
+*setup required* rather than green.
+
+To verify on demand:
 
 ```bash
 sudo systemctl start lhpc-firewall-check.service
@@ -169,8 +175,11 @@ tunnel: `ssh -N -L 8443:127.0.0.1:8443 pi@raspberrypi.local`.
 **Public internet** — forward only 8443 at your router; expose with `--cidr 0.0.0.0/0
 --confirm-phrase enable-remote-danger`. Never forward 4403/9443/8001/5000/7000.
 
-**Pi Wi-Fi AP + phone** — enable AP mode in the Firewall panel with the interface and CIDR (e.g.
-`wlan0`, `10.42.0.0/24`). It allows AP DHCP (`68→67` on that interface) and DNS (UDP+TCP 53), plus
+**Pi Wi-Fi AP + phone** — enable AP mode with the interface and CIDR (e.g. `wlan0`,
+`10.42.0.0/24`), in the Firewall panel or with
+`lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24`. Do it BEFORE the radio
+becomes an AP: without these rules the phone never gets a DHCP lease, and the console is then
+unreachable too. It allows AP DHCP (`68→67` on that interface) and DNS (UDP+TCP 53), plus
 the console. Issue the phone certificate **before** exposing (see
 [wifi-access-point.md](wifi-access-point.md)).
 
@@ -204,8 +213,8 @@ table inet lhpc {
     chain input {
         type filter hook input priority filter; policy drop;
         iif "lo" accept
-        meta nfproto ipv4 tcp dport 4403 drop      # meshtasticd — unauthenticated
-        meta nfproto ipv4 tcp dport 9443 drop
+        tcp dport 4403 drop                        # meshtasticd — unauthenticated
+        tcp dport 9443 drop
         ct state invalid drop
         ct state established,related accept
         meta l4proto ipv6-icmp accept              # NDP — mandatory for IPv6

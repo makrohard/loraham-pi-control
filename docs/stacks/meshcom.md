@@ -9,6 +9,11 @@ until the firmware finishes booting. Expected, not a failure.
 
 Start order: daemon → bridge → GPS relay → QEMU.
 
+**Install:** the binary channel is the default here (a prebuilt, sha256-verified artifact —
+minutes instead of hours); `--source pinned|dev|stable` builds from source instead. See [Binary
+channel](../../README.md#binary-channel-prebuilt).
+
+
 | | |
 |---|---|
 | Components | `meshcom-bridge`, `meshcom-gps-relay`, `meshcom-qemu` |

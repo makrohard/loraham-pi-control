@@ -114,6 +114,65 @@ class BinaryChannelMixin:
             return False
         return self.on_binary_channel(sid)
 
+    # The remedy an artifact-managed runtime dependency needs — ONE string, so the dependency
+    # report and the start refusal cannot drift apart (they did: the report said "not needed" for
+    # exactly what the start gate refused to start without — audit).
+    ARTIFACT_MISSING_NOTE = ("binary-managed runtime dependency is missing — the artifact was "
+                             "supposed to deliver it; reinstall the binary artifact")
+
+    def binary_requirement_class(self, comp_id: str, req) -> str:
+        """THE shared verdict for one requirement of one component: "blocker" | "irrelevant" |
+        "artifact-missing". Used by BOTH `start_blocking_requirements()` and `deps.stack_report()`.
+
+        A `provisioned` requirement is installed into the runtime root by the BUILD, and on the
+        binary channel there is no build — but that does not make them all irrelevant:
+
+          * PURE BUILD TOOLS (PlatformIO) are nothing the artifact ships and nothing the operator
+            can act on -> "irrelevant". Blocking start on one is a dead end: MeshCom refused to
+            start with "missing pio" on a box whose firmware came prebuilt (live-found on a Zero).
+          * Things the ARTIFACT delivers (the Meshtastic CLI venv, the QEMU binary) are real runtime
+            prerequisites -> "artifact-missing". The manifest is explicit that a box lacking the CLI
+            venv must be "refused up front instead of starting and silently failing to apply the
+            region", and cheap receipt validation only restats PROOF paths, so deleting just that
+            venv leaves the receipt valid — this classification is the only thing that notices.
+
+        The receipt says which is which: a path the receipt OWNS was supposed to be delivered."""
+        if not getattr(req, "provisioned", False) or not self.binary_covers(comp_id):
+            return "blocker"
+        state, rec, _why = self.binary_receipt_state(self.stack_of(comp_id) or comp_id)
+        if state != "valid" or rec is None:
+            return "irrelevant"                    # no artifact owns anything here
+        owned = set(rec.files) | set(getattr(rec, "owned_dirs", ()) or ())
+        root = str(self._paths.runtime_root).rstrip("/") + "/"
+        path = self._lifecycle()._resolve_req_path(getattr(req, "check_file", "") or "")
+        rel = path[len(root):] if path.startswith(root) else ""
+        if rel and (rel in owned or any(rel.startswith(d.rstrip("/") + "/") for d in owned)):
+            return "artifact-missing"
+        return "irrelevant"
+
+    def binary_artifact_repair(self, comp_id: str) -> str:
+        """The one command that repairs an artifact-managed runtime dependency."""
+        return f"lhpc install {self.stack_of(comp_id) or comp_id} --source binary --yes"
+
+    def start_blocking_requirements(self, comp) -> list:
+        """`missing_requirements(comp)` minus the ones a binary artifact makes IRRELEVANT, via the
+        shared classifier. Returns `Requirement` objects unchanged for ordinary blockers; an
+        artifact-managed one is returned with the binary remedy substituted, so `req_remediation()`
+        and every downstream renderer keep working untouched."""
+        import dataclasses as _dc
+        miss = self._lifecycle().missing_requirements(comp)
+        if not miss or not self.binary_covers(comp.id):
+            return miss
+        out = []
+        for req in miss:
+            verdict = self.binary_requirement_class(comp.id, req)
+            if verdict == "irrelevant":
+                continue
+            out.append(req if verdict != "artifact-missing" else
+                       _dc.replace(req, install=self.binary_artifact_repair(comp.id),
+                                   note=self.ARTIFACT_MISSING_NOTE))
+        return out
+
     def binary_block_reason(self, stack_id: str, action: str = "build") -> str:
         """Reason string for actions a binary-installed stack cannot do (build, host tests,
         HMAC changes), or "" when the action is fine."""

@@ -38,6 +38,10 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
 
 ## Build durations & memory pressure (512 MB Zero 2 W)
 
+Everything below is about **source builds**. The three heavy stacks (daemon, meshtastic, meshcom)
+install from the binary channel by default, which skips the compiles entirely — this section
+applies when you choose `--source pinned|dev|stable`, or on a platform with no published artifact.
+
 - The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at `-j1`) and
   the MeshCom firmware (**~26 min cold**, ~2–3 min incremental); RadioLib + daemon and the Python-venv
   stacks are minutes each. The per-step build timeout is **28800 s** (8 h), sized for the Zero's cold QEMU
@@ -45,33 +49,32 @@ hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip
   (`.pio/build/<env>/.lhpc-build-complete`) is the authoritative built-state signal — a stale `flash.bin`
   from an earlier build never reads "built" after a failed/interrupted rebuild, and cleaning the firmware
   removes the marker with it.
+- **Runtime concurrency has the same ceiling as the builds.** Field-measured on a Zero 2 W
+  (415 MB usable after zram): meshtasticd + the emulated MeshCom node under QEMU + nginx + the web
+  console running together drives the board into swap thrash — Wi-Fi drops first (the brcmfmac
+  firmware gives up under sustained load), then SSH and the local console stop answering, and only
+  a power cycle recovers it. Run MeshCom **or** Meshtastic on a Zero, not both, and stop the console
+  (`systemctl --user stop lhpc-web lhpc-nginx`) while the QEMU node boots. A Pi 5 has no such limit.
 - **Stop the web stack for heavy builds** on a 512 MB board — the controller and a `-j`-parallel
   compile competing for RAM is what triggers the OOM killer. lhpc already biases build children toward
   the OOM killer so the controller survives, and the QEMU build defaults to a memory-aware `-j`
   (`min(nproc, floor(MemTotal_GB))` → `-j1` on 512 MB, full parallelism on a Pi 5), but freeing RAM
   still makes the build faster and safer.
 - **Disk swapfile as OOM insurance (small-RAM boards).** Trixie's default swap is **zram** —
-  *compressed pages that still live in RAM*, so it adds no real backing store. A firmware build can
-  still be OOM-killed with zram present (field-observed: cc1plus killed at `-j1` with 414 MiB of zram,
-  only 78 MiB in use, while the web stack was resident). To prevent the *hard* OOM, `bootstrap-deps.sh`
-  provisions a **disk-backed** swapfile (`/var/swap.lhpc`, default 768 MB) when `MemTotal < ~600 MB`,
-  at a **lower priority than zram** — zram stays the fast tier and the file is overflow that only backs
-  the peak. It is created only when there is no sufficient *other* disk swap (zram is *not* counted,
-  and neither is our own file) **and** the target filesystem has enough free space (2× the target for a
-  fresh image, 1× to rebuild an existing one) — else it refuses rather than fill the card.
-  **Success means ACTIVE *and* DECLARED:** the image is built in a same-directory temp, fsynced and
-  renamed into place (an interrupted run leaves an inert temp, never a half-formatted swapfile), and
-  the `fstab` entry is published transactionally so there is always **exactly one** canonical line.
-  A re-run therefore *repairs* whichever half is missing (active-but-undeclared, or declared-but-off)
-  instead of merely no-oping. A non-regular file at the swap path — symlink, directory, FIFO, device —
-  is **refused untouched**, as is a symlinked `/etc/fstab` (the script is privileged; following a link
-  would let it overwrite an arbitrary target). **On a low-RAM host where swap is required but cannot be
-  provisioned the bootstrap now exits 4** — the apt/SPI/group work still completes first, so you get a
-  configured machine *and* an unambiguous failure. **Trade-off:** the swapfile lives on the SD card, so
-  heavy paging adds flash wear — the cost of build reliability on a 512 MB box. Opt out with
-  `--no-swapfile` (the only supported way to proceed without it), or size it with
-  `--swap-size <MB>` (64–16384); on a Pi 5 or any board with ≥ 600 MB RAM it is never created. A build
-  that pages heavily every time is a signal to stop the web stack (above) or move to more RAM.
+  compressed pages that still live in RAM, so it adds no backing store and a build can still be
+  OOM-killed (field-observed at `-j1`). When `MemTotal < ~600 MB`, `bootstrap-deps.sh` provisions a
+  **disk-backed** swapfile (`/var/swap.lhpc`, default 768 MB) at *lower* priority than zram, so it
+  only backs the peak. It is created only when no sufficient other disk swap exists and the
+  filesystem has room — otherwise it refuses rather than fill the card.
+  - Success means **active AND declared**: the image is built in a same-directory temp, fsynced and
+    renamed into place, and the `fstab` entry is published transactionally as exactly one canonical
+    line — so a re-run *repairs* whichever half is missing instead of no-oping.
+  - A non-regular file at the swap path, or a symlinked `/etc/fstab`, is refused untouched. If swap
+    is required but cannot be provisioned, the bootstrap **exits 4** after completing the apt/SPI/
+    group work — a configured machine and an unambiguous failure.
+  - Opt out with `--no-swapfile`, size it with `--swap-size <MB>` (64–16384). Never created at
+    ≥ 600 MB RAM. Trade-off: it lives on the SD card, so heavy paging adds flash wear.
+
 - Builds are detached: they survive a web-service restart. Every job prints a copy-pasteable
   `tail -f <log>` line the moment its log is created — follow the exact file from another terminal
   instead of guessing (`lhpc logs <comp>` resolves to the same newest file). Build output is

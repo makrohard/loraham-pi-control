@@ -1573,6 +1573,30 @@ def test_valid_remote_reaches_git(tmp_path):
     assert any("clone" in c for c in runner.calls)          # a valid remote does clone
 
 
+def test_post_clone_failure_names_the_step_and_reason_in_the_log(tmp_path):
+    """A clone that SUCCEEDS and a later git step that times out must not read as a network
+    fault: the caller can only say "clone failed", so the step and the reason belong in the
+    adoption log (live-found — a switch failed right after "Resolving deltas: 100%")."""
+    class _Runner:
+        def run(self, argv, timeout=None, cwd=None, env=None):
+            if "checkout" in argv:
+                return CommandResult(124, "", "fatal: interrupted", timed_out=True)
+            return CommandResult(0, "", "")
+    log = tmp_path / "adopt.log"
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    inst = _inst_with(_Runner(), tmp_path)
+    with log.open("w") as fh:
+        ok = inst._clone(SourceSpec(path="src/x", remote="https://github.com/x/y.git"),
+                         dest, "pinned", remote="https://github.com/x/y.git",
+                         expected_pin="a" * 40, log_fh=fh)
+    assert ok is False
+    body = log.read_text()
+    assert "[fail] checkout aaaaaaaaaaaa" in body
+    assert "timed out after 300s" in body
+    assert "fatal: interrupted" in body
+
+
 def test_run_action_rejects_invalid_source(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     r = svc.run_action("install", "daemon", source="evil")

@@ -143,6 +143,34 @@ class LifecycleOpsMixin:
             time.sleep(self.ENDPOINT_VERIFY_POLL_S)
             waited += self.ENDPOINT_VERIFY_POLL_S
 
+    def _radio_not_ready_hint(self, band: str) -> str:
+        """Why a reachable daemon can report RADIO=FAILED, ordered by what we can actually observe.
+        Bounded and GET-safe: one snapshot read, no subprocess."""
+        from .model import ResourceKind, RunState
+        try:
+            snap = self.build_snapshot()
+            # Anything LIVE that drives the radio hardware itself — the SPI bus or a band — except
+            # the daemon. meshtasticd is the real-world case: it claims the BAND (not the bus), so a
+            # bus-only test would miss exactly the process that matters. DEGRADED counts as live:
+            # the process is running with an endpoint/readiness missing, and it still holds the
+            # hardware — the same rule every other ownership path here applies (audit).
+            hw = (ResourceKind.SPI_BUS, ResourceKind.RADIO_BAND)
+            live = (RunState.RUNNING, RunState.DEGRADED)
+            spi_users = sorted({
+                c.id for s in snap.stacks for c in s.stack.components
+                if c.id != "loraham-daemon"
+                and (st := s.components.get(c.id)) is not None
+                and st.run_state in live
+                and any(r.kind in hw for r in (getattr(c, "resources", ()) or ()))})
+        except Exception:
+            spi_users = []
+        if spi_users:
+            return ("another process is on the shared SPI bus (" + ", ".join(spi_users) +
+                    ") — its transfers can corrupt the daemon's chip probe; stop it, start this "
+                    "stack, then start it again")
+        return (f"the {band} module did not answer its probe: check the board is seated and, if it "
+                "worked before, POWER-CYCLE the Pi — a wedged RF front-end survives a warm reboot")
+
     def _conflicting_service_hint(self, comp) -> str:
         """When a component declares an `absent_file` requirement (a must-not-run systemd unit) yet a
         start still reached readiness-failure, the unit can be ACTIVE without being ENABLED — its
@@ -696,7 +724,7 @@ class LifecycleOpsMixin:
                 record(comp, stack, Outcome.MANUAL_REQUIRED,
                        f"system service — start with: sudo systemctl start {comp.units[0].name}")
                 continue
-            miss = life.missing_requirements(comp)
+            miss = self.start_blocking_requirements(comp)
             if miss:
                 # A groups grant that is merely restart-PENDING (configured but not yet effective in this
                 # process) must advise a RESTART, not re-show the already-run `usermod` (see req_remediation).
@@ -1146,8 +1174,14 @@ class LifecycleOpsMixin:
             lines.append(f"  [note] radio mode {self.radio_mode()}: daemon serves {'+'.join(needed)}")
         for b in not_ready:
             ok_all = False
+            # A bare RADIO=FAILED leaves the operator with nothing to do (live-found: a MeshCom start
+            # blocked on it for an hour). Name the two causes that actually produce it on this
+            # hardware: another process clocking the SHARED SPI bus while the daemon probes the chip
+            # (the daemon's /run/lock/loraham serialises its own instances, never a foreign binary),
+            # and an RF front-end wedged from an earlier run — which only a power cycle clears.
             lines.append(f"  [fail] daemon on {b}: reachable but RADIO="
                          f"{views[b].radio_state or 'unknown'} (not READY) — dependent launch blocked")
+            lines.append(f"    | {self._radio_not_ready_hint(b)}")
         for b in claimed_down:
             ok_all = False
             lines.append(f"  [fail] daemon on {b}: CONF socket unreachable but a daemon process "
@@ -2910,11 +2944,14 @@ class LifecycleOpsMixin:
         return allowed[0]
 
     def is_installed(self, target: str) -> bool:
-        """Whether a stack's main source is present (nothing to install if it
-        declares no source)."""
+        """Whether a stack's managed material is present (nothing to install if it declares no
+        source). A binary-covered main component counts as installed on its RECEIPT, not on a
+        source directory it has no reason to own."""
         s = self.stack(target)
         main = s.main_component if s else None
         if not main or not main.source:
+            return True
+        if self.binary_covers(main.id):
             return True
         return self._paths.resolve_source(main.source.path).is_dir()
 

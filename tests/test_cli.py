@@ -658,3 +658,88 @@ def test_auto_install_recover_orphan_risk_needs_confirm_orphan(tmp_path, monkeyp
     assert main(["auto-install", "--recover", "--confirm-orphan"]) == 0
     assert "acknowledged" in capsys.readouterr().out.lower()
     assert ai_mod.read_reservation(paths)[0] == "absent"
+
+
+# --- firewall policy from the CLI (parity with the console's firewall panel) -----------------
+# The AP allowance was console-only, and that is exactly the setting a headless operator cannot
+# reach: without its DHCP/DNS rules a phone cannot join the access point, and the console you
+# would need in order to enable it is only reachable OVER that access point.
+
+def _fw_cfg(rt):
+    from lhpc.core import config as cfgmod
+    from lhpc.core.paths import Paths
+    return cfgmod.load_config(Paths(runtime_root=rt)).firewall
+
+
+@pytest.mark.contract
+def test_firewall_cli_sets_the_ap_allowance(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+
+    # Fail closed: an AP without both coordinates saves NOTHING.
+    assert main(["firewall", "--ap", "on"]) == 1
+    assert "requires both an interface" in capsys.readouterr().out
+    assert _fw_cfg(tmp_path).ap_enabled is False
+
+    assert main(["firewall", "--ap", "on", "--ap-interface", "wlan0",
+                 "--ap-cidr", "10.42.0.0/24"]) == 0
+    cfg = _fw_cfg(tmp_path)
+    assert (cfg.ap_enabled, cfg.ap_interface, cfg.ap_cidr) == (True, "wlan0", "10.42.0.0/24")
+    assert "firewall-apply.sh" in capsys.readouterr().out          # names how to activate it
+
+
+@pytest.mark.contract
+def test_firewall_cli_leaves_untouched_fields_alone(tmp_path, monkeypatch, capsys):
+    """An omitted flag must never clear a setting — the argparse default is None, not []."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    assert main(["firewall", "--ap", "on", "--ap-interface", "wlan0",
+                 "--ap-cidr", "10.42.0.0/24", "--ssh-ports", "22, 2222"]) == 0
+    assert main(["firewall", "--mode", "compatibility"]) == 0
+    cfg = _fw_cfg(tmp_path)
+    assert cfg.mode == "compatibility"
+    assert (cfg.ap_enabled, cfg.ap_interface) == (True, "wlan0")   # untouched
+    assert cfg.ssh_ports == (22, 2222)                             # untouched
+    capsys.readouterr()
+
+    assert main(["firewall", "--ssh-ports", ""]) == 0              # blank clears, as in the panel
+    assert _fw_cfg(tmp_path).ssh_ports == ()
+    assert _fw_cfg(tmp_path).ap_enabled is True
+
+
+@pytest.mark.contract
+def test_firewall_cli_recommended_is_exclusive_and_resets(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    assert main(["firewall", "--ap", "on", "--ap-interface", "wlan0",
+                 "--ap-cidr", "10.42.0.0/24", "--mode", "compatibility"]) == 0
+    capsys.readouterr()
+
+    # Combining them would silently discard the individual flags — refuse instead.
+    assert main(["firewall", "--recommended", "--mode", "compatibility"]) == 2
+    assert "do not combine" in capsys.readouterr().out
+    assert _fw_cfg(tmp_path).mode == "compatibility"               # nothing changed
+
+    assert main(["firewall", "--recommended"]) == 0
+    cfg = _fw_cfg(tmp_path)
+    assert (cfg.mode, cfg.ap_enabled, cfg.ssh_ports) == ("secure-default", False, ())
+
+
+@pytest.mark.contract
+def test_firewall_cli_status_and_script_paths_unchanged(tmp_path, monkeypatch, capsys):
+    """No policy flag = the old behaviour (status). A REFUSED policy change must not go on to
+    print a script that would apply an intent which was never saved."""
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["firewall"]) == 0
+    assert "Firewall:" in capsys.readouterr().out
+
+    assert main(["firewall", "--mode", "compatibility", "--script"]) == 0
+    out = capsys.readouterr().out
+    assert "firewall settings saved" in out and "#!/usr/bin/env bash" in out
+
+    assert main(["firewall", "--ap", "on", "--script"]) == 1
+    out = capsys.readouterr().out
+    assert "#!/usr/bin/env bash" not in out

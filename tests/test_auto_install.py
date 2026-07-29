@@ -86,6 +86,17 @@ def test_running_required_host_test_is_deferred_in_auto_install_but_runs_explici
         object.__setattr__(comp, "test_requires_running", False)
 
 
+def test_plan_header_names_the_channel_even_without_a_run_wide_source(tmp_path):
+    """A bare `auto-install` uses each row's own default; the header used to print an empty
+    "source: " (live-found on the Zero). With an explicit channel it stays verbatim."""
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    bare = next(d for d in svc.auto_install(source="", apply=False).details if "host tests:" in d)
+    assert "source: per stack (binary where published, else dev)" in bare
+    named = next(d for d in svc.auto_install(source="pinned", apply=False).details
+                 if "host tests:" in d)
+    assert named.endswith("source: pinned")
+
+
 def test_packaged_meshcom_test_runs_in_bulk(tmp_path):
     """The PACKAGED meshcom-qemu test is self-sufficient (test.sh boots its own guest), so it
     must NOT carry test_requires_running — auto-install runs it right after the build instead of

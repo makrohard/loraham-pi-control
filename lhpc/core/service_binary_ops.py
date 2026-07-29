@@ -421,22 +421,27 @@ class BinaryOpsMixin:
         return sorted(out)
 
     def _prune_empty_dirs(self, rels) -> None:
-        """Remove directories that the artifact's own files left EMPTY (deepest first).
+        """Remove directories that the artifact's own files left EMPTY, DEEPEST FIRST.
 
         `rmdir` refuses a non-empty directory, so a shared one (the daemon binary sits inside a
-        git checkout) is never touched — and we only ever climb upward from the receipt's own
-        file paths, never over whole publish roots. Leaving an emptied publish directory behind
-        would read as "destination already exists" to a following source adoption."""
-        pruned = set()
-        for rel in sorted(rels, key=len, reverse=True):
-            parent = "/".join(rel.split("/")[:-1])
-            while parent and parent not in pruned:
-                pruned.add(parent)
-                try:
-                    os.rmdir(self._paths.under(*parent.split("/")))
-                except (OSError, PathContainmentError, ValueError):
-                    break                      # non-empty (or gone) — stop climbing
-                parent = "/".join(parent.split("/")[:-1])
+        git checkout) is never touched — and we only consider ancestors of the receipt's own file
+        paths, never whole publish roots. DEPTH ORDER is the contract: a parent must be tried only
+        after every child, or an emptied tree keeps its upper levels (live-found — four empty
+        directories survived a meshtastic retire because a first, failed attempt on a
+        not-yet-empty parent was never retried). Leaving an emptied publish directory behind
+        would read as "destination already exists" to a following source adoption. The runtime
+        root's own top-level skeleton (build/, src/, …) is never a candidate."""
+        dirs = set()
+        for rel in rels:
+            parts = rel.split("/")[:-1]
+            while len(parts) > 1:
+                dirs.add("/".join(parts))
+                parts = parts[:-1]
+        for d in sorted(dirs, key=lambda x: x.count("/"), reverse=True):
+            try:
+                os.rmdir(self._paths.under(*d.split("/")))
+            except (OSError, PathContainmentError, ValueError):
+                pass                   # non-empty, shared, or already gone — leave it
 
     def _sweep_binary_staging(self) -> None:
         """Remove staging directories left by a KILLED install (never by a normal failure — that

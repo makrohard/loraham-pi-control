@@ -41,6 +41,10 @@ _ACC_LOG = ("logs", "nginx-access.log")
 _UPDATING_PAGE = ("config", "nginx", "_lhpc_updating.html")
 
 _NGINX_VALIDATE_TIMEOUT_S = 15.0
+# A restart is ExecStop (`nginx -s quit`, draining workers) + ExecStart. On a loaded Pi Zero
+# that is not a 20-second operation, and our own expiring budget used to be reported as an
+# indistinguishable 'restart failed' (live-found).
+_NGINX_RESTART_TIMEOUT_S = 60.0
 
 # Declared SYSTEM (apt) dependencies of the production webserver. LHPC never installs system
 # packages itself — each is surfaced with the exact operator command (matching deps.py's model).
@@ -345,6 +349,30 @@ def listener_scope(system, port: int) -> str:
         if not (ip.startswith("127.") or ip in ("::1", "0:0:0:0:0:0:0:1")):
             return "exposed"
     return "loopback" if found else "absent"
+
+
+def listener_addresses(system, port: int) -> list:
+    """The DEDUPLICATED non-loopback bind addresses currently listening on `port`, from the same
+    /proc/net/tcp probe as `listener_scope()`.
+
+    `listener_scope()` answers "is it exposed"; the firewall's narrowing exception additionally
+    needs to know WHICH address, because the console may bind a concrete LAN address and the
+    firewall candidate scopes the allow rule to exactly that address. Returns [] when nothing
+    non-loopback listens (the caller then refuses rather than guessing)."""
+    try:
+        listeners = system.procfs.tcp_listeners()
+    except Exception:
+        return []
+    out = []
+    for ln in listeners:
+        if ln.port != port:
+            continue
+        ip = (ln.ip or "").strip()
+        if ip.startswith("127.") or ip in ("::1", "0:0:0:0:0:0:0:1"):
+            continue
+        if ip not in out:
+            out.append(ip)
+    return out
 
 
 def _ssl_suffix(scheme: str) -> str:
@@ -731,12 +759,25 @@ def restart(system, paths: Paths) -> tuple:
     restart runs ExecStop (`nginx -s quit`, releasing the socket) then ExecStart (a fresh bind) —
     the ONLY way a BIND CHANGE (loopback 127.0.0.1 <-> 0.0.0.0) actually takes effect. Returns one
     of ('restarted'|'failed', message)."""
-    r = system.runner.run(["systemctl", "--user", "restart", "lhpc-nginx.service"], 20.0)
+    r = system.runner.run(["systemctl", "--user", "restart", "lhpc-nginx.service"],
+                          _NGINX_RESTART_TIMEOUT_S)
     if getattr(r, "not_found", False):
         return "failed", "systemctl not found"
     if r.returncode == 0:
         return "restarted", "nginx restarted"
-    msg = ((r.stderr or r.stdout or "restart failed").strip().splitlines() or ["restart failed"])[-1]
+    msg = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1]
+    if not msg:
+        # systemctl CAN fail without a word (notably when our own budget expires). Say which of
+        # the two it was and what the unit ended up as — a bare "restart failed" sent the operator
+        # to the nginx log for a problem that was never nginx's (live-found on a Zero).
+        why = (f"our restart budget of {_NGINX_RESTART_TIMEOUT_S:.0f}s expired"
+               if getattr(r, "timed_out", False)
+               else f"systemctl exited {r.returncode} without a message")
+        act = system.runner.run(["systemctl", "--user", "is-active", "lhpc-nginx.service"], 5.0)
+        state = (getattr(act, "stdout", "") or "").strip() or "unknown"
+        msg = (f"{why} — the unit is now {state}"
+               + ("; re-run `lhpc webserver apply` to prove the new listener"
+                  if state == "active" else ""))
     # Live-found misleading failure: this bus EPERM means the CALLER cannot reach the operator's
     # user manager — either it runs as root/sudo, or inside the managed web unit (whose sandbox
     # deliberately blocks %t/bus). The generic advice pointed at the nginx log; name the remedy.

@@ -232,13 +232,17 @@ lhpc webserver start-service      # nur lokal, ohne Anmeldung — nach außen is
 
 ### 8. Stacks per Auto-Install aufsetzen (CLI)
 
-Komplettlauf: **≈ 45 min auf einem Pi 5, ≈ 4 h auf einem Pi Zero 2W.** Auf dem Pi ausführen
-(innerhalb der SSH-Sitzung — nicht auf deinem Desktop), und in tmux:
+Auf dem Pi ausführen (innerhalb der SSH-Sitzung — nicht auf deinem Desktop), und in tmux:
 
 ```bash
 tmux new -s lhpc                 # auf dem Pi; nach einem Abbruch: tmux attach -t lhpc
 lhpc auto-install --yes
 ```
+
+Die drei lange kompilierenden Stacks (daemon, meshtastic, meshcom) werden standardmäßig aus dem
+[Binary-Kanal](#binary-kanal-vorkompiliert) installiert — Sekunden bis wenige Minuten Download
+statt Stunden. Der Rest baut in je wenigen Minuten aus dem Quellcode. **Alles** stattdessen aus
+Quellen zu bauen (`--source pinned`) dauert ≈ 35–45 min auf einem Pi 5 und ≈ 4 h auf einem Pi Zero 2W.
 
 Host-Tests sind standardmäßig **aus**; `--tests` schaltet sie ein, `--tx` schließt `--tests` ein
 und sendet **echte HF** (Dummy-Loads!). Build-Artefakte bleiben erhalten — ein erneuter Lauf setzt
@@ -248,9 +252,9 @@ Headless-Betrieb normal.
 <details><summary>Stack für Stack statt alles auf einmal</summary>
 
 ```bash
-# daemon — LoRaHAM-Daemon, besitzt die Funkgeräte (beide Bänder)
+# daemon — LoRaHAM-Daemon, besitzt die Funkgeräte (beide Bänder); standardmäßig Binary
 lhpc install daemon
-lhpc build daemon
+#   stattdessen aus Quellen:  lhpc install daemon --source pinned && lhpc build daemon
 
 # chat — APRS-/Chat-TUI
 lhpc install chat
@@ -268,13 +272,13 @@ lhpc build voice
 lhpc install kiss
 lhpc build kiss
 
-# meshtastic — baut meshtasticd aus dem Quellcode: ≈ 15 min Pi 5 / ≈ 1¾ h Zero 2W
+# meshtastic — standardmäßig Binary (kein Build-Schritt); Quellen: ≈ 15 min Pi 5 / ≈ 1¾ h Zero 2W
 lhpc install meshtastic
-lhpc build meshtastic
+#   stattdessen aus Quellen:  lhpc install meshtastic --source pinned && lhpc build meshtastic
 
-# meshcom — baut headless QEMU + Firmware aus dem Quellcode: ≈ 20 min Pi 5 / ≈ 2 h Zero 2W
+# meshcom — standardmäßig Binary (kein Build-Schritt); Quellen: ≈ 20 min Pi 5 / ≈ 2 h Zero 2W
 lhpc install meshcom
-lhpc build meshcom
+#   stattdessen aus Quellen:  lhpc install meshcom --source pinned && lhpc build meshcom
 
 # meshcore — MeshCore-Pi-Node
 lhpc install meshcore
@@ -325,17 +329,47 @@ an, und vor jeder entfernten Anfrage steht eine **Client-Zertifikats-Anmeldung**
 offen):
 
 ```bash
-lhpc webserver init --dns lhpc-zero.local --ip 192.168.0.10     # PKI: CAs + Server-Zertifikat
-lhpc webserver cert issue laptop        # gibt EINMALIG eine Passphrase aus — notieren!
-lhpc webserver cert export laptop ~/laptop.p12
-lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+# die Installation hat die PKI bereits mit Loopback-SANs angelegt — alle eigenen Adressen ergänzen,
+# inklusive 10.42.0.1, wenn dieser Pi später sein eigener Access-Point werden soll
+lhpc webserver configure --dns localhost --dns lhpc-zero.local \
+                         --ip 127.0.0.1 --ip 192.168.0.10 --ip 10.42.0.1
+lhpc webserver tls-renew                # Server-Zertifikat mit diesen SANs neu ausstellen
+lhpc webserver cert issue lhpc-laptop   # gibt EINMALIG eine Passphrase aus — notieren!
+lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12
+lhpc webserver expose --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
 
-Die exportierte Datei liegt danach **auf dem Pi** unter `~/laptop.p12` (dem angegebenen Pfad).
-Übertrage sie auf den Rechner oder das Handy, das sich verbinden soll — etwa mit
-`scp <benutzer>@lhpc-zero.local:laptop.p12 .` — und importiere sie dort in den Zertifikatsspeicher
-des Browsers; dabei die einmalige Passphrase eingeben. Schrittweise Browser-Anleitung:
+> **Beide Listen sind wiederholbar, und `configure` ERSETZT sie** — alle Adressen und Bereiche in
+> einem Zug angeben (`localhost` / `127.0.0.1` inklusive, sonst verliert die lokale Konsole ihren
+> eigenen Zertifikatsnamen). Wer den [Access-Point](docs/wifi-access-point.md) gleich mitnimmt,
+> braucht beim späteren Umschalten nur noch die Firewall. Nachträglich ergänzen ist ebenfalls
+> unkritisch: `configure` + `tls-renew` + `webserver apply` stellt nur das Server-Zertifikat unter
+> derselben CA neu aus, importierte Client-Zertifikate funktionieren weiter. Nie erneut ausführen
+> darf man auf einem laufenden System `init` — das legt beide CAs neu an und macht jedes
+> ausgegebene Client-Zertifikat ungültig.
+
+> **Zertifikatsname für die Auswahl** — der Name erscheint in der Zertifikatsabfrage des Browsers
+> bzw. des Handys. Deshalb `lhpc-` voranstellen: Auf einem Gerät mit mehreren Zertifikaten sagt
+> `laptop` nichts, `lhpc-laptop` schon.
+
+> **Reihenfolge mit der Firewall:** `expose` → Firewall anwenden → `webserver apply`. Umgekehrt
+> verweigert `webserver apply` mit *Firewall changes pending* und du führst das Skript zweimal aus.
+
+**Zwei** Dateien müssen auf das Gerät: das exportierte Bundle und die Server-CA, damit der
+Browser der Seite vertraut statt zu warnen. Jede mit eigenem Befehl und explizitem Ziel kopieren:
+
+```bash
+scp <benutzer>@lhpc-zero.local:lhpc-laptop.p12 .
+scp <benutzer>@lhpc-zero.local:loraham-pi-control/config/tls/server-ca/ca.crt .
+```
+
+> Bei `scp a b` ist das letzte Argument **immer** das Ziel, und scp kopiert anstandslos
+> remote→remote — `host:{lhpc-laptop.p12,…/ca.crt}` schreibt also die erste Datei **über die zweite** und
+> zerstört dein CA-Zertifikat. Eine Datei pro Befehl.
+
+Beide im Zertifikatsspeicher des Geräts importieren, für das Bundle die einmalige Passphrase
+eingeben. Anleitung je Browser sowie für Android/iOS:
 [`docs/webserver.md`](docs/webserver.md#install-the-client-certificate-in-a-browser).
 
 Eine **öffentliche oder anmeldefreie** Freigabe geht auch — aber auf eigene Gefahr: Wer den Port
@@ -349,8 +383,10 @@ Stack-Web-UIs laufen über dieselbe Front (ihre rohen Ports lauschen auf allen I
 ohne Anmeldung — lieber proxyen als diese Ports öffnen):
 
 ```bash
-lhpc webserver proxy meshtastic --mode lan --port 8445 --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver proxy meshcom    --mode lan --port 8446 --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+lhpc webserver proxy meshtastic --mode lan --port 8445 --auth local-open-remote-auth \
+     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+lhpc webserver proxy meshcom    --mode lan --port 8446 --auth local-open-remote-auth \
+     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
 
@@ -456,6 +492,7 @@ Betriebsmodell und Ein-Klick-Mechanik: [`docs/deployment.md`](docs/deployment.md
 | Web-Konsole von einem anderen Rechner nicht erreichbar | nicht freigegeben / Firewall | [Fernzugriff](#fernzugriff); [Firewall](docs/firewall.md) |
 | SSH **während der Installation** abgerissen, Lauf gestoppt | Orchestrator bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut ausführen (setzt am Cache auf); tmux nutzen (Schritt 1). **Betrifft nur die Installation** — laufende Stacks hängen an systemd bzw. laufen abgekoppelt und überstehen WLAN-Abbrüche; im Normalbetrieb ist danach nichts neu zu installieren. Auf einem Zero 2W umgeht ein USB-LAN-Adapter das Problem bei der Installation ganz |
 | Board während eines langen Builds nicht erreichbar | Boards mit wenig RAM verlieren unter Last das Netz | Konsole prüfen, NetworkManager neu starten oder rebooten, dann erneut ausführen; [field-notes](docs/field-notes.md) |
+| Quell-Installation meldet „GitHub clone failed" | der Clone — oder ein Schritt danach (Checkout des gepinnten Commits) — hat aufgegeben | der Grund steht am Ende von `logs/adopt-<Komponente>.log` (`[fail] <Schritt>: …`); Installation erneut starten, eine langsame Leitung wird nicht gemerkt |
 | `auto-install` verweigert den Start nach einem abgebrochenen Lauf | übrig gebliebene Lauf-Marker | `lhpc auto-install --status`, dann `lhpc auto-install --recover`; [field-notes](docs/field-notes.md) |
 
 ## Dokumentation
@@ -463,7 +500,7 @@ Betriebsmodell und Ein-Klick-Mechanik: [`docs/deployment.md`](docs/deployment.md
 | Gruppe | Doku |
 |---|---|
 | Verstehen | [Architektur](docs/architecture.md) |
-| Benutzen | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Feldnotizen](docs/field-notes.md) |
+| Benutzen | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Wartung](docs/maintenance.md) · [Feldnotizen](docs/field-notes.md) |
 | Web-Konsole & Fernzugriff | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
 | Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
 | Referenz & Richtlinien | [Härtung](docs/hardening-0.1.md) · [Provenienz](docs/provenance.md) |

@@ -778,7 +778,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append(f"  {dev}: {chk.detail}")
 
         # Configured source paths present?
-        present = missing = 0
+        present = missing = covered = 0
         for s in self.stacks():
             for c in s.components:
                 if c.source is None:
@@ -786,9 +786,18 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 p = str(self._paths.resolve_source(c.source.path))
                 if sys.fs.exists(p):
                     present += 1
+                elif self.binary_covers(c.id):
+                    # No checkout BY DESIGN — the artifact IS the build output. Counting these as
+                    # "missing" made a healthy binary install read half-installed (live-found).
+                    covered += 1
                 else:
                     missing += 1
-        details.append(f"  configured sources: {present} present, {missing} missing")
+        _src = f"  configured sources: {present} present"
+        if covered:
+            _src += f", {covered} provided by a binary artifact"
+        if missing:
+            _src += f", {missing} missing"
+        details.append(_src)
 
         # Itemized UNMET dependencies per stack (grouped): system prerequisites carry the
         # exact operator command — LHPC never installs system packages itself.

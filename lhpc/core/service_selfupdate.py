@@ -479,7 +479,13 @@ class SelfUpdateOpsMixin:
             refusal = [f"  {ln}" for ln in res.get("changes", ())]
             if refusal:
                 refusal.insert(0, "These paths would be discarded by 'overwrite local changes':")
-            return ActionResult(False, res["message"], details=refusal, data=data)
+            nxt = []
+            if res.get("needs_overwrite") or refusal:
+                refusal.append("Resetting the checkout to upstream discards exactly those local "
+                               "commits/changes and keeps nothing of them.")
+                nxt = ["lhpc self-update --apply --overwrite"]
+            return ActionResult(False, res["message"], details=refusal, next_commands=nxt,
+                                data=data)
         if res.get("cleanup_failed"):                        # updated, but untracked cleanup failed -> partial
             details = [res.get("cleanup_error", ""), instr.get("note", ""),
                        "Restart the web console after cleaning up:"]

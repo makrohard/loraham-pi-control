@@ -15,7 +15,7 @@ import pytest
 
 from lhpc.core import selfupdate
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import RealSystem
+from lhpc.core.probes.backends import CommandResult, RealSystem
 
 _ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t",
@@ -178,6 +178,54 @@ def test_apply_diverged_history_refused_without_force(env):
     res = selfupdate.apply_update(env["sys"], env["paths"])
     assert res["ok"] is False and "diverged" in res["message"]
     assert "\n" not in res["message"]                          # single clean line (no raw git block)
+    # The refusal must carry its OWN remedy: a diverged history can only be resolved by the reset
+    # path, and a dead-end refusal left the operator with git surgery (live-found on a Zero).
+    assert res.get("needs_overwrite") is True
+
+
+@pytest.mark.contract
+def test_only_proven_divergence_offers_the_destructive_overwrite(env, monkeypatch):
+    """`--overwrite` runs `reset --hard` + `clean -ffd`. Offering it for a lock file, a read-only
+    filesystem or a corrupt index would destroy untracked work without repairing the fault, so the
+    offer requires ancestry-proven divergence (audit)."""
+    _upstream_commit(env["up"])
+    real_git = selfupdate._git
+
+    def merge_fails(system, root, args, timeout):
+        if args[:1] == ["merge"]:
+            return CommandResult(128, "", "fatal: Unable to create '.git/index.lock': File exists.")
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", merge_fails)
+    monkeypatch.setattr(selfupdate, "ff_blocked", lambda system, branch="": False)
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False
+    assert not res.get("needs_overwrite")                       # not a divergence -> no offer
+    assert "diverged" not in res["message"]
+    assert "index.lock" in res["message"]                       # the REAL fault survives
+
+    monkeypatch.setattr(selfupdate, "ff_blocked", lambda system, branch="": True)
+    res = selfupdate.apply_update(env["sys"], env["paths"])
+    assert res["ok"] is False and res.get("needs_overwrite") is True and "diverged" in res["message"]
+
+
+@pytest.mark.contract
+def test_failed_forced_reset_is_not_reported_as_divergence(env, monkeypatch):
+    """The forced path already IS the reset — its failure must not recommend the reset again."""
+    _upstream_commit(env["up"])
+    real_git = selfupdate._git
+
+    def reset_fails(system, root, args, timeout):
+        if args[:1] == ["reset"]:
+            return CommandResult(1, "", "error: unable to write file (No space left on device)")
+        return real_git(system, root, args, timeout)
+
+    monkeypatch.setattr(selfupdate, "_git", reset_fails)
+    monkeypatch.setattr(selfupdate, "ff_blocked", lambda system, branch="": True)
+    res = selfupdate.apply_update(env["sys"], env["paths"], force=True)
+    assert res["ok"] is False
+    assert not res.get("needs_overwrite")
+    assert "diverged" not in res["message"] and "No space left" in res["message"]
 
 
 # --- garble fix: command-output summarizer -----------------------------------------------------
@@ -406,6 +454,24 @@ def test_operator_active_restart_failure_is_not_success(tmp_path, monkeypatch):
     assert r.data.get("web_restart_failed") and r.data.get("update_applied")     # partial-update info
     assert "systemctl --user start lhpc-web.service" in r.summary                # exact recovery command
     assert "boom" not in r.summary                                               # no raw command output
+
+
+def test_diverged_refusal_offers_the_reset_path(tmp_path, monkeypatch):
+    """The refusal the operator actually sees must name `--overwrite`; without it a diverged
+    checkout is a dead end that only hand-run git can clear (live-found on a Zero)."""
+    from lhpc.core import selfupdate as su
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(su, "apply_update", lambda *a, **k: {
+        "ok": False, "needs_overwrite": True,
+        "message": "Update could not be applied — the local branch has diverged from upstream."})
+    monkeypatch.setattr(ControllerService, "_self_update_blockers", lambda self: None)
+    r = svc.self_update_apply_operator()
+    assert not r.ok
+    assert "lhpc self-update --apply --overwrite" in r.next_commands
+    assert any("discards exactly those local" in d for d in r.details)
 
 
 def test_self_update_apply_operator_refuses_in_managed_unit(tmp_path, monkeypatch):

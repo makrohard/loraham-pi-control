@@ -110,11 +110,11 @@ lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
   `--confirm-phrase enable-remote-danger`.
 - **IPv6 remote exposure is not supported in this release** — IPv6 bind/CIDR values are
   rejected; `::1` is honoured for local access only.
-- LHPC never edits YOUR firewall configuration. The optional MANAGED firewall (Dashboard ->
-  Webserver -> Firewall) renders an nftables ruleset you apply with one sudo command — it lives
-  in its own `table inet lhpc` and never touches foreign rules. Opening a port at your own
-  firewall/router is otherwise your
-  responsibility — see [Firewalling the Pi](firewall.md) — the opt-in managed nftables firewall, or by-hand recipes per scenario.
+- **The managed firewall gates exposure.** With it in use, `lhpc webserver apply` is refused
+  while the firewall is unapplied (*Firewall changes pending*, with the command), and at boot
+  nginx binds **loopback-only** until the live check passes. LHPC never edits your own firewall
+  configuration; opening a port at your router stays yours. See
+  [Firewalling the Pi](firewall.md).
 
 `no-auth` + remote means **anyone in the allowed range reaches the console with no client
 authentication**. The Monitor and Configuration views show a persistent red warning while
@@ -126,16 +126,29 @@ The end-to-end path to reach the console from another machine on your network, p
 client certificate. Run every `lhpc` command from an interactive operator shell on the Pi (not the
 web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` with the Pi's LAN IP.
 
-1. **Front-end + PKI** (skip if `install.sh` already did it):
+1. **Front-end + PKI.** `install.sh` already did both — but with LOOPBACK SANs only, so the
+   server certificate does not yet carry the name you will reach it under. Add every address in
+   one go (`configure` REPLACES each list — repeat the loopback entries, and include the
+   [access-point](wifi-access-point.md) address if that is on your plan) and re-issue the leaf:
+   ```
+   lhpc webserver configure --dns localhost --dns pi.local \
+                            --ip 127.0.0.1 --ip 192.168.0.10 --ip 10.42.0.1
+   lhpc webserver tls-renew                                # same CAs, new server cert
+   ```
+   Adding an address later is not destructive: `configure` + `tls-renew` + `apply` re-issues only
+   the server leaf under the unchanged CAs, so client credentials already imported on a phone or
+   laptop keep working. Only `init` voids them.
+   Only on a box without the managed console (manual install, repaired PKI):
    ```
    sudo apt install -y nginx
    sudo systemctl disable --now nginx.service             # keep the package, disable the root service (lhpc uses its own user unit)
    lhpc webserver init --dns pi.local --ip 192.168.0.10   # two CAs + server cert (DNS/IP SANs)
    lhpc webserver start-service                            # generate+validate config, start nginx
    ```
-2. **Turn on remote access** (default access mode already requires a client cert off-loopback):
+2. **Turn on remote access** (default access mode already requires a client cert off-loopback).
+   `--cidr` is repeatable — list every range you want now, e.g. the LAN and the AP subnet:
    ```
-   lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
+   lhpc webserver expose --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
    lhpc webserver apply                                    # validate + reload nginx
    ```
    > **Bind changes restart the front-end automatically.** A bind change (loopback → `0.0.0.0`,
@@ -148,8 +161,8 @@ web process). Replace `192.168.0.0/24` with your LAN range and `192.168.0.10` wi
    > watcher existed need one `lhpc self-update --repair-integration` to gain it.
 3. **Issue a device certificate** and get its bundle off the Pi:
    ```
-   lhpc webserver cert issue laptop        # prints a ONE-TIME passphrase — record it now
-   lhpc webserver cert export laptop ~/laptop.p12         # write the encrypted .p12 to a file
+   lhpc webserver cert issue lhpc-laptop   # prints a ONE-TIME passphrase — record it now
+   lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12   # write the encrypted .p12 to a file
    ```
    Or, from a browser **on the Pi** (loopback only), open the console's Webserver → Certificates
    panel and click **Download** on the `laptop` row. A remote browser can never pull a fresh key.
@@ -208,7 +221,7 @@ authentication**. `lhpc` can front each one with a dedicated nginx listener carr
 mTLS + source-CIDR gate as the console, so you never open the raw port:
 
 ```
-lhpc webserver proxy meshtastic --mode lan --port 8445 \
+lhpc webserver proxy meshtastic --mode lan --port 8445 --auth local-open-remote-auth \
      --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
@@ -219,13 +232,16 @@ lhpc webserver apply
   `--scheme` need `enable-remote-danger`.
 - `--port` is **required** — a stack with no port set is not proxied. The web console suggests
   `8444` for meshcom and `8445` for meshtastic; any free port ≥ 1024 works (nginx is rootless).
-- `--access-mode` takes the same values as the console (default `local-open-remote-auth`), and
-  proxied UIs use the **same** client certificates.
+- `--access-mode` (alias `--auth`) takes the same values as the console (default
+  `local-open-remote-auth`), and proxied UIs use the **same** client certificates. Pass it
+  explicitly: a stack whose stored policy is already `no-auth` otherwise refuses with
+  *elevated confirmation required*, and waiving that with the danger phrase would publish an
+  unauthenticated stack UI to your LAN.
 - Only meshcom and meshtastic are eligible (a manifest web endpoint). kiss, meshcore and the
   daemon speak non-HTTP protocols and cannot be proxied.
 
 Keep the native port firewalled and reach the UI through the proxy port. Firewall recipes:
-[Firewalling the Pi](firewall.md#stack-web-uis--proxy-dont-open). Command details:
+[Firewalling the Pi](firewall.md#what-actually-listens). Command details:
 [`docs/cli.md`](cli.md#webserver).
 
 ## Certificates and the two-CA PKI
@@ -240,11 +256,14 @@ Bootstrap everything from the CLI:
 
 ```
 lhpc webserver init --dns pi.local --ip 192.168.0.10
-lhpc webserver cert issue laptop        # prints a ONE-TIME bundle passphrase (record it)
+lhpc webserver cert issue lhpc-laptop   # prints a ONE-TIME bundle passphrase (record it)
 lhpc webserver cert list
 lhpc webserver tls-renew
-lhpc webserver cert revoke laptop --confirm-label laptop
+lhpc webserver cert revoke lhpc-laptop --confirm-label lhpc-laptop
 ```
+
+The label is what the accessing device shows in its certificate chooser — prefix it with `lhpc-`
+so the right credential is obvious among a phone's other certificates.
 
 Each client certificate is exported as an **encrypted PKCS#12 `.p12`** bundle under
 `config/tls/exports/` (0600). The private key exists only inside that bundle. The one-time
@@ -254,9 +273,18 @@ passphrase is shown once and never stored or logged.
 
 Two imports are needed on the remote machine, and LHPC automates neither:
 
-- the **server TLS CA** — so the browser trusts `https://…:8443/` instead of warning;
-- the **`.p12` client bundle** — the device credential mTLS asks for (you'll be prompted for the
-  one-time passphrase from `cert issue`).
+- the **server TLS CA** — `<runtime>/config/tls/server-ca/ca.crt` — so the browser trusts
+  `https://…:8443/` instead of warning;
+- the **`.p12` client bundle** — wherever `lhpc webserver cert export <label> <path>` wrote it —
+  the device credential mTLS asks for (you'll be prompted for the one-time passphrase from
+  `cert issue`).
+
+Sanity-check the CA before you copy it — it is a PEM certificate of a few hundred bytes:
+
+```bash
+ls -l ~/loraham-pi-control/config/tls/server-ca/ca.crt
+head -1 ~/loraham-pi-control/config/tls/server-ca/ca.crt      # -----BEGIN CERTIFICATE-----
+```
 
 **Firefox** (its own store, not the OS): `about:preferences#privacy` → **Certificates** → *View
 Certificates*. Under **Your Certificates** → *Import…* the `.p12`. Under **Authorities** → *Import…*
@@ -280,6 +308,17 @@ Without the CA import the connection still works but shows a trust warning; with
 cert-required access mode rejects the browser.
 
 ### Bundle transfer safety
+
+Copy each file with its **own** `scp` command and an explicit destination:
+
+```bash
+scp <user>@<host>:lhpc-phone.p12 .
+scp <user>@<host>:loraham-pi-control/config/tls/server-ca/ca.crt .
+```
+
+With `scp a b` the last argument is *always* the destination, and scp copies remote→remote without
+complaint — so a shell brace list of two remote paths (`host:{a,b}`) silently writes the first file
+**over the second**. That is an easy way to destroy your own CA certificate.
 
 A **new** `.p12` bundle can be downloaded through the web UI **only from a loopback session** —
 a remotely-authenticated browser can manage existing certificates but can never pull a freshly

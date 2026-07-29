@@ -8,6 +8,7 @@ import sys
 from lhpc.core import webserver, pki, runtime_fs, validators, config
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import CommandResult, FakeSystem, Listener, CommandResult as CR
+from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
 from lhpc.adapters.web.app import create_app, run_server
 from pathlib import Path
@@ -376,6 +377,28 @@ def test_restart_primitive_calls_systemctl(tmp_path):
             1, "", "Failed to connect to user scope bus via local transport: Operation not permitted")})
     state, msg = webserver.restart(eperm.system, paths)
     assert state == "failed" and "not sudo/root, not the web console" in msg
+
+
+def test_restart_without_output_names_the_reason_and_the_resulting_state(tmp_path):
+    """A silent systemctl failure used to print the literal "restart failed", so our own expired
+    budget looked like an nginx fault and sent the operator to the nginx log (live-found on a
+    Zero). Name which of the two happened, and what the unit ended up as."""
+    timed = FakeSystem(commands={
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"):
+            CommandResult(124, "", "", timed_out=True),
+        ("systemctl", "--user", "is-active", "lhpc-nginx.service"): CommandResult(0, "active\n", "")})
+    state, msg = webserver.restart(timed.system, Paths(runtime_root=tmp_path))
+    assert state == "failed"
+    assert "budget of 60s expired" in msg and "the unit is now active" in msg
+    assert "lhpc webserver apply" in msg               # active -> a retry proves the listener
+
+    quiet = FakeSystem(commands={
+        ("systemctl", "--user", "restart", "lhpc-nginx.service"): CommandResult(3, "", ""),
+        ("systemctl", "--user", "is-active", "lhpc-nginx.service"): CommandResult(3, "failed\n", "")})
+    state, msg = webserver.restart(quiet.system, Paths(runtime_root=tmp_path))
+    assert state == "failed"
+    assert "exited 3 without a message" in msg and "the unit is now failed" in msg
+    assert "lhpc webserver apply" not in msg           # not active -> no misleading retry hint
 
 
 def test_apply_refuses_invalid_config(tmp_path):
@@ -2075,3 +2098,48 @@ def test_verify_uses_runner(tmp_path):
     mon = svc.webserver_monitor().data
     assert mon["last_verified"] == r.data["checked_at"]
     assert mon["effective"]["remote_listener"] is False
+
+
+def test_no_auth_elevation_offers_the_authenticated_alternative(tmp_path):
+    """Refusing a no-auth remote listener must not leave the danger phrase as the only visible way
+    forward: the operator usually wants the listener AUTHENTICATED (live-found — the documented
+    proxy recipe hit this, and waiving it would have published meshtasticd's UI unauthenticated)."""
+    plan = {"remote": True, "danger": "elevated", "public": False, "no_auth": True,
+            "cleartext": False, "problems": []}
+    miss = ControllerService._exposure_missing(plan, confirm=False, confirm_public=False,
+                                               cidr_flag="--cidr <net>")
+    assert any("enable-remote-danger" in m for m in miss)
+    assert any("--auth local-open-remote-auth" in m for m in miss)
+
+    public = {**plan, "no_auth": False, "public": True}
+    miss = ControllerService._exposure_missing(public, confirm=False, confirm_public=False,
+                                               cidr_flag="--cidr <net>")
+    assert not any("--auth" in m for m in miss)      # a public range is not an auth problem
+
+
+def test_allowed_gate_warning_survives_every_outcome(tmp_path, monkeypatch):
+    """An ALLOWED gate can still warn (exposure reduced, firewall scripts not regenerated). That
+    warning and its remedy must reach the operator on whatever the operation returns — success or
+    failure — or they act on a stale apply script with no hint why (audit P2a)."""
+    svc = _svc(tmp_path)
+    warn = "exposure reduced, but the firewall scripts could not be regenerated (EACCES)"
+    monkeypatch.setattr(ControllerService, "firewall_gate_activation",
+                        lambda self, ports, hint="x": (True, warn, ["lhpc firewall --script"]))
+    monkeypatch.setattr("lhpc.core.webserver.nginx_installed", lambda system: True)
+
+    for inner in (ActionResult(True, "applied and reloaded"),
+                  ActionResult(False, "nginx reload failed", next_commands=["lhpc webserver logs"])):
+        monkeypatch.setattr(ControllerService, "_webserver_apply_after_gate",
+                            lambda self, cfg, r=inner: r)
+        res = svc.webserver_apply()
+        assert res.ok is inner.ok                                  # verdict untouched
+        assert warn in res.details                                 # warning carried
+        assert "lhpc firewall --script" in res.next_commands       # remedy carried
+        assert all(c in res.next_commands for c in inner.next_commands)   # originals kept
+
+    monkeypatch.setattr(ControllerService, "firewall_gate_activation",
+                        lambda self, ports, hint="x": (True, "", []))
+    monkeypatch.setattr(ControllerService, "_webserver_apply_after_gate",
+                        lambda self, cfg: ActionResult(True, "applied and reloaded"))
+    res = svc.webserver_apply()
+    assert res.ok and res.details == [] and res.next_commands == []   # silent gate stays silent

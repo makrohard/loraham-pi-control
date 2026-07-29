@@ -96,36 +96,53 @@ The AP only puts the phone on the Pi's network. **Order matters** (the same orde
 [firewall.md](firewall.md), scenario 4): certificates FIRST, exposure LAST — a fresh setup
 that exposes before any PKI exists applies a config with no certificates behind it.
 
-**1 — put the AP address in the server certificate.**
+**1 — put the AP address in the server certificate.** Already named `10.42.0.1` when you set up
+LAN access ([webserver.md](webserver.md#expose-to-your-lan-with-mtls--runbook))? Then skip to step 2.
 
-*First install (no PKI yet):* `init` creates the CAs and the server cert together —
+*Only without a PKI (manual install, repaired PKI):* `init` creates the CAs and the server
+cert together —
 
 ```bash
 lhpc webserver init --ip 10.42.0.1 --dns loraham.local
 ```
 
-*Existing install (CAs already present):* **never re-run `init`** — it would recreate the
-CAs and void every client certificate you have issued. Add the SANs to the existing
-server cert instead:
+*Normal case — `install.sh` already created the PKI:* **never re-run `init`**, it would
+recreate the CAs and void every client certificate you have issued. Add the SANs to the
+existing server cert instead. `configure` REPLACES each list, so repeat the loopback entries:
 
 ```bash
-lhpc webserver configure --ip 10.42.0.1 --dns loraham.local
+lhpc webserver configure --dns localhost --dns loraham.local --ip 127.0.0.1 --ip 10.42.0.1
 lhpc webserver tls-renew
 ```
 
 **2 — issue the phone's client certificate and move it across:**
 
 ```bash
-lhpc webserver cert issue phone
-lhpc webserver cert export phone ~/phone.p12
+lhpc webserver cert issue lhpc-phone
+lhpc webserver cert export lhpc-phone ~/lhpc-phone.p12
 ```
 
-**3 — expose the console to the AP subnet and activate:**
+**3 — expose the console to the AP subnet and activate.** `expose` REPLACES the allowed-source
+list, so name every range you want to keep — the AP subnet *and* your LAN, if the box is used in
+both places:
 
 ```bash
-lhpc webserver expose --cidr 10.42.0.0/24 --confirm-phrase enable-remote
+lhpc webserver expose --cidr 10.42.0.0/24 --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
+
+**4 — with the managed firewall, allow the AP's own DHCP/DNS.** Under the default deny policy a
+phone that joins the AP gets **no address at all** until these rules exist, and the console you
+would use to enable them is only reachable over that AP. Do it BEFORE switching the radio:
+
+```bash
+lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24
+sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
+lhpc firewall            # Config ✓ · Boot ✓ · Live ✓
+```
+
+(The same switch lives in the console under **Webserver → Firewall**. Skip this step entirely if
+you do not use the managed firewall.)
 
 Then browse to **`https://10.42.0.1:8443`** and present the client certificate you
 imported to the phone (see [`webserver.md`](webserver.md) for the full mTLS runbook).
