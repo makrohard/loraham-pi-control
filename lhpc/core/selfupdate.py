@@ -282,7 +282,13 @@ def check_upstream(system: System, branch: str = "") -> dict:
     # `--` ends option parsing so a branch name can never be read as a git flag (S5:
     # defense-in-depth — `br` is derived locally today, but guard it if it ever becomes
     # operator-settable).
-    f = _git(system, root, ["fetch", "--quiet", _REMOTE, "--", br], _NET_TIMEOUT)
+    # EXPLICIT FORCED REFSPEC into the remote-tracking ref. `git fetch <remote> <branch>`
+    # updates the tracking ref only opportunistically, and NOT when upstream rewrote
+    # history — after a force-push we kept reading the old commit and reported "update
+    # available" pointing at a commit that no longer exists (with `ff_blocked` reasoning
+    # computed against that phantom). With the refspec, "fresh by construction" is true.
+    f = _git(system, root, ["fetch", "--quiet", "--force", _REMOTE, "--",
+                            f"refs/heads/{br}:refs/remotes/{_REMOTE}/{br}"], _NET_TIMEOUT)
     if getattr(f, "not_found", False):
         return {"ok": False, "error": "git not found"}
     if f.returncode != 0:

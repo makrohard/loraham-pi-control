@@ -845,6 +845,21 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         observed = self._observed_conflicts(snap)
         details.append(f"  observed resource conflicts: {len(observed)}")
 
+        # Boot restore silently STOPS working when the managed units stop matching what
+        # this version renders — which every controller update that touches a unit
+        # template causes. The gate itself is right (do not restore behind an unproven
+        # console), but the operator only found out after a power cycle brought the box
+        # up with nothing running. Say it here, while they can still fix it.
+        try:
+            proven, why = self._web_integration_proven()
+        except Exception:                       # never let a diagnostic break doctor
+            proven, why = True, ""
+        if not proven:
+            details.append("")
+            details.append("  ! BOOT RESTORE WILL BE SKIPPED — " + why)
+            details.append("    stacks will NOT come back after a reboot until this is repaired:")
+            details.append("      lhpc self-update --repair-integration")
+
         # Consolidated, copyable install/grant commands for everything unsatisfied — at the very end.
         if install_cmds:
             details.append("Install the missing dependencies:")
@@ -1357,6 +1372,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 continue
             if st_index[comp.id].run_state != RunState.RUNNING:
                 return False
+            # RUNNING is a PROCESS fact. For a component whose readiness is an endpoint,
+            # a same-named foreign process satisfies it while the endpoint the driver
+            # owns is absent — and the no-side-effect path then returned already_healthy
+            # for something that never came up. Require the declared evidence too.
+            if str(getattr(comp, "readiness", "")) == "endpoint" and not all(
+                    e.present for e in (st_index[comp.id].endpoints or ())):
+                return False
         return True
 
     def _daemon_needs(self, order, params, band: str = ""):
@@ -1436,6 +1458,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)
             if eb in ("433", "868"):
                 return {eb}
+        # A LIVE multi-band owner with NO band evidence must claim EVERY band it could be
+        # on. Falling back to the declared primary here meant a node actually running on
+        # 433 with a lost/unreadable marker was arbitrated as an 868 owner — and a second
+        # exclusive 433 owner could then be admitted onto the same radio. Unknown is not
+        # the default band; unknown is all of them.
+        allowed = self.stack_bands(sid) if sid else ()
+        if len(allowed) > 1 and not self._effective_band(sid, "") \
+                and self._band_owner_is_up(sid):
+            return set(allowed)
         cfg_band = self._config_band(target, band)    # declared/default (start, or stop w/o evidence)
         return {cfg_band} if cfg_band else {c.band for _, c in order if c.band}
 
@@ -1827,6 +1858,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def _unknown_stack(self, stack_id: str) -> ActionResult:
         known = ", ".join(s.id for s in self.stacks())
+        # A COMPONENT id here is not a typo — it is the operator using the wrong
+        # granularity. `install` adopts a whole stack (a lone component would leave
+        # unmet build_requires and a broken run order); `update` refreshes ONE source.
+        # Say which stack owns it instead of listing stacks and leaving them to guess.
+        owner = self.stack_of(stack_id)
+        if owner and owner != stack_id:
+            return ActionResult(
+                ok=False,
+                summary=f"'{stack_id}' is a component of the '{owner}' stack, not a stack.",
+                details=[f"  Install works on whole stacks: lhpc install {owner}",
+                         f"  To refresh just this source:   lhpc update {stack_id}"],
+                next_commands=[f"lhpc install {owner}", f"lhpc update {stack_id}"],
+            )
         return ActionResult(
             ok=False,
             summary=f"Unknown stack '{stack_id}'.",

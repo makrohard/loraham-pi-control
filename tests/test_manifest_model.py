@@ -32,10 +32,10 @@ def test_daemon_spi_is_cooperative():
     assert spi.mode is ResourceMode.COOPERATIVE
 
 
-def test_eight_stacks_each_with_a_main_component():
+def test_nine_stacks_each_with_a_main_component():
     stacks = {s.id: s for s in load_manifest()}
     assert set(stacks) == {"daemon", "chat", "igate", "voice", "kiss",
-                           "meshtastic", "meshcom", "meshcore"}
+                           "meshtastic", "meshcom", "meshcore", "reticulum"}
     for sid, s in stacks.items():
         assert s.main and s.main_component is not None, sid
     assert stacks["daemon"].main == "loraham-daemon"

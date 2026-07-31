@@ -1207,6 +1207,15 @@ main = "meshtastic"
     key = "loraham.radio.433"
     kind = "radio-band"
     mode = "exclusive"
+    [[stack.component.resource]]
+    # meshtasticd drives /dev/spidev0.0 directly and takes NO part in the daemon's
+    # spi0.lock, so it cannot be interleaved with another bus user. Claiming this key
+    # exclusively blocks `meshtastic + reticulum` (both drive the bus) while leaving
+    # `daemon + meshtastic` allowed: that combination ships and is field-verified, and
+    # its identical hazard predates this stack (docs/field-notes.md).
+    key = "spi.bus.0.unlocked"
+    kind = "spi-bus"
+    mode = "exclusive"
 
 # =====================================================================
 # Stack: meshcom — MeshCom firmware in QEMU (433 DIRECT)
@@ -1947,3 +1956,537 @@ main = "meshcore-pi"
     pin_tag = "v1.5.0-63-g56b246b"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
+
+[[stack]]
+id = "reticulum"
+name = "Reticulum (RNS)"
+summary = "Reticulum node driving the LoRa radio DIRECTLY over SPI — no rnoded, no RNode firmware, no KISS. Owns the radio for its band; shares the SPI bus with the daemon through spi0.lock."
+main = "rns"
+
+[[stack.component]]
+id = "rns-lora-interface"
+name = "LoRa SPI interface (library)"
+kind = "library"
+optional = true
+purpose = "Direct-SPI LoRa driver + RNS interface + the fail-closed service runner. Build-time dependency of `rns`; never started on its own."
+tx_capable = false
+readiness = "manual"
+[stack.component.source]
+path = "src/loraham-rns-interface"
+remote = "https://github.com/makrohard/loraham-rns-interface.git"
+branch = "main"
+pin_commit = "3fef54243a72313384f5f13ba036d64021eec0ec"
+pin_tag = "3fef542"
+
+[[stack.component]]
+id = "rns"
+name = "Reticulum node"
+kind = "service"
+band = "868"
+bands = ["433", "868"]
+purpose = "rnsd-equivalent that OWNS the shared instance and the radio. Runs loraham-rns-node, which exits rather than staying up without a radio."
+tx_capable = true
+build_requires = ["rns-lora-interface"]
+readiness = "endpoint"
+readiness_timeout = 60.0
+build_marker = ".venv/.lhpc-build-complete"
+build_timeout = 1800.0
+bin = ".venv/bin/loraham-rns-node"
+run = ".venv/bin/loraham-rns-node --config {runtime}/state/reticulum --interface LoRa --ready-file {runtime}/state/reticulum/ready {rns_allow}"
+note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen with `lhpc hardware` — they are deliberately not editable per stack, because a wrong PA or TCXO value can damage the module. The SX1262 (Waveshare) path is hardware-verified on 868 (TX and RX, both directions, against an SX1276 peer); on 433 it is code-complete but has NOT been tested on hardware."
+[stack.component.source]
+path = "src/reticulum"
+remote = "https://github.com/markqvist/Reticulum.git"
+branch = "master"
+pin_commit = "b48b96e61676504e0a4e527b33b9a0b4495c6872"
+pin_tag = "b48b96e"
+[stack.component.process]
+exec_name = "loraham-rns-node"
+[stack.component.run_env]
+# Without this the start log is EMPTY: Python block-buffers off a TTY, so a
+# failure would be invisible to the operator reading `lhpc logs reticulum`.
+PYTHONUNBUFFERED = "1"
+[[stack.component.param]]
+name = "rns_allow"
+kind = "str"
+validator = "bind"
+default = "127.0.0.1"
+arg = "--client-allow"
+group = "Network exposure"
+label = "Client-access allow-list — who may connect (127.0.0.1 = this Pi only; a LAN CIDR to expose; NO auth without IFAC)"
+[[stack.component.pre_steps]]
+kind = "mkdir"
+path = "{runtime}/state/reticulum/interfaces"
+[[stack.component.pre_steps]]
+kind = "mkdir"
+path = "{runtime}/state/loraham"
+[[stack.component.build_steps]]
+argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
+[[stack.component.build_steps]]
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
+announce = "[install] Reticulum into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow"
+[[stack.component.build_steps]]
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "{runtime}/src/loraham-rns-interface"]
+announce = "[install] the direct-SPI LoRa interface + loraham-rns-node"
+[[stack.component.build_steps]]
+argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/interfaces/LoRaSPIInterface.py", "{runtime}/state/reticulum/interfaces/LoRaSPIInterface.py"]
+[[stack.component.build_steps]]
+argv = [".venv/bin/python", "-c", "import RNS, gpiod, spidev, loraham_rns.interface, loraham_rns.node; print('reticulum venv OK', RNS.__version__)"]
+announce = "[probe] verify the built environment imports before marking it complete"
+
+[[stack.component.endpoint]]
+kind = "path"
+address = "state/reticulum/ready"
+ready = true
+role = "artifact"
+description = "radio-verified marker (written only after the node owns the instance AND the radio is online)"
+[[stack.component.endpoint]]
+kind = "tcp"
+address = "127.0.0.1:37428"
+role = "listener"
+description = "Reticulum shared instance"
+[stack.component.endpoint.firewall]
+auth = "none"
+[[stack.component.endpoint]]
+kind = "tcp"
+address = "127.0.0.1:37429"
+role = "listener"
+description = "Reticulum instance control"
+[stack.component.endpoint.firewall]
+auth = "none"
+[[stack.component.endpoint]]
+kind = "tcp"
+address = "127.0.0.1:4242"
+role = "listener"
+description = "RNS client access (Sideband, MeshChat)"
+client = true
+scheme = "tcp"
+[stack.component.endpoint.firewall]
+bind_param = "rns_bind"
+allow_param = "rns_allow"
+auth = "none"
+
+[[stack.component.resource]]
+key = "loraham.radio.868"
+kind = "radio-band"
+mode = "exclusive"
+note = "Owns the radio for this band — conflicts with the daemon and meshtastic on 868."
+[[stack.component.resource]]
+key = "loraham.radio.433"
+kind = "radio-band"
+mode = "exclusive"
+[[stack.component.resource]]
+key = "spi.bus.0"
+kind = "spi-bus"
+mode = "cooperative"
+[[stack.component.resource]]
+# Meshtastic drives /dev/spidev0.0 WITHOUT taking spi0.lock, so it cannot be
+# interleaved safely with any other bus user. Both it and this node claim this key
+# exclusively, which blocks that pair while leaving `daemon + meshtastic` — a
+# shipped, field-verified combination whose identical hazard predates this stack and
+# is recorded in docs/field-notes.md — untouched.
+key = "spi.bus.0.unlocked"
+kind = "spi-bus"
+mode = "exclusive"
+note = "Participates in the daemon's spi0.lock, so both may share the bus."
+[[stack.component.resource]]
+key = "tcp.port.37428"
+kind = "tcp-port"
+mode = "exclusive"
+[[stack.component.resource]]
+key = "tcp.port.37429"
+kind = "tcp-port"
+mode = "exclusive"
+[[stack.component.resource]]
+key = "tcp.port.4242"
+kind = "tcp-port"
+mode = "exclusive"
+
+[[stack.component.require]]
+check_file = "/dev/spidev0.0"
+install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
+note = "SPI device. The spi0-0cs overlay (bootstrap-deps.sh --spi-mode soft-cs) is required: the radio's chip-select is driven from userspace, and the kernel must NOT claim CE0/CE1."
+[[stack.component.require]]
+groups = ["spi", "gpio"]
+install = "sudo usermod -aG spi,gpio $USER"
+note = "spi + gpio group membership — needed to drive the radio without root"
+[[stack.component.require]]
+# dpkg RECEIPTS, not dist-packages paths and not `module`. The old check was a
+# dist-packages path (Python-version and arch specific) covering gpiod ONLY, so a box
+# with gpiod present and spidev missing passed install/doctor and failed later in the
+# build's import probe. `module` cannot work here either: it resolves inside the
+# CONTROLLER venv, which is built with include-system-site-packages = false and can
+# never see an apt binding (verified live — it refused to install on a box where both
+# were present). The package receipt is stable across Python and arch.
+check_file = "/var/lib/dpkg/info/python3-libgpiod.list"
+install = "sudo apt install -y python3-libgpiod python3-spidev"
+note = "Python libgpiod binding as a SYSTEM package. The stack venv is built with --system-site-packages and inherits it, so the radio needs no compiler — which is what makes this installable on a Pi Zero, where the pip wheels cannot build."
+[[stack.component.require]]
+check_file = "/var/lib/dpkg/info/python3-spidev.list"
+install = "sudo apt install -y python3-spidev"
+note = "Python spidev binding as a SYSTEM package — the other half of the radio's bindings, checked separately so a half-installed pair cannot pass."
+
+[stack.component.config_file]
+path = "{runtime}/state/reticulum/config"
+fmt = "ini-update"
+mode = 0o600
+base = "{asset}/bases/reticulum.conf"
+[[stack.component.config_file.param]]
+name = "hardware"
+key = "hardware"
+section = "interfaces/LoRa"
+kind = "str"
+default = "{hardware}"
+hidden = true
+label = "Radio hardware setup (from `lhpc hardware`)"
+[[stack.component.config_file.param]]
+name = "iface_band"
+key = "band"
+section = "interfaces/LoRa"
+kind = "str"
+default = "{band}"
+hidden = true
+label = "Band"
+[[stack.component.config_file.param]]
+name = "runtime_dir"
+key = "runtime_dir"
+section = "interfaces/LoRa"
+kind = "str"
+default = "{runtime}/state/loraham"
+hidden = true
+label = "SPI lock directory"
+[[stack.component.config_file.param]]
+name = "state_dir"
+key = "state_dir"
+section = "interfaces/LoRa"
+kind = "str"
+default = "{runtime}/state/reticulum"
+hidden = true
+label = "Airtime accounting directory"
+[[stack.component.config_file.param]]
+name = "frequency"
+key = "frequency"
+section = "interfaces/LoRa"
+kind = "int"
+default = "868500000"
+band_defaults = { 433 = "434500000", 868 = "868500000" }
+min = 137000000
+max = 1020000000
+label = "Frequency Hz"
+[[stack.component.config_file.param]]
+name = "bandwidth"
+key = "bandwidth"
+section = "interfaces/LoRa"
+kind = "enum"
+choices = ["62500", "125000", "250000", "500000"]
+default = "125000"
+label = "Bandwidth Hz"
+[[stack.component.config_file.param]]
+name = "spreadingfactor"
+key = "spreadingfactor"
+section = "interfaces/LoRa"
+kind = "int"
+default = "8"
+min = 7
+max = 12
+label = "Spreading factor (SF7-12; SF6 needs implicit-header mode, unsupported)"
+[[stack.component.config_file.param]]
+name = "codingrate"
+key = "codingrate"
+section = "interfaces/LoRa"
+kind = "int"
+default = "5"
+min = 5
+max = 8
+label = "Coding rate (4/n)"
+[[stack.component.config_file.param]]
+name = "txpower"
+key = "txpower"
+section = "interfaces/LoRa"
+kind = "int"
+default = "14"
+band_defaults = { 433 = "10", 868 = "14" }
+min = 0
+max = 17
+label = "TX power dBm — 868 SRD allows 25 mW (14 dBm); the 433 SRD band is 10 mW ERP (10 dBm)"
+[[stack.component.config_file.param]]
+name = "airtime_limit_short"
+key = "airtime_limit_short"
+section = "interfaces/LoRa"
+kind = "str"
+default = "5.0"
+band_defaults = { 433 = "10.0", 868 = "5.0" }
+advanced = true
+label = "Short-term airtime limit % (15 s window)"
+[[stack.component.config_file.param]]
+name = "airtime_limit_long"
+key = "airtime_limit_long"
+section = "interfaces/LoRa"
+kind = "str"
+default = "1.0"
+band_defaults = { 433 = "10.0", 868 = "1.0" }
+advanced = true
+label = "Long-term airtime limit % (1 h window) — 868 SRD is 1%, 433 SRD is 10%"
+[[stack.component.config_file.param]]
+name = "ifac_netname"
+key = "networkname"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+omit_if_empty = true
+group = "Network exposure"
+label = "IFAC network name — written as RNS's `networkname`; set the passphrase in secrets.toml too or IFAC stays off"
+[[stack.component.config_file.param]]
+name = "ifac_netkey"
+key = "passphrase"
+section = "interfaces/LoRa"
+kind = "str"
+hidden = true
+omit_if_empty = true
+secret_ref = "reticulum.ifac_netkey"
+label = "IFAC passphrase (config/secrets.toml only)"
+[[stack.component.config_file.param]]
+name = "rns_bind"
+key = "listen_ip"
+section = "interfaces/Client access"
+# enum, NOT str: `choices` is only enforced for enums, so a str param still let the
+# CLI, the API or a hand-edited config save a non-loopback address. The node refuses
+# one as well — the config is not the only way in.
+kind = "enum"
+default = "127.0.0.1"
+choices = ["127.0.0.1"]
+group = "Network exposure"
+label = "Client-access bind (loopback only in 0.1.7)"
+note = "RNS client access on 4242 has NO application-level authentication, so a non-loopback bind would rely entirely on the allow-list plus a managed firewall that may be absent, stale or not live-verified. Locked to loopback for this release; remote clients reach it through an SSH tunnel. Lifting this needs the start path to REFUSE a non-loopback bind unless the firewall is installed, current and live-verified for that exact bind/allow pair."
+
+[[stack.component]]
+id = "nomadnet"
+name = "NomadNet node"
+kind = "service"
+optional = true
+purpose = "NomadNet browser/TUI and page node on the shared Reticulum instance. Client only — it never owns the radio."
+tx_capable = true
+interactive = true
+depends_on = ["rns"]
+start_order = 2
+readiness = "manual"
+build_marker = ".venv/.lhpc-build-complete"
+build_timeout = 900.0
+bin = ".venv/bin/nomadnet"
+# Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
+# be — RNS derives the shared-instance RPC key from the identity there) a client
+# started while `rns` is absent becomes the shared-instance OWNER and initialises the
+# LoRa interface itself, taking the radio. The guard proves the instance exists first.
+run = "{runtime}/src/reticulum/.venv/bin/loraham-rns-client --configdir {runtime}/state/reticulum --wait 10 -- .venv/bin/nomadnet --rnsconfig {runtime}/state/reticulum --config {runtime}/state/nomadnet"
+note = "Interactive ncurses browser (needs a real TTY; no headless mode) — start it yourself with the command lhpc shows, locally or over SSH. It attaches to the Reticulum instance owned by `rns` and never starts its own radio interface; while it is open your node serves its pages and files."
+[stack.component.source]
+path = "src/nomadnet"
+remote = "https://github.com/markqvist/NomadNet.git"
+branch = "master"
+pin_commit = "ad10301569a39d4f43b3d21ae9fc392602c937ca"
+pin_tag = "ad10301"
+[stack.component.process]
+exec_name = "nomadnet"
+[[stack.component.pre_steps]]
+kind = "mkdir"
+path = "{runtime}/state/nomadnet"
+[[stack.component.build_steps]]
+argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
+[[stack.component.build_steps]]
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
+announce = "[install] NomadNet into {source}/.venv — pip is quiet off-TTY"
+
+[[stack.component]]
+id = "lxmd"
+name = "LXMF delivery service"
+kind = "service"
+optional = true
+purpose = "LXMF message delivery on the shared instance. NOT a propagation node unless enable_node is turned on."
+tx_capable = true
+depends_on = ["rns"]
+start_order = 2
+readiness = "process"
+build_marker = ".venv/.lhpc-build-complete"
+build_timeout = 900.0
+bin = ".venv/bin/lxmd"
+# Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
+# be — RNS derives the shared-instance RPC key from the identity there) a client
+# started while `rns` is absent becomes the shared-instance OWNER and initialises the
+# LoRa interface itself, taking the radio. The guard proves the instance exists first.
+run = "{runtime}/src/reticulum/.venv/bin/loraham-rns-client --configdir {runtime}/state/reticulum --wait 10 -- .venv/bin/lxmd --rnsconfig {runtime}/state/reticulum --config {runtime}/state/lxmd"
+note = "Propagation is OFF by default: enabling it on a duty-limited link is a deliberate decision, not a default. The hourly ceiling depends on the SUB-BAND (0.1%, 1% or 10% within 863-870 MHz)."
+[stack.component.source]
+path = "src/lxmf"
+remote = "https://github.com/markqvist/LXMF.git"
+branch = "master"
+pin_commit = "795fdaa2b0777c13033787d933d1afc94a2377cb"
+pin_tag = "795fdaa"
+[stack.component.process]
+exec_name = "lxmd"
+[[stack.component.pre_steps]]
+kind = "mkdir"
+path = "{runtime}/state/lxmd"
+[[stack.component.build_steps]]
+argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
+[[stack.component.build_steps]]
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "."]
+announce = "[install] LXMF into {source}/.venv — pip is quiet off-TTY"
+
+[[stack.component]]
+id = "sideband"
+name = "Sideband (GUI)"
+kind = "service"
+optional = true
+purpose = "Sideband LXMF client with a desktop GUI, attached to the shared instance."
+tx_capable = true
+depends_on = ["rns"]
+# The build COPIES lhpc_location.py out of the driver checkout and runs its
+# enable_sideband_plugins.py, so the driver is a real build input. Undeclared, the
+# build receipt ignored it: an updated location plugin left Sideband reading "built"
+# with the old copy still installed.
+build_requires = ["rns-lora-interface"]
+start_order = 3
+readiness = "process"
+build_marker = ".venv/.lhpc-build-complete"
+build_timeout = 3600.0
+bin = ".venv/bin/sideband"
+# Launched through `loraham-rns-client`: pointed at the OWNER's config (which it must
+# be — RNS derives the shared-instance RPC key from the identity there) a client
+# started while `rns` is absent becomes the shared-instance OWNER and initialises the
+# LoRa interface itself, taking the radio. The guard proves the instance exists first.
+run = "{runtime}/src/reticulum/.venv/bin/loraham-rns-client --configdir {runtime}/state/reticulum --wait 10 -- .venv/bin/sideband --rnsconfig {runtime}/state/reticulum --config {runtime}/state/sideband"
+run_argv = ["{runtime}/src/reticulum/.venv/bin/loraham-rns-client", "--configdir", "{runtime}/state/reticulum", "--wait", "10", "--", ".venv/bin/sideband", "--rnsconfig", "{runtime}/state/reticulum", "--config", "{runtime}/state/sideband"]
+run_cwd = "{source}"
+note = "Desktop GUI — needs a display, and is far heavier than the node itself (~277 MB resident). On a headless or small box run Sideband on a PHONE OR LAPTOP instead, over the client-access port."
+[stack.component.run_env]
+DISPLAY = "@env:DISPLAY=:0"
+LHPC_LOCATION_CONF = "{runtime}/state/sideband/location.conf"
+KIVY_HOME = "{runtime}/state/sideband/kivy"
+# Kivy writes its config + logs to ~/.kivy and CREATES that dir on first launch;
+# the web console runs ProtectHome=read-only, so a fresh graphical install died at
+# startup. KIVY_HOME keeps that state inside the managed runtime root instead.
+[stack.component.source]
+path = "src/sideband"
+remote = "https://github.com/markqvist/Sideband.git"
+branch = "main"
+pin_commit = "2000d81a44bff57e3b3cb7d45915ba29bbde4e18"
+pin_tag = "2000d81"
+[stack.component.process]
+exec_name = "sideband"
+[[stack.component.pre_steps]]
+kind = "mkdir"
+path = "{runtime}/state/sideband"
+[[stack.component.build_steps]]
+argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"]
+[[stack.component.build_steps]]
+# VERSION-PINNED PyPI install, deliberately not `pip install .` from the checkout.
+# Sideband's own setup.py looks for `kivymd` beside setup.py while the repo keeps it
+# at sbapp/kivymd, so glob_paths(".kv") matches nothing and a source install silently
+# drops all 36 Kivy .kv layouts — the app then exits at window creation (verified).
+# Reproducing upstream's release build needs their dev layout (sibling Reticulum/LXMF
+# symlinks), and patching upstream is out of scope. Pinning the VERSION keeps the
+# installed artefact deterministic; it must match the pinned checkout's __version__
+# (tests/test_reticulum_stack.py enforces that).
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "sbapp==1.9.2"]
+
+[[stack.component.build_steps]]
+# Idempotence guard: pip treats an already-present 1.9.2 as satisfied and skips it, so a
+# venv carrying a BROKEN build of the same version (e.g. an earlier `pip install .`, which
+# drops every .kv layout) survives a rebuild untouched and the app dies at window creation.
+# --no-deps keeps this to the package itself; the step above resolved the dependency tree.
+argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "--force-reinstall", "--no-deps", "sbapp==1.9.2"]
+
+[[stack.component.build_steps]]
+argv = ["install", "-d", "-m", "0700", "{runtime}/state/sideband/kivy"]
+announce = "[install] Sideband (sbapp) into {source}/.venv — pulls Kivy/numpy/pillow, ~800 MB; progress: watch {source}/.venv/lib grow"
+[[stack.component.build_steps]]
+argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/plugins/lhpc_location.py", "{runtime}/state/sideband/plugins/lhpc_location.py"]
+announce = "[install] the location telemetry plugin (Sideband has no GPS backend on Linux)"
+[[stack.component.build_steps]]
+argv = [".venv/bin/python", "{runtime}/src/loraham-rns-interface/scripts/enable_sideband_plugins.py", "{runtime}/state/sideband", "{runtime}/state/sideband/plugins"]
+announce = "[configure] enable Sideband's plugin loader (otherwise only reachable through its GUI settings)"
+[stack.component.config_file]
+path = "{runtime}/state/sideband/location.conf"
+fmt = "env"
+[[stack.component.config_file.param]]
+name = "location_source"
+key = "location_source"
+kind = "enum"
+choices = ["gpsd", "nmea", "fixed", "off"]
+default = "gpsd"
+group = "Position"
+label = "Position source (gpsd covers USB/serial/HAT/network GPS; fixed = a station that does not move)"
+[[stack.component.config_file.param]]
+name = "gpsd_host"
+key = "gpsd_host"
+kind = "str"
+validator = "host"
+default = "127.0.0.1"
+group = "Position"
+label = "gpsd host"
+advanced = true
+[[stack.component.config_file.param]]
+name = "gpsd_port"
+key = "gpsd_port"
+kind = "int"
+default = "2947"
+min = 1
+max = 65535
+group = "Position"
+label = "gpsd port"
+advanced = true
+[[stack.component.config_file.param]]
+name = "nmea_device"
+key = "nmea_device"
+kind = "str"
+validator = "path"
+default = "/dev/ttyACM0"
+group = "Position"
+label = "NMEA device (only when source = nmea)"
+advanced = true
+[[stack.component.config_file.param]]
+name = "fixed_lat"
+key = "fixed_lat"
+kind = "str"
+default = ""
+omit_if_empty = true
+group = "Position"
+label = "Fixed latitude (decimal degrees)"
+[[stack.component.config_file.param]]
+name = "fixed_lon"
+key = "fixed_lon"
+kind = "str"
+default = ""
+omit_if_empty = true
+group = "Position"
+label = "Fixed longitude (decimal degrees)"
+[[stack.component.config_file.param]]
+name = "fixed_alt"
+key = "fixed_alt"
+kind = "str"
+default = ""
+omit_if_empty = true
+group = "Position"
+label = "Fixed altitude (m)"
+advanced = true
+[[stack.component.config_file.param]]
+name = "max_age"
+key = "max_age"
+kind = "int"
+default = "30"
+min = 1
+max = 3600
+group = "Position"
+label = "Treat a fix older than this (seconds) as no fix"
+advanced = true
+
+[[stack.component.require]]
+gui = true
+cmd = "python3-config"
+install = "sudo apt install -y python3-dev"
+note = "Python headers. Sideband is the ONE component here that needs a compiler: sbapp pulls materialyoucolor, a C++ extension with no aarch64 wheel, which fails with 'Python.h: No such file or directory' without this. The node itself needs no compiler."
+[[stack.component.require]]
+check_file = "{runtime}/src/sideband/.venv/bin/sideband"
+provisioned = true
+install = "lhpc build reticulum"
+note = "Sideband is provisioned into its own in-root venv by the build. It needs a DISPLAY at run time; Kivy vendors its own SDL2, so no GTK/X11 apt packages are pulled."

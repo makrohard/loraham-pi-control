@@ -4,6 +4,21 @@ Field-verified notes from from-zero installs on a Pi Zero 2 W (512 MB, quad A53)
 (reference rig). Both hardware classes run the **same Trixie arm64 packages** — nothing here is
 hardware-conditional except the SPI overlay choice and the meshtasticd `gpiochip` (both noted below).
 
+## Waveshare SX1262 HAT — no TCXO, and two driver traps
+
+Verified on 868 against two peers (SX1276 + SX127x), all directions.
+
+* The HAT this was tested on has **no TCXO**: `SetDIO3AsTcxoCtrl` at any voltage leaves
+  `XOSC_START_ERR` (device errors `0x0020`) set and the chip stuck in `STBY_RC` — `SetTx`
+  is accepted and silently does nothing, so TX never confirms. The driver now probes and
+  falls back to the crystal, logging one notice. Other SX1262 boards do have a TCXO, so
+  the profile keeps the hint and the probe decides.
+* libgpiod 2.x returns `gpiod.line.Value`, which is **not** int-convertible. BUSY is the
+  only line the driver reads, so this hit the SX1262 alone — `int(...)` raised at the
+  first `configure()`.
+* `rnstatus` interface counters are the reliable RX/TX evidence. Grepping the node log
+  for `Valid announce` proves nothing: it is not emitted at the default log level.
+
 ## First-boot / Raspberry Pi Imager
 
 - Set the username, Wi-Fi, and SSH in Imager's OS-customisation before flashing.
@@ -267,3 +282,80 @@ default basetemp lands on the 208 MB `/tmp` tmpfs and the full suite fills it (E
 leaked basetemps accumulate (a Pi 5 once held 19 GB of stray `lpt-*` dirs under `/var/tmp`). For such
 legacy leftovers: stop pytest, list with `find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name
 'lpt-*'`, review, then remove explicitly — never a broad glob.
+
+## Direct SPI owners and the shared bus lock (2026-07-31)
+
+The LoRaHAM daemon treats `<runtime>/state/loraham/spi0.lock` as a **fail-closed**
+contract: no SPI transfer may proceed unless that `flock` is held, bounded at 2 s,
+fatal otherwise (`loraham_daemon/locking_pihal.h`). The `reticulum` stack is a peer
+on that bus and honours the same rules, so the daemon's invariant still holds while
+Reticulum runs — the two coexist on opposite bands.
+
+**`meshtasticd` does not participate in that lock**, and declares no `spi.bus.0`
+claim, so `daemon` + `meshtastic` on opposite bands are allowed by the resource
+model while sharing `/dev/spidev0.0` without mutual exclusion. That combination is
+long-standing and field-verified in practice, so it was deliberately left alone
+rather than being refused by this change — but it is a real gap, not a safe design,
+and worth revisiting separately. Reticulum + meshtastic carries exactly the same
+risk as daemon + meshtastic already does.
+
+Also worth recording, from bringing the direct-SPI driver up on a Pi 5 (RP1):
+
+- `SPI_NO_CS` is **rejected** by `dw_spi_mmio` with `EINVAL`. It is not needed:
+  under `dtoverlay=spi0-0cs` the kernel never alt-muxes the CS pins (it logs
+  `not valid maps for state default`), and a transfer with no chip-select asserted
+  reads back nothing. Claiming the CS line through libgpiod also re-muxes it to
+  SIO, which is what actually keeps the controller off it.
+- Releasing a libgpiod line does **not** restore the pin's alt-function mux. A pin
+  grabbed as GPIO stays SIO after the process exits; rebinding the SPI controller
+  re-applies the pinctrl default state.
+
+### `already_healthy` does not consult readiness (found 2026-07-31)
+
+With a **foreign** `loraham-rns-node` already running (started outside lhpc,
+owning the Reticulum shared instance and the radio), `lhpc stack start reticulum`
+reports:
+
+```
+OK  'reticulum' already healthy — nothing to start.
+    [already_healthy] rns: already running
+```
+
+…even though the driver-owned readiness marker was absent. The component is
+matched by process signature, so a same-named process that lhpc did not launch
+satisfies the check. The node itself still refuses correctly — it exits 3 with
+"another Reticulum shared instance already owns this configuration" — it simply
+never gets launched.
+
+This is general lhpc ownership behaviour, not specific to this stack: any stack
+can be shadowed by a process with the same `process.exec_name`. It is recorded
+here rather than fixed, because changing it touches ownership semantics shared by
+every stack. The practical impact is limited (something IS running with the
+radio), but the operator is told "healthy" about a process lhpc does not own.
+
+### A failed dependency does not stop the dependent component (2026-07-31)
+
+Observed on the Pi 5 while validating the reticulum stack. With the SPI lock
+directory deliberately made unreadable so `rns` could not start:
+
+```
+ERR  Run FAILED for 'lxmd': rns did not start/verify.
+  [unverified] rns: ready endpoint(s) never came up (…/ready: absent); cleanup: stopped
+  [verified]   lxmd: started
+```
+
+`lxmd` declares `depends_on = ["rns"]`, and lhpc reports the run as FAILED, but it
+still launches the dependent component. Only the LoRaHAM daemon has an explicit
+dependency gate; ordinary components have none.
+
+Why it matters here: Reticulum clients share the radio owner's config directory —
+they must, because RNS derives the shared-instance RPC authkey from that
+directory's identity (`Reticulum.py:356`), so a client with its own config dir is
+rejected with `AuthenticationError: digest sent was rejected`. Sharing the dir
+means a client started after `rns` failed can construct its own instance
+*including the LoRa interface* and take the radio. In the run above it did not,
+only because the same broken lock directory also blocked its interface.
+
+The clean fix is RNS's `require_shared_instance`, which neither `nomadnet` nor
+`lxmd` exposes on the command line, plus generic dependency-result gating in
+lhpc. Both are larger than this release; recorded here rather than half-fixed.

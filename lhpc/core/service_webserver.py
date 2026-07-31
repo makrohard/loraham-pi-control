@@ -64,7 +64,7 @@ class WebserverOpsMixin:
         console-only config and reporting "verified" would be a claim about a config nginx never loads."""
         from . import webserver as _ws
         ev = _ws.verify(self._system, self._paths, self.config().webserver,
-                        self._stack_web_proxies())
+                        self._stack_web_proxies(), probe_console=True)
         failed = [k for k, v in ev["checks"].items() if v == "failed"]
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"

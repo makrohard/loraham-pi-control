@@ -38,7 +38,11 @@
 {# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
    address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all
    three read identically. `addr` is the reached host:port (request-scoped). #}
-{% macro webserver_pills(p, addr) %}<span class="pill pill-{{ p.auth_level }}">{{ p.auth }}</span> <span class="pill pill-{{ p.iface_level }}">{{ p.iface }}</span> {% if addr %}<a class="pill pill-{{ p.scheme_level }} wsurl" href="{{ p.scheme }}://{{ addr }}">{{ p.scheme }}://{{ addr }}</a>{% else %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://</span>{% endif %} <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
+{# `link` makes the URL pill an anchor. It defaults to FALSE because these pills are
+   rendered inside <summary> elements, and an interactive element nested in a summary
+   toggle is not reliably reachable by keyboard or assistive technology. Panels that
+   show the pills in a summary offer the clickable URL in their body instead. #}
+{% macro webserver_pills(p, addr, link=false) %}<span class="pill pill-{{ p.auth_level }}">{{ p.auth }}</span> <span class="pill pill-{{ p.iface_level }}">{{ p.iface }}</span> {% if addr and link %}<a class="pill pill-{{ p.scheme_level }} wsurl" href="{{ p.scheme }}://{{ addr }}">{{ p.scheme }}://{{ addr }}</a>{% elif addr %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://{{ addr }}</span>{% else %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://</span>{% endif %} <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
 
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">

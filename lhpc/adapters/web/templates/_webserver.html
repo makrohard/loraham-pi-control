@@ -12,6 +12,10 @@
     {% if not mon.pki.server_ca.present %}<span class="ver ver-red">PKI absent</span>{% endif %}
   </summary>
 
+  {# The URL is a LINK here, not in the summary above: an anchor inside <summary> is
+     not reliably keyboard/AT reachable. #}
+  {% if ws_console_addr %}<p class="wsopen"><a class="wsurl" href="{{ mon.posture.scheme }}://{{ ws_console_addr }}">Open {{ mon.posture.scheme }}://{{ ws_console_addr }}</a></p>{% endif %}
+
   {# ===== Settings ===== #}
   <div class="ws-sub-wrap">
   <details class="advcfg" open>

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import os
+from os.path import exists as _op_exists
+from os.path import join as _op_join
 
 from .paths import PathContainmentError
 from .service_base import ActionResult, _proc_ceased, _proc_start_time, _StopRun
@@ -267,6 +269,59 @@ class SelfUpdateOpsMixin:
             return ActionResult(False, "Could not acquire the self-update lock (unsafe runtime state) "
                                 "— aborting without changes.", data={"lock_error": True})
 
+    def _refresh_units_post_update(self):
+        """VERIFY the managed units against the NEW checkout, out of process. Returns
+        (ok, detail).
+
+        Verification is a subprocess because it MUST be: the running interpreter still
+        holds the PRE-update `updater_units`, so an in-process check renders the OLD
+        templates and cheerfully approves stale units.
+
+        The repair attempt below is deliberately best-effort and is NOT a migration
+        mechanism. It runs in-process, so it too renders pre-update templates; and on the
+        systemd-helper route it cannot write at all (`ProtectHome=read-only` — verified:
+        `touch ~/.config/systemd/user/...` -> EROFS). It therefore only ever fixes units
+        that drifted for some OTHER reason, never units whose template changed in the
+        update being applied.
+
+        What makes that acceptable TODAY is an invariant, not a mechanism: 0.1.7 does not
+        change any unit's bytes (see tests/test_updater_units.py::
+        test_unit_bytes_unchanged_since_0_1_6). The moment a release does change them,
+        this is not enough — a real two-stage migration is required, and until it exists
+        the verification below is what turns a silent boot-restore outage into a visible
+        partial update. See docs/backlog.md.
+        """
+        import subprocess
+        import sys as _sys
+
+        from . import updater_units
+        # Only units that are provably THIS deployment's may be rewritten. A foreign,
+        # ambiguous or overridden set is someone else's file — leave it, and do not
+        # blame the update for it.
+        try:
+            if not self.updater_integration().get("fixable"):
+                return True, "units not this deployment's — left untouched"
+        except Exception as exc:
+            return True, f"integration state unavailable ({type(exc).__name__}) — units left untouched"
+        root = str(self._paths.runtime_root)
+        _r, _checkout, venv = updater_units.deployment_paths(root)
+        py = _op_join(venv, "bin", "python")
+        if not _op_exists(py):
+            py = _sys.executable
+        try:
+            rep = self.self_update_repair_integration(restart=False)
+        except Exception as exc:
+            return False, f"unit refresh raised {type(exc).__name__}: {exc}"[:160]
+        try:
+            chk = subprocess.run([py, "-m", "lhpc.core.updater_units", "verify-set", root],
+                                 capture_output=True, text=True, timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"unit verification could not run: {exc}"[:160]
+        if chk.returncode == 0:
+            return True, "units canonical"
+        detail = (chk.stdout or chk.stderr or "").strip()[:140]
+        return False, f"units still not canonical after repair ({rep.summary[:60]}): {detail}"
+
     def _apply_and_sync(self, force: bool) -> ActionResult:
         """Apply the source update, then — ONLY on a REAL advance — synchronize the editable venv install
         with the SAME `sys.executable -m pip install -e <repo-root>` the managed helper runs, so a
@@ -293,6 +348,25 @@ class SelfUpdateOpsMixin:
                                    f"{_sys.executable} -m pip install -e {root} manually."
                                    + (f" ({detail})" if detail else ""),
                                    data={**res.data, "venv_sync_failed": True})
+
+        # Re-render the managed units. An update whose new version changes a unit TEMPLATE
+        # leaves the installed unit non-canonical, and boot restore then refuses to run —
+        # the box comes back from a power cycle with NOTHING started, and nothing points at
+        # the updater as the cause. Boot restore cannot repair it itself (it runs with
+        # ProtectHome=read-only and cannot write unit files), so the updater — which caused
+        # the drift and has the context — must leave them canonical. Only when they are
+        # provably ours; no restart here (the update flow owns that).
+        ok_units, unit_detail = self._refresh_units_post_update()
+        res = _dc.replace(res, data={**res.data, "units_refreshed": ok_units,
+                                     "units_refresh_detail": unit_detail})
+        if not ok_units:
+            # VISIBLE, not buried in data: a successful-looking update that left stale
+            # units disables boot restore, and the operator has no reason to suspect it.
+            res = _dc.replace(
+                res, ok=False,
+                summary=("Update applied, but the managed systemd units could NOT be "
+                         f"refreshed — {unit_detail}. Boot restore will be skipped until "
+                         "this is repaired: lhpc self-update --repair-integration"))
         return res
 
     def self_update_apply_operator(self, *, force: bool = False) -> ActionResult:
@@ -745,6 +819,21 @@ class SelfUpdateOpsMixin:
                                            f"{sys.executable} -m pip install -e {root} manually, then "
                                            f"restart the console." + (f" ({detail})" if detail else ""),
                                            data={**dict(res.data), "venv_sync_failed": True})
+                    else:
+                        # Refresh the managed units with the NEW code. This path applies
+                        # inline (it does not go through _apply_and_sync), so without this
+                        # a one-click update left the OLD units installed: the new version
+                        # then reads its own integration as non-canonical, one-click
+                        # updating goes away and boot restore is skipped.
+                        ok_u, det_u = self._refresh_units_post_update()
+                        res = ActionResult(
+                            bool(res.ok) and ok_u,
+                            res.summary if ok_u else
+                            ("Update applied, but the managed systemd units could NOT be "
+                             f"refreshed — {det_u}. Boot restore will be skipped until "
+                             "repaired: lhpc self-update --repair-integration"),
+                            data={**dict(res.data), "units_refreshed": ok_u,
+                                  "units_refresh_detail": det_u})
         except _StopRun:
             pass
         # Record the outcome DURABLY, then release the in-flight record. If the STRICT record does

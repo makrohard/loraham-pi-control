@@ -947,7 +947,8 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     }
 
 
-def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
+def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
+           probe_console: bool = False) -> dict:
     """Assemble the effective-state proof checklist and PERSIST it as evidence. Static + config
     checks are proven here (deps present, CA/cert present, nginx -t valid). The console's LISTENER
     SCOPE is proven from /proc/net/tcp (local evidence, not a network/subprocess probe); the
@@ -991,6 +992,21 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
     ok, msg, _staged = stage_and_validate(system, paths, cfg, stack_webs)
     checks["nginx_config_valid"] = "ok" if ok else "failed"
     checks["nginx_config_message"] = msg
+
+    # Is the console actually SERVING? Everything above validates configuration and
+    # material; none of it notices that the thing nginx proxies to is dead. `verify`
+    # reported "webserver verified" with the console unit failed and every page
+    # answering 502 — a live-probing command must not give a green for that.
+    # `probe_console` only on the EXPLICIT verify: `apply` shares this function to
+    # validate the config it is about to promote, and must not gain a subprocess call
+    # (its tests pin that a reload-only apply touches systemctl not at all).
+    if probe_console:
+        from .updater_units import WEB_UNIT
+        act = system.runner.run(["systemctl", "--user", "is-active", "--quiet", WEB_UNIT], 5.0)
+        if getattr(act, "not_found", False):
+            checks["console_running"] = "unknown"      # no systemd here: invent no verdict
+        else:
+            checks["console_running"] = "ok" if act.returncode == 0 else "failed"
 
     # Per-stack proxy evidence, including the upstream's REAL bind scope. An upstream listening off
     # loopback is reachable around this proxy, so its access mode protects nothing — a standing

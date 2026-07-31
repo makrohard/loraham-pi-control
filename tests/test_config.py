@@ -203,12 +203,33 @@ def test_meshcore_file_config_exposed(tmp_path):
 
 def test_secrets_loaded_separately(tmp_path):
     (tmp_path / "config").mkdir()
-    (tmp_path / "config" / "secrets.toml").write_text('[meshcom]\nbridge_password = "x"\n')
+    secrets_file = tmp_path / "config" / "secrets.toml"
+    secrets_file.write_text('[meshcom]\nbridge_password = "x"\n')
+    # 0600 is the contract: `lhpc install` writes it that way (install.py), and
+    # load_secrets refuses anything group/other-readable.
+    secrets_file.chmod(0o600)
     secrets = load_secrets(_paths(tmp_path))
     assert secrets["meshcom"]["bridge_password"] == "x"
     # Secrets never leak into the effective config.
     cfg = load_config(_paths(tmp_path))
     assert "meshcom" not in cfg.values
+
+
+def test_a_group_readable_secrets_file_is_refused(tmp_path):
+    """A 0600 generated config is pointless if the source of the key is world-readable.
+    The refusal is typed (ConfigError) so callers turn it into a blocked start rather
+    than a traceback."""
+    from lhpc.core.config import ConfigError
+
+    (tmp_path / "config").mkdir()
+    secrets_file = tmp_path / "config" / "secrets.toml"
+    secrets_file.write_text('[meshcom]\nbridge_password = "x"\n')
+    for mode in (0o644, 0o640, 0o604):
+        secrets_file.chmod(mode)
+        with pytest.raises(ConfigError, match="readable beyond its owner"):
+            load_secrets(_paths(tmp_path))
+    secrets_file.chmod(0o600)
+    assert load_secrets(_paths(tmp_path))["meshcom"]["bridge_password"] == "x"
 
 
 def test_run_param_default_uses_operator_callsign(tmp_path):

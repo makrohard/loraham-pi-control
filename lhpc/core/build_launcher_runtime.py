@@ -260,6 +260,26 @@ def run(spec: dict) -> None:
                 sys.stderr.write("web job: attempt superseded — refusing to run\n")
                 raise SystemExit(3)
 
+            # Invalidate the completion marker FAIL-CLOSED before the first step —
+            # same contract as lifecycle.build(): a build killed mid-way must never
+            # leave a marker that reads "built". An unremovable marker aborts the job.
+            marker_path = spec.get("marker_path") or ""
+            if marker_path:
+                mp = Path(marker_path)
+                try:
+                    runtime_fs.read_text_regular(paths, mp, max_bytes=1024)
+                except FileNotFoundError:
+                    pass                                   # already absent
+                except (OSError, PathContainmentError) as exc:
+                    detail[0] = f"stale build marker is not a safe regular file ({exc})"[:200]
+                    raise SystemExit(1) from None
+                else:
+                    try:
+                        runtime_fs.unlink(paths, mp)
+                    except (OSError, PathContainmentError) as exc:
+                        detail[0] = f"could not remove the stale build marker ({exc})"[:200]
+                        raise SystemExit(1) from None
+
             from .commands import CommandError, build_env
             for s in steps:
                 argv = _resolve_argv(s["argv"])
@@ -288,6 +308,16 @@ def run(spec: dict) -> None:
                     else:
                         detail[0] = ("step failed: " + " ".join(argv))[:200]
                     raise SystemExit(rc)
+            # Write the receipt-bearing marker BEFORE declaring done, so "done" implies
+            # the marker exists: on failure, cancellation or unsafe termination above,
+            # this line is never reached and the marker stays absent.
+            if marker_path and spec.get("marker_text"):
+                try:
+                    runtime_fs.atomic_write(paths, Path(marker_path),
+                                            spec["marker_text"], 0o644)
+                except (OSError, PathContainmentError) as exc:
+                    detail[0] = f"steps passed but the completion marker could not be written ({exc})"[:200]
+                    raise SystemExit(1) from None
             outcome[0] = "done"          # only after EVERY step passed
         finally:
             # Release EVERY acquired fd explicitly — including partial-acquisition failure paths.

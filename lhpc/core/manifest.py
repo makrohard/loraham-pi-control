@@ -61,6 +61,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             validator=p.get("validator", ""),
             group=p.get("group", ""),
             omit_if_empty=p.get("omit_if_empty", False),
+            secret_ref=str(p.get("secret_ref", "")),
         )
         for p in raw.get("param", [])
     )
@@ -85,9 +86,37 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             raise ManifestError(
                 f"{label} must be '{{runtime}}/...', '{{asset}}/...' (base only) or a relative "
                 f"source path, got {value!r}")
-    return FileConfig(path=path, fmt=raw.get("fmt", "keyval"),
+    fmt = raw.get("fmt", "keyval")
+    if fmt not in _CONFIG_FMTS:
+        raise ManifestError(f"config_file.fmt {fmt!r} unknown "
+                            f"(allowed: {', '.join(sorted(_CONFIG_FMTS))})")
+    mode = raw.get("mode", 0o644)
+    if isinstance(mode, str):
+        mode = int(mode, 8)
+    if mode not in _CONFIG_MODES:
+        raise ManifestError(f"config_file.mode {mode:#o} not permitted "
+                            f"(allowed: {', '.join(oct(m) for m in sorted(_CONFIG_MODES))})")
+    # A secret must never be able to compete with an operator-settable value, and a file
+    # carrying one must not be world-readable.
+    for prm in params:
+        if not prm.secret_ref:
+            continue
+        if prm.secret_ref.count(".") != 1 or not all(prm.secret_ref.split(".")):
+            raise ManifestError(f"secret_ref {prm.secret_ref!r} must be '<table>.<key>'")
+        if not prm.hidden:
+            raise ManifestError(f"param {prm.name!r} has secret_ref and must be hidden")
+        if prm.default or prm.band_defaults:
+            raise ManifestError(f"param {prm.name!r} has secret_ref and must not declare "
+                                f"a default or band_defaults — the secret is the only source")
+        if mode != 0o600:
+            raise ManifestError(f"config_file carrying secret_ref param {prm.name!r} "
+                                f"must declare mode 0600, got {mode:#o}")
+    return FileConfig(path=path, fmt=fmt, mode=mode,
                       base=base, apply_cmd=raw.get("apply_cmd", ""),
                       params=params)
+
+_CONFIG_FMTS = {"keyval", "env", "toml-update", "yaml-update", "ini-update"}
+_CONFIG_MODES = {0o644, 0o640, 0o600}
 
 _DEFAULT_MANIFEST = asset_path("manifest.example.toml")   # package data (wheel-safe)
 

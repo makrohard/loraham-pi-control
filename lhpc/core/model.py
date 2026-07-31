@@ -302,6 +302,10 @@ class FileParam:
     group: str = ""              # settings sub-section title (see RunParam.group)
     omit_if_empty: bool = False  # OPTIONAL-ABSENT: when unset/blank, OMIT the key from the generated
     #                              file entirely (and remove an active key line inherited from the base)
+    secret_ref: str = ""         # "<table>.<key>" in config/secrets.toml. The value is resolved
+                                 # ONLY through load_secrets() at write time — never from
+                                 # local.toml or merged config — so the two trust layers stay
+                                 # separate. Enforced hidden + non-overridable at manifest load.
     #                              — never write an empty value. For pins a board genuinely lacks
     #                              (Uputronics Reset/Busy): a written value assert-aborts meshtasticd.
 
@@ -317,7 +321,9 @@ class FileConfig:
     """
 
     path: str
-    fmt: str = "keyval"          # "keyval" | "toml-update" | "yaml-update"
+    fmt: str = "keyval"          # "keyval" | "toml-update" | "yaml-update" | "ini-update"
+    mode: int = 0o644            # permissions applied on EVERY atomic replace. A file holding
+                                 # a secret_ref value must be 0600.
     base: str = ""               # base file to update (rel. to source dir, or absolute)
     apply_cmd: str = ""          # copyable command to apply the generated file ({path})
     params: tuple[FileParam, ...] = ()

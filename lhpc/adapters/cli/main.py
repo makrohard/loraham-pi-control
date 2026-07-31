@@ -898,8 +898,13 @@ def _run(argv: list[str] | None = None) -> int:
         if args.stack_action in ("start", "stop", "restart", "poststart"):
             return _apply_flow(
                 lambda a: svc.run_action(args.stack_action, args.stack, apply=a), yes=args.yes)
-        parser.parse_args(["stack", "--help"])
-        return 1
+        # argparse's --help action calls sys.exit(0), so routing a usage error through
+        # it exited 0 and `lhpc stack || handle_error` silently passed. Every sibling
+        # (config, logs, build, daemon, ...) exits 2 on a missing argument; match them.
+        print("usage: lhpc stack <action> <stack> [--yes]\n"
+              "lhpc stack: an action is required (start|stop|restart|poststart)",
+              file=sys.stderr)
+        return 2
     if args.command == "config":
         return _cmd_config(svc, args)
     if args.command == "autostart":
@@ -1186,8 +1191,10 @@ def _run(argv: list[str] | None = None) -> int:
                     fh.write(data)
                 print(f"OK    wrote {len(data)} bytes to {args.path} (mode 0600)")
                 return 0
-        print("Usage: lhpc webserver {status|verify|init|configure|expose|proxy|disable-remote|"
-              "reset-defaults|tls-renew|logs|cert ...}")
+        # Lowercase "usage:" and stderr — argparse's shape, so every lhpc usage error
+        # reads and redirects the same way.
+        print("usage: lhpc webserver {status|verify|init|configure|expose|proxy|"
+              "disable-remote|reset-defaults|tls-renew|logs|cert ...}", file=sys.stderr)
         return 2
 
     parser.print_help()

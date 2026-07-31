@@ -20,6 +20,9 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - [Maintenance](maintenance.md) — routine upkeep of an installed box.
 - [Field notes](field-notes.md) — fresh-install checklist, Pi Zero 2 W vs Pi 5 build
   durations, QEMU-stack expectations, log naming, and per-board `gpiochip`/GPIO notes.
+- [Test matrix](test-matrix.md) — what 0.1.7 proves on live hardware, and how.
+- [Backlog](backlog.md) — accepted deferrals, and what holds the line for each
+  until they are fixed. Read before changing a systemd unit template.
 
 ## Web console & remote access
 
@@ -42,7 +45,7 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - Per stack: [daemon](stacks/daemon.md) · [KISS/TCP TNC](stacks/kiss.md) ·
   [Chat & iGate (APRS)](stacks/aprs.md) · [MeshCore](stacks/meshcore.md) ·
   [MeshCom](stacks/meshcom.md) · [Meshtastic](stacks/meshtastic.md) ·
-  [Voice](stacks/voice.md)
+  [Reticulum](stacks/reticulum.md) · [Voice](stacks/voice.md)
 
 ## Reference & policy
 

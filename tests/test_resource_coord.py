@@ -20,7 +20,11 @@ def _svc(tmp_path):
 
 def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
     svc = _svc(tmp_path)
-    assert svc._operation_resource_keys("meshtastic") == ["loraham.radio.868"]   # only its band
+    # meshtasticd also claims `spi.bus.0.unlocked` (it drives /dev/spidev0.0 without
+    # taking spi0.lock), which is how `meshtastic + reticulum` is blocked while the
+    # shipped `daemon + meshtastic` pair stays allowed.
+    assert svc._operation_resource_keys("meshtastic") == ["loraham.radio.868",
+                                                          "spi.bus.0.unlocked"]
     keys = svc._operation_resource_keys("meshcore")
     assert "loraham.radio.868" in keys and keys == sorted(keys)
 

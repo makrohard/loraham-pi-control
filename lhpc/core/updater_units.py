@@ -56,6 +56,21 @@ _DROPIN_DIRS = ("/usr/lib/systemd/user", "/etc/systemd/user")   # ~/.config/syst
 
 
 # --------------------------------------------------------------------------- canonical render
+#
+# CHANGING ANY BYTE BELOW — INCLUDING A COMMENT — IS A BREAKING CHANGE.
+#
+# These strings ARE the unit files. `verify()` compares byte-for-byte, and an installed unit that
+# no longer matches is not canonical, which makes boot restore REFUSE: the box comes back from a
+# power cycle with nothing running. Nothing in the update path repairs this today. The in-process
+# repair in service_selfupdate renders PRE-update templates, and on the systemd-helper route it
+# cannot write at all (ProtectHome=read-only). So a template edit silently strands every box that
+# already has the old unit installed.
+#
+# Until the two-stage migration in docs/backlog.md exists, treat these as frozen. If a stack needs
+# a new writable path, redirect it into {root} with an environment variable instead — that is why
+# Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy rather than ~/.kivy.
+#
+# tests/test_updater_units.py::test_unit_bytes_unchanged_since_0_1_6 enforces this.
 
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).
@@ -602,8 +617,27 @@ def _main(argv: list[str]) -> int:
         import sys
         sys.stdout.write(render(argv[2], argv[3], argv[4], argv[5]))
         return 0
+    # `... verify-set <root>` — is EVERY managed unit byte-for-byte canonical?
+    # Run as a SUBPROCESS after an update so the check uses the NEW checkout's
+    # templates: an in-process check runs the pre-update code already imported into
+    # the running interpreter and cheerfully approves the old units.
+    if len(argv) == 3 and argv[1] == "verify-set":
+        import os
+        import sys
+        from pathlib import Path
+        root = argv[2]
+        _r, checkout, venv = deployment_paths(root)
+        user_dir = Path(os.path.expanduser("~")) / ".config" / "systemd" / "user"
+        bad = {k: verify(user_dir, k, root, checkout, venv) for k in ALL_UNITS}
+        bad = {k: v for k, v in bad.items() if v != OK}
+        if bad:
+            sys.stdout.write("; ".join(f"{k}: {v}" for k, v in sorted(bad.items())) + "\n")
+            return 1
+        sys.stdout.write("ok\n")
+        return 0
     import sys
-    sys.stderr.write("usage: python -m lhpc.core.updater_units render <kind> <root> <checkout> <venv>\n")
+    sys.stderr.write("usage: python -m lhpc.core.updater_units "
+                     "render <kind> <root> <checkout> <venv> | verify-set <root>\n")
     return 2
 
 

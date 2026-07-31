@@ -743,3 +743,25 @@ def test_firewall_cli_status_and_script_paths_unchanged(tmp_path, monkeypatch, c
     assert main(["firewall", "--ap", "on", "--script"]) == 1
     out = capsys.readouterr().out
     assert "#!/usr/bin/env bash" not in out
+
+
+def test_a_missing_stack_action_is_a_usage_error(capsys):
+    """`lhpc stack` routed its usage error through argparse's --help action, which
+    calls sys.exit(0) — so a missing action exited 0 and `lhpc stack || fail` passed
+    silently. Every sibling group exits 2; this must too, and on stderr."""
+    from lhpc.adapters.cli.main import main
+
+    rc = main(["stack"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "usage:" in err and "action is required" in err
+
+
+def test_a_missing_webserver_action_is_a_usage_error(capsys):
+    """Same shape as argparse: lowercase `usage:`, on stderr, exit 2."""
+    from lhpc.adapters.cli.main import main
+
+    rc = main(["webserver"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert err.startswith("usage: lhpc webserver")

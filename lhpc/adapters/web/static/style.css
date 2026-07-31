@@ -638,9 +638,12 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .wsbox > details[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
 .wsbox .fwline { display: flex; align-items: baseline; gap: .5rem; }
 .wsbox .fwline .wsname { font-weight: 600; }
-/* logs link pushed to the right edge of the summary header / the firewall line */
-.wsbox > details > summary .hdrlogs,
+/* logs link pushed to the right edge of the firewall line. The HEADER logs link is
+   no longer inside the summary (it is a .row-actions overlay — an interactive
+   element nested in a summary toggle is not reliably keyboard/AT reachable), so
+   the summary only reserves room for it. */
 .wsbox .fwline .hdrlogs { margin-left: auto; }
+.wsbox > details > summary { padding-right: 4rem; }
 .systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
              padding: .3rem .4rem .3rem 0; }
@@ -709,3 +712,4 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
   .sysbar { flex-basis: 3rem; }
   .sys-val { width: 8.5rem; }
 }
+.wsopen { margin: .4rem 0 .6rem; font-size: .9rem; }

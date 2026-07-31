@@ -177,3 +177,49 @@ def test_run_step_without_announce_unchanged(tmp_path, capfd):
     _locks_dir(tmp_path)
     blr.run(_spec(tmp_path, steps=[{"argv": ["true"], "env": {}}]))
     assert "[resolve]" not in capfd.readouterr().out
+
+
+# ---- build-completion marker (receipt) -------------------------------------
+
+def _marker_spec(tmp_path, *, steps, marker_text="lhpc build complete\nconsumed x abc\n"):
+    rt = tmp_path / "rt"
+    marker = rt / "src" / "x" / ".venv" / ".lhpc-build-complete"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    spec = _spec(tmp_path, steps=steps)
+    spec["marker_path"] = str(marker)
+    spec["marker_text"] = marker_text
+    return spec, marker
+
+
+def test_detached_build_replaces_a_stale_receipt(tmp_path):
+    """The web Build bypassed lifecycle.build(), so the steps succeeded, the job read
+    done — and the stale marker survived: the component still read NOT built and the
+    advertised web workflow could never complete a rebuild after source drift."""
+    receipt = "lhpc build complete\nconsumed rns aaa\nconsumed rns-lora-interface bbb\n"
+    spec, marker = _marker_spec(tmp_path, steps=[{"argv": ["true"]}], marker_text=receipt)
+    marker.write_text("lhpc build complete\nconsumed rns OLD\n")   # stale receipt
+    blr.run(spec)
+    assert marker.read_text() == receipt, "the marker must be the EXACT current receipt"
+
+
+def test_a_failed_detached_build_leaves_no_marker(tmp_path):
+    """Invalidate before step one, write only after every step passes: a failed build
+    must leave the marker ABSENT, never the stale one and never a fresh one."""
+    spec, marker = _marker_spec(tmp_path, steps=[{"argv": ["false"]}])
+    marker.write_text("lhpc build complete\n")                     # pre-receipt marker
+    with pytest.raises(SystemExit) as e:
+        blr.run(spec)
+    assert e.value.code != 0
+    assert not marker.exists(), "a failed build must not leave any completion marker"
+
+
+def test_an_unsafe_marker_aborts_before_any_step(tmp_path):
+    """A symlinked marker must abort the job before the first step runs — removing
+    through it could delete a file outside the build tree."""
+    spec, marker = _marker_spec(tmp_path, steps=[{"argv": ["touch", str(tmp_path / "ran")]}])
+    outside = tmp_path / "outside"; outside.write_text("keep me")
+    marker.symlink_to(outside)
+    with pytest.raises(SystemExit):
+        blr.run(spec)
+    assert not (tmp_path / "ran").exists(), "no step may run behind an unsafe marker"
+    assert outside.read_text() == "keep me"

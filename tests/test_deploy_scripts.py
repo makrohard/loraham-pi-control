@@ -55,7 +55,13 @@ def _fake_bin(tmp_path: Path, *, git_src: Path | None = None, systemctl: str = "
             '  "$REAL" clone --quiet --branch main --single-branch "$SRC" "$dest"\n'
             '  "$REAL" -C "$dest" remote set-url origin '
             '"https://github.com/makrohard/loraham-pi-control.git"\n'
-            '  ( cd "$SRC" && "$REAL" ls-files -m -o --exclude-standard ) | while IFS= read -r f; do\n'
+            # Overlay = files this branch CHANGED vs main, plus anything uncommitted. The
+            # clone must stay on `main` (install.sh refuses a non-main checkout as unsafe
+            # — a real property, not a test detail), so a feature committed on a branch
+            # would otherwise be invisible here and the unit-render comparison would
+            # compare the deployed main code against the branch's renderer.
+            '  ( cd "$SRC" && { "$REAL" diff --name-only main...HEAD 2>/dev/null || true; '
+            '"$REAL" ls-files -m -o --exclude-standard; } | sort -u ) | while IFS= read -r f; do\n'
             '    [ -f "$SRC/$f" ] || continue\n'
             '    mkdir -p "$dest/$(dirname "$f")"; cp "$SRC/$f" "$dest/$f"\n'
             '  done\n'

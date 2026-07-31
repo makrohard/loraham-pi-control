@@ -4,6 +4,7 @@ Mixin of ControllerService (state/constants on the facade). Adapters import lhpc
 from __future__ import annotations
 
 import json
+import os
 import re as _re
 import time
 from pathlib import Path
@@ -25,11 +26,21 @@ _HMAC_LOG_BASE_RE = _re.compile(r"^hmac-apply-[0-9a-f]{32}$")
 
 class LifecycleOpsMixin:
 
-    def _band_limited_running(self, snap):
+    def _band_limited_running(self, snap, conservative: bool = False):
         """(limited_fn, running_components, running_ids) with each running component's
         `loraham.radio.<band>` claims restricted to the band(s) it ACTUALLY uses — the daemon to
         the bands it currently serves, a band-switchable app to its effective band, a fixed-band
-        app to its band. So a daemon on 433 and meshtastic on 868 are NOT seen as one radio."""
+        app to its band. So a daemon on 433 and meshtastic on 868 are NOT seen as one radio.
+
+        `conservative` selects what an unmarked multi-band owner claims, and the two callers
+        genuinely differ:
+          * DISPLAY (`_observed_conflicts`) -> False. Its declared band. Claiming both would
+            render false 433+868 conflicts for a stack that is plainly on one of them — a
+            reported bug, and a scary red banner is not a safety measure.
+          * ADMISSION (`_running_conflicts`) -> True. EVERY band it could be on, because
+            admitting a second exclusive owner onto a radio already in use is a real
+            collision. Unknown must cost a refusal, not a silent overlap.
+        """
         import dataclasses
         # Daemon radio ownership is PROCESS topology (a dead CONF socket does not free the radio),
         # not socket reachability.
@@ -54,9 +65,12 @@ class LifecycleOpsMixin:
                 if c.id == self.DAEMON_ID:
                     eff = served
                 elif c.bands:
-                    # Actual running band, else the component's DECLARED band — never "both".
-                    eb = self._effective_band(ss.stack.id, c.band)
-                    eff = {eb} if eb in ("433", "868") else set()
+                    # Actual running band; with none, per `conservative` above.
+                    if conservative:
+                        eff = self._live_bands(ss.stack.id, c.band)
+                    else:
+                        eb = self._effective_band(ss.stack.id, c.band)
+                        eff = {eb} if eb in ("433", "868") else set()
                 else:
                     eff = {c.band} if c.band else set()
                 running.append(limited(c, eff))
@@ -81,7 +95,9 @@ class LifecycleOpsMixin:
         claims are matched by the band each side actually uses, so a multi-band app
         on 868 does not conflict with a daemon serving only 433 (and vice-versa)."""
         snap = self.build_snapshot()
-        limited, running, running_ids = self._band_limited_running(snap)
+        # conservative=True: this decides whether a start is BLOCKED. An unmarked
+        # multi-band owner must be treated as occupying every band it could be on.
+        limited, running, running_ids = self._band_limited_running(snap, conservative=True)
         target = limited(comp, {band} if band else set())
         conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id})
         return [c.message for c in conflicts if comp.id in c.holders and c.observed]
@@ -241,8 +257,7 @@ class LifecycleOpsMixin:
                 if c.id == self.DAEMON_ID:
                     active = served
                 elif multi:
-                    eb = self._effective_band(sid, c.band)   # actual band, else declared (never both)
-                    active = {eb} if eb in ("433", "868") else set()
+                    active = self._live_bands(sid, c.band)   # actual band, else ALL of them
                 else:
                     active = {c.band} if c.band else set()
                 for r in c.resources:
@@ -259,11 +274,13 @@ class LifecycleOpsMixin:
                 # daemon: its own dependent clients are consumers of the radio it provides, not
                 # competitors — a real competitor (a direct-radio EXCLUSIVE owner like meshtastic)
                 # is already caught by the exclusive-claim check above.
-                comp_band = self._effective_band(sid, c.band) if multi else c.band
+                comp_bands = (self._live_bands(sid, c.band) if multi
+                              else ({c.band} if c.band else set()))
                 if (not target_is_daemon and sid != target_stack
                         and sid != self.stack_of(self.DAEMON_ID)
-                        and comp_band and comp_band in needed_bands):
-                    add(sid, c.id, f"radio {comp_band} MHz")
+                        and comp_bands & needed_bands):
+                    add(sid, c.id,
+                        f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
         return blockers
 
     def hardware_block(self, target: str) -> str:
@@ -490,7 +507,29 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot start '{target}': invalid parameter — {pv_err}",
                                 next_commands=[f"lhpc status {target}"])
         # Band-switchable stack: resolve the chosen band (default = first allowed).
-        cfg_band = self._config_band(target, band)
+        # An explicit band wins; otherwise inherit the band the stack is ALREADY running
+        # on, and only then fall back to the declared primary. Starting an optional
+        # client (sideband) inside a stack running on 433 used to resolve to the primary
+        # (868) and OVERWRITE the running-band marker with it — the console then showed,
+        # and would have configured, the wrong band for a live 433 node.
+        cfg_band = self._config_band(
+            target, band or self.running_band(self.stack_of(target) or target, ""))
+        # A band-switchable stack runs on ONE band. Asking for the other one while its
+        # band owner is up used to be a silent no-op: every component read
+        # already_healthy, the console said "Run applied", and the radio stayed put.
+        # Refuse with the reason and the commands that actually switch it.
+        _sid = self.stack_of(target) or target
+        _live = self.running_band(_sid, "")
+        if band and _live and band != _live and self.stack_bands(_sid) \
+                and self._band_owner_is_up(_sid):
+            return ActionResult(
+                False,
+                f"'{_sid}' is already running on {_live} MHz — refusing to start it on "
+                f"{band} MHz.",
+                details=["  [blocked] a band-switchable stack runs on ONE band at a time",
+                         f"  Stop it first, then start it on {band} MHz."],
+                next_commands=[f"lhpc stack stop {_sid} --yes",
+                               f"lhpc stack start {_sid} --yes"])
         life = self._lifecycle()
         radio, tx = self._daemon_needs(order, params, cfg_band)
         # The stack whose daemon params to apply once the daemon is up (a direct component target
@@ -679,8 +718,47 @@ class LifecycleOpsMixin:
             if not daemon_ok and self.DAEMON_ID in comp.depends_on:
                 record(comp, stack, Outcome.BLOCKED, "daemon not ready — not started")
                 continue
+            # ...and the same must hold for EVERY dependency, not just the daemon.
+            # lxmd/nomadnet/sideband use the config dir `rns` owns, so one of them
+            # starting after `rns` failed can become the shared-instance owner and
+            # initialise the LoRa interface itself — taking the radio behind our back.
+            unmet = self._unmet_dependencies(comp, order, results)
+            if unmet:
+                record(comp, stack, Outcome.BLOCKED,
+                       f"depends on {', '.join(unmet)}, which did not start — not started")
+                continue
             if running:
+                # RUNNING is a PROCESS fact. For an endpoint-readiness component a
+                # same-named foreign process satisfies it while the evidence the driver
+                # owns (its ready marker / listeners) is absent — the radio proof was
+                # bypassed. Demand the declared evidence before calling it healthy.
+                st_now = st_index[comp.id]
+                if str(getattr(comp, "readiness", "")) == "endpoint" and not all(
+                        e.present for e in (st_now.endpoints or ())):
+                    record(comp, stack, Outcome.BLOCKED,
+                           "a process is running but its readiness evidence is absent "
+                           "(foreign or half-started) — stop it (verified) and re-run")
+                    continue
                 record(comp, stack, Outcome.ALREADY_HEALTHY, "already running")
+                continue
+            # A GUI app cannot work without a display. Voice is kept off headless rigs
+            # by its GUI-only build deps, but a box CAN have those deps (installed for
+            # another stack, or a desktop image driven over SSH) and still have no
+            # session — Sideband was then launched into nothing. Skip it the same way:
+            # a typed SKIPPED, not a failure, and never for a non-GUI component.
+            # A receipt-bearing component whose consumed sources moved since its last
+            # build must not launch: the venv still holds the OLD driver, and starting
+            # it would run code the manifest no longer describes. Web starts and
+            # auto-install already gate on unbuilt_components; the CLI start did not.
+            if comp.build_marker and comp.build_requires and not self.is_built(comp):
+                record(comp, stack, Outcome.BLOCKED,
+                       "its sources changed since the last build — rebuild first "
+                       f"(lhpc build {stack.id})")
+                continue
+            if self.needs_display(comp) and not self.display_available():
+                record(comp, stack, Outcome.SKIPPED,
+                       "needs a graphical session; none is running on this box "
+                       "(start it from the desktop, not over SSH)")
                 continue
             if comp.source and not life.source_dir(comp).exists():
                 record(comp, stack, Outcome.BLOCKED, f"not installed (lhpc install {stack.id})")
@@ -836,21 +914,33 @@ class LifecycleOpsMixin:
             # multi-band decisions + dashboard state, so a write failure must surface in
             # the typed result (UNVERIFIED), not hide behind a clean VERIFIED.
             band_ok = True
-            if cfg_band and self.stack_bands(stack.id):
+            # Only a BAND-CARRYING component may define the stack's band. Starting an
+            # optional client with band=868 used to write that marker while `rns` was
+            # still tuned to 433 — status, the dashboard, arbitration and per-band
+            # config all then described a band the radio was not on.
+            if cfg_band and self.stack_bands(stack.id) and (comp.band or comp.bands):
                 band_ok = self._set_running_band(stack.id, cfg_band)
             if band_ok:
                 record(comp, stack, Outcome.VERIFIED, summary)
             else:
+                # Leaving the owner up without durable band evidence is the dangerous
+                # outcome: later arbitration falls back to the DECLARED band, so a node
+                # actually on 433 reads as 868 and a second 433 owner can be admitted.
+                # Stop what we just started rather than run a radio we cannot account for.
+                cleanup = life.stop(comp, band=cfg_band)
                 record(comp, stack, Outcome.UNVERIFIED,
                        summary + "; running-band marker could not be persisted — "
-                       "operational state may be inconsistent")
+                       + ("started process stopped again (no durable band evidence)"
+                          if cleanup.outcome == Outcome.STOPPED
+                          else "cessation NOT verified — ownership retained"))
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
         # ok derives ENTIRELY from typed outcomes. A MANUAL_REQUIRED for an OPTIONAL
         # component does not block; every other non-success outcome does.
         optional_ids = {c.id for _, c in order if c.optional}
         def blocks(r):
-            if r.outcome == Outcome.MANUAL_REQUIRED and r.component in optional_ids:
-                return False
+            if r.outcome in (Outcome.MANUAL_REQUIRED, Outcome.SKIPPED) \
+                    and r.component in optional_ids:
+                return False          # optional: a manual/headless skip is an accepted outcome
             return not r.ok
         blocking = [r for r in results if blocks(r)]
         required_manual = [r.component for r in blocking if r.outcome == Outcome.MANUAL_REQUIRED]
@@ -1071,7 +1161,9 @@ class LifecycleOpsMixin:
         if not want:
             return {}
         owners: dict[str, str] = {}
-        for ss in self.build_snapshot().stacks:
+        # fresh=True: this runs right AFTER the stop, so a snapshot cached before it
+        # would still show the just-stopped owner as running and keep the marker alive.
+        for ss in self.build_snapshot(fresh=True).stacks:
             sid = ss.stack.id
             multi = bool(self.stack_bands(sid))
             for c in ss.stack.components:
@@ -1080,8 +1172,7 @@ class LifecycleOpsMixin:
                 if ss.components[c.id].run_state not in (RunState.RUNNING, RunState.DEGRADED):
                     continue
                 if multi:
-                    eb = self._effective_band(sid, c.band)
-                    active = {eb} if eb in ("433", "868") else set()
+                    active = self._live_bands(sid, c.band)
                 else:
                     active = {c.band} if c.band else set()
                 for r in c.resources:
@@ -1739,7 +1830,16 @@ class LifecycleOpsMixin:
         # Clear band/interactive markers after the target's OWN verified cessation — even if the
         # later daemon-release fails, a stopped client must never look running.
         if sid and own_ok:
-            self._safe_unlink(self._band_marker(sid))
+            # Only the BAND OWNER's cessation retires the band marker. Stopping an
+            # optional client (sideband, lxmd) used to wipe it while `rns` was still
+            # on 868, which erased the stack's band evidence: the dashboard then had
+            # nothing to place it by and it dropped out of its own band column.
+            #
+            # Decided from the TYPED STOP RESULTS, not from a snapshot: the snapshot
+            # is memoised per operation, so a read taken here still showed the
+            # just-stopped owner as running and kept the marker alive forever.
+            if self._band_owners_stopped(sid, own_results):
+                self._safe_unlink(self._band_marker(sid))
             self.dismiss_interactive(sid)
         # A CLIENT stop also releases the daemon band it used — only where no other running
         # dependent needs it. Its typed result feeds the aggregate success (a failed release makes
@@ -2046,7 +2146,8 @@ class LifecycleOpsMixin:
                             on_component_log(f"{title} · logs/{fn}", fn)   # per-step path shown in the web view
                     res = life.build(comp, log_base=log_base,
                                      redactor=redactor, should_cancel=should_cancel,
-                                     on_log_open=self._log_announcer(comp.id, details))
+                                     on_log_open=self._log_announcer(comp.id, details),
+                                     marker_extra=self._consumed_source_lines(comp))
                     ok = ok and res.ok
                     details.append(f"  [{res.state.value}] build {comp.id} "
                                    f"(rc {res.returncode}, log {res.log_path})")
@@ -2304,9 +2405,22 @@ class LifecycleOpsMixin:
                                          self.stack_of(c.id) or "", ckeys):
                     return None, aid, f"could not record the {op} job for '{c.id}' (a live attempt exists)"
                 try:
+                    # The detached job must complete the SAME contract as lifecycle.build():
+                    # invalidate the marker before step one, write the receipt only after
+                    # every step passes. The receipt SHAs are computed here at spawn; the
+                    # launcher holds the source locks for its whole lifetime, so the
+                    # consumed sources cannot move between spawn and completion.
+                    from .lifecycle import BUILD_MARKER_TEXT
+                    # BUILD only: a detached TEST run goes through this same spawn and
+                    # must never invalidate or rewrite the build completion marker.
+                    _mark = bool(c.build_marker) and op == "build"
+                    marker_path = str(life.source_dir(c) / c.build_marker) if _mark else ""
+                    marker_text = (BUILD_MARKER_TEXT + self._consumed_source_lines(c)
+                                   if _mark else "")
                     script = commands.render_build_launcher(
                         steps, runtime, src, lock_paths, index_lock=index_lock, txn_dir=txn_dir,
-                        result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "")
+                        result_name=log, attempt_id=aid, op=op, target=c.id, stack=self.stack_of(c.id) or "",
+                        marker_path=marker_path, marker_text=marker_text)
                 except commands.CommandError as exc:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail=str(exc)[:200])
                     return None, aid, f"cannot {op} '{c.id}': {exc}"
@@ -2905,6 +3019,105 @@ class LifecycleOpsMixin:
         except (OSError, ValueError):
             return default
 
+    def _live_bands(self, stack_id: str, declared: str) -> set:
+        """The band(s) a LIVE multi-band component must be arbitrated against.
+
+        With trustworthy evidence (marker / interactive launch band) that is the one
+        band it is on. WITHOUT it, every band it could be on: falling back to the
+        DECLARED band here let a node actually running on 433 with a lost marker be
+        treated as an 868 holder, so a second exclusive 433 owner could be admitted
+        onto the same radio. Unknown is not the default band; unknown is all of them.
+        """
+        eb = self._effective_band(stack_id, "")
+        if eb in ("433", "868"):
+            return {eb}
+        allowed = self.stack_bands(stack_id)
+        if len(allowed) > 1:
+            return set(allowed)
+        return {declared} if declared else set()
+
+    def _band_owner_is_up(self, stack_id: str) -> bool:
+        """Whether a band-carrying component of this stack is running right now."""
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        for ss in self.build_snapshot(fresh=True).stacks:
+            if ss.stack.id != stack_id:
+                continue
+            for c in ss.stack.components:
+                st = ss.components.get(c.id)
+                if (c.band or c.bands) and st is not None and st.run_state in up:
+                    return True
+        return False
+
+    def _band_owners_stopped(self, stack_id: str, results) -> bool:
+        """Whether THIS stop ended every band-carrying component of the stack.
+
+        Evidence is the typed result of the stop we just performed — the only
+        thing that is guaranteed post-mutation truth.
+        """
+        stack = self.stack(stack_id)
+        owners = {c.id for c in (stack.components if stack else ()) if c.band or c.bands}
+        if not owners:
+            return True                    # nothing carries a band: nothing to keep
+        ceased = {r.component for r in results
+                  if r.outcome in (Outcome.STOPPED, Outcome.ALREADY_STOPPED)}
+        return owners <= ceased
+
+    @staticmethod
+    def needs_display(comp) -> bool:
+        """Whether this component is a GUI app. Derived from its own declarations: a
+        component with a GUI-only requirement (`gui = true`) is one that needs a
+        display — the same predicate the build-time GUI skip already uses."""
+        return any(getattr(r, "gui", False) for r in (comp.requires or ()))
+
+    @staticmethod
+    def display_available() -> bool:
+        """Whether a graphical session is actually running HERE.
+
+        Not `DISPLAY` in our environment: the controller runs as a systemd user
+        service and never inherits it. The honest evidence is a live compositor
+        socket — Wayland in the user runtime dir, or an X11 socket.
+        """
+        import glob
+
+        uid = os.getuid()
+        if glob.glob(f"/run/user/{uid}/wayland-[0-9]*"):
+            return True
+        return bool(glob.glob("/tmp/.X11-unix/X[0-9]*"))
+
+    @staticmethod
+    def _unmet_dependencies(comp, order, results) -> list:
+        """Dependencies of `comp` (transitively, within this run order) that did NOT
+        reach a successful outcome. Empty when every one of them is up.
+
+        Only the daemon used to be gated this way; an ordinary `depends_on` was
+        launched regardless of whether its dependency had failed.
+        """
+        by_id = {c.id: c for _, c in order}
+        want, seen = list(comp.depends_on or ()), set()
+        while want:                                  # transitive closure
+            dep = want.pop()
+            if dep in seen:
+                continue
+            seen.add(dep)
+            want.extend(by_id[dep].depends_on or () if dep in by_id else ())
+        good = {Outcome.VERIFIED, Outcome.STARTED, Outcome.ALREADY_HEALTHY}
+        outcome = {r.component: r.outcome for r in results}
+        # A dependency that was never part of this run is not judged here: it is either
+        # already running (the snapshot gate) or outside the requested scope.
+        return sorted(d for d in seen
+                      if d in outcome and outcome[d] not in good)
+
+    def runs_on_band(self, stack_id: str, band: str) -> bool:
+        """Whether a MULTI-band stack is running on THIS band.
+
+        A multi-band stack runs on exactly one band at a time, so "is a band-carrying
+        component up?" is the same answer in every column — it rendered the stack as
+        running on 433 while it was actually on 868. Evidence order: the start marker,
+        then the band an interactive app was launched on, then the DECLARED primary.
+        Never "every band it could use".
+        """
+        return self._effective_band(stack_id, self._config_band(stack_id, "")) == band
+
     def running_lora_stacks(self, band: str) -> list:
         """Daemon-client (LoRa) stacks currently running on `band` — the ones a live switch to
         MODE=FSK would break. Used to warn on the daemon's live-setting confirm."""
@@ -3039,6 +3252,33 @@ class LifecycleOpsMixin:
             return None
         return comp.bin or None
 
+    def _consumed_source_lines(self, comp) -> str:
+        """One `consumed <id> <sha>` line per source this build installs FROM: the
+        component's own checkout plus each `build_requires` dependency's.
+
+        Recorded into the build marker and recomputed by `is_built`, so the marker is a
+        receipt for the exact sources consumed — a static marker stayed "built" after
+        `rns-lora-interface` (or Reticulum itself) was updated, leaving the OLD driver
+        installed in the venv while lhpc reported the component built.
+        """
+        if not (comp.build_marker and comp.build_requires):
+            return ""
+        by_id = {c.id: c for st in self.stacks() for c in st.components}
+        lines = []
+        for cid in (comp.id, *comp.build_requires):
+            dep = by_id.get(cid)
+            src = self._lifecycle().source_dir(dep) if dep else None
+            sha = ""
+            if src is not None:
+                r = self._system.runner.run(
+                    ["git", "-C", str(src), "rev-parse", "HEAD"], 5.0)
+                sha = (r.stdout or "").strip() if getattr(r, "returncode", 1) == 0 else ""
+            # An unreadable HEAD (not a repo, linked source) is recorded as such: the
+            # marker then only matches while it STAYS unreadable — any later real SHA
+            # is a change and forces the rebuild.
+            lines.append(f"consumed {cid} {sha or 'unknown'}\n")
+        return "".join(lines)
+
     def is_built(self, comp) -> bool:
         """True if the component needs no build, or its built artifact is present.
         The artifact path may carry run-param placeholders (e.g. {env} for the
@@ -3057,8 +3297,12 @@ class LifecycleOpsMixin:
                 # oversize/malformed content, or an unsafe/escaping parent all read as NOT built (never
                 # a traceback / web 500). Only a regular file whose ENTIRE content is the exact marker
                 # text counts as built.
-                return runtime_fs.read_text_regular(self._paths, marker,
-                                                    max_bytes=_BUILD_MARKER_MAX) == BUILD_MARKER_TEXT
+                # Expected = the static text + the CURRENT consumed-source SHAs. A marker
+                # written against older sources (or the pre-receipt static form) mismatches
+                # and reads NOT built — `lhpc build reticulum` is then surfaced as required.
+                return (runtime_fs.read_text_regular(self._paths, marker,
+                                                     max_bytes=_BUILD_MARKER_MAX)
+                        == BUILD_MARKER_TEXT + self._consumed_source_lines(comp))
             except (FileNotFoundError, OSError, PathContainmentError):
                 return False
         rel = self._build_artifact(comp)
@@ -3104,7 +3348,12 @@ class LifecycleOpsMixin:
             return "(no run command)"
         cwd = (commands._paths_subst(comp.run_cwd, runtime, src, "")
                if comp.run_cwd else src)
-        return f"cd {shlex.quote(cwd)} && {cmd}"
+        # Restore the terminal afterwards. A full-screen TUI (NomadNet) puts the tty
+        # in raw mode; interrupted with Ctrl+C it exits WITHOUT restoring it, leaving
+        # ECHO and ICANON off — the shell then looks dead, echoing nothing. Measured:
+        # ECHO/ICANON stay cleared after SIGINT. `stty sane` costs nothing on a clean
+        # exit and is silenced when there is no tty (piped/captured).
+        return f"cd {shlex.quote(cwd)} && {cmd}; stty sane 2>/dev/null"
 
     def _client_interfaces(self, status, stack_id: str = "") -> list[dict]:
         """User-facing interfaces a client connects to (KISS TCP, web UIs, serial
@@ -3343,6 +3592,14 @@ class LifecycleOpsMixin:
                 multi = bool(self.stack_bands(s.id))
                 running_up = any(c.id in live and live[c.id].run_state in up
                                  for c in s.components if c.band or c.bands)
+                # A MULTI-band stack runs on exactly ONE band at a time, so "is a
+                # band-carrying component up?" is not enough — that answer is the same
+                # in every column and rendered the stack as "Running on 433" while it
+                # was actually on 868. Scope it to the band it is really on: the start
+                # marker, else the launch band, else its DECLARED primary — never "all
+                # bands it could use".
+                if running_up and multi:
+                    running_up = self.runs_on_band(s.id, band)
                 comps = []
                 for c in s.components:
                     # A running component whose post-start runner is still applying settings reads

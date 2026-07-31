@@ -2143,3 +2143,24 @@ def test_allowed_gate_warning_survives_every_outcome(tmp_path, monkeypatch):
                         lambda self, cfg: ActionResult(True, "applied and reloaded"))
     res = svc.webserver_apply()
     assert res.ok and res.details == [] and res.next_commands == []   # silent gate stays silent
+
+
+def test_verify_fails_when_the_console_is_not_serving(tmp_path):
+    """`verify` validated config, nginx presence, PKI and `nginx -t` — but never that
+    the thing nginx proxies to is alive. With the console unit failed and every page
+    answering 502 it still reported "webserver verified": a live-probing command
+    handing out a false green."""
+    svc0 = _svc_webserver_corrections(tmp_path); svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    staged = _staged_webserver_corrections(paths)
+    unit = ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service")
+    base = {("nginx", "-v"): CR(0, "", ""), ("nginx", "-t", "-c", staged): CR(0, "", "ok")}
+
+    dead = FakeSystem(commands={**base, unit: CR(3, "", "")})
+    res = ControllerService(system=dead.system, paths=paths).webserver_verify()
+    assert res.ok is False and "console_running" in res.summary
+    assert res.data["checks"]["console_running"] == "failed"
+
+    alive = FakeSystem(commands={**base, unit: CR(0, "", "")})
+    res2 = ControllerService(system=alive.system, paths=paths).webserver_verify()
+    assert res2.data["checks"]["console_running"] == "ok"

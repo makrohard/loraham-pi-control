@@ -691,7 +691,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} d ago"
 
-    def _stack_groups(band="", only_sid=None):
+    def _stack_groups(band="", only_sid=None, cfg_sid=""):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
@@ -718,6 +718,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if only_sid is not None and ss.stack.id != only_sid:
                 continue                              # lazy-body partial: build only the requested row
             stack = ss.stack
+            # A band chosen in the URL belongs to ONE stack (`cfg`), not the page.
+            # Every OTHER band-switchable stack falls back to the band it is actually
+            # RUNNING on — not to its declared primary: a stack started on 433 flipped
+            # to 868 as soon as the URL lost its band/cfg (any stop redirect does that),
+            # which also decided which per-band config a Save would write.
+            sband = (band if (cfg_sid and stack.id == cfg_sid)
+                     else service.running_band(stack.id, ""))
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
                    if not main or c.id != main.id]
@@ -778,8 +785,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "command": service.manual_start_command(main) if interactive else "",
                 # Per-stack Settings section rendered inline on the Apps list (same data the
                 # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                "view": service.config_view(stack.id, band),
-                "config_groups": service.config_param_groups(stack.id, band),
+                "view": service.config_view(stack.id, sband),
+                "config_groups": service.config_param_groups(stack.id, sband),
                 # Folded-in detail sections (all read-only / GET-safe):
                 "system_deps": service.system_deps(stack.id),
                 "deps_report": service.deps_report(stack.id),
@@ -807,13 +814,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None                    # fail-safe: never break the Apps page over firewall
 
-    def _stacks_context(band="", *, hw_probe=None, only_sid=None):
+    def _stacks_context(band="", *, hw_probe=None, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
         with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
         it inline; the lazy partial passes None — the transient belongs to the whole-page render).
         `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
-        groups, snapshot = _stack_groups(band, only_sid)
+        groups, snapshot = _stack_groups(band, only_sid, cfg_sid)
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
         # stacks_state.js). Rendering them already-open with their body inline — like a ?open= row —
         # means a restored-open row is present at FIRST PAINT, so re-opening it never shifts the page
@@ -852,6 +859,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The Apps page — also the home of the controller's embedded Update UI. All controller data is
         # cached-only — no live git/network/identity on a GET. hw_probe is popped (consumed once).
         ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
+                                                 cfg_sid=request.args.get("cfg", ""),
                                                   hw_probe=session.pop("hw_probe", None))
         # Boot-restore toggle state for the webserver panel (config read only — GET-safe).
         try:
@@ -871,7 +879,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # context as the whole page (so it can never miss a var), rendered read-only/GET-safe. A direct
         # `?open=<sid>` link still renders the body server-side, so this is a progressive enhancement.
         # only_sid scopes the heavy per-stack build to just this row (unknown sid -> empty -> 404).
-        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""), only_sid=sid)
+        ctx, groups, _snapshot = _stacks_context(request.args.get("band", ""), only_sid=sid,
+                                                 cfg_sid=request.args.get("cfg", ""))
         g = next((x for x in groups if x["stack"].id == sid), None)
         if g is None:
             abort(404)

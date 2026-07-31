@@ -15,11 +15,13 @@ from .config import (
     _patch_local_table,
     _stack_config_path,
     apply_config_transaction,
+    load_secrets,
     load_stack_config,
     merge_stack_values,
     render_keyval,
     render_local_tables,
     render_stack_config,
+    update_ini,
     update_stack_config,
     update_toml,
     update_yaml,
@@ -1471,8 +1473,18 @@ class ParamsConfigMixin:
         `overrides` are EPHEMERAL per-start file values ({param_name: value}, this launch only,
         never persisted) taken from the Start-confirm 'Stack parameters' panel — validated by the
         caller via `_normalize_file_overrides` before they reach here."""
-        op = self.config().operator
+        cfg = self.config()
+        op = cfg.operator
         runtime = str(self._paths.runtime_root)
+        # Secrets are a SEPARATE trust layer from local.toml — read only here, and
+        # only if a parameter actually declares one: an unsafe or unreadable
+        # secrets.toml must not break generation for a stack that has no secrets.
+        _secrets_box = {}
+
+        def secrets():
+            if "v" not in _secrets_box:
+                _secrets_box["v"] = load_secrets(self._paths)
+            return _secrets_box["v"]
         cfg_band = self._config_band(target, band)
         # Validate operator identity; fall back to safe placeholders if invalid so a
         # corrupted local.toml can never inject into a generated config file.
@@ -1481,9 +1493,16 @@ class ParamsConfigMixin:
         except validators.ValidationError:
             call = "N0CALL"
 
+        # The radio hardware setup is a GLOBAL controller setting, not a per-stack
+        # parameter: an operator picks the board with `lhpc hardware`, and the stack's
+        # pins/chip follow from it. Injecting it here keeps it out of reach of saved or
+        # ephemeral user values.
+        hardware = str(getattr(getattr(cfg, "radio", None), "hardware", "") or "")
+
         def subst(text: str) -> str:
             return (text.replace("{callsign}", call)
                         .replace("{runtime}", runtime)
+                        .replace("{hardware}", hardware)
                         .replace("{band}", cfg_band))    # for per-band config keys
 
         stored = self.file_config_values(target, band)
@@ -1496,19 +1515,49 @@ class ParamsConfigMixin:
             # raw into the app's config file. An ephemeral override (already validated by
             # `_normalize_file_overrides`) takes precedence for THIS launch only.
             values = {}
+            secret_error = ""
             for p in fc.params:
+                if getattr(p, "secret_ref", ""):
+                    # Separate trust layer: never `over`, never `stored`, never a default.
+                    table, _, key = p.secret_ref.partition(".")
+                    try:
+                        loaded = secrets()
+                    except ConfigError as exc:
+                        # A refused secrets file is a config-generation FAILURE, not an
+                        # exception escaping to the caller: the start boundary catches
+                        # OSError/PathContainmentError only, so this used to surface as
+                        # a traceback (web 500) instead of a blocked, typed result.
+                        secret_error = str(exc)
+                        break
+                    val = (loaded.get(table) or {}).get(key)
+                    if not isinstance(val, str) or not val.strip():
+                        # NEVER fall back to an empty value — that would silently ship an
+                        # unauthenticated interface that looks configured. Either omit the
+                        # key entirely (opt-in feature left off) or block the write.
+                        if getattr(p, "omit_if_empty", False):
+                            values[p.name] = ""
+                            continue
+                        secret_error = (f"required secret [{table}] {key} is missing or empty in "
+                                        f"config/secrets.toml")
+                        break
+                    values[p.name] = val
+                    continue
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 try:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:
                     values[p.name] = p.default
+            if secret_error:
+                # The message names the LOCATION of the secret, never its value.
+                written.append(ConfigWrite(c.id, str(fc.path), "failed", secret_error))
+                continue
             # THREE explicit destination policies (P1 generated-config containment):
             dest = self._resolve_config_dest(c, fc.path)
             if dest.status != "ok":
                 written.append(ConfigWrite(c.id, dest.detail_path, dest.status, dest.detail))
                 continue
             out_path = dest.path
-            if fc.fmt in ("toml-update", "yaml-update"):
+            if fc.fmt in ("toml-update", "yaml-update", "ini-update"):
                 base = self._resolve_config_dest(c, fc.base, for_base=True)
                 if base.status != "ok":
                     written.append(ConfigWrite(c.id, base.detail_path,
@@ -1520,8 +1569,13 @@ class ParamsConfigMixin:
                 except (OSError, PathContainmentError) as exc:
                     written.append(ConfigWrite(c.id, str(base.path), "no-base", str(exc)))
                     continue
-                updater = update_toml if fc.fmt == "toml-update" else update_yaml
-                text = updater(base_text, fc.params, values, subst)
+                updater = {"toml-update": update_toml, "yaml-update": update_yaml,
+                           "ini-update": update_ini}[fc.fmt]
+                try:
+                    text = updater(base_text, fc.params, values, subst)
+                except ValueError as exc:
+                    written.append(ConfigWrite(c.id, str(out_path), "failed", str(exc)))
+                    continue
             elif fc.fmt == "env":
                 # KEY=value (no spaces, no header) for split-on-'=' parsers.
                 text = render_keyval(fc.params, values, subst, sep="=", comment=False)
@@ -1529,7 +1583,7 @@ class ParamsConfigMixin:
                 text = render_keyval(fc.params, values, subst)
             try:
                 if dest.policy == "runtime":
-                    runtime_fs.atomic_write(self._paths, out_path, text, 0o644)
+                    runtime_fs.atomic_write(self._paths, out_path, text, fc.mode)
                 else:
                     # Pass the RELATIVE path so containment is proven component-by-
                     # component before any directory is created (P1.1).

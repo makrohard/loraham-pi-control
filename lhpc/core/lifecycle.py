@@ -39,7 +39,7 @@ from .probes.process import probe_process
 # The ONE exact content a completion marker may hold; `is_built()` accepts nothing else. A build stamps
 # it only after EVERY step succeeds, and a rebuild invalidates it (fail-closed) before the first step.
 BUILD_MARKER_TEXT = "lhpc build complete\n"
-_BUILD_MARKER_MAX = 64                         # bounded marker read — anything larger is malformed
+_BUILD_MARKER_MAX = 512                        # bounded marker read (text + consumed-source lines)
 
 # Surfaced when a groups grant is CONFIGURED (usermod done) but not yet EFFECTIVE in this process — the
 # fix is a restart, not another usermod. Kept here so both dependency render sites use the one wording.
@@ -323,7 +323,7 @@ class Lifecycle:
 
     def build(self, comp: Component, timeout: float | None = None,
               log_base: str | None = None, redactor=None, should_cancel=None,
-              on_log_open=None) -> JobResult:
+              on_log_open=None, marker_extra: str = "") -> JobResult:
         """Run a component's typed build steps (structured argv, shell=False). Each
         step may carry env and a `{pkgconfig:NAME}` token (resolved via pkg-config).
 
@@ -380,7 +380,11 @@ class Lifecycle:
         # so is_built never reads "built" off an unstamped tree).
         if marker is not None:
             try:
-                runtime_fs.atomic_write(self.paths, marker, BUILD_MARKER_TEXT, 0o644)
+                # `marker_extra` (caller-computed consumed-source SHAs) makes the marker
+                # provenance-bearing: is_built() recomputes the expected text, so a marker
+                # written against older sources reads NOT built after either source moves.
+                runtime_fs.atomic_write(self.paths, marker,
+                                        BUILD_MARKER_TEXT + marker_extra, 0o644)
             except (OSError, PathContainmentError) as exc:
                 return JobResult(name=base, state=JobState.FAILED, returncode=1,
                                  log_path=last.log_path,

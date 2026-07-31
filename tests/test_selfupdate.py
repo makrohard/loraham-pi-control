@@ -304,7 +304,10 @@ def test_check_upstream_fetch_error_is_sanitized(tmp_path, monkeypatch):
         g("rev-parse", "HEAD"): CR(0, "h\n", ""),
         g("rev-parse", "--abbrev-ref", "HEAD"): CR(0, "main\n", ""),
         g("status", "--porcelain"): CR(0, "", ""),
-        g("fetch", "--quiet", "origin", "--", "main"): CR(1, "", noisy),
+        # forced refspec: check_upstream must follow a rewritten upstream (see
+        # test_check_upstream_follows_a_rewritten_upstream)
+        g("fetch", "--quiet", "--force", "origin", "--",
+          "refs/heads/main:refs/remotes/origin/main"): CR(1, "", noisy),
     }
     out = selfupdate.check_upstream(FakeSystem(commands=cmds).system)
     assert out["ok"] is False
@@ -986,7 +989,8 @@ def _fake_commands(root, *, clean_rc):
         ("git", "-C", r, "rev-parse", "HEAD"): R(out="aaaaaaaaa\n"),
         ("git", "-C", r, "rev-parse", "--abbrev-ref", "HEAD"): R(out="main\n"),
         ("git", "-C", r, "status", "--porcelain"): R(out="?? junk\n"),         # dirty -> needs force
-        ("git", "-C", r, "fetch", "--quiet", "origin", "--", "main"): R(),
+        ("git", "-C", r, "fetch", "--quiet", "--force", "origin", "--",
+         "refs/heads/main:refs/remotes/origin/main"): R(),
         ("git", "-C", r, "rev-parse", "origin/main"): R(out="bbbbbbbbb\n"),
         ("git", "-C", r, "show", "origin/main:lhpc/version.py"): R(out='__version__ = "0.1.2"\n'),
         ("git", "-C", r, "diff", "--name-only", "HEAD..origin/main", "--", "pyproject.toml"): R(),
@@ -2427,3 +2431,83 @@ def test_overwrite_removed_only_with_old_helper_execstart(tmp_path, monkeypatch)
     _write_overwrite_unit(ud, "/elsewhere", "/elsewhere/venv/lhpc/bin/lhpc self-update --run-service --overwrite")
     svc.self_update_repair_integration(restart=False)
     assert (ud / "lhpc-selfupdate-overwrite.service").exists()
+
+
+def test_check_upstream_follows_a_rewritten_upstream(env):
+    """`git fetch <remote> <branch>` updates the remote-tracking ref only
+    opportunistically, and NOT when upstream rewrote history. After a force-push we kept
+    reading the OLD commit, so lhpc reported "update available" for a commit that no
+    longer exists — and computed `ff_blocked` against that phantom."""
+    up = env["up"]
+    first = _upstream_commit(up, version="0.9.9")
+    assert selfupdate.check_upstream(env["sys"])["upstream_head"] == first
+
+    # Upstream rewrites history (force-push), exactly like a re-cut release branch.
+    _git(up, "reset", "--hard", "HEAD~1")
+    (up / "note.txt").write_text("rewritten\n")
+    _git(up, "add", "-A")
+    _git(up, "commit", "-m", "rewritten")
+    _git(up, "push", "--force", "origin", "main")
+    rewritten = _git(up, "rev-parse", "HEAD")
+    assert rewritten != first
+
+    out = selfupdate.check_upstream(env["sys"])
+    assert out["ok"]
+    assert out["upstream_head"] == rewritten, "must follow the rewritten upstream"
+    assert out["upstream_head"] != first, "must not report the vanished commit"
+
+
+def test_apply_leaves_the_managed_units_canonical(env, monkeypatch):
+    """An update whose new version changes a unit TEMPLATE left the installed unit
+    non-canonical, and boot restore then refused — the box came back from a power cycle
+    with nothing running. Boot restore cannot repair it (ProtectHome=read-only), so the
+    updater must."""
+    from lhpc.core.service_base import ActionResult
+
+    svc = env["svc"] if "svc" in env else None
+    if svc is None:
+        pytest.skip("no service fixture in this env")
+    calls = []
+    monkeypatch.setattr(type(svc), "updater_integration", lambda self: {"fixable": True})
+    monkeypatch.setattr(type(svc), "self_update_repair_integration",
+                        lambda self, *, restart=True: (calls.append(restart),
+                                                       ActionResult(True, "repaired"))[1])
+    monkeypatch.setattr(type(svc), "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+    res = svc._apply_and_sync(force=False)
+    assert res.data.get("units_refreshed") is True
+    assert calls == [False], "must not restart the console from inside the update"
+
+
+def test_unit_refresh_runs_the_new_code_out_of_process(env, monkeypatch):
+    """The refresh must be a SUBPROCESS: the running interpreter still holds the
+    PRE-update `updater_units`, so an in-process render/verify approves the OLD units.
+    And the systemd helper cannot write them at all (ProtectHome=read-only), so a
+    successful-looking update used to leave stale units and silently disable boot
+    restore."""
+    import inspect
+
+    from lhpc.core.services import ControllerService
+
+    src = inspect.getsource(ControllerService._refresh_units_post_update)
+    assert "subprocess.run" in src and "verify-set" in src, "verification must be out-of-process"
+    assert "fixable" in src, "must never rewrite units that are not this deployment's"
+
+
+def test_a_failed_unit_refresh_makes_the_update_visibly_partial(env, monkeypatch):
+    """A failed refresh was stored only in ActionResult.data while ok stayed True, and
+    the CLI renderer never shows that data — the operator saw a clean success."""
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+
+    svc = env["svc"] if "svc" in env else None
+    if svc is None:
+        pytest.skip("no service fixture in this env")
+    monkeypatch.setattr(type(svc), "self_update_apply",
+                        lambda self, *, force=False: ActionResult(True, "applied", data={}))
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update",
+                        lambda self: (False, "units still not canonical"))
+    res = svc._apply_and_sync(force=False)
+    assert res.ok is False
+    assert "units could NOT be refreshed" in res.summary
+    assert "repair-integration" in res.summary

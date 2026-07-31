@@ -400,9 +400,12 @@ def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
     # EXACT invariants, not a denylist: a denylist rots and proves nothing about new deps.
     # The opt-in scope is GUI toolkits PLUS the Voice-only audio libraries (Voice is skipped by
     # default on a headless rig, so its private deps have no business in every bootstrap).
+    # python3-dev is GUI-scoped on purpose: only Sideband needs a compiler
+    # (materialyoucolor has no aarch64 wheel). The node builds without one.
     assert sorted(gui) == ["sudo apt install -y libasound2-dev",
                            "sudo apt install -y libcodec2-dev",
                            "sudo apt install -y libgtk-3-dev",
+                           "sudo apt install -y python3-dev",
                            "sudo apt install -y python3-tk"]
     assert not set(core) & set(gui)                 # a command lives in exactly one scope
     assert not any("gtk" in c or "python3-tk" in c or "asound" in c or "codec2" in c for c in core)

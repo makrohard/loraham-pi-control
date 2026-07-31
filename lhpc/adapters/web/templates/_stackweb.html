@@ -16,6 +16,9 @@
     {% if sw.bypassable %}<span class="ver ver-red">upstream exposed</span>{% endif %}
   </summary>
   <div class="body">
+    {# The URL is a LINK here, not in the summary above (a11y: no interactive element
+       inside a <summary> toggle). #}
+    {% if sw.cfg.enabled and sw.posture %}<p class="wsopen"><a class="wsurl" href="{{ sw.posture.scheme }}://{{ req_host }}:{{ sw.cfg.port }}">Open {{ sw.posture.scheme }}://{{ req_host }}:{{ sw.cfg.port }}</a></p>{% endif %}
 
     {# STANDING security fact, not a one-off flash: the upstream answers on a non-loopback interface,
        so nginx is not the only door — whatever `mode`/`auth` say. #}

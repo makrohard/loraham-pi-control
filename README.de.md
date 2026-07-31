@@ -30,6 +30,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
 | `meshcore` | 868 | MeshCore-Pi-Node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
+| `reticulum` | 433 / 868 | Reticulum-Node, steuert das Funkmodul direkt über SPI | [reticulum](docs/stacks/reticulum.md) |
 
 Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic steuert das Funkgerät selbst und
 kann sich kein Band mit dem Daemon teilen (`lhpc` blockiert den Konflikt).
@@ -136,9 +137,10 @@ sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
 sudo apt install -y --no-install-recommends socat                                       # kiss
+sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
 sudo apt install -y --no-install-recommends libssl-dev libslirp0 meson ninja-build libglib2.0-dev libpixman-1-dev libslirp-dev zlib1g-dev libgcrypt20-dev   # meshcom (Bridge + QEMU, headless aus dem Quellcode gebaut)
 sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (aus dem Quellcode gebaut)
-sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev python3-tk           # nur mit --with-gui (Voice, MeshCore Node Manager)
+sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev python3-tk python3-dev           # nur mit --with-gui (Voice, MeshCore Node Manager)
 
 sudo systemctl disable --now nginx.service               # Paket behalten, den ROOT-Dienst abschalten
 # Boards mit wenig RAM (<600 MB): eine Swapdatei bewahrt die meshtasticd-/meshcom-Builds vor dem OOM-Kill

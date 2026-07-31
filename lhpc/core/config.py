@@ -709,8 +709,23 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
 
 
 def load_secrets(paths: Paths) -> dict:
-    """Read the local secrets layer (never tracked). Returns {} if absent."""
-    return _load_runtime_toml(paths, paths.runtime_root / "config" / "secrets.toml")
+    """Read the local secrets layer (never tracked). Returns {} if absent.
+
+    Refuses a file readable by group or others: the generated RNS config carrying
+    the IFAC key is written 0600, which is pointless if the source of that key is
+    world-readable. Create it with `install -m 0600` (or chmod 600 after editing —
+    some editors restore 0644 on save).
+    """
+    path = paths.runtime_root / "config" / "secrets.toml"
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return _load_runtime_toml(paths, path)
+    if mode & 0o077:
+        raise ConfigError(
+            f"{path} is readable beyond its owner (mode {mode & 0o777:04o}) — "
+            f"refusing to load secrets; run: chmod 600 {path}")
+    return _load_runtime_toml(paths, path)
 
 
 _WEB_SESSION_KEY = ("config", "secrets", "web_session.key")
@@ -780,6 +795,87 @@ def render_keyval(params, values, subst, sep: str = " = ", comment: bool = True)
             v = "1" if str(v) not in ("", "0", "false", "off") else "0"
         lines.append(f"{subst(p.key)}{sep}{subst(str(v))}")   # key may hold {band}
     return "\n".join(lines) + "\n"
+
+
+_INI_UNSAFE = "".join(chr(c) for c in range(0x20)) + "\x7f"
+
+
+def _ini_scalar(raw: str) -> str:
+    """Render a value the way ConfigObj will read it back.
+
+    Rejects control characters outright: a newline in a generated config does
+    not corrupt one value, it invents a new key.
+    """
+    if any(ch in raw for ch in _INI_UNSAFE):
+        raise ValueError("control characters are not allowed in a config value")
+    if raw == "":
+        return '""'
+    if raw != raw.strip() or any(ch in raw for ch in "#,'\"") :
+        return '"' + raw.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return raw
+
+
+def _ini_section_path(section: str) -> tuple[str, ...]:
+    """`section` is a "/"-separated path: "interfaces/LoRa 868" -> [[LoRa 868]]
+    nested inside [interfaces]. "" means the top level."""
+    return tuple(part for part in str(section).split("/") if part)
+
+
+def update_ini(text: str, params, values, subst) -> str:
+    """Update declared keys in a ConfigObj-style nested INI, preserving the rest.
+
+    Sections are addressed by full path, so `[[LoRa 868]]` under `[interfaces]`
+    is unambiguous even if another section reuses the name. A declared key that
+    is absent is APPENDED to its section; only the FIRST occurrence is updated,
+    so a hand-added duplicate can never be silently split.
+    """
+    want: dict = {}
+    for prm in params:
+        raw = subst(str(values.get(prm.name, prm.default)))
+        if getattr(prm, "omit_if_empty", False) and raw.strip() == "":
+            continue
+        key = subst(prm.key)
+        if any(ch in key for ch in _INI_UNSAFE) or not key.strip():
+            raise ValueError(f"invalid config key {key!r}")
+        want[(_ini_section_path(prm.section), key)] = _ini_scalar(raw)
+
+    lines = text.splitlines()
+    out: list[str] = []
+    path: tuple[str, ...] = ()
+    done: set = set()
+
+    def flush(section_path, indent):
+        """Append any declared keys this section never had."""
+        for (sec, key), val in want.items():
+            if sec == section_path and (sec, key) not in done:
+                out.append(f"{indent}{key} = {val}")
+                done.add((sec, key))
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            depth = len(stripped) - len(stripped.lstrip("["))
+            name = stripped.strip("[]").strip()
+            flush(path, "  " * (len(path)))          # close the previous section
+            path = (*path[:depth - 1], name)
+            out.append(line)
+            continue
+        candidate = stripped[1:].strip() if stripped.startswith("#") else stripped
+        if "=" in candidate:
+            key = candidate.split("=", 1)[0].strip()
+            slot = (path, key)
+            if slot in want and slot not in done:
+                indent = line[:len(line) - len(line.lstrip())] or "  " * len(path)
+                out.append(f"{indent}{key} = {want[slot]}")
+                done.add(slot)
+                continue
+        out.append(line)
+    flush(path, "  " * len(path))
+
+    missing = {sec for (sec, _k) in want} - {sec for (sec, _k) in done}
+    if missing:
+        raise ValueError(f"config base has no section {'/'.join(min(missing))!r}")
+    return "\n".join(out) + "\n"
 
 
 def update_toml(text: str, params, values, subst) -> str:

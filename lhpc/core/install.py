@@ -396,7 +396,13 @@ class Installer:
                     components=self._path_consumers(spec.path), handle=prior)
                 if rec is None:
                     action.status = "failed"
-                    action.detail = f"ownership/identity not proven — not overwritten: {why}"
+                    # Say how to RECOVER. Refusing to overwrite a tree lhpc did not move is
+                    # right, but every route (update, update --source pinned, install) then
+                    # refuses and the operator is stuck with no documented way out.
+                    action.detail = (
+                        f"ownership/identity not proven — not overwritten: {why}. "
+                        f"Recover by removing the checkout ({spec.path}) and re-running "
+                        f"install, which re-clones it at the pin.")
                     return action
                 # Never overwrite a working tree with local modifications — TRACKED changes
                 # AND non-ignored, non-artifact UNTRACKED files: staging into it would be
