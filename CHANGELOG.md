@@ -1,11 +1,12 @@
 # Changelog
 
-## unreleased
+## 0.1.6
 
 - Binary install channel: prebuilt, smoke-gated artifacts for daemon/meshtastic/meshcom — minutes instead of hours, and the default where published (`--source binary`); pins must match the manifest, switching back to source is non-destructive
-- Managed firewall
+- Managed firewall: nftables default-deny you apply with one sudo command, with per-listener choices, an access-point mode (DHCP/DNS on the AP interface) and three honest status dimensions — policy is now settable from the CLI too (`lhpc firewall --mode/--ap/--ssh-ports/--allow-endpoints/--recommended`), so a headless box needs no console
 - System monitor
-- Boot auto-restore
+- Boot auto-restore: stacks that were running come back after a reboot, through the normal start path
+- Field-validated from zero on a Pi Zero 2W: binary install → mTLS console → stack proxies → own access point with a phone client certificate
 - Test hygiene
 
 ## 0.1.5

@@ -48,7 +48,7 @@ source-fallback) in lockstep with any `lib_index` schema change. Actions are SHA
 container is digest-pinned — bump those deliberately.
 
 ## Per-release
-- [ ] Version bump (`pyproject.toml`, now `0.1.5`) + `CHANGELOG.md` + tag
+- [ ] Version bump (`pyproject.toml`, now `0.1.6`) + `CHANGELOG.md` + tag
 - [ ] Refresh known-working pins to the run-proven set
 - [ ] **From-zero acceptance** on fresh hardware — `bootstrap-deps → install.sh → auto-install` on a
       freshly flashed Pi Zero 2W (~4 h) and Pi 5 (~44 min). This is the real net for the install path
