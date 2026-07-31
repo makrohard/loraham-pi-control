@@ -1943,7 +1943,7 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    pin_commit = "d6c5af7b31102393f9b93be165261e15c749aae0"
-    pin_tag = "v1.5.0-18-gd6c5af7"
+    pin_commit = "56b246b4d45174817936c0fc910897b52bec66b4"
+    pin_tag = "v1.5.0-63-g56b246b"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
