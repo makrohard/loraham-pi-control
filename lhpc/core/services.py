@@ -860,6 +860,21 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append("    stacks will NOT come back after a reboot until this is repaired:")
             details.append("      lhpc self-update --repair-integration")
 
+        # GPS: a malformed [gps] has already disabled position (fail closed), and stale
+        # per-stack values are inert but misleading. Both are quiet failures otherwise —
+        # the operator believes a stack is reporting position when it is not.
+        gcfg = getattr(self.config(), "gps", None)
+        if gcfg is not None and not getattr(gcfg, "valid", True):
+            details.append("")
+            details.append(f"  ! POSITION SOURCE DISABLED — {gcfg.reason}")
+            details.append("    stacks that would use GPS will start without a position:")
+            details.append("      lhpc gps --source <off|gpsd|nmea|fixed>")
+        for sid, keys in self.legacy_gps_values().items():
+            details.append("")
+            details.append(f"  ! {sid} has old per-stack position values on disk "
+                           f"({', '.join(keys)})")
+            details.append("    they are IGNORED — `lhpc gps` is authoritative for every stack")
+
         # Consolidated, copyable install/grant commands for everything unsatisfied — at the very end.
         if install_cmds:
             details.append("Install the missing dependencies:")
@@ -1316,6 +1331,147 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         owner = self._owner_stack(target)
         return owner is not None and owner.main == self.DAEMON_ID
 
+    def gps_plan(self, target: str = ""):
+        """THE resolved GPS plan. One object, computed from `[gps]` PLUS the target stack's
+        persisted `use_gps` switch, shared by run order, claims, config rendering, post-steps,
+        status, stop and boot restore — so no two of them can act on a different idea of where
+        position comes from, or of whether this stack uses it at all.
+
+        Without `target` the GLOBAL source is reported as-is (what `lhpc gps` shows).
+        """
+        from .gps import plan_from_config
+        plan = plan_from_config(self.config())
+        if target and plan.enabled and not self.gps_enabled_for(target):
+            # The stack opted out: it opens nothing, claims nothing, renders no device and
+            # pushes "no GPS" to its node. Same shape as a global `off`, scoped to one stack.
+            return plan.disabled_for_stack()
+        return plan
+
+    def gps_enabled_for(self, target: str) -> bool:
+        """The stack's PERSISTED `use_gps` switch (default off).
+
+        Stored and read BANDLESSLY. "Does this box report its position" is a property of the
+        stack, not of the frequency it happens to be on. Reading it per band made the switch
+        revert on a band change; reading "on if ANY band says on" then made turning it OFF on
+        one band ineffective. One value, one answer.
+
+        `target` may be a component id — it is normalized to its owner stack, so a direct
+        component start is gated exactly like a stack start.
+
+        Deliberately not settable per start: an ephemeral value would let a launch differ
+        from the saved state that claims and generated config were derived from.
+        """
+        stack_id = self.gps_owner_stack(target)
+        if not stack_id:
+            return False
+        try:
+            cfg = load_stack_config(self._paths, stack_id)          # bandless
+        except (OSError, ValueError, KeyError, ConfigError):
+            return False
+        return str(cfg.get("use_gps", "")).strip().lower() == "on"
+
+    # Stacks whose components can consume a position.
+    _GPS_STACKS: ClassVar[tuple] = ("meshtastic", "meshcom", "reticulum")
+
+    def gps_owner_stack(self, target: str) -> str:
+        """The GPS-capable stack a target belongs to, or "".
+
+        A start may name a COMPONENT (`sideband`, `meshcom-qemu`, `meshtastic-gps`). Without
+        normalizing, every GPS decision — feed admission, the start gate, the receiver claim —
+        silently did nothing for those targets.
+        """
+        if not target:
+            return ""
+        if target in self._GPS_STACKS:
+            return target
+        try:
+            owner = self._owner_stack_id(target)
+        except (KeyError, AttributeError):
+            owner = ""
+        return owner if owner in self._GPS_STACKS else ""
+
+    def _gps_components_for(self, target: str) -> set:
+        """GPS feed components this stack must run under the current plan.
+
+        Empty unless the stack has a consumer that needs a device-shaped stream: Meshtastic
+        only for `source = gpsd` (it reads `nmea` straight off the real device and uses its
+        own fixed-position support), MeshCom whenever GPS is on (its pinned relay speaks only
+        to a LOCAL gpsd and cannot serve remote gpsd, direct NMEA, or a fixed position).
+        """
+        # Accepts a stack OR a component id: a direct consumer start resolves the same feed set
+        # as its stack, so both paths describe one plan.
+        target = self.gps_owner_stack(target)
+        if not target:
+            return set()
+        plan = self.gps_plan(target)
+        if not plan.enabled:
+            return set()
+        cid = self._production_feeds().get(target)
+        if not cid or not plan.needs_bridge(target):
+            return set()
+        # Only admit a component the stack actually declares — a manifest without the feed
+        # must not silently gain one.
+        s = self.stack(target)
+        return {cid} if s and any(c.id == cid for c in s.components) else set()
+
+    def _production_feeds(self) -> dict:
+        """Stack id -> the component that carries its PRODUCTION position feed."""
+        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC
+        return {CONSUMER_MESHTASTIC: "meshtastic-gps", CONSUMER_MESHCOM: "meshcom-gps"}
+
+    def _all_gps_feed_ids(self) -> set:
+        """Every production feed component id — what a direct start must be checked against."""
+        return set(self._production_feeds().values())
+
+    def _gps_consumer_ids(self) -> set:
+        """Components that actually READ a position.
+
+        A GPS stack contains plenty that does not: `meshcom-bridge` is a TCP relay to the
+        daemon and `meshcom-firmware` is a build artifact. Treating "belongs to a GPS stack"
+        as "consumes position" started a feed — and claimed the receiver — for components that
+        never read one.
+        """
+        # meshtasticd reads the serial device, the QEMU node reads its UART, Sideband reads the
+        # plugin. Everything else in those stacks is transport or build output.
+        return {"meshtastic", "meshcom-qemu", "sideband"}
+
+    def _gps_run_order_uses_position(self, target: str) -> bool:
+        """Does what this start would ACTUALLY bring up read a position, or feed one?
+
+        The owner stack is the wrong unit. `meshcom-bridge` and `meshcom-firmware` belong to a
+        GPS stack and read nothing; the fixture relay replays a checked-in file; and a Reticulum
+        start whose run order is just `rns` — Sideband not selected — touches no receiver either.
+        Gating and claiming on stack membership refused those starts over settings they never
+        use, and took the receiver away from something that would have used it.
+        """
+        order = self._run_order(target)
+        if not order:
+            return False
+        ids = {c.id for _s, c in order}
+        return bool(ids & (self._gps_consumer_ids() | self._all_gps_feed_ids()))
+
+    # The MeshCom fixture relay replays a CHECKED-IN synthetic NMEA file. It is a test
+    # facility, never a position source, and it writes to the same UART socket as the
+    # production feed.
+    _FIXTURE_FEEDS: ClassVar[dict] = {"meshcom": "meshcom-gps-relay"}
+
+    def _gps_components_excluded(self, target: str) -> set:
+        """Feed components that must not run under the current plan.
+
+        The fixture relay stays an ordinary opt-in optional component — an operator can still
+        auto-start it or run it directly, which is what makes it "explicit and test-only".
+        What it must never do is run BESIDE the production feed: both write the same UART
+        socket, so the node would receive a synthetic position interleaved with the real one
+        and there would be no way to tell which it beaconed.
+
+        When the global source is configured, production wins.
+        """
+        target = self.gps_owner_stack(target)                 # stack OR component id
+        cid = self._FIXTURE_FEEDS.get(target)
+        if not cid:
+            return set()
+        return {cid} if self._gps_components_for(target) else set()
+
     def _run_order(self, target: str):
         """Ordered (stack, component) list to bring `target` up: the target's
         non-optional components plus their transitive dependencies, deps first."""
@@ -1327,6 +1483,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             cfg = load_stack_config(self._paths, target)
             allowed_optional = {c.id for c in s.components
                                 if c.optional and cfg.get(f"autostart_{c.id}") == "on"}
+            # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
+            # resolved global GPS plan, computed HERE — before anything downstream acquires a
+            # lock — so run order, claims and the rendered config all describe the same plan.
+            # Without this, turning GPS on could never add the component: this order is built
+            # from static manifest data plus saved autostart flags only.
+            allowed_optional |= self._gps_components_for(target)
+            allowed_optional -= self._gps_components_excluded(target)
             seeds = [c.id for c in s.components if not c.optional]
             if s.main and s.main not in seeds:
                 seeds.append(s.main)
@@ -1334,6 +1497,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         elif target in idx:
             seeds = [target]
             allowed_optional = {target}   # an explicit component run is always allowed
+            # A DIRECT consumer start (`lhpc stack start meshcom-qemu`) must run under the same
+            # GPS plan as its stack. Without this the consumer came up with no feed at all —
+            # silently position-blind — because a component run order is seeds + dependencies
+            # only, and the feed is admitted from the plan, never declared as a dependency.
+            # The feed itself is not re-added when it IS the target (see `gps_block`).
+            # Only a component that actually READS a position pulls the feed in. A feed (or the
+            # fixture relay) must not drag the other one in either: both write the same endpoint,
+            # and an explicit fixture run must stay possible.
+            if target in self._gps_consumer_ids():
+                _feeds = (self._gps_components_for(target)
+                          - self._gps_components_excluded(target))
+                allowed_optional |= _feeds
+                seeds += sorted(_feeds)
         else:
             return None
         order, seen = [], set()
@@ -1488,7 +1664,39 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     keys.add(r.key)
         for b in self._operation_bands(target, band, radio, op):
             keys.add(f"loraham.radio.{b}")
+        # The GPS receiver is a DYNAMIC exclusive claim: which device (if any) a stack opens
+        # comes from the resolved global plan, not from a static manifest resource. Without
+        # this, two stacks configured for direct NMEA would both open the same receiver — two
+        # readers on one device, which loses fixes intermittently instead of failing cleanly.
+        # Keyed on the real character device (st_rdev), so /dev/ttyACM0 and its by-id alias
+        # cannot be claimed as if they were two different receivers.
+        gps_key = self._gps_device_claim(target)
+        if gps_key:
+            keys.add(gps_key)
         return sorted(keys)
+
+    def _gps_device_claim(self, target: str) -> str:
+        """The exclusive resource key for the local receiver this stack would open, or "".
+
+        Empty for every source that opens no local device (off / fixed / remote gpsd) and for
+        stacks with no GPS consumer — claiming a device they never touch would refuse
+        combinations that are perfectly valid.
+        """
+        raw, target = target, self.gps_owner_stack(target)
+        if not target:
+            return ""
+        # Claim only what this start actually brings up. Stack membership is not enough: a
+        # Reticulum start without Sideband, or a `meshcom-bridge`/`meshcom-firmware`/fixture run,
+        # reads no position and must not take the receiver from something that would.
+        if not self._gps_run_order_uses_position(raw):
+            return ""
+        try:
+            plan = self.gps_plan(target)
+        except (OSError, ValueError, AttributeError):
+            return ""
+        if not plan.enabled or not plan.claims_device or not plan.device_key:
+            return ""
+        return f"gps.{plan.device_key}"
 
     def _operation_source_paths(self, target: str) -> list[str]:
         """Distinct managed source paths a start touches (generated config, command
@@ -1613,10 +1821,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # How long to WAIT for a resource claim held by our OWN controller process before failing.
     _SELF_LOCK_WAIT_S = 5.0
-    # How long to tolerate an UNIDENTIFIABLE holder (flock taken, `.owner` not yet published).
-    # Deliberately tiny: it covers one file write, not a real wait, so external contention still
-    # fails fast instead of every conflict becoming a multi-second stall.
-    _OWNER_PUBLISH_GRACE_S = 0.25
 
     def _acquire_key(self, stack, k: str, op: str, target: str) -> None:
         """Enter one reslock key into `stack`. A claim held by ANOTHER process is a real external
@@ -1626,15 +1830,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         shortly → wait BOUNDED, so the operator is never told their own stack is 'busy' on itself,
         while a genuinely hung holder still can't wedge us forever."""
         from . import reslock
-        now = time.monotonic()
-        deadline = now + self._SELF_LOCK_WAIT_S
-        # PUBLICATION GRACE. `operation_lock` takes the flock and only THEN writes its `.owner`
-        # record, so a contender that arrives inside that window is told "busy" by a holder it
-        # cannot yet identify. Treating that as an external conflict made a same-process wait fail
-        # immediately — intermittently, and more often under load, which is exactly when two
-        # controller threads overlap. An unidentified holder is therefore retried BRIEFLY (this is
-        # the only ambiguous state) and never for longer than the same-process budget.
-        grace = min(now + self._OWNER_PUBLISH_GRACE_S, deadline)
+        deadline = time.monotonic() + self._SELF_LOCK_WAIT_S
+        # `operation_lock` serializes taking the flock with publishing its `.owner` record — per
+        # key, within this process — so a holder in ANOTHER THREAD HERE can never be observed
+        # mid-publication. That is what removes the old timing-based grace: waiting a fixed
+        # fraction of a second for an owner record to appear was a race against SD-card write
+        # latency, and it lost under load, which is exactly when two controller threads overlap.
+        #
+        # An unidentifiable holder is therefore, by construction, NOT one of ours: it is another
+        # process mid-publication or a corrupt record. Both are external conflicts and fail fast.
         while True:
             try:
                 stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
@@ -1643,13 +1847,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 holder = busy.holder if isinstance(busy.holder, dict) else {}
                 pid = holder.get("pid")
                 if pid is None or not str(pid).strip():
-                    # Absent/malformed owner: mid-publication, or a corrupt record. Retry only
-                    # inside the short grace, then surface the SAME typed ResourceBusy — an
-                    # unidentifiable holder must never become a five-second stall.
-                    if time.monotonic() < grace:
-                        time.sleep(0.01)
-                        continue
-                    raise
+                    raise                   # unidentifiable => external -> fail fast
                 if str(pid) != str(os.getpid()):
                     raise                   # a genuinely EXTERNAL holder -> fail fast, as before
                 if time.monotonic() >= deadline:

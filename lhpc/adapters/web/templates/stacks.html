@@ -113,6 +113,9 @@
           {% endif %}
           {# Managed Firewall — sibling of Webserver, INSIDE the LHCP controller row #}
           {% include "_firewall.html" %}
+          {# Position (GPS) — sibling of Webserver/Firewall in the controller row #}
+          {% include "_gps.html" %}
+
         </div>
       </details>
       {# Action links OUTSIDE the summary (a11y) but overlaid on the row. #}

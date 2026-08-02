@@ -10,6 +10,7 @@ The status state rules are implemented in `_run_state_for_service`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from .model import (
@@ -53,6 +54,10 @@ class Snapshot:
             if s.stack.id == stack_id:
                 return s
         return None
+
+
+# A GPS feed refreshes its marker every ~10 s; anything older is not this run.
+_GPS_MARKER_MAX_AGE_S = 60.0
 
 
 class StatusProber:
@@ -166,6 +171,17 @@ class StatusProber:
         endpoints, all_ready, _any_present, has_expected = self._assess_endpoints(comp)
         status.endpoints = endpoints
 
+        # A GPS feed's health is its UPSTREAM SOURCE, not a path. Its endpoint exists from the
+        # moment it is created, so without this a feed whose gpsd died would keep reading
+        # RUNNING while delivering nothing. Feeding the verdict through the SAME
+        # ready/not-ready channel the endpoint machinery uses gives DEGRADED on loss and a
+        # clean return to RUNNING on recovery, with no restart.
+        if comp.readiness == "gps-feed":
+            feed_ready, feed_note = self._gps_feed_ready(comp)
+            has_expected = True
+            all_ready = feed_ready
+            status.evidence["gps.feed"] = feed_note
+
         status.run_state = _run_state_for_service(
             unit_states=unit_states,
             proc_matched=proc_matched,
@@ -215,6 +231,61 @@ class StatusProber:
                 and src.state in (SourceState.MATCH, SourceState.DIFFERS)):
             return ProfileState.CONFIRMED_WORKING
         return _profile_from_source(src.state)
+
+    def _gps_feed_ready(self, comp) -> tuple[bool, str]:
+        """(healthy, note) for a GPS feed, from the marker it writes about its UPSTREAM.
+
+        `ready` (sentences flowing) and `connected` (source reachable, no fix yet — a cold
+        start can take minutes) both count as healthy. Anything else means the position is not
+        arriving, which must show as DEGRADED rather than a confident RUNNING.
+
+        Read-only and failure-tolerant: this runs on every status GET.
+        """
+        import json
+        import time
+        from pathlib import Path as _Path
+
+        from . import runtime_fs
+        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC, bridge_state_dir
+        consumer = (CONSUMER_MESHTASTIC if comp.id == "meshtastic-gps"
+                    else CONSUMER_MESHCOM if comp.id == "meshcom-gps" else "")
+        if not consumer:
+            return True, "not a GPS feed"
+        marker = _Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
+        try:
+            got = json.loads(runtime_fs.read_text_regular(self._paths, marker, max_bytes=4096))
+        except (OSError, ValueError, runtime_fs.PathContainmentError):
+            return False, "no readiness marker"
+        if not isinstance(got, dict):
+            return False, "unreadable readiness marker"
+        # Same rule as the start gate: a marker from a previous run, or one nobody has
+        # refreshed, does not describe the feed that is supposed to be running now.
+        try:
+            updated = float(got.get("updated", 0) or 0)
+        except (TypeError, ValueError):
+            updated = 0.0
+        if updated <= 0 or (time.time() - updated) > _GPS_MARKER_MAX_AGE_S:
+            return False, "readiness marker is stale"
+        # A feed killed moments after its last refresh leaves a marker that is still RECENT, so
+        # the owning process is what says it is still there. Required, and validated the same way
+        # as in the start gate: `bool` is an `int`, and True would read as the always-alive pid 1.
+        pid = got.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return False, "readiness marker has no usable owner pid"
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False, "readiness marker is stale (feed is gone)"
+        except PermissionError:
+            pass                                       # alive, owned by another user
+        except OSError:
+            return False, "readiness marker is stale (feed is gone)"
+        state = str(got.get("state", ""))
+        if state == "ready":
+            return True, f"source live ({got.get('sentences', 0)} sentences)"
+        if state == "connected":
+            return True, "source reachable, waiting for a fix"
+        return False, f"source not delivering ({got.get('detail') or state or 'unknown'})"
 
     def _assess_endpoints(
         self, comp: Component

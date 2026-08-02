@@ -459,18 +459,18 @@ class MaintenanceOpsMixin:
         materialised INTO the runtime root by `lhpc build`, so their remediation ("lhpc build <stack>")
         is an lhpc command that does not exist yet at bootstrap time — emitting it would put a
         `command not found` into a script whose whole job is to run before lhpc is installed."""
-        core, _gui = self._declared_dep_scopes()
+        core, _gui, _gps = self._declared_dep_scopes()
         return core
 
     def _declared_gui_dep_commands(self) -> list[str]:
         """The GUI-ONLY remediation commands — everything the headless-safe default bootstrap must
         NOT run, and that `bootstrap-deps.sh --with-gui` installs instead. CORE WINS: a command also
         declared by any non-GUI requirement is absent from this list (see `_declared_dep_scopes`)."""
-        _core, gui = self._declared_dep_scopes()
+        _core, gui, _gps = self._declared_dep_scopes()
         return gui
 
-    def _declared_dep_scopes(self) -> tuple[list[str], list[str]]:
-        """Split every declared remediation command into (core, gui-only).
+    def _declared_dep_scopes(self) -> tuple[list[str], list[str], list[str]]:
+        """Split every declared remediation command into (core, gui-only, gps-only).
 
         A command's effective `gui_only` is the AND across ALL its declarations: one non-GUI
         declaration is enough to keep it in the default bootstrap (and to restore normal mandatory
@@ -478,6 +478,7 @@ class MaintenanceOpsMixin:
         component without stranding another component that genuinely needs it headless."""
         core: list[str] = []
         gui: list[str] = []
+        gps: list[str] = []
         gui_only: dict[str, bool] = {}
 
         def _add(cmd: str, is_gui: bool) -> None:
@@ -497,12 +498,24 @@ class MaintenanceOpsMixin:
                 for req in c.requires:
                     if getattr(req, "provisioned", False):
                         continue
+                    # GPS deps are RUNTIME-CONDITIONAL: gpsd is needed only if the operator
+                    # later chooses a gpsd on THIS box as the position source. The bootstrap
+                    # script provisions a fresh box that has no GPS setting yet, so installing
+                    # it here would put a daemon on every box for a feature most never enable.
+                    # `lhpc deps` surfaces it the moment the source is set to a local gpsd.
+                    if getattr(req, "gps", False):
+                        # Bucketed for the opt-in --with-gps block rather than dropped: the
+                        # model promises that flag, and silently omitting the package left an
+                        # operator with a local receiver no way to install it from bootstrap.
+                        if req.install and req.install not in gps:
+                            gps.append(req.install)
+                        continue
                     _add(req.install, bool(getattr(req, "gui", False)))
         # A command first seen as GUI and later declared core moves scope, so re-derive both lists
         # from the merged verdict rather than trusting insertion order.
         core = [c for c in core + gui if not gui_only[c]]
         gui = [c for c in gui if gui_only[c]]
-        return core, gui
+        return core, gui, gps
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -511,20 +524,24 @@ class MaintenanceOpsMixin:
         import hashlib
 
         from . import deps
-        core, gui = self._declared_dep_scopes()
+        core, gui, gps = self._declared_dep_scopes()
         # The revision fingerprints COMMAND **and** SCOPE. Hashing the command strings alone would
         # leave the revision unchanged when a package merely moves core -> gui, which is a genuine
         # behaviour change (it disappears from the default bootstrap).
-        scoped = [f"core:{c}" for c in core] + [f"gui:{c}" for c in gui]
+        # `gps:` is part of the fingerprint for the same reason `gui:` is — a package moving
+        # into the opt-in bucket disappears from the default bootstrap, which is a real
+        # behaviour change even though the command text is unchanged.
+        scoped = ([f"core:{c}" for c in core] + [f"gui:{c}" for c in gui]
+                  + [f"gps:{c}" for c in gps])
         rev = hashlib.sha256("\n".join(sorted(set(scoped))).encode()).hexdigest()[:12]
-        return deps.render_bootstrap_script(core, rev, gui_cmds=gui)
+        return deps.render_bootstrap_script(core, rev, gui_cmds=gui, gps_cmds=gps)
 
     def deps_declared(self) -> ActionResult:
         """Readable preview of what `lhpc deps --script` would render — the declared system
         prerequisites, deduplicated, each marked NOT executed by LHPC."""
         from . import deps as deps_mod
         seen: set[str] = set()
-        core, gui = self._declared_dep_scopes()
+        core, gui, _gps = self._declared_dep_scopes()
         details = ["Declared system prerequisites (run `lhpc deps --script` for a runnable script):"]
         for cmd in core:
             c = (cmd or "").strip()

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.8
+
+- **One global position source** (`lhpc gps`) shared by Meshtastic, MeshCom and Sideband: a gpsd on this box or another, a receiver read directly, or a fixed position. Per-stack settings only turn GPS on or off — Sideband's old independent source selector no longer applies, and any values still saved are reported as ignored
+- Meshtastic gains GPS for the first time: lhpc presents the source as the serial device meshtasticd requires, applies `position.gps_mode` in **both** directions, and uses the node's native fixed-position support (no synthesized stream, no chip-probe delay)
+- MeshCom production GPS comes from the same mechanism; the fixture relay is now explicitly a test facility and never joins a normal start
+- Direct-device use is refused when gpsd already owns the receiver — identity resolved through the real character device, so `/dev/ttyACM0` and `/dev/serial/by-id/…` are recognised as one
+- Malformed `[gps]` fails closed to `off`, and stacks that would use GPS refuse to start rather than run silently blind
+- `gpsd` is an optional convenience, surfaced only when the configured server is local; lhpc never configures gpsd itself (see [docs/gps.md](docs/gps.md))
+- Per-stack `use_gps` switch (default **off**) so setting a source does not silently start every stack beaconing; a stack with GPS on and the source off refuses to start and names both settings. Stored band-lessly (like autostart) so it survives a band change, and refused while the stack runs — its feed, claims and generated config came from the current setting
+- A saved source that cannot be resolved — an `nmea` device that is missing or is not a character device — refuses the start and is named as **UNUSABLE** by `lhpc gps` and the console, instead of reporting a healthy `source: nmea` while every stack ran position-blind
+- Reaching a source is not having one: opening the device, or completing gpsd's TCP handshake, no longer admits a start — an empty gpsd that owns no receiver, or one sending only non-navigation traffic, keeps the feed pre-admission instead of bringing the stack up position-blind
+- A feed reads **live only when position is flowing**: a sentence must carry a valid fix, so a receiver that is merely talking — satellites-in-view, a GGA with fix quality `0`, or the lone `$GPTXT` of a u-blox left in UBX binary mode — reports "reachable, waiting for a fix" instead of "position source live" (found on hardware)
+- Feed health follows the **upstream source**, not the endpoint: an unreachable source fails the start and is cleaned up, later loss reads **DEGRADED**, and recovery returns to running with no restart
+- Readiness left behind by a previous run cannot approve a new start: a marker that is not being refreshed, or that does not name a live feed process, reads **DEGRADED** instead of `ready`
+- Component targets behave like their stack: `lhpc config meshcom-qemu use_gps on` sets the one stack switch, a direct consumer start brings the feed its stack's plan calls for, and starting a feed by itself is refused unless that plan uses it. GPS applies to what a start actually brings up rather than to stack membership, so the MeshCom bridge and firmware, the fixture relay, and a Reticulum start without Sideband bring up no feed, claim no receiver, and are not gated on GPS settings they never read
+- GPS liveness is one strict, fresh check shared by both configuration transactions: RUNNING, DEGRADED **and UNKNOWN** on a GPS-enabled stack's position readers or its feed all block a source or `use_gps` change, so an unanswerable probe can no longer pull the receiver out from under a possibly-live reader; a stack running with GPS off blocks nothing
+- The switch is stored canonically: a value that is not `on` clears the key rather than saving a third state, so an empty value can no longer disable GPS under a running stack without the refusal firing
+- The receiver is an exclusive claim keyed on the real device (`st_rdev`), so `/dev/ttyACM0` and its `by-id` alias cannot be taken twice, and a running stack blocks another from the same receiver
+- `--with-gps` installs gpsd from bootstrap when the source is a local gpsd
+- A receiver left in **UBX binary** mode by gpsd is diagnosed by name instead of silently delivering nothing
+- Fixed: `lhpc install --source binary` self-contended on its own source guard, making binary install impossible for any stack with `clone_required` (MeshCom)
+
 ## 0.1.7
 
 - Reticulum (RNS) stack: a node that drives the LoRa radio **directly over SPI** — no rnoded, no RNode firmware, no KISS. Owns its band exclusively, shares the SPI bus with the daemon through `spi0.lock`, and refuses to run without a verified radio

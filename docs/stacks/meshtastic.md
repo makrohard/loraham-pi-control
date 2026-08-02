@@ -49,3 +49,17 @@ and direct RF95 SPI/GPIO.
 
 A native C++ build is slow on a Pi Zero 2W — the platform/library resolve alone can take many
 minutes, and the disk swapfile the bootstrap provisions exists for exactly this.
+
+## GPS
+
+Position comes from the global setting (`lhpc gps`, see [GPS](../gps.md)) — not from this
+stack's config.
+
+- **gpsd** — lhpc runs a small feed presenting the stream as a serial device, because
+  meshtasticd reads only `GPS: SerialPath:`. Expect ~37 s of `No GNSS Module` warnings after
+  start while it probes for a chip; it then proceeds and parses NMEA normally.
+- **nmea** — meshtasticd reads the receiver directly and detects a real chip, so there is no
+  probe delay. gpsd must not also own that device; lhpc refuses the combination.
+- **fixed** — the node's own fixed-position support is used; no feed runs.
+- **off** — `position.gps_mode` is set to `NOT_PRESENT` and any stored fixed position is
+  cleared, so the node cannot keep beaconing a position you turned off.

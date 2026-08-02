@@ -224,7 +224,9 @@ def test_param_groups_required_on_top_then_by_component(tmp_path):
     assert groups[0]["header"] == "Required"
     assert [r["name"] for r in groups[0]["rows"]] == ["mc_callsign"]   # identity pulled to top
     headers = [g["header"] for g in groups]
-    assert "MeshCom GPS relay" in headers                              # a per-component group
+    # "(fixture)" since 0.1.8 — production GPS comes from the global source, so the name
+    # has to say this one replays a synthetic file.
+    assert "MeshCom GPS relay (fixture)" in headers                   # a per-component group
     # the identity field is NOT duplicated inside its component group
     qemu = next(g for g in groups if g["header"] == "MeshCom QEMU node")
     assert "mc_callsign" not in [r["name"] for r in qemu["rows"]]

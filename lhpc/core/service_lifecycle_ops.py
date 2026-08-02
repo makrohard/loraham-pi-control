@@ -102,6 +102,91 @@ class LifecycleOpsMixin:
         conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id})
         return [c.message for c in conflicts if comp.id in c.holders and c.observed]
 
+    # Marker states the GPS feed publishes, and what each MEANS for readiness.
+    #   ready       — sentences are flowing: healthy.
+    #   connected   — the source answered but no fix yet (cold start can take minutes):
+    #                 acceptable to start, surfaced as a warning, NOT a failure.
+    #   source-lost — the source is unreachable: never a successful start, and DEGRADED if it
+    #                 happens later.
+    #   stale       — was flowing, then stopped: DEGRADED.
+    _GPS_READY_OK = ("ready", "connected")
+    _GPS_READY_DEGRADED = ("source-lost", "stale", "starting")
+
+    def gps_feed_state(self, comp) -> dict:
+        """The feed's own readiness marker, or {} when absent/unreadable.
+
+        Read from the marker rather than probed: whether a POSITION is flowing is something
+        only the feed knows, and the endpoint path exists from the instant it is created.
+        """
+        import json
+
+        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC, bridge_state_dir
+        consumer = (CONSUMER_MESHTASTIC if comp.id == "meshtastic-gps"
+                    else CONSUMER_MESHCOM if comp.id == "meshcom-gps" else "")
+        if not consumer:
+            return {}
+        marker = Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
+        try:
+            raw = runtime_fs.read_text_regular(self._paths, marker, max_bytes=4096)
+            got = json.loads(raw)
+        except (OSError, ValueError, PathContainmentError):
+            return {}
+        if not isinstance(got, dict):
+            return {}
+        # A marker from a PREVIOUS run must never speak for this one. A persisted
+        # `state=ready` (with `updated` in the past, or from a pid that is gone) would
+        # otherwise approve a start whose feed had not delivered anything at all.
+        if not self._gps_marker_is_current(got):
+            return {}
+        return got
+
+    GPS_MARKER_MAX_AGE_S = 60.0
+
+    def _gps_marker_is_current(self, got: dict) -> bool:
+        """Is this readiness marker written by a live feed, recently?"""
+        import time as _t
+        try:
+            updated = float(got.get("updated", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if updated <= 0 or (_t.time() - updated) > self.GPS_MARKER_MAX_AGE_S:
+            return False
+        # The pid is REQUIRED, not a bonus: the bridge writes it on every refresh, so a marker
+        # without one is not from a feed we are running. `bool` is an `int` in Python — True
+        # would otherwise sail through as "pid 1", which is always alive.
+        pid = got.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass                                       # alive, owned by someone else
+        except OSError:
+            return False
+        return True
+
+    def _gps_feed_ready(self, comp) -> tuple[bool, str]:
+        """(ok, evidence) for a GPS feed at START time, polled within the readiness budget."""
+        budget = getattr(comp, "readiness_timeout", 0.0) or self.ENDPOINT_VERIFY_TIMEOUT_S
+        waited, last = 0.0, "no readiness marker"
+        while True:
+            st = self.gps_feed_state(comp)
+            state = str(st.get("state", "")) if st else ""
+            if state == "ready":
+                return True, f"position source live ({st.get('sentences', 0)} sentences)"
+            if state == "connected":
+                # A receiver that has been off or indoors can need minutes for a first fix;
+                # refusing here would make a cold start look like a broken one.
+                last = "source reachable, waiting for a fix"
+            elif state:
+                last = f"source not reachable ({st.get('detail') or state})"
+            if budget <= 0 or waited >= budget:
+                return (state == "connected"), last
+            time.sleep(self.ENDPOINT_VERIFY_POLL_S)
+            waited += self.ENDPOINT_VERIFY_POLL_S
+
     def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
         (all_present, evidence-lines). Only endpoints explicitly marked ready
@@ -231,6 +316,13 @@ class LifecycleOpsMixin:
                     claims[r.key] = c.id
         for b in needed_bands:
             claims.setdefault(f"loraham.radio.{b}", target)
+        # The GPS receiver is a DYNAMIC claim (which device, if any, comes from the resolved
+        # plan — not from a static manifest resource). It must be in the CONFLICT set and not
+        # only the lock set: the lock is released when the start completes, so locks alone let
+        # a second stack start afterwards and open the same receiver.
+        _gps_key = self._gps_device_claim(target)
+        if _gps_key:
+            claims.setdefault(_gps_key, target)
 
         snap = self.build_snapshot()
         # Daemon radio ownership is PROCESS topology (a dead CONF socket does not free the radio),
@@ -260,6 +352,21 @@ class LifecycleOpsMixin:
                     active = self._live_bands(sid, c.band)   # actual band, else ALL of them
                 else:
                     active = {c.band} if c.band else set()
+                # A RUNNING GPS consumer holds its receiver for as long as it runs, and that
+                # claim exists nowhere in the manifest — derive it, or the second stack sees no
+                # holder and opens the device too.
+                #
+                # From the LIVE COMPONENT, never from its owner stack: the stack's claim is
+                # derived from the run order a FUTURE start would use, which is not what is
+                # running now. With `autostart_sideband` off, a directly started Sideband is
+                # reading the receiver while `reticulum`'s prospective order is just `rns` — so
+                # the stack claim was empty and MeshCom was admitted onto the same device the
+                # moment Sideband's start lock was released. Turning that autostart off while
+                # Sideband ran did the same thing to an already-running reader.
+                if sid != target_stack:
+                    _owner_gps = self._gps_device_claim(c.id)
+                    if _owner_gps and _owner_gps in claims:
+                        add(sid, c.id, _owner_gps)
                 for r in c.resources:
                     if r.mode not in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER):
                         continue
@@ -282,6 +389,87 @@ class LifecycleOpsMixin:
                     add(sid, c.id,
                         f"radio {'/'.join(sorted(comp_bands & needed_bands))} MHz")
         return blockers
+
+    def gps_block(self, target: str) -> tuple[str, list]:
+        """(reason, next_commands) when this stack must NOT start under the current GPS plan.
+
+        Three refusals, all fail-closed:
+
+        * the `[gps]` section is malformed — position is already disabled, and a stack the
+          operator believes is GPS-enabled would start silently blind;
+        * direct NMEA on a device the local gpsd already owns — two readers on one receiver
+          do not fail cleanly, they lose fixes intermittently;
+        * direct NMEA whose ownership cannot be PROVEN either way — inability to prove it safe
+          is a refusal, never an assumption that it is free.
+
+        Empty for stacks with no GPS consumer, and for `off`/`fixed`/remote gpsd, which open
+        no local device at all.
+        """
+        from .gps import gpsd_owns_device
+        # A start may name a COMPONENT (sideband, meshcom-qemu). Normalizing to the owner
+        # stack is what makes a direct component start obey the same gate as its stack.
+        raw = target
+        target = self.gps_owner_stack(target)
+        if not target:
+            return "", []
+        # GPS policy applies to what this start ACTUALLY brings up, not to stack membership.
+        # `meshcom-bridge`, `meshcom-firmware` and the fixture relay read no position, and a
+        # Reticulum start without Sideband reads none either — refusing those over GPS settings
+        # they never consult blocks perfectly valid work.
+        if not self._gps_run_order_uses_position(raw):
+            return "", []
+        # A PRODUCTION FEED started on its own is only meaningful when the stack's plan actually
+        # calls for it. Run outside that plan it publishes an endpoint and claims the receiver
+        # for a consumer that is not coming — and, with the source off, delivers nothing while
+        # looking healthy. The fixture relay is deliberately NOT covered here: it stays an
+        # ordinary opt-in optional component (see `_gps_components_excluded`).
+        if (raw != target and raw in self._all_gps_feed_ids()
+                and raw not in self._gps_components_for(target)):
+            return (f"'{raw}' is the GPS feed for '{target}', and the current position plan "
+                    f"does not use it — starting it alone would claim the receiver for a "
+                    f"consumer that is not running",
+                    ["lhpc gps", f"lhpc config {target} use_gps on",
+                     f"lhpc stack start {target}"])
+        cfg = self.config()
+        g = getattr(cfg, "gps", None)
+        if g is not None and not getattr(g, "valid", True):
+            return (f"the global position source is invalid ({g.reason}) and has been disabled — "
+                    "fix it or set it to off", ["lhpc gps"])
+        # A stack that has ASKED for GPS but has no source to use it must not start pretending
+        # to report position — that is the silent-blind case, and it is the operator's own two
+        # settings contradicting each other, so name both.
+        if self.gps_enabled_for(target) and not (g is not None and g.enabled):
+            return ("this stack has GPS enabled (use_gps) but the global position source is "
+                    "off — set a source, or turn the stack's GPS off",
+                    ["lhpc gps --source <gpsd|nmea|fixed>",
+                     f"lhpc config {target} use_gps off"])
+        plan = self.gps_plan(target)
+        # VALIDITY FIRST. An unresolvable plan (a `nmea` device that does not exist, or is not a
+        # character device) is REPRESENTED as `source = off`, so testing `enabled` first returned
+        # success for it: the stack started with no feed, no receiver claim and no warning —
+        # silently position-blind — while `lhpc gps` still reported `source: nmea`.
+        if not plan.valid:
+            return (f"the global position source could not be resolved: {plan.reason}",
+                    ["lhpc gps"])
+        if not plan.enabled:
+            return "", []
+        if not plan.claims_device:
+            return "", []
+        # Ask the LOCAL gpsd, never the retained host. In direct-NMEA mode `host`/`port` are
+        # leftovers from whenever gpsd was last configured; if that was a remote box, querying
+        # it would ask a machine that cannot possibly hold THIS receiver and cheerfully report
+        # the device free while a local gpsd was holding it.
+        owned, detail = gpsd_owns_device(plan.device, "127.0.0.1", 2947)
+        if owned is True:
+            return (f"the position source reads {plan.device} directly, but the local gpsd already "
+                    "owns that receiver — two readers on one device lose fixes intermittently; "
+                    "use the gpsd source instead",
+                    ["lhpc gps --source gpsd"])
+        if owned is None:
+            return (f"cannot prove that {plan.device} is free for direct use ({detail}) — refusing "
+                    "rather than risking two readers on one receiver",
+                    ["lhpc gps --source gpsd"])
+        return "", []
 
     def hardware_block(self, target: str) -> str:
         """A reason string when NO radio hardware is configured and this stack needs a radio, else "".
@@ -491,6 +679,14 @@ class LifecycleOpsMixin:
         if hw_block:
             return ActionResult(False, f"Cannot start '{target}': {hw_block}",
                                 next_commands=["lhpc hardware"])
+        # GPS admission — BEFORE any lock is taken, so the plan that decides run order, claims
+        # and config rendering is the same one validated here. A direct-NMEA source is the case
+        # that fails intermittently rather than cleanly (two readers on one receiver), so it is
+        # refused up front rather than discovered as flaky position later.
+        gps_block, gps_next = self.gps_block(target)
+        if gps_block:
+            return ActionResult(False, f"Cannot start '{target}': {gps_block}",
+                                next_commands=gps_next or ["lhpc gps"])
         # Radio-mode availability: a stack whose every band is excluded by the current mode cannot
         # run (remedy = change the mode, not stop a holder). Refused for both dry-run and apply.
         rm_block = self.radio_mode_block(target)
@@ -882,7 +1078,21 @@ class LifecycleOpsMixin:
             # readiness="endpoint": VERIFIED only once every ready=true endpoint is up;
             # otherwise SIGTERM the just-launched owned session (verified cleanup) and
             # report UNVERIFIED — no post-start work runs.
-            if comp.readiness == "endpoint":
+            if comp.readiness == "gps-feed":
+                # A feed whose SOURCE never came up is not started, it is inert: it would sit
+                # publishing an endpoint that delivers nothing, and the app reading it would
+                # report no position with no indication why. Verified against the marker the
+                # feed writes from its upstream, never against the endpoint path existing.
+                ready_ok, ev = self._gps_feed_ready(comp)
+                if not ready_ok:
+                    cleanup = life.stop(comp, band=cfg_band)
+                    record(comp, stack, Outcome.UNVERIFIED,
+                           f"GPS feed never reached its source ({ev}); cleanup: "
+                           + ("stopped" if cleanup.outcome == Outcome.STOPPED
+                              else "cessation NOT verified — ownership retained"))
+                    continue
+                summary = f"started; {ev}"
+            elif comp.readiness == "endpoint":
                 ready_ok, ev = self._ready_endpoints_present(comp)
                 if not ready_ok:
                     cleanup = life.stop(comp, band=cfg_band)

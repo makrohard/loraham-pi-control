@@ -2022,17 +2022,19 @@ def test_confirm_start_optional_component_checkboxes(tmp_path, monkeypatch):
 
 
 def test_settings_page_rules_line_before_optional_component(tmp_path):
-    # /stacks?cfg=meshcom: the MeshCom GPS relay settings group is separated by a rule.
+    # /stacks?cfg=meshcom: the fixture-relay settings group is separated by a rule.
+    # Named '(fixture)' since 0.1.8: production GPS comes from the global source, and
+    # this component replays a synthetic file — the name has to say so.
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     from lhpc.core.paths import Paths
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     groups = {g["name"]: g for g in svc.config_param_groups("meshcom", "")}
-    assert groups["MeshCom GPS relay"]["rule_before"] is True
+    assert groups["MeshCom GPS relay (fixture)"]["rule_before"] is True
     body = create_app(service_factory=lambda: svc).test_client() \
         .get("/stacks?cfg=meshcom").data.decode()   # open meshcom Settings (lazy body)
-    i_gps = body.find("MeshCom GPS relay")
+    i_gps = body.find("MeshCom GPS relay (fixture)")
     assert any(0 < i_gps - n < 600
                for n in range(len(body))
                if body.startswith('<tr class="cfgrule">', n))
@@ -2310,3 +2312,88 @@ def test_firewall_settings_section_present(tmp_path):
 def test_firewall_configure_get_redirects(tmp_path):
     resp = _client(tmp_path).get("/firewall/configure")
     assert resp.status_code == 302 and resp.headers["Location"].endswith("#firewall-row")
+
+
+# --- GPS: the console and the CLI must never disagree about the position source ------------
+
+def test_gps_card_is_rendered_with_the_global_source(tmp_path):
+    """GPS is a GLOBAL box setting, so it lives in the LHPC controller row beside Webserver
+    and the Firewall — visible on /stacks with no clicks and belonging to no stack.
+
+    It is NOT a daemon setting (the daemon uses no position) and must not be reachable only
+    by expanding one stack's settings, which hid it from anyone working on another.
+    """
+    from lhpc.core.config import save_gps
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    save_gps(svc._paths, source="gpsd", host="192.168.1.5", port=2948)
+    svc._invalidate_config()
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    assert "Position (GPS)" in body, "the card must be on /stacks without expanding anything"
+    assert 'name="gps_source"' in body and 'name="gps_host"' in body
+    assert "192.168.1.5" in body and "2948" in body
+    # In the controller row: after the Firewall section, before the stack list.
+    # In the controller row, as a sibling of the Firewall section.
+    assert 'id="gps-row"' in body
+    assert body.index('id="gps-row"') > body.index('id="firewall-row"')
+
+
+def test_gps_set_requires_csrf(tmp_path):
+    c = _client(tmp_path)
+    assert c.post("/gps", data={"gps_source": "gpsd"}).status_code == 400
+
+
+def test_gps_card_reports_a_disabled_source_instead_of_looking_normal(tmp_path):
+    """A malformed section already disabled position; a card that rendered as if nothing were
+    wrong would leave the operator believing GPS works."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "local.toml").write_text('[gps]\nsource = "bogus"\n')
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    body = create_app(service_factory=lambda: ReadOnlyGuard(svc)).test_client() \
+        .get("/stacks?cfg=meshtastic").get_data(as_text=True)
+    assert "Position is DISABLED" in body
+
+
+def test_gps_card_follows_the_webserver_panel_layout(tmp_path):
+    """The GPS card is a controller-row panel like Webserver and the Firewall, so it uses the
+    same shape — `details.advcfg` + status pill, a Settings section, and a `paramgrid dptab`
+    table with a help column. A hand-rolled layout looked out of place next to them.
+
+    Every control also carries an accessible name: a bare `<input>` in a table cell is
+    announced as an unlabelled text field, which would cost the console its accessibility
+    score (see tests/test_form_accessibility.py for the select-specific property check).
+    """
+    import re
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    card = body[body.index('id="gps-row"'):]
+    card = card[:card.index("</details>", card.index("paramgrid"))]
+
+    assert 'class="advcfg"' in body[:body.index('id="gps-row"') + 40]
+    assert "ws-sub-wrap" in card and "paramgrid dptab" in card
+    # The fields sit directly under the card — no nested "Settings" sub-panel to click
+    # through for a single form.
+    assert "<summary>Settings</summary>" not in card
+    assert card.count('class="dphelp muted"') >= 6, "each row explains itself"
+
+    # No control may be left without an accessible name.
+    for m in re.finditer(r"<(input|select)\b[^>]*>", card):
+        tag = m.group(0)
+        if 'type="hidden"' in tag or 'type="submit"' in tag:
+            continue
+        assert "aria-label=" in tag, f"unlabelled control: {tag[:80]}"
+
+
+def test_the_gps_card_never_renders_a_coordinate(tmp_path):
+    """The console is reachable from a browser, a screenshot or a shared session, and
+    docs/gps.md promises coordinates are never echoed back. The placeholder may say only
+    WHETHER one is set."""
+    from lhpc.core.config import save_gps
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    save_gps(svc._paths, source="fixed", fixed_lat="51.4779", fixed_lon="-0.0015", fixed_alt="45")
+    svc._invalidate_config()
+    body = _client(tmp_path).get("/stacks").get_data(as_text=True)
+    for coord in ("51.4779", "-0.0015"):
+        assert coord not in body, f"{coord} leaked into the page"

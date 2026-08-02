@@ -2498,7 +2498,6 @@ def test_a_failed_unit_refresh_makes_the_update_visibly_partial(env, monkeypatch
     """A failed refresh was stored only in ActionResult.data while ok stayed True, and
     the CLI renderer never shows that data — the operator saw a clean success."""
     from lhpc.core.service_base import ActionResult
-    from lhpc.core.services import ControllerService
 
     svc = env["svc"] if "svc" in env else None
     if svc is None:

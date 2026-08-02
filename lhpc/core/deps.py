@@ -26,6 +26,19 @@ from .lifecycle import (
 NOT_EXECUTED_NOTE = "not executed by LHPC — run it yourself"
 
 
+def _local_gpsd_configured(paths) -> bool:
+    """Is the global position source a gpsd on THIS box?
+
+    Read defensively: dependency reporting runs on read-only status paths that must never
+    raise, and a box with no GPS configured is the common case.
+    """
+    try:
+        from .config import load_config
+        return bool(load_config(paths).gps.local_gpsd)
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 @dataclass(frozen=True)
 class DepItem:
     kind: str            # "system" | "build" | "runtime"
@@ -77,9 +90,16 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
                 continue
             g = bool(getattr(req, "gui", False))
             gui_eff[k] = (gui_eff[k] and g) if k in gui_eff else g
+    # A LOCAL-gpsd dependency is only real when the configured position source actually is a
+    # local gpsd. With the source off, remote, or reading a device directly, there is nothing
+    # to install here — telling an operator whose gpsd runs on another box that they are
+    # missing a package would simply be false.
+    gps_needed = _local_gpsd_configured(paths)
     for c in stack.components:
         missing = lifecycle.missing_requirements(c)
         for req in c.requires:
+            if getattr(req, "gps", False) and not gps_needed:
+                continue
             key = req.install or req.cmd or req.check_file
             if not key or key in seen_sys:
                 continue
@@ -202,7 +222,7 @@ def _is_spi_block(low: str) -> bool:
     return "config.txt" in low or "dtparam=spi" in low or "dtoverlay=spi" in low
 
 
-def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
+def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=()) -> str:
     """Render every declared dependency-remediation command into ONE hardened, executable bootstrap
     script. Standalone `sudo apt install` commands merge into a single deduplicated `apt-get install`
     run FIRST (so tools like curl/gpg exist before the blocks that use them). Group grants are
@@ -224,6 +244,22 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
     gui_pkgs: list[str] = []
     gui_blocks: list[str] = []
     seen_gui: set[str] = set()
+    # GPS-ONLY packages: needed only if the operator later points the position source at a
+    # gpsd on THIS box. A fresh image has no GPS setting yet, so installing a daemon for a
+    # feature most boxes never enable would be wrong — opt in with --with-gps.
+    gps_pkgs: list[str] = []
+    seen_gps: set[str] = set()
+    for cmd in (gps_cmds or ()):
+        c = (cmd or "").strip()
+        if not c:
+            continue
+        m = _APT_INSTALL_RE.match(c) if "\n" not in c else None
+        if m:
+            for pkg in m.group(1).split():
+                if pkg.startswith("-") or pkg in seen_gps:
+                    continue
+                seen_gps.add(pkg)
+                gps_pkgs.append(pkg)
     for cmd in (gui_cmds or ()):
         c = (cmd or "").strip()
         if not c:
@@ -306,7 +342,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         "# BEFORE the script is ever granted root. lhpc itself never runs privileged commands.",
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
-        " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--keep-wifi-powersave]",
+        " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps]"
+        " [--keep-wifi-powersave]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics:"
@@ -331,6 +368,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         "#                        no graphical/audio stack; nonzero when it cannot be resolved or would",
         "#                        install one. Run this FIRST on a fresh image — the package closure is",
         "#                        then known before anything is installed, not discovered mid-install.",
+        "#     --with-gps         ALSO install gpsd, for using a GPS receiver attached to THIS box",
+        "#                        as the shared position source (see `lhpc gps`). Not needed for a",
+        "#                        gpsd on another machine.",
         "#     --with-gui         ALSO install the GUI-only dependencies (GTK/Tk) that the desktop"
         " components need. OMITTED BY DEFAULT: this script must never pull a graphical stack onto a"
         " headless image. It installs GUI application LIBRARIES only — never a desktop environment,"
@@ -353,7 +393,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
 
     out("usage() {",
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
-        ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--keep-wifi-powersave]" >&2',
+        ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -363,6 +403,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         'NO_SWAPFILE=""',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
+        'WITH_GPS=""',
         'KEEP_WIFI=""',
         'DRY_RUN=""',
         "while [ $# -gt 0 ]; do",
@@ -371,6 +412,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         '\t\t--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;',
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
+        '\t\t--with-gps) WITH_GPS=1; shift ;;',
         '\t\t--keep-wifi-powersave) KEEP_WIFI=1; shift ;;',
         '\t\t--dry-run) DRY_RUN=1; shift ;;',
         '\t\t--swap-size) SWAP_SIZE_MB="${2:?--swap-size needs a value (MB)}"; shift 2 ;;',
@@ -628,6 +670,22 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=()) -> str:
         out("else",
             '\techo "[bootstrap-deps] GUI dependencies skipped (headless-safe default). On a machine'
             ' with a display, re-run with --with-gui."',
+            "fi",
+            "")
+
+    if gps_pkgs:
+        out("# --- GPS (opt-in) ---------------------------------------------------------------------------",
+            "# gpsd is only needed when the shared position source is a receiver on THIS box. A gpsd on",
+            "# another machine, a directly-read device, or a fixed position need nothing here — so this is",
+            "# opt-in rather than part of the default set, and lhpc never configures gpsd itself.",
+            'if [ -n "$WITH_GPS" ]; then')
+        out("\tsudo apt-get install -y \\")
+        gp = sorted(gps_pkgs)
+        for i, pkg in enumerate(gp):
+            out(f"\t\t{pkg}" + (" \\" if i < len(gp) - 1 else ""))
+        out("else",
+            '\techo "[bootstrap-deps] gpsd skipped (opt-in). Re-run with --with-gps if the position'
+            ' source will be a GPS attached to this box."',
             "fi",
             "")
 

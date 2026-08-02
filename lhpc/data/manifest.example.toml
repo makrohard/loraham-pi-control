@@ -903,6 +903,42 @@ main = "meshtastic"
   proof_paths = ["build/tools/meshtasticd/meshtasticd"]
   probes = [["build/tools/meshtasticd/meshtasticd", "--version"]]
 
+  # GPS feed for meshtasticd. OPTIONAL in the manifest, but NOT an operator choice: the
+  # lifecycle admits it from the resolved GLOBAL GPS plan, because meshtasticd can only read
+  # a serial device — it speaks neither gpsd nor TCP (verified against the pinned firmware:
+  # PortduinoGlue.cpp reads only `GPS: SerialPath:`).
+  #
+  # Needed ONLY for `source = gpsd`. With `nmea`, meshtasticd points straight at the real
+  # device and detects an actual chip instead of sweeping baud rates for ~37 s; with `fixed`
+  # it uses its own native fixed-position support and needs no stream at all.
+  [[stack.component]]
+  id = "meshtastic-gps"
+  readiness = "gps-feed"
+  name = "GPS feed (meshtasticd)"
+  kind = "service"
+  purpose = "Publishes the global position source as a serial device meshtasticd can read."
+  tx_capable = false
+  optional = true
+  start_order = 0
+  # `{controller_python}` is controller-derived (like {runtime}/{source}) — the bridge is
+  # lhpc's OWN internal service, so it must run through this controller's interpreter and
+  # never whatever python3/lhpc happens to be on PATH.
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshtastic"]
+  note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
+
+    [stack.component.process]
+    exec_name = "python3"
+    all_args = ["_gps-bridge", "meshtastic"]
+
+    # SOFT + CONDITIONAL: only reported when the global source is a gpsd on THIS box. With a
+    # remote gpsd, a direct NMEA device, or a fixed position there is nothing to install here,
+    # so the dependency is suppressed entirely rather than shown as an unmet requirement.
+    [[stack.component.require]]
+    cmd = "gpsd"
+    install = "sudo apt install gpsd"
+    gps = true
+    note = "only needed when the position source is a gpsd on this box (lhpc gps); lhpc does not configure gpsd itself — see docs/gps.md"
+
   [[stack.component]]
   id = "meshtastic"
   name = "Meshtastic (meshtasticd)"
@@ -911,6 +947,10 @@ main = "meshtastic"
   bands = ["433", "868"]
   purpose = "meshtasticd driving the RF95 directly; lhpc starts/stops it rootless with a runtime config."
   tx_capable = true
+  # The GPS feed must exist BEFORE meshtasticd opens it — the device is its `GPS: SerialPath:`.
+  # The feed is optional, so this edge is inert unless the global GPS plan admits it (see
+  # `_gps_components_for`); it exists to fix the ORDER, not to force the component.
+  depends_on = ["meshtastic-gps"]
   pre = 'mkdir -p "{runtime}/state/meshtasticd/ssl"'
   # RUNTIME-OWNED binary, built from the managed source below. Never /usr/bin/meshtasticd: the
   # OBS package is built from the upstream `native-tft` environment and therefore links
@@ -973,9 +1013,39 @@ main = "meshtastic"
     { kind = "delay", seconds = 12 },
     { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
     { kind = "exec", label = "node identity", optional = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    # GPS mode is a DEVICE setting in the node database, NOT the YAML: `GPS: SerialPath:` alone
+    # does nothing, because portduino defaults `position.gps_mode` to NOT_PRESENT and the YAML
+    # `Config:` section cannot set it (verified on hardware — before this step meshtasticd
+    # logged nothing about GPS at all, and after it: GPSlock=1, position sent to the mesh).
+    #
+    # REQUIRED IN BOTH DIRECTIONS, exactly like the region step. The failure this prevents is a
+    # start reported as successful while the node kept the OPPOSITE GPS state: a node that
+    # silently beacons no position, or one that keeps beaconing after GPS was turned off.
+    # `{gps_mode}` is controller-owned, resolved from the ONE global `[gps]` plan.
+    { kind = "exec", label = "gps mode", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "position.gps_mode", "{gps_mode}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    # A station that does not move needs no GPS at all: meshtasticd has native fixed-position
+    # support, which also skips the ~37 s chip probe a synthesized NMEA stream would still
+    # incur. `{gps_fixed_args}` expands to --setlat/--setlon(/--setalt) for `source = fixed`,
+    # to --remove-position when a previously fixed node is switched away, and to nothing
+    # otherwise (the step is then skipped rather than run with an empty argv).
+    { kind = "exec", label = "fixed position", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "{gps_fixed_args}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"], skip_if_empty = "{gps_fixed_args}" },
   ]
   note = "ONE-TIME setup (free the radio + stop the packaged service auto-starting): `sudo systemctl disable --now meshtasticd`. SPI must be enabled (config.txt: dtparam=spi=on, dtoverlay=spi0-0cs). lhpc runs/stops it WITHOUT root ONLY WHEN you are in the spi+gpio groups — see System dependencies below; grant with the shown command (then log out/in or reboot) if missing. Shares the SPI radio with the LoRaHAM daemon. Region + node name are applied automatically after start (config: Region / Node name)."
 
+    # PERSISTED per-stack GPS switch. The GLOBAL source (`lhpc gps`) says WHERE position comes
+    # from; this says whether THIS stack uses it. Both are needed: a non-off global source must
+    # not silently enable position reporting on every stack at once.
+    #
+    # Resolved together with the global source into ONE plan before anything locks, so run order,
+    # claims, config rendering, post-steps, status and boot restore all agree. NOT accepted as an
+    # ephemeral start override — a start that quietly differed from the saved state would leave
+    # claims and rendered config describing different things.
+    [[stack.component.param]]
+    name = "use_gps"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "off"
+    label = "Use the global position source (set it with `lhpc gps`)"
     [[stack.component.param]]
     name = "region"
     kind = "enum"
@@ -1074,6 +1144,22 @@ main = "meshtastic"
     path = "{runtime}/config/files/meshtasticd.yaml"
     fmt = "yaml-update"
     base = "{asset}/bases/meshtasticd.yaml"
+      # The GPS device meshtasticd reads. CONTROLLER-OWNED: filled from the resolved global
+      # `[gps]` plan via `{gps_device}`, never from a saved or ephemeral user value — the whole
+      # point of one authoritative source is that a stack cannot choose its own.
+      #
+      # `omit_if_empty` matters: the firmware enables GPS on `SerialPath != ""`, so with GPS off
+      # the key must be ABSENT, not present-and-blank.
+      [[stack.component.config_file.param]]
+      name = "gps_serial_path"
+      key = "SerialPath"
+      section = "GPS"
+      kind = "str"
+      default = "{gps_device}"
+      validator = "path"
+      omit_if_empty = true
+      hidden = true
+      label = "GPS device (from the global position source)"
       [[stack.component.config_file.param]]
       name = "ssl_key"
       key = "SSLKey"
@@ -1377,18 +1463,65 @@ main = "meshcom-qemu"
     mode = "requirement"
     requirement = "MANAGED"
 
+  # PRODUCTION GPS feed for the QEMU node — lhpc's own bridge, serving the global position
+  # source over the UART1 socket the guest reads.
+  #
+  # It does NOT use the pinned `gps-relay.py` for this: that script accepts only
+  # `--mode gpsd|fixture` and HARD-REJECTS a non-loopback gpsd host ("gpsd must stay
+  # loopback-only"), so it cannot serve a remote gpsd, a direct NMEA device, or a fixed
+  # position — three of the four sources lhpc offers. The relay below stays for FIXTURE
+  # replay, which is a test facility and the only thing it is still the right tool for.
+  #
+  # Admitted from the resolved global GPS plan (see `_gps_components_for`), never from an
+  # operator auto-start flag.
   [[stack.component]]
-  id = "meshcom-gps-relay"
-  readiness = "process"
-  name = "MeshCom GPS relay"
+  id = "meshcom-gps"
+  readiness = "gps-feed"
+  name = "GPS feed (MeshCom)"
   kind = "service"
-  purpose = "Feeds NMEA into the QEMU node's virtual UART1 (fixture or host gpsd)."
+  purpose = "Publishes the global position source on the QEMU node's UART1 socket."
   tx_capable = false
   optional = true
   start_order = 2
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcom"]
+  note = "Starts automatically when the global position source needs it (see `lhpc gps`) — not a manual choice."
+
+    [stack.component.process]
+    exec_name = "python3"
+    all_args = ["_gps-bridge", "meshcom"]
+
+    # ONE feed may own the QEMU UART at a time. Production and fixture both write the SAME
+    # socket, so side by side the node would receive a synthetic position interleaved with the
+    # real one and nothing could tell which it beaconed. An EXCLUSIVE claim makes that
+    # structurally impossible rather than relying on admission logic to remember.
+    [[stack.component.resource]]
+    key = "meshcom.uart1.feed"
+    kind = "unix-socket"
+    mode = "exclusive"
+
+    # SOFT + CONDITIONAL: only reported when the global source is a gpsd on THIS box. With a
+    # remote gpsd, a direct NMEA device, or a fixed position there is nothing to install here,
+    # so the dependency is suppressed entirely rather than shown as an unmet requirement.
+    [[stack.component.require]]
+    cmd = "gpsd"
+    install = "sudo apt install gpsd"
+    gps = true
+    note = "only needed when the position source is a gpsd on this box (lhpc gps); lhpc does not configure gpsd itself — see docs/gps.md"
+
+  [[stack.component]]
+  id = "meshcom-gps-relay"
+  readiness = "process"
+  name = "MeshCom GPS relay (fixture)"
+  kind = "service"
+  purpose = "TEST ONLY: replays a checked-in synthetic NMEA fixture into the QEMU node's UART1."
+  tx_capable = false
+  optional = true
+  start_order = 2
+  # FIXTURE ONLY. Its gpsd mode is deliberately unused: it is loopback-only and therefore
+  # cannot express three of the four global sources. Production GPS comes from `meshcom-gps`.
   run = "python3 scripts/gps-relay.py --mode fixture --fixture fixtures/gps/valid_fix.nmea --uart .run/gps-uart1.sock {rate} {loop}"
   # MUST precede the [[…param]] sub-tables (TOML binds trailing bare keys to the LAST table).
-  note = "Optional. Start before the node: GPS init is one-shot."
+  note = "TEST facility — replays a synthetic fixture, NOT your real position. Start before the node: GPS init is one-shot. For real position use `lhpc gps`."
 
     # Fixture-replay knobs (start-time). mode/fixture/uart stay fixed (gpsd mode
     # would need --fixture removed — switch it by editing the run line).
@@ -1416,6 +1549,16 @@ main = "meshcom-qemu"
     exec_name = "python3"
     all_args = ["gps-relay.py"]
 
+    # ONE feed may own the QEMU UART at a time. Production and fixture both write the SAME
+    # socket, so side by side the node would receive a synthetic position interleaved with the
+    # real one and nothing could tell which it beaconed. An EXCLUSIVE claim makes that
+    # structurally impossible rather than relying on admission logic to remember.
+    [[stack.component.resource]]
+    key = "meshcom.uart1.feed"
+    kind = "unix-socket"
+    mode = "exclusive"
+
+
   [[stack.component]]
   id = "meshcom-qemu"
   name = "MeshCom QEMU node"
@@ -1423,7 +1566,10 @@ main = "meshcom-qemu"
   band = "433"
   purpose = "Runs MeshCom firmware headless under QEMU (web 18083, net-console 12323)."
   tx_capable = true
-  depends_on = ["meshcom-bridge", "meshcom-gps-relay"]
+  # Both GPS feeds are OPTIONAL, so these edges only fix the ORDER — whichever is admitted
+  # (production bridge from the global plan, or the fixture relay by explicit auto-start)
+  # must be up before the node, because MeshCom's GPS init is one-shot.
+  depends_on = ["meshcom-bridge", "meshcom-gps", "meshcom-gps-relay"]
   start_order = 3
   # Shown as a transient note right after start — the emulated node is slow to boot, so set
   # expectations (and steer heavy GUI viewing off this Pi during boot).
@@ -1532,6 +1678,15 @@ main = "meshcom-qemu"
     # window ever expires.
     { kind = "tcp_send", port = 12323, label = "callsign", data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
+
+    # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
+    # GLOBAL source says WHERE position comes from; this says whether THIS stack uses it.
+    [[stack.component.param]]
+    name = "use_gps"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "off"
+    label = "Use the global position source (set it with `lhpc gps`)"
 
     [[stack.component.require]]
     check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
@@ -2006,6 +2161,14 @@ exec_name = "loraham-rns-node"
 # Without this the start log is EMPTY: Python block-buffers off a TTY, so a
 # failure would be invisible to the operator reading `lhpc logs reticulum`.
 PYTHONUNBUFFERED = "1"
+# PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
+# GLOBAL source says WHERE position comes from; this says whether THIS stack uses it.
+[[stack.component.param]]
+name = "use_gps"
+kind = "enum"
+choices = ["on", "off"]
+default = "off"
+label = "Use the global position source (set it with `lhpc gps`)"
 [[stack.component.param]]
 name = "rns_allow"
 kind = "str"
@@ -2408,47 +2571,62 @@ announce = "[configure] enable Sideband's plugin loader (otherwise only reachabl
 [stack.component.config_file]
 path = "{runtime}/state/sideband/location.conf"
 fmt = "env"
+# POSITION IS NOT A PER-STACK CHOICE. Every field below is CONTROLLER-OWNED, filled from
+# the global `[gps]` setting (`lhpc gps`) and marked `hidden` so it can never be edited per
+# stack. Before this, Sideband carried its own independent source selector, which meant two
+# stacks could disagree about where position came from — and a stale saved value here would
+# silently win over the global setting. The plugin itself stays source-agnostic; it is simply
+# handed the resolved answer.
 [[stack.component.config_file.param]]
 name = "location_source"
 key = "location_source"
-kind = "enum"
-choices = ["gpsd", "nmea", "fixed", "off"]
-default = "gpsd"
+kind = "str"
+default = "{gps_source}"
+hidden = true
 group = "Position"
-label = "Position source (gpsd covers USB/serial/HAT/network GPS; fixed = a station that does not move)"
+label = "Position source (global — set with `lhpc gps`)"
 [[stack.component.config_file.param]]
 name = "gpsd_host"
 key = "gpsd_host"
 kind = "str"
-validator = "host"
-default = "127.0.0.1"
+default = "{gps_host}"
+hidden = true
 group = "Position"
-label = "gpsd host"
-advanced = true
+label = "gpsd host (global)"
 [[stack.component.config_file.param]]
 name = "gpsd_port"
 key = "gpsd_port"
-kind = "int"
-default = "2947"
-min = 1
-max = 65535
+kind = "str"
+default = "{gps_port}"
+hidden = true
 group = "Position"
-label = "gpsd port"
-advanced = true
+label = "gpsd port (global)"
 [[stack.component.config_file.param]]
 name = "nmea_device"
 key = "nmea_device"
 kind = "str"
-validator = "path"
-default = "/dev/ttyACM0"
+default = "{gps_nmea_device}"
+hidden = true
+omit_if_empty = true
 group = "Position"
-label = "NMEA device (only when source = nmea)"
-advanced = true
+label = "NMEA device (global)"
+# The direct-NMEA reader configures the port itself, so it needs the baud rate. It was in the
+# plugin's own defaults but had no way to be set from lhpc — an operator with a 4800-baud
+# receiver had no lever at all.
+[[stack.component.config_file.param]]
+name = "nmea_baud"
+key = "nmea_baud"
+kind = "str"
+default = "{gps_baud}"
+hidden = true
+group = "Position"
+label = "NMEA baud (global)"
 [[stack.component.config_file.param]]
 name = "fixed_lat"
 key = "fixed_lat"
 kind = "str"
-default = ""
+default = "{gps_lat}"
+hidden = true
 omit_if_empty = true
 group = "Position"
 label = "Fixed latitude (decimal degrees)"
@@ -2456,7 +2634,8 @@ label = "Fixed latitude (decimal degrees)"
 name = "fixed_lon"
 key = "fixed_lon"
 kind = "str"
-default = ""
+default = "{gps_lon}"
+hidden = true
 omit_if_empty = true
 group = "Position"
 label = "Fixed longitude (decimal degrees)"
@@ -2464,7 +2643,8 @@ label = "Fixed longitude (decimal degrees)"
 name = "fixed_alt"
 key = "fixed_alt"
 kind = "str"
-default = ""
+default = "{gps_alt}"
+hidden = true
 omit_if_empty = true
 group = "Position"
 label = "Fixed altitude (m)"

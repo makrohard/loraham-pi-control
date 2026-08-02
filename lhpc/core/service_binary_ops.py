@@ -211,9 +211,21 @@ class BinaryOpsMixin:
                                 details=[f"  changed: {c}" for c in _ch[:5]],
                                 next_commands=[src_cmd], data={"binary_failed": True})
                         continue                       # proven at the pin, clean — reuse it
-                    # `locked=True` when an OUTER boundary (the auto-install run) already holds
-                    # this path's source lock — re-acquiring it would self-contend and fail.
-                    act = inst.adopt_source(comp, source="pinned", locked=locked)
+                    # The source lock for this path may be held by an OUTER boundary (the
+                    # auto-install run, `locked=True`) **or** by THIS call's own guard, which
+                    # covers every path in `spec.covers` (see the `if not locked:` block
+                    # above). Either way, re-acquiring it here self-contends and the adoption
+                    # fails — reported as "another source operation is in progress" naming a
+                    # PID that is really our own stale owner record.
+                    #
+                    # Passing the bare `locked` told adoption the lock was free whenever the
+                    # guard was ours, which made `install --source binary` impossible for any
+                    # stack with `clone_required` (MeshCom: the artifact runs run.sh /
+                    # gps-relay.py out of the pinned checkout, so it must be adopted).
+                    _guard_held = locked or (
+                        comp.source is not None
+                        and comp.source.path in set(self._binary_source_paths(stack_id)))
+                    act = inst.adopt_source(comp, source="pinned", locked=_guard_held)
                     if act.status == "failed":
                         return ActionResult(
                             False,

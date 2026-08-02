@@ -26,3 +26,22 @@ channel](../../README.md#binary-channel-prebuilt).
 The firmware connects to the bridge over TCP (external-radio); `XR_HOST`/`XR_PORT`
 point at the bridge, `XR_PASSWORD` (optional HMAC) comes from `<runtime>/config/secrets/xr_pw`. The HMAC
 password and any real GPS coordinates are secrets — git-ignored, never committed.
+
+## GPS
+
+Production position comes from the global setting (`lhpc gps`, see [GPS](../gps.md)), fed to
+the QEMU node's UART by lhpc. The pinned `gps-relay.py` is **not** used for this: it accepts
+only a loopback gpsd, so it cannot serve a remote gpsd, a directly-read receiver, or a fixed
+position.
+
+`MeshCom GPS relay (fixture)` replays a checked-in **synthetic** file. It is a test facility,
+never a position source, and it is not part of a normal start. Run it explicitly if you want
+it: `lhpc stack start meshcom-gps-relay`.
+
+Position reaches the node through lhpc's feed, which connects to QEMU's own UART socket as a
+client (QEMU is the server). Verified on hardware with a live gpsd, a gpsd on another machine,
+and a fixed position.
+
+**Give the emulator time.** MeshCom's GPS init is one-shot at boot, and the node needs roughly
+1 minute on a Pi 5 but up to ~8 on a Zero 2 W before `--pos` reports a fix. A node that shows no
+position immediately after start is usually still booting.

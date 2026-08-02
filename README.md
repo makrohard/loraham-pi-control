@@ -33,6 +33,11 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 Daemon-backed stacks start the daemon automatically; Meshtastic drives the radio itself and can't
 share a band with the daemon (`lhpc` blocks the conflict).
 
+**Position (GPS)** is one global setting shared by every stack that can use it — a gpsd on this box
+or another, a receiver read directly, or a fixed position — and each stack has its own on/off
+switch. `lhpc gps --source gpsd`, then `lhpc config meshtastic use_gps on`. See
+[GPS](docs/gps.md).
+
 ### Hardware
 
 Tested boards, on Pi **Zero 2W** and **Pi 5** (other SX127x/SX1262 SPI boards are expected to work

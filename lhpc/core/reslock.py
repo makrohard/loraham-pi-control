@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 import re
+import threading
 import time
 from contextlib import contextmanager
 
@@ -70,6 +71,31 @@ def read_owner(paths: Paths, key: str) -> dict | None:
         return None
 
 
+# IN-PROCESS PUBLICATION LOCK, one per resource key.
+#
+# The flock and the `.owner` record cannot be made atomic against other PROCESSES — the
+# kernel grants the flock, and only then can we write who we are. But every ambiguous
+# report we have actually seen came from our OWN process: this service is shared across
+# waitress threads, so two threads routinely contend for the same claim, and the second
+# one could observe "flock held, owner not yet written" and be told it was busy by a
+# holder it could not identify. The same window exists on RELEASE (owner already removed,
+# flock not yet dropped).
+#
+# Serializing acquire+publish and unpublish+release per key makes that in-between state
+# unobservable WITHIN this process, which is what lets the contender path treat an
+# unidentifiable holder as genuinely external and fail fast instead of polling a timeout.
+_PUBLISH_LOCKS: dict = {}
+_PUBLISH_LOCKS_GUARD = threading.Lock()
+
+
+def _publish_lock(key: str) -> threading.Lock:
+    with _PUBLISH_LOCKS_GUARD:
+        lk = _PUBLISH_LOCKS.get(key)
+        if lk is None:
+            lk = _PUBLISH_LOCKS[key] = threading.Lock()
+        return lk
+
+
 @contextmanager
 def operation_lock(paths: Paths, resource_key: str, operation: str,
                    target: str = "", blocking: bool = False, stamp: float | None = None):
@@ -78,26 +104,41 @@ def operation_lock(paths: Paths, resource_key: str, operation: str,
     Raises `ResourceBusy` (naming the holder) if another operation holds it and
     `blocking` is False. The lock is released — and the owner record cleared — on exit,
     and the kernel releases the flock automatically if this process dies mid-operation.
+
+    Acquisition and publication of the owner record are serialized per key within this
+    process (see `_PUBLISH_LOCKS`), so no other thread here can see one without the other.
     """
     key = canonical_key(resource_key)
     lockfile = paths.under("state", "locks", key + ".lock")
     fh = runtime_fs.open_lock(paths, lockfile)
-    flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+    pub = _publish_lock(key)
+    owner = json.dumps({
+        "resource": key, "operation": operation, "target": target,
+        "pid": os.getpid(), "acquired": stamp if stamp is not None else time.time(),
+    })
     try:
-        try:
-            fcntl.flock(fh, flags)
-        except OSError as exc:
-            raise ResourceBusy(key, read_owner(paths, key)) from exc
-        runtime_fs.write_marker(paths, _owner_path(paths, key), json.dumps({
-            "resource": key, "operation": operation, "target": target,
-            "pid": os.getpid(), "acquired": stamp if stamp is not None else time.time(),
-        }))
+        if blocking:
+            # A BLOCKING flock may wait for a holder that needs `pub` to release — so it is
+            # never attempted while holding `pub`. The publish itself still is.
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            with pub:
+                runtime_fs.write_marker(paths, _owner_path(paths, key), owner)
+        else:
+            with pub:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError as exc:
+                    raise ResourceBusy(key, read_owner(paths, key)) from exc
+                runtime_fs.write_marker(paths, _owner_path(paths, key), owner)
         try:
             yield
         finally:
-            runtime_fs.unlink(paths, _owner_path(paths, key))
+            # Symmetric: the owner record disappears and the flock drops as one step, so a
+            # contender never sees a held lock with no owner on the way out either.
+            with pub:
+                try:
+                    runtime_fs.unlink(paths, _owner_path(paths, key))
+                finally:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
     finally:
-        try:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-        finally:
-            fh.close()
+        fh.close()

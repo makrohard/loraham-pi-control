@@ -65,7 +65,8 @@ def _between(text: str, start: str, end: str, path: pathlib.Path) -> str:
 # --- generator sides (computed once, language-independent) --------------------------------------
 
 def _generator_sets():
-    core_cmds, gui_cmds = _svc()._declared_dep_scopes()
+    # (core, gui, gps) since 0.1.8 — gpsd is a third, opt-in bucket (--with-gps).
+    core_cmds, gui_cmds, _gps_cmds = _svc()._declared_dep_scopes()
     core = set().union(*(_apt_tokens(c) for c in core_cmds)) if core_cmds else set()
     gui = set().union(*(_apt_tokens(c) for c in gui_cmds)) if gui_cmds else set()
     return core, gui

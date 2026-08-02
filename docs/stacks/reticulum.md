@@ -235,3 +235,16 @@ transmit but never receive.
 | start fails, "refusing to expose an unauthenticated RNS interface" | non-loopback bind with a loopback allow-list |
 | "SPI bus lock not acquired within 2s" | a peer holding `spi0.lock` is wedged (usually a stuck daemon) |
 | TX seems to stall | the duty-cycle limiter is holding packets; check the airtime limits |
+
+## Position (Sideband)
+
+Sideband's location plugin takes its position from the global setting (`lhpc gps`, see
+[GPS](../gps.md)) — gpsd (local or remote), a directly-read receiver, or a fixed position.
+
+Its position fields are no longer editable per stack: one setting answers "where is this
+box" for every stack, so two cannot disagree. If older per-stack values are still saved,
+`lhpc gps` and `lhpc doctor` list them and say they are ignored.
+
+The plugin reads its settings from `LHPC_LOCATION_CONF`, which lhpc points at the generated
+`state/sideband/location.conf`. That file is (re)generated when the stack **starts**, so a change
+to `lhpc gps` takes effect on the next start, not immediately.

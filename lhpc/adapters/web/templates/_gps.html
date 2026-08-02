@@ -1,0 +1,92 @@
+{# Position (GPS) — controller-owned, rendered INLINE in the /stacks controller row, SIBLING to
+   Webserver and the Firewall. Same shape as the Webserver panel: a status pill in the summary,
+   a Settings section with one Apply, and a `paramgrid dptab` table with a help column.
+
+   GPS is a GLOBAL box setting: it belongs to no stack and is NOT a daemon setting. Each stack
+   keeps its own `use_gps` switch, which follows this single source. `gps_global` is a
+   top-level render var (fail-safe None -> section omitted), like `firewall_view`.
+
+   ACCESSIBILITY: every control carries an aria-label, so each is announced with what it
+   changes rather than as a bare combo box / text field (Lighthouse a11y, and
+   tests/test_form_accessibility.py). #}
+{% if gps_global %}
+  <details class="advcfg" id="gps-row"{% if request.args.get('open') == 'gps' %} open data-force-open="1"{% endif %}>
+    <summary>Position (GPS)
+      <span class="pill pill-{{ 'ok' if gps_global.valid and gps_global.plan_valid and gps_global.source != 'off' else ('bad' if not (gps_global.valid and gps_global.plan_valid) else 'muted') }}">{{ gps_global.source }}</span>
+      {% if gps_global.running %}<span class="ver ver-red">in use</span>{% endif %}
+    </summary>
+
+    {# The fields sit DIRECTLY under this card — no nested "Settings" sub-panel. GPS has one
+       job and one form; a second collapsible layer would just be a click in the way. #}
+    <div class="ws-sub-wrap">
+      <section class="cfgsec">
+        <p class="muted">Where every stack gets its position. Meshtastic, MeshCom and Sideband all
+          follow this one setting; each stack then has its own <code>use_gps</code> switch in its
+          own Settings. lhpc never installs or configures gpsd itself.</p>
+
+        {% if not gps_global.valid %}
+          <p class="depnote depnote-warn"><strong>Position is DISABLED</strong> — {{ gps_global.reason }}.
+            A stack with GPS enabled refuses to start rather than run without a position.</p>
+        {% elif not gps_global.plan_valid %}
+          <p class="depnote depnote-warn"><strong>Source unusable</strong> — {{ gps_global.plan_reason }}.
+            The setting is saved, but no stack can start with GPS on until it resolves.</p>
+        {% endif %}
+        {% if gps_global.running %}
+          <p class="depnote depnote-warn">In use by {{ gps_global.running|join(', ') }} — stop it before
+            changing the source; its claims and generated config came from the current one.</p>
+        {% endif %}
+        {% for sid, keys in (gps_global.legacy or {}).items() %}
+          <p class="depnote">{{ sid }} still has old per-stack position values
+            ({{ keys|join(', ') }}) — ignored; this setting is authoritative.</p>
+        {% endfor %}
+
+        <form method="post" action="{{ url_for('gps_set') }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <table class="paramgrid dptab">
+            <tr><th>Source</th>
+              <td><select name="gps_source" aria-label="Position source">
+                {% for sid, label in gps_global.sources %}
+                  <option value="{{ sid }}"{{ ' selected' if sid == gps_global.source else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select></td>
+              <td class="dphelp muted">gpsd covers USB / HAT / a GPS server on the network</td></tr>
+            <tr><th>gpsd host</th>
+              <td><input name="gps_host" value="{{ gps_global.host }}" autocomplete="off"
+                         aria-label="gpsd host"></td>
+              <td class="dphelp muted">127.0.0.1, or another box running gpsd</td></tr>
+            <tr><th>gpsd port</th>
+              <td><input name="gps_port" type="number" min="1" max="65535" value="{{ gps_global.port }}"
+                         autocomplete="off" aria-label="gpsd port"></td>
+              <td class="dphelp muted">default 2947</td></tr>
+            <tr><th>NMEA device</th>
+              <td><input name="gps_device" value="{{ gps_global.device }}" autocomplete="off"
+                         aria-label="NMEA device"></td>
+              <td class="dphelp muted">only for source <code>nmea</code>; gpsd must not also own it</td></tr>
+            <tr><th>NMEA baud</th>
+              <td><select name="gps_baud" aria-label="NMEA baud">
+                {% for b in gps_global.bauds %}
+                  <option value="{{ b }}"{{ ' selected' if b|string == gps_global.nmea_baud|string else '' }}>{{ b }}</option>
+                {% endfor %}
+              </select></td>
+              <td class="dphelp muted">the direct reader configures the port itself</td></tr>
+            {# Coordinates are NEVER rendered back: this page is reachable from a browser, a
+               screenshot or a shared session. The placeholder says only whether one is set. #}
+            <tr><th>Fixed latitude</th>
+              <td><input name="gps_lat" value="" autocomplete="off" aria-label="Fixed latitude"
+                         placeholder="{{ 'set — blank keeps it' if gps_global.fixed_lat else 'decimal degrees' }}"></td>
+              <td class="dphelp muted">only for source <code>fixed</code>; never shown back</td></tr>
+            <tr><th>Fixed longitude</th>
+              <td><input name="gps_lon" value="" autocomplete="off" aria-label="Fixed longitude"
+                         placeholder="{{ 'set — blank keeps it' if gps_global.fixed_lon else 'decimal degrees' }}"></td>
+              <td class="dphelp muted">blank leaves the stored value unchanged</td></tr>
+            <tr><th>Fixed altitude</th>
+              <td><input name="gps_alt" value="" autocomplete="off" aria-label="Fixed altitude"
+                         placeholder="{{ 'set' if gps_global.fixed_alt else 'metres' }}"></td>
+              <td class="dphelp muted">optional</td></tr>
+          </table>
+          <p><button type="submit">Apply</button></p>
+        </form>
+      </section>
+    </div>
+  </details>
+{% endif %}

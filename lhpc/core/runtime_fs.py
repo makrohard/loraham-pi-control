@@ -580,6 +580,77 @@ def guard_state(paths: Paths, path: Path) -> str:
         return "unsafe"                  # escaped/swapped/unreadable parent — cannot prove absent
 
 
+def publish_symlink(paths: Paths, path: Path, target: str) -> None:
+    """Atomically publish a SYMLINK leaf inside the runtime root, descriptor-anchored.
+
+    Used for endpoints that must appear complete or not at all — the GPS feed's PTY link is
+    read by another process the instant it exists, so a check-then-unlink-then-symlink
+    sequence has a window where the path is missing, and a swapped parent could place the
+    link outside the root entirely. Created under a unique temp name via the held parent fd
+    and renamed over the target, so the leaf is never observed absent or half-made.
+
+    The TARGET may point outside the runtime root (a PTY lives in /dev); it is the LINK's
+    location that is contained.
+    """
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        # Replacing our own symlink is the normal case (a feed restarting). Replacing anything
+        # ELSE is not: a regular file, directory, socket or device at this path belongs to
+        # something else, and `os.replace` would silently destroy it.
+        try:
+            st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            st = None
+        if st is not None and not _stat.S_ISLNK(st.st_mode):
+            raise PathContainmentError(
+                f"refusing to publish over a non-symlink leaf: {path}")
+        tmp = None
+        for _ in range(64):
+            cand = f".{name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                os.symlink(target, cand, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError(f"could not create a unique temp link for {path}")
+        try:
+            os.rename(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+
+
+def unlink_link(paths: Paths, path: Path) -> None:
+    """Delete a contained runtime leaf that IS expected to be a symlink.
+
+    `unlink()` deliberately refuses a symlink leaf — it protects writes to regular files from
+    being redirected. An endpoint we published as a link must still be removable, so this is
+    the narrow counterpart: same descriptor-anchored containment, but a symlink leaf is the
+    expected case rather than an attack. Anything that is NOT a symlink is refused, so this
+    can never be turned into a way to delete a regular file.
+    """
+    try:
+        with _walk_parent(paths, path, create=False) as (parent_fd, name):
+            try:
+                st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            if not _stat.S_ISLNK(st.st_mode):
+                raise PathContainmentError(
+                    f"refusing to remove {path}: expected a symlink, found something else")
+            try:
+                os.unlink(name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+    except FileNotFoundError:
+        pass
+
+
 def unlink(paths: Paths, path: Path) -> None:
     """Delete a contained runtime leaf safely, descriptor-anchored: never through a symlink
     leaf (refused), never following a swapped parent. A missing leaf is a no-op."""

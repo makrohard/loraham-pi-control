@@ -644,7 +644,8 @@ class Lifecycle:
         try:
             script = commands.render_post_launcher(comp.post_steps, comp, params, op,
                                                    runtime, src, band, binding=binding, gated=True,
-                                                   result_path=str(result))
+                                                   result_path=str(result),
+                                                   gps=self._gps_post_values(getattr(stack, 'id', '')))
         except (commands.CommandError, validators.ValidationError) as exc:
             return PostStartSchedule(False, f"launcher render failed: {exc}")
         try:
@@ -704,6 +705,39 @@ class Lifecycle:
     def has_required_post_start(self, comp: Component) -> bool:
         return any(s.get("required") for s in (comp.post_steps or ()))
 
+    def _gps_enabled_for(self, stack_id: str) -> bool:
+        """The stack's saved, BANDLESS `use_gps` switch. Duplicated here (rather than reaching
+        for the controller) because Lifecycle owns no service reference — same file, same key,
+        one line."""
+        try:
+            from .config import load_stack_config
+            cfg = load_stack_config(self.paths, stack_id)
+        except (OSError, ValueError, KeyError, AttributeError):
+            return False                                   # advisory read; never blocks a start
+        return str(cfg.get("use_gps", "")).strip().lower() == "on"
+
+    def _gps_post_values(self, stack_id: str = "") -> dict:
+        """Controller-owned GPS values for post-start steps, from the ONE resolver.
+
+        Read here rather than threaded in from the caller so the launcher can never be
+        rendered against a different plan than the one lifecycle planning used — they both
+        derive from `[gps]` at the same moment.
+        """
+        try:
+            from .config import load_config
+            from .gps import meshtastic_post_step_values, plan_from_config
+            plan = plan_from_config(load_config(self.paths))
+            # The stack's own switch decides whether THIS node reports a position. Pushing
+            # ENABLED from the bare global plan set gps_mode on a node whose GPS was off.
+            if stack_id and plan.enabled and not self._gps_enabled_for(stack_id):
+                plan = plan.disabled_for_stack()
+            return meshtastic_post_step_values(plan)
+        except (OSError, ValueError, AttributeError):
+            # A post-step that cannot resolve its GPS value must not silently become a no-op;
+            # NOT_PRESENT is the safe direction (GPS off), and the step is `required`, so a
+            # genuinely broken push still fails the start rather than reporting success.
+            return {"gps_mode": "NOT_PRESENT", "gps_fixed_args": ["--remove-position"]}
+
     @staticmethod
     def required_result_leaf(binding: dict) -> str:
         """The sidecar leaf for a SYNCHRONOUS (required) post-start run, derived from the main
@@ -740,7 +774,7 @@ class Lifecycle:
         try:
             script = commands.render_post_launcher(
                 comp.post_steps, comp, params, op, runtime, src, band, binding=binding,
-                result_path=str(result),
+                result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', '')),
                 meta={"comp": comp.id, "band": band or "", "role": "required"})
         except (commands.CommandError, validators.ValidationError) as exc:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,

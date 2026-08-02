@@ -161,6 +161,11 @@ class Requirement:
     #                             only by `bootstrap-deps.sh --with-gui`; still probed, still surfaced, but
     #                             WARN-only in the install gate — a headless box is not broken for lacking
     #                             it, it simply cannot run that component.
+    gps: bool = False           # needed ONLY when the global position source is a LOCAL gpsd. Same
+    #                             soft-dependency shape as `gui` (opt-in `--with-gps`, warn-level), but
+    #                             additionally SUPPRESSED ENTIRELY when the configured gpsd is remote or
+    #                             the source is off/nmea/fixed — telling an operator whose gpsd runs on
+    #                             another box to install a local package would be simply wrong.
 
 
 @dataclass(frozen=True)

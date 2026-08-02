@@ -151,6 +151,49 @@ lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
 
 ---
 
+### gps
+Show or set the **position source shared by every stack**. Like `hardware`, this is a *global*
+controller setting, not a per-stack parameter: Meshtastic, MeshCom and Sideband all take position
+from here, so they can never disagree about where it comes from. Per-stack settings only turn GPS
+**on or off**.
+
+```
+lhpc gps                                        # show the current source
+lhpc gps --source off                           # no position (default)
+lhpc gps --source gpsd                          # gpsd on this box (127.0.0.1:2947)
+lhpc gps --source gpsd --host 192.168.1.5       # gpsd on ANOTHER box
+lhpc gps --source nmea --device /dev/ttyACM0    # a serial/USB GPS directly, no gpsd
+lhpc gps --source nmea --device /dev/ttyACM0 --baud 9600
+lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45   # a station that does not move
+```
+
+- **gpsd covers the most cases.** How gpsd gets its data is gpsd's business, not lhpc's — a USB
+  receiver, a HAT, or a hardware GPS server on the network all look the same through it. lhpc never
+  edits `/etc/default/gpsd`; see [GPS](gps.md) for that side.
+- **`nmea` opens the device directly** and therefore *excludes* gpsd: two readers on one receiver
+  present as intermittent position loss, so lhpc refuses the combination by resolving the device's
+  real identity (`st_rdev`) — `/dev/ttyACM0` and `/dev/serial/by-id/...` are recognised as the same
+  receiver.
+- **Malformed settings fail closed** to `source = off` rather than half-enabling a source.
+- The source **cannot be changed while a stack that uses it is running** — stop the stack first; its
+  claims and generated config were derived from the current source. What counts as "in use" is a
+  stack's position readers and its feed, in any live state: a feed running on its own counts, and so
+  does a component whose state cannot be determined — "could not tell" blocks the change rather than
+  being read as "not running". A stack running with `use_gps = off` takes no position from the global
+  setting and does not block it.
+- Coordinates are never echoed back by the CLI, the console, or any log.
+- **A source alone reports nothing.** Each stack opts in with its own saved switch:
+  `lhpc config <stack> use_gps on|off` (meshtastic, meshcom, reticulum; default **off**). A
+  stack with `use_gps = on` and the source `off` refuses to start and names both settings. The
+  switch is stored band-lessly, so it survives a band change, and — like the source — it cannot
+  be changed while that stack is running.
+- Everything the console's **Position (GPS)** card offers is available here — the two surfaces
+  call the same code, so validation and refusals are identical.
+- `gpsd` is opt-in at bootstrap: `./bootstrap-deps.sh --spi-mode <mode> --with-gps`, and only
+  when the source is a gpsd on *this* box.
+
+---
+
 ### autostart
 **Boot auto-restore** — restart the stacks that were running before a reboot (default: **on**).
 At boot, `lhpc-boot-restore.service` restores every stack that was LHPC-started and not stopped
@@ -291,6 +334,9 @@ password between bridge and firmware (default stack: meshcom).
 - `abort` cancels a running apply; `recover` clears a blocking `unsafe` state left when a
   cancelled build could not be proven stopped — automatically once the session is proven gone, or
   as your explicit acknowledgement after inspecting `ps`.
+
+### _gps-bridge
+Internal service — `lhpc _gps-bridge <meshtastic|meshcom>` — started by the lifecycle when the global position source needs to be presented as a device. Publishes NMEA on a PTY (Meshtastic) or a UNIX socket (MeshCom) under `state/gps/<consumer>/`, with a readiness marker driven by the upstream source. One instance per consumer. Not for direct use.
 
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.

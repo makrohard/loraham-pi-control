@@ -167,6 +167,153 @@ def _parse_boot(merged: dict, diagnostics: list) -> BootConfig:
     return BootConfig(restore=val)
 
 
+GPS_SOURCES = ("off", "gpsd", "nmea", "fixed")
+
+# Baud rates a POSIX termios port can actually be set to (`termios.B<rate>`). The direct-NMEA
+# reader configures the port itself, so an unsupported rate is a CONFIG error, not a runtime one.
+GPS_BAUDS = (4800, 9600, 19200, 38400, 57600, 115200)
+
+GPS_DEFAULT_PORT = 2947
+GPS_DEFAULT_BAUD = 9600
+
+
+@dataclass(frozen=True)
+class GpsConfig:
+    """[gps] — THE authoritative position source for every stack that can use one.
+
+    Per-stack settings may only turn GPS on or off; they are never independent source
+    selectors. That is the whole point: one setting, one answer to "where does position
+    come from", so two stacks can never disagree about it.
+
+    FAIL-CLOSED, like [boot] and the firewall's ap_enabled: anything malformed yields
+    source="off" with a reason, because a half-parsed position source is worse than none
+    (a stack would silently beacon a wrong or stale position). `valid` reports whether the
+    section parsed cleanly; `source` is already forced to "off" when it did not.
+    """
+
+    source: str = "off"
+    host: str = "127.0.0.1"
+    port: int = GPS_DEFAULT_PORT
+    device: str = ""
+    nmea_baud: int = GPS_DEFAULT_BAUD
+    fixed_lat: str = ""
+    fixed_lon: str = ""
+    fixed_alt: str = ""
+    valid: bool = True
+    reason: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self.source != "off"
+
+    @property
+    def local_gpsd(self) -> bool:
+        """gpsd on THIS box. Drives the soft dependency: a remote-gpsd operator must never be
+        told to install a local package (there is nothing to install here)."""
+        return self.source == "gpsd" and _is_loopback_host(self.host)
+
+    @property
+    def claims_local_serial(self) -> bool:
+        """Only direct NMEA opens a local character device. off / fixed / remote gpsd must
+        claim nothing — claiming a device they never touch would refuse valid combinations."""
+        return self.source == "nmea" and bool(self.device)
+
+
+def _is_loopback_host(host: str) -> bool:
+    h = (host or "").strip().strip("[]").lower()
+    if h in ("localhost", "localhost."):
+        return True
+    try:
+        import ipaddress
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def _gps_off(diagnostics: list, reason: str) -> GpsConfig:
+    diagnostics.append(f"[gps] {reason}; position source DISABLED (fail closed)")
+    return GpsConfig(source="off", valid=False, reason=reason)
+
+
+def _parse_gps(merged: dict, diagnostics: list) -> GpsConfig:
+    raw = merged.get("gps")
+    if raw is None:
+        return GpsConfig()
+    if not isinstance(raw, dict):
+        return _gps_off(diagnostics, f"section is not a table ({type(raw).__name__})")
+
+    source = raw.get("source", "off")
+    if not isinstance(source, str) or source.strip().lower() not in GPS_SOURCES:
+        return _gps_off(diagnostics, f"unknown source {source!r} (allowed: {', '.join(GPS_SOURCES)})")
+    source = source.strip().lower()
+    if source == "off":
+        return GpsConfig()
+
+    host = raw.get("host", "127.0.0.1")
+    if not isinstance(host, str) or not host.strip():
+        return _gps_off(diagnostics, f"invalid host {host!r}")
+    host = host.strip()
+
+    port = raw.get("port", GPS_DEFAULT_PORT)
+    if isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535):
+        return _gps_off(diagnostics, f"invalid port {port!r}")
+
+    device = raw.get("device", "")
+    if not isinstance(device, str):
+        return _gps_off(diagnostics, f"invalid device {device!r}")
+    device = device.strip()
+
+    baud = raw.get("nmea_baud", GPS_DEFAULT_BAUD)
+    if isinstance(baud, bool) or not isinstance(baud, int) or baud not in GPS_BAUDS:
+        return _gps_off(diagnostics,
+                        f"unsupported nmea_baud {baud!r} (allowed: {', '.join(map(str, GPS_BAUDS))})")
+
+    # A direct-NMEA source with no device is not a usable source — the reader would have
+    # nothing to open, and "enabled but silently dead" is exactly what fail-closed prevents.
+    if source == "nmea":
+        if not device:
+            return _gps_off(diagnostics, "source = nmea requires a device")
+        if not device.startswith("/"):
+            return _gps_off(diagnostics, f"device {device!r} must be an absolute path")
+
+    lat, lon, alt = (raw.get("fixed_lat", ""), raw.get("fixed_lon", ""), raw.get("fixed_alt", ""))
+    lat, lon, alt = (str(lat).strip() if lat not in (None, "") else "",
+                     str(lon).strip() if lon not in (None, "") else "",
+                     str(alt).strip() if alt not in (None, "") else "")
+    if source == "fixed":
+        # COMPLETE and FINITE: a station that reports half a position, or a NaN that survives
+        # float(), would beacon nonsense to the mesh.
+        ok, why = _finite_position(lat, lon, alt)
+        if not ok:
+            return _gps_off(diagnostics, why)
+
+    return GpsConfig(source=source, host=host, port=port, device=device, nmea_baud=baud,
+                     fixed_lat=lat, fixed_lon=lon, fixed_alt=alt)
+
+
+def _finite_position(lat: str, lon: str, alt: str) -> tuple[bool, str]:
+    """(ok, reason). Altitude is optional; latitude and longitude are not."""
+    import math
+    if not lat or not lon:
+        return False, "source = fixed requires both fixed_lat and fixed_lon"
+    try:
+        flat, flon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False, "fixed_lat/fixed_lon must be decimal degrees"
+    if not (math.isfinite(flat) and math.isfinite(flon)):
+        return False, "fixed_lat/fixed_lon must be finite"
+    if not (-90.0 <= flat <= 90.0) or not (-180.0 <= flon <= 180.0):
+        return False, "fixed_lat must be -90..90 and fixed_lon -180..180"
+    if alt:
+        try:
+            falt = float(alt)
+        except (TypeError, ValueError):
+            return False, "fixed_alt must be a number (metres)"
+        if not math.isfinite(falt):
+            return False, "fixed_alt must be finite"
+    return True, ""
+
+
 @dataclass(frozen=True)
 class RadioConfig:
     """Radio HARDWARE setup — sourced ONLY from the runtime-local layer. Default `unset` means no
@@ -327,6 +474,7 @@ class Config:
     stackweb: dict = field(default_factory=dict)   # stack_id -> StackWebConfig (web-UI proxy)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
     boot: BootConfig = field(default_factory=BootConfig)
+    gps: GpsConfig = field(default_factory=GpsConfig)   # THE position source for every stack
     sources: dict = field(default_factory=dict)   # per-component runtime overrides
     remotes: dict = field(default_factory=dict)   # per-component GitHub remote overrides
     local_path: Path | None = None
@@ -683,6 +831,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     stackweb = _parse_stackweb(merged, diagnostics)
     firewall = _parse_firewall(merged, diagnostics)
     boot = _parse_boot(merged, diagnostics)
+    gps = _parse_gps(merged, diagnostics)
     # FAIL CLOSED (plan §3, deliberate deviation from the fail-soft convention above): when the
     # LOCAL layer itself could not be read (malformed/unreadable/symlinked local.toml), the
     # operator's boot-restore switch is unknown — an autonomous process-starter must not fall
@@ -691,6 +840,13 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         boot = BootConfig(restore=False, valid=False,
                           reason="local config unreadable/malformed — boot restore disabled "
                                  "(fail closed)")
+        # `[gps]` lives in that same unreadable layer, so its ABSENCE from `merged` means
+        # "could not be read", not "not configured". Reporting a clean `off` would be a lie
+        # with consequences: a stack whose GPS is enabled would start believing there is
+        # simply no source, instead of refusing because the setting is unknown.
+        gps = GpsConfig(source="off", valid=False,
+                        reason="local config unreadable/malformed — position source unknown "
+                               "(fail closed)")
 
     return Config(
         values=merged,
@@ -700,6 +856,7 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         stackweb=stackweb,
         firewall=firewall,
         boot=boot,
+        gps=gps,
         sources=sources,
         remotes=remotes,
         local_path=local_path,
@@ -1017,6 +1174,102 @@ def save_operator_config(paths: Paths, callsign: str) -> Path:
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"operator": {"callsign": callsign}})
+
+
+def save_gps(paths: Paths, *, recheck=None, **fields) -> Path:
+    """Persist the GLOBAL position source into the runtime-local layer (git-ignored).
+
+    Validates EVERYTHING before any write and writes the whole `[gps]` table, because the
+    fields are interdependent: `nmea` needs a device, `fixed` needs complete coordinates.
+    Patching one key at a time could leave a combination on disk that `_parse_gps` then
+    rejects wholesale, silently disabling position — the operator would have "set" a source
+    and got none.
+
+    Only keys the caller passed are changed; the rest carry over from the current config,
+    so `lhpc gps --host X` does not wipe the device.
+
+    `recheck` (optional) runs UNDER the exclusive lock and may veto the write by returning a
+    reason string — that is how "no consumer may be running" stays true at the moment of the
+    write rather than only at the moment it was asked.
+    """
+    with config_lock(paths):
+        # EVERYTHING under one exclusive lock: the recheck, the read, the merge, the
+        # validation and the write.
+        #
+        # Reading the current table before taking the lock loses a concurrent update — two
+        # partial saves each merge onto the value they read and the second silently discards
+        # the first. And checking "is a consumer running" before the lock lets a start
+        # complete in between, so the source changes under a stack whose claims and generated
+        # config were derived from the old one.
+        if recheck is not None:
+            blocked = recheck()
+            if blocked:
+                raise ConfigError(blocked)
+        return _write_gps_locked(paths, fields)
+
+
+def _write_gps_locked(paths: Paths, fields: dict) -> Path:
+    """Read-merge-validate-write for `[gps]`. Caller MUST hold the config lock."""
+    cur = load_config(paths).gps
+    merged = {
+        "source": fields.get("source", cur.source),
+        "host": fields.get("host", cur.host),
+        "port": fields.get("port", cur.port),
+        "device": fields.get("device", cur.device),
+        "nmea_baud": fields.get("nmea_baud", cur.nmea_baud),
+        "fixed_lat": fields.get("fixed_lat", cur.fixed_lat),
+        "fixed_lon": fields.get("fixed_lon", cur.fixed_lon),
+        "fixed_alt": fields.get("fixed_alt", cur.fixed_alt),
+    }
+    unknown = set(fields) - set(merged)
+    if unknown:
+        raise ConfigError(f"unknown [gps] field(s): {', '.join(sorted(unknown))}")
+
+    src = str(merged["source"]).strip().lower()
+    if src not in GPS_SOURCES:
+        raise ConfigError(f"invalid GPS source {merged['source']!r} "
+                          f"(allowed: {', '.join(GPS_SOURCES)})")
+    merged["source"] = src
+
+    try:
+        port = int(merged["port"])
+    except (TypeError, ValueError):
+        raise ConfigError(f"invalid gpsd port {merged['port']!r}") from None
+    if not (1 <= port <= 65535):
+        raise ConfigError(f"gpsd port {port} out of range (1-65535)")
+    merged["port"] = port
+
+    try:
+        baud = int(merged["nmea_baud"])
+    except (TypeError, ValueError):
+        raise ConfigError(f"invalid nmea_baud {merged['nmea_baud']!r}") from None
+    if baud not in GPS_BAUDS:
+        raise ConfigError(f"unsupported nmea_baud {baud} "
+                          f"(allowed: {', '.join(map(str, GPS_BAUDS))})")
+    merged["nmea_baud"] = baud
+
+    host = str(merged["host"]).strip()
+    if not host:
+        raise ConfigError("gpsd host must not be empty")
+    merged["host"] = host
+
+    device = str(merged["device"]).strip()
+    if device and not device.startswith("/"):
+        raise ConfigError(f"GPS device {device!r} must be an absolute path")
+    merged["device"] = device
+
+    for key in ("fixed_lat", "fixed_lon", "fixed_alt"):
+        merged[key] = "" if merged[key] in (None, "") else str(merged[key]).strip()
+
+    if src == "nmea" and not device:
+        raise ConfigError("source = nmea requires a device (e.g. --device /dev/ttyACM0)")
+    if src == "fixed":
+        ok, why = _finite_position(merged["fixed_lat"], merged["fixed_lon"], merged["fixed_alt"])
+        if not ok:
+            raise ConfigError(why)
+
+    path = paths.runtime_root / "config" / "local.toml"
+    return _write_local_tables(paths, path, {"gps": merged})
 
 
 def save_hardware_setup(paths: Paths, setup_id: str) -> Path:

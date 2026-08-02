@@ -150,7 +150,10 @@ class ManifestError(Exception):
     """A manifest declared an invalid or unsafe lifecycle spec (fail early)."""
 
 
-_READINESS = {"process", "endpoint", "daemon-band", "manual", "external-systemd"}
+# "gps-feed": verified from the feed's own readiness marker (its upstream source),
+# never from the endpoint path existing — a PTY exists the instant it is created.
+_READINESS = {"process", "endpoint", "daemon-band", "manual", "external-systemd",
+              "gps-feed"}
 _PRE_KINDS = {"mkdir", "chmod", "symlink"}
 _POST_KINDS = {"delay", "exec", "tcp_wait", "tcp_send"}
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -185,10 +188,17 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         elif kind == "operator":
             if name != "callsign":
                 raise ManifestError(f"{cid}: unknown operator placeholder {tok!r}")
-        elif inner not in ("band", "runtime", "source"):
+        # `controller_python` is controller-derived like runtime/source: it resolves to THIS
+        # controller's interpreter, so lhpc's own internal services (the GPS bridge) never
+        # run through whatever python3 happens to be on PATH.
+        # `gps_mode` / `gps_fixed_args` are controller-owned post-step values resolved from
+        # the ONE global GPS plan (see core/gps.py) — a stack cannot choose its own source.
+        elif inner not in ("band", "runtime", "source", "controller_python",
+                           "gps_mode", "gps_fixed_args"):
             raise ManifestError(f"{cid}: unknown placeholder {tok!r}")
         return
-    stripped = tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
+    stripped = (tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
+                   .replace("{controller_python}", ""))
     if "{" in stripped or "}" in stripped:
         raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
 
@@ -613,7 +623,8 @@ def _parse_component(raw: dict) -> Component:
                         absent_file=r.get("absent_file", ""),
                         provisioned=bool(r.get("provisioned", False)),
                         module=_require_module(r.get("module", ""), raw.get("id", "?")),
-                        gui=bool(r.get("gui", False)))
+                        gui=bool(r.get("gui", False)),
+                        gps=bool(r.get("gps", False)))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),

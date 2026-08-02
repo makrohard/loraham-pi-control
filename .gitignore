@@ -33,3 +33,7 @@ logs/
 .vscode/
 *.swp
 .claude/
+
+# coverage data — a local artifact, never committed
+.coverage
+.coverage.*

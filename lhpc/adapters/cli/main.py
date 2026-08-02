@@ -440,6 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_logs.add_argument("target", help="Stack/component id")
     p_logs.add_argument("--lines", type=int, default=200, help="Tail length")
 
+    from lhpc.core.config import GPS_BAUDS as _GPS_BAUDS
+    from lhpc.core.config import GPS_SOURCES as _GPS_SOURCES
     from lhpc.core.config import HW_SETUPS as _HW_SETUPS
     p_as = sub.add_parser("autostart",
                           help="Boot auto-restore: restart previously running stacks after a reboot")
@@ -455,6 +457,27 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Show or set the radio hardware setup (which board(s) the box has)")
     p_hw.add_argument("setup", nargs="?", choices=tuple(_HW_SETUPS),
                       help="e.g. loraham | uputronics | waveshare-433 (no arg: show current + list)")
+
+    # GPS is a GLOBAL setting like `hardware`, not a per-stack parameter: every stack that
+    # can use a position takes it from here, so two stacks can never disagree about where
+    # position comes from. Per-stack settings only turn GPS on or off.
+    p_gps = sub.add_parser("gps",
+                           help="Show or set the position source shared by all stacks")
+    p_gps.add_argument("--source", choices=tuple(_GPS_SOURCES),
+                       help="off | gpsd | nmea | fixed")
+    p_gps.add_argument("--host", help="gpsd host (default 127.0.0.1; a remote box is fine)")
+    p_gps.add_argument("--port", type=int, help="gpsd port (default 2947)")
+    p_gps.add_argument("--device", help="NMEA character device, for --source nmea")
+    p_gps.add_argument("--baud", type=int, dest="nmea_baud",
+                       help=f"NMEA baud ({', '.join(str(b) for b in _GPS_BAUDS)}); default 9600")
+    p_gps.add_argument("--lat", dest="fixed_lat", help="fixed latitude (decimal degrees)")
+    p_gps.add_argument("--lon", dest="fixed_lon", help="fixed longitude (decimal degrees)")
+    p_gps.add_argument("--alt", dest="fixed_alt", help="fixed altitude (metres, optional)")
+
+    # Internal: the per-consumer NMEA bridge, started by the lifecycle. Not operator-facing
+    # (same underscore convention as _hmac-apply).
+    p_gpsb = sub.add_parser("_gps-bridge", help=argparse.SUPPRESS)
+    p_gpsb.add_argument("consumer", help=argparse.SUPPRESS)
 
     # Mirrors config.FIREWALL_MODES exactly, like _WS_MODES below — the CLI never invents policy
     # vocabulary of its own.
@@ -948,6 +971,16 @@ def _run(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "hardware":
         return _render(svc.set_hardware_setup(args.setup))
+    if args.command == "gps":
+        fields = {k: v for k, v in (
+            ("source", args.source), ("host", args.host), ("port", args.port),
+            ("device", args.device), ("nmea_baud", args.nmea_baud),
+            ("fixed_lat", args.fixed_lat), ("fixed_lon", args.fixed_lon),
+            ("fixed_alt", args.fixed_alt)) if v is not None}
+        return _render(svc.set_gps(**fields))
+    if args.command == "_gps-bridge":
+        from lhpc.core import gps_bridge as _gpsb
+        return _gpsb.run(args.consumer, svc._paths)
     if args.command == "firewall":
         import json as _json
 

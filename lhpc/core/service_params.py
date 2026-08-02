@@ -7,6 +7,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import ClassVar
 
 from . import daemon_control, runtime_fs, validators
 from .config import (
@@ -31,6 +32,12 @@ from .model import ComponentKind, RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, ConfigWrite
 from .snapshot_memo import invalidates_snapshot
+
+# Params that are a property of the STACK, not of the band it happens to be on, and are
+# therefore stored in the band-less config file (like autostart). Both the writer
+# (`save_config_bundle`) and the reader (`_resolved_param_value`) must agree on this set —
+# disagreeing is what made the switch read as its default while being saved as "on".
+_BANDLESS_STACK_PARAMS = ("use_gps",)
 
 
 class ParamsConfigMixin:
@@ -344,6 +351,12 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        if cfg_band and name in _BANDLESS_STACK_PARAMS:
+            # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
+            # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
+            # then display, and which the next bundle save writes back as "at default -> remove",
+            # silently clearing the switch while editing something unrelated.
+            stored = load_stack_config(self._paths, self._owner_stack_id(target), "")
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -617,6 +630,12 @@ class ParamsConfigMixin:
                 key = req.install or req.cmd or req.check_file or req.absent_file
                 if not key:
                     continue
+                # CONDITIONAL soft dependency: `gpsd` is only real when the configured
+                # position source is a gpsd on THIS box. Dropped entirely otherwise — a
+                # remote-gpsd operator has nothing to install here, and surfacing it made the
+                # install/start gate demand a package the box does not need.
+                if getattr(req, "gps", False) and not self._local_gpsd_needed():
+                    continue
                 is_gui = bool(getattr(req, "gui", False))
                 # ORDER-INDEPENDENT MERGE: collect the raw declaration facts here and derive
                 # `gui` / `mandatory` from ALL of them after the sweep (below). Deriving them
@@ -734,6 +753,12 @@ class ParamsConfigMixin:
             "running": bool(main and live.get(main.id) in up),
             "radios": [],
         }
+        # GPS is GLOBAL, but it is shown on EVERY stack that can use a position — beside that
+        # stack's own `use_gps` switch. Putting it only on the daemon page (where it first
+        # lived) meant an operator turning Meshtastic's GPS on had no way to reach the source
+        # that switch depends on, and the daemon does not use a position at all. Every copy
+        # edits the SAME setting and says so, so they cannot contradict each other.
+
         # The daemon's config page carries its LIVE (runtime) settings for ONE band,
         # chosen by a 433/868 switch at the top. The repo/RadioLib remotes + save/
         # restore below apply to both bands.
@@ -964,10 +989,93 @@ class ParamsConfigMixin:
                 to_remove.add(key)                                          # at default -> not persisted
             else:
                 to_set[key] = v                                             # override -> persisted
+        # `use_gps` is a STACK-LEVEL switch, exactly like autostart above: "does this box report
+        # its position" is a property of the stack, not of the band it happens to be on. Stored
+        # per band it silently reverted on a band change — and the band-less read then saw
+        # nothing at all, so the switch did nothing. (Live-found on the Zero: the CLI wrote
+        # `use_gps` into `meshtastic@868.toml` while every GPS decision read `meshtastic.toml`.)
+        # Routed here, in the canonical bundle path, so the CLI, the console and the API all
+        # agree — an intercept on any single surface only fixes that surface.
+        #
+        # A COMPONENT target (`lhpc config meshcom-qemu use_gps on`) would otherwise store the
+        # component-scoped `__r__meshcom-qemu__use_gps`, which no GPS reader looks at — the
+        # switch would appear to save and then do nothing. It is one switch per STACK, so it is
+        # normalized to the owner stack's FLAT band-less key whichever target names it.
+        _GPS_SW = "use_gps"
+        _gps_now, _want = False, ""
+        for _k in [k for k in to_set if k == _GPS_SW or k.endswith(f"__{_GPS_SW}")]:
+            # The WANTED state comes from the VALUE, never from which bucket the key landed in.
+            # Reading it as "in to_set => on" made `use_gps=""` — an override that differs from
+            # the default and so lands in to_set — look like "on": it matched the current "on",
+            # was seen as no change, skipped the running-stack refusal, and then disabled GPS,
+            # because every reader compares against the literal "on".
+            _gps_now = True
+            _want = "on" if str(to_set.pop(_k)).strip().lower() == "on" else "off"
+        for _k in [k for k in to_remove if k == _GPS_SW or k.endswith(f"__{_GPS_SW}")]:
+            to_remove.discard(_k)
+            _gps_now, _want = True, "off"
+        if _gps_now:
+            # Store the CANONICAL value: "on" is an override, anything else is the default and
+            # is cleared, so the file never holds a third state nobody reads as either.
+            if _want == "on":
+                auto_set[_GPS_SW] = "on"
+                auto_remove.discard(_GPS_SW)
+            else:
+                auto_remove.add(_GPS_SW)
+                auto_set.pop(_GPS_SW, None)
+        # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
+        # its generated config describing a different plan than the one that launched — the same
+        # reason the global source is locked while in use. Refused BEFORE anything is written;
+        # rechecked authoritatively inside the transaction (`_gps_recheck`), because between here
+        # and the write a concurrent start can bring the stack up.
+        if _gps_now and _want != ("on" if self.gps_enabled_for(sid) else "off"):
+            # Same rule as the authoritative recheck below, so the fast refusal and the one under
+            # the lock can never disagree about what counts as "in use". Cheap read here — the
+            # forced-fresh recompute belongs inside the transaction, not on the fast path.
+            _live = self.gps_liveness_blockers([sid], snap=self._snapshot_or_none())
+            if _live:
+                return ActionResult(
+                    False, f"Config not saved for '{target}': cannot change use_gps while "
+                           f"{', '.join(_live)} {'is' if len(_live) == 1 else 'are'} running.",
+                    details=["  its feed, claims and generated config came from the "
+                             "CURRENT setting"],
+                    next_commands=[f"lhpc stack stop {sid}"])
+
+        def _gps_recheck(_pth=None):
+            """AUTHORITATIVE recheck, run inside the exclusive config transaction.
+
+            The pre-check above reads state before the lock is taken, so a start that begins in
+            between would have its feed, claims and generated config derived from the OLD switch
+            while the new one lands underneath it. Here the config lock is held, the saved value
+            is re-read from the file being merged, and the running probe is FORCED FRESH — so a
+            concurrent start that has completed is seen. Fail-closed: if the probe cannot answer,
+            the save is refused rather than assumed safe. Raising rolls the transaction back.
+            """
+            if not _gps_now:
+                return
+            try:
+                _cur = str(_load_runtime_toml(
+                    self._paths, _stack_config_path(self._paths, sid, "")
+                ).get(_GPS_SW, "")).strip().lower() or "off"
+            except (OSError, ValueError, KeyError, ConfigError) as exc:
+                raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc
+            if _cur == _want:
+                return                              # not a change -> nothing to serialize against
+            # ONE fresh, strict snapshot — never a snapshot cached before the lock — judged over
+            # the stack's CONSUMER and FEED components. Checking only the stack's main component
+            # let `use_gps=off` succeed while `meshcom-gps` was running on its own, orphaning a
+            # feed that holds the receiver claim.
+            _blockers = self.gps_liveness_blockers([sid], snap=self._gps_fresh_snapshot())
+            if _blockers:
+                raise ConfigError(
+                    f"cannot change use_gps while {', '.join(_blockers)} "
+                    f"{'is' if len(_blockers) == 1 else 'are'} running — its feed, claims and "
+                    f"generated config came from the CURRENT setting (lhpc stack stop {sid})")
         # The stack file is written as a MERGE rendered INSIDE the transaction lock: overlay the
         # override keys (keeping daemon-profile dp_*, other bands + unrelated manual scalars), then
         # drop the at-default keys. A raise here (unsupported manual value) rolls the transaction back.
         def _render_stack(pth, tgt=sid, b=cfg_band, setv=to_set, rmv=to_remove):
+            _gps_recheck(pth)               # no-op unless this save touches the switch
             merged = merge_stack_values(pth, tgt, b, setv, clear_empty=False)
             for k in rmv:
                 merged.pop(k, None)
@@ -976,6 +1084,7 @@ class ParamsConfigMixin:
         if (auto_set or auto_remove) and cfg_band:
             # SECOND transactional target: autostart flags land in the band-less file.
             def _render_auto(pth, tgt=sid, setv=None, rmv=None):
+                _gps_recheck(pth)
                 if rmv is None:
                     rmv = set(auto_remove)
                 if setv is None:
@@ -1091,13 +1200,266 @@ class ParamsConfigMixin:
         return ActionResult(True, f"hardware setup set to {setup_id}",
                             details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}"])
 
+    def _gps_config_values(self, target: str) -> dict:
+        """Controller-owned `{gps_*}` values for a stack's generated config.
+
+        These come from the ONE global plan, which is why the consuming params are `hidden`
+        and non-editable: a stack must not be able to select its own position source. A
+        saved or hand-edited per-stack value can never win, because the value is not read
+        from the stack's config at all — it is substituted here.
+
+        `{gps_device}` differs per consumer by design:
+          * `gpsd` -> Meshtastic gets the bridge PTY (meshtasticd cannot speak gpsd);
+          * `nmea` -> the REAL device, so meshtasticd detects an actual chip instead of
+            sweeping baud rates for ~37 s against a stream nothing can answer;
+          * `fixed`/`off` -> empty, and the param is `omit_if_empty`.
+        Sideband needs no device path for gpsd — its plugin is a native gpsd client.
+        """
+        from .gps import CONSUMER_MESHTASTIC, bridge_endpoint_path
+        # TARGET-AWARE: the global source says WHERE, the stack's switch says WHETHER. Using
+        # the bare global plan here rendered a device into a stack whose GPS was off.
+        plan = self.gps_plan(target)
+        owner = self.gps_owner_stack(target)
+        device = ""
+        if plan.enabled:
+            if plan.source == "nmea":
+                device = plan.device
+            elif plan.source == "gpsd" and owner == CONSUMER_MESHTASTIC:
+                device = bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHTASTIC)
+        return {
+            "{gps_source}": plan.source,
+            "{gps_host}": plan.host or "127.0.0.1",
+            "{gps_port}": str(plan.port or 2947),
+            "{gps_device}": device,
+            "{gps_nmea_device}": plan.device,
+            "{gps_baud}": str(plan.nmea_baud or 9600),
+            "{gps_lat}": plan.fixed_lat,
+            "{gps_lon}": plan.fixed_lon,
+            "{gps_alt}": plan.fixed_alt,
+        }
+
+    # Position keys Sideband used to own per-stack, before `[gps]` became authoritative.
+    _LEGACY_GPS_KEYS: ClassVar[tuple] = (
+        "location_source", "gpsd_host", "gpsd_port", "nmea_device", "nmea_baud",
+        "fixed_lat", "fixed_lon", "fixed_alt")
+
+    def legacy_gps_values(self) -> dict:
+        """Stale per-stack position values still saved on disk -> {stack: [keys]}.
+
+        These no longer take effect: the params are `hidden` and filled from `[gps]`, so a
+        saved value cannot override the global source. But leaving them silently in place
+        would mislead anyone reading the config, so they are REPORTED — the audit's
+        "migrated, or ignored with a clear diagnostic, never silently overriding".
+        """
+        found = {}
+        for sid in ("reticulum",):
+            try:
+                cfg = load_stack_config(self._paths, sid)
+            except ConfigError as exc:
+                # `load_stack_config` is FAIL-CLOSED: a malformed/unreadable stack file raises
+                # ConfigError, which is NOT an OSError or ValueError. Catching the wrong types
+                # let it escape into a status GET and the console's settings view as a
+                # traceback/500. Report it as a named diagnostic instead — the operator needs
+                # to know the file is broken, and nothing here may fall back to defaults.
+                found[sid] = [f"unreadable stack config: {exc}"]
+            except OSError as exc:
+                found[sid] = [f"unreadable stack config: {exc}"]
+            else:
+                keys = sorted(k for k in self._LEGACY_GPS_KEYS
+                              if f"file_{k}" in cfg or k in cfg)
+                if keys:
+                    found[sid] = keys
+        return found
+
+    # A GPS change is blocked by any of these. UNKNOWN is included deliberately: lhpc represents
+    # a probe that could not answer as UNKNOWN, not as an exception, so treating it as "not
+    # running" is precisely the fail-open this guards against.
+    _GPS_LIVE_STATES: ClassVar[tuple] = (RunState.RUNNING, RunState.DEGRADED, RunState.UNKNOWN)
+
+    def gps_liveness_blockers(self, stack_ids, snap=None, require_enabled: bool = False) -> list:
+        """Components that must stop before a GPS setting may change, from ONE snapshot.
+
+        Looks at each owner stack's position CONSUMERS and its FEED — never just the stack's
+        main component. A feed running on its own holds the receiver claim and an endpoint built
+        from the CURRENT settings while its stack's main reads stopped, and a consumer is the
+        thing whose rendered config and claims were derived from them.
+
+        Pass `snap` to evaluate both GPS transactions against the SAME fresh picture; omit it and
+        a fresh one is taken. A snapshot that cannot be built at all is itself a blocker.
+        """
+        watch = self._gps_consumer_ids() | self._all_gps_feed_ids()
+        wanted = {s for s in stack_ids if s}
+        if require_enabled:
+            # A stack running with its switch OFF takes no position from the global setting, so
+            # it is not affected by a source change and must not block one. (Its FEED could not
+            # be running in that state anyway — a live feed IS the stack using GPS.)
+            wanted = {s for s in wanted if self.gps_enabled_for(s)}
+        try:
+            snap = snap if snap is not None else self.build_snapshot(fresh=True)
+        except Exception:
+            return sorted(f"{sid} (state unknown)" for sid in wanted)
+        live = []
+        for ss in snap.stacks:
+            if getattr(ss.stack, "id", "") not in wanted:
+                continue
+            for cid, st in ss.components.items():
+                if cid in watch and getattr(st, "run_state", None) in self._GPS_LIVE_STATES:
+                    live.append(f"{cid} (state unknown)"
+                                if st.run_state is RunState.UNKNOWN else cid)
+        return sorted(set(live))
+
+    def _snapshot_or_none(self):
+        """The CURRENT (possibly memoized) snapshot, or None when it cannot be built — the
+        callers treat that as a blocker rather than as "nothing is running"."""
+        try:
+            return self.build_snapshot()
+        except Exception:
+            return None
+
+    def _gps_fresh_snapshot(self):
+        """A forced recompute, or None when it cannot be built (the callers treat that as a
+        blocker rather than as 'nothing is running')."""
+        try:
+            return self.build_snapshot(fresh=True)
+        except Exception:
+            return None
+
+    def gps_consumers_running(self, snap=None) -> list:
+        """Everything that must stop before the GLOBAL position source may change.
+
+        Changing the source under a running consumer would leave it reading a device or a gpsd
+        that the new plan no longer describes — its claims and its rendered config were both
+        derived from the OLD plan. Refusing is simpler and safer than re-planning a running
+        stack, and it is what the operator would have to do by hand anyway.
+        """
+        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC
+        return self.gps_liveness_blockers(
+            (CONSUMER_MESHTASTIC, CONSUMER_MESHCOM, "reticulum"), snap=snap,
+            require_enabled=True)
+
+    def gps_settings(self) -> dict:
+        """The global GPS view for the CLI and the console — ONE source of truth, so the two
+        surfaces can never show different sources."""
+        from .gps import plan_from_config
+        cfg = self.config()
+        g = cfg.gps
+        plan = plan_from_config(cfg)
+        return {"source": g.source, "host": g.host, "port": g.port, "device": g.device,
+                "nmea_baud": g.nmea_baud, "fixed_lat": g.fixed_lat, "fixed_lon": g.fixed_lon,
+                "fixed_alt": g.fixed_alt, "valid": g.valid, "reason": g.reason,
+                "local_gpsd": g.local_gpsd, "claims_serial": g.claims_local_serial,
+                "device_key": plan.device_key, "plan_reason": plan.reason,
+                # The SECTION can parse cleanly and still not resolve — a `nmea` device that is
+                # missing or is not a character device. That plan is represented as `off`, so
+                # without this the surfaces reported a healthy "source: nmea" for a source no
+                # stack can actually use.
+                "plan_valid": plan.valid}
+
+    def gps_view(self) -> dict:
+        """Console view of the global position source. Built from `gps_settings()` so the web
+        card and `lhpc gps` can never disagree about what is configured."""
+        from .config import GPS_BAUDS, GPS_SOURCES
+        labels = {"off": "Off — no position",
+                  "gpsd": "gpsd (USB / HAT / network GPS server)",
+                  "nmea": "Direct NMEA device (not shared with gpsd)",
+                  "fixed": "Fixed position (station does not move)"}
+        v = self.gps_settings()
+        v["sources"] = [(s, labels.get(s, s)) for s in GPS_SOURCES]
+        v["bauds"] = list(GPS_BAUDS)
+        # DISPLAY only — the memoized snapshot, never a forced recompute. A page render calls the
+        # stack helpers ~15×, and making this one reassess turned every render into two full
+        # assessments (re-scanning /proc and re-running git for every source). The authoritative,
+        # forced-fresh check belongs in the two config transactions, not on a GET.
+        v["running"] = self.gps_consumers_running(snap=self._snapshot_or_none())
+        v["legacy"] = self.legacy_gps_values()
+        return v
+
+    def set_gps(self, **fields) -> ActionResult:
+        """Show or set the GLOBAL position source (`[gps]` in local.toml).
+
+        This is THE source for every stack that can use a position; per-stack settings only
+        turn GPS on or off. With no fields it reports the current setting.
+        """
+        from . import config as _config
+        from .gps import gpsd_owns_device
+        if not fields:
+            v = self.gps_settings()
+            det = [f"  source:  {v['source']}"]
+            if v["source"] == "gpsd":
+                det.append(f"  gpsd:    {v['host']}:{v['port']}"
+                           + ("  (local)" if v["local_gpsd"] else "  (remote)"))
+            if v["source"] == "nmea":
+                det.append(f"  device:  {v['device']} @ {v['nmea_baud']} baud")
+            if v["source"] == "fixed":
+                det.append("  fixed position configured")     # never echo coordinates
+            if not v["valid"]:
+                det.append(f"  INVALID: {v['reason']} — position is DISABLED (fail closed)")
+            elif not v.get("plan_valid", True):
+                det.append(f"  UNUSABLE: {v['plan_reason']} — no stack can start with GPS on")
+            for sid, keys in self.legacy_gps_values().items():
+                det.append(f"  note: {sid} still has old per-stack position values on disk "
+                           f"({', '.join(keys)}) — IGNORED; this setting is authoritative")
+            det.append("  choose with: lhpc gps --source <" + "|".join(_config.GPS_SOURCES) + ">")
+            return ActionResult(True, f"position source: {v['source']}", details=det)
+
+        # The liveness check runs UNDER the config lock, not before it: a start completing in
+        # between would leave a running stack whose claims and generated config were derived
+        # from the source we just replaced.
+        blocked: list = []
+
+        def _recheck() -> str:
+            # ONE fresh snapshot, taken here — under the config lock — so a start that completed
+            # between the caller's read and this point is seen, and every component is judged
+            # against the same picture.
+            blocked[:] = self.gps_consumers_running(snap=self._gps_fresh_snapshot())
+            if not blocked:
+                return ""
+            return ("in use by: " + ", ".join(blocked))
+
+        try:
+            _config.save_gps(self._paths, recheck=_recheck, **fields)
+        except _config.ConfigError as exc:
+            if blocked:
+                return ActionResult(
+                    False,
+                    "cannot change the position source while it is in use by: "
+                    + ", ".join(blocked),
+                    details=["  a running stack holds claims and a config derived from the "
+                             "CURRENT source",
+                             *(f"  stop it first:  lhpc stack stop {sid}" for sid in blocked)])
+            return ActionResult(False, f"could not save GPS settings: {exc}")
+        except OSError as exc:
+            return ActionResult(False, f"could not save GPS settings: {exc}")
+        self._invalidate_config()
+
+        v = self.gps_settings()
+        details = [f"  source: {v['source']}"]
+        if not v["valid"]:
+            # Saved values validate individually, so this means the SECTION is inconsistent.
+            return ActionResult(False, f"GPS settings rejected on reload: {v['reason']}")
+        # A direct device that gpsd already owns is the one combination that looks fine and
+        # then fails intermittently — two readers on one receiver. Warn at set time.
+        if v["source"] == "nmea" and v["device"]:
+            owned, detail = gpsd_owns_device(v["device"], v["host"], v["port"])
+            if owned is True:
+                details.append(f"  WARNING: local gpsd already owns {detail} — starting a stack in "
+                               "this mode will be refused; use --source gpsd instead")
+            elif owned is None:
+                details.append(f"  note: could not check whether gpsd owns {v['device']} ({detail})")
+        return ActionResult(True, f"position source set to {v['source']}", details=details)
+
     def save_stack_config(self, target: str, values: dict, band: str = "") -> ActionResult:
         """Validate and persist a stack/band's run + file configuration via the CANONICAL bundle
         path (`save_config_bundle`). `values` keys are the same canonical API keys the Config/Start
         pages use: `name`/`file_<name>` when unique, `component.name`/`file_<component.name>` when the
         name is duplicated across the stack. Unknown fields and unqualified duplicate names are typed
         failures with NO mutation; unique names keep their flat-key/field compatibility; daemon-profile
-        `dp_*`, autostart, remotes and the transactional semantics are preserved."""
+        `dp_*`, autostart, remotes and the transactional semantics are preserved.
+
+        `use_gps` needs no special handling here: `save_config_bundle` routes it to the band-less
+        file and refuses a change under a running stack, so every surface behaves identically.
+        (It once WAS handled here — which fixed nothing, because the CLI and the console both
+        call `save_config_bundle` directly.)"""
         if self.stack(target) is None:
             return self._unknown_stack(target)
         return self.save_config_bundle(target, values=values, band=band)
@@ -1433,6 +1795,20 @@ class ParamsConfigMixin:
                 return {}, f"unknown parameter {key!r}" if err.startswith("unknown") else err
             if self._is_hmac_managed_param(_c, p):                  # no ephemeral bypass of the gate
                 return {}, self._HMAC_MANAGED_PARAM_MSG
+            # The GPS switch is PERSISTED only. Accepting a DIFFERENT value per launch would
+            # let a start run with GPS on while the saved state says off — and the resource
+            # claims, the generated config and the post-start push all come from the SAVED
+            # state, so the launch and what the box actually holds would disagree.
+            #
+            # An echo of the CURRENT value is not an override: the console's start form posts
+            # every parameter it renders, so rejecting the value outright blocked every start
+            # from the web. Only a real change is refused.
+            if p.name == "use_gps":
+                current = "on" if self.gps_enabled_for(target) else "off"
+                if str(val).strip().lower() == current:
+                    continue
+                return {}, ("use_gps cannot be changed for a single start — it is a saved "
+                            f"setting (lhpc config {target} use_gps on|off)")
             try:
                 clean[key] = validators.validate_param(p, val)
             except validators.ValidationError as exc:
@@ -1499,11 +1875,22 @@ class ParamsConfigMixin:
         # ephemeral user values.
         hardware = str(getattr(getattr(cfg, "radio", None), "hardware", "") or "")
 
+        # The GPS device a consumer should read, derived from the ONE resolved plan — the same
+        # object lifecycle planning and the resource claims use, so a rendered config can never
+        # describe a source the lifecycle did not plan for. Empty when GPS is off or when the
+        # consumer needs no device (`fixed` uses the app's own fixed-position support), and the
+        # param is `omit_if_empty`, so the key then vanishes rather than being written blank.
+        gps_values = self._gps_config_values(target)
+
         def subst(text: str) -> str:
-            return (text.replace("{callsign}", call)
-                        .replace("{runtime}", runtime)
-                        .replace("{hardware}", hardware)
-                        .replace("{band}", cfg_band))    # for per-band config keys
+            out = (text.replace("{callsign}", call)
+                       .replace("{runtime}", runtime)
+                       .replace("{hardware}", hardware)
+                       .replace("{band}", cfg_band))    # for per-band config keys
+            if "{gps_" in out:
+                for token, value in gps_values.items():
+                    out = out.replace(token, value)
+            return out
 
         stored = self.file_config_values(target, band)
         over = overrides or {}

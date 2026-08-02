@@ -154,6 +154,17 @@ class BinaryChannelMixin:
         """The one command that repairs an artifact-managed runtime dependency."""
         return f"lhpc install {self.stack_of(comp_id) or comp_id} --source binary --yes"
 
+    def _local_gpsd_needed(self) -> bool:
+        """Is a gpsd on THIS box actually part of the configured position source?
+
+        Read defensively: this sits on the start gate and on read-only dependency views, so a
+        config problem must not raise here — and "no GPS configured" is the common case.
+        """
+        try:
+            return bool(self.config().gps.local_gpsd)
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def start_blocking_requirements(self, comp) -> list:
         """`missing_requirements(comp)` minus the ones a binary artifact makes IRRELEVANT, via the
         shared classifier. Returns `Requirement` objects unchanged for ordinary blockers; an
@@ -161,6 +172,12 @@ class BinaryChannelMixin:
         and every downstream renderer keep working untouched."""
         import dataclasses as _dc
         miss = self._lifecycle().missing_requirements(comp)
+        # A CONDITIONAL soft dependency must never block a start. `gpsd` is only real when the
+        # configured position source is a gpsd on THIS box; with the source off, remote, or
+        # reading a device directly there is nothing to install, and treating it as missing
+        # made a whole stack refuse to start over a package it does not need.
+        miss = [r for r in miss
+                if not (getattr(r, "gps", False) and not self._local_gpsd_needed())]
         if not miss or not self.binary_covers(comp.id):
             return miss
         out = []

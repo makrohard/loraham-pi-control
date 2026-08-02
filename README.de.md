@@ -35,6 +35,11 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic steuert das Funkgerät selbst und
 kann sich kein Band mit dem Daemon teilen (`lhpc` blockiert den Konflikt).
 
+**Position (GPS)** ist eine globale Einstellung für alle Stacks, die sie nutzen können — ein gpsd
+auf diesem oder einem anderen Rechner, ein direkt gelesener Empfänger oder eine feste Position.
+Jeder Stack hat zusätzlich seinen eigenen Schalter: `lhpc gps --source gpsd`, dann
+`lhpc config meshtastic use_gps on`. Siehe [GPS](docs/gps.md).
+
 ### Hardware
 
 Getestete Boards, auf Pi **Zero 2W** und **Pi 5** (andere SX127x-/SX1262-SPI-Boards sollten

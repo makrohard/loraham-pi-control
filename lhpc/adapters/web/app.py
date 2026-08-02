@@ -869,6 +869,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             ctx.setdefault("boot_restore_on", False)
             ctx.setdefault("boot_restore_valid", False)
+        # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
+        # not a per-stack one. Rendered as its own card on this page so it is visible without
+        # expanding any row; the per-stack pages still show it beside their `use_gps` switch,
+        # and every copy edits the same setting.
+        try:
+            ctx.setdefault("gps_global", service.gps_view())
+        except (OSError, ValueError, AttributeError, KeyError):
+            ctx.setdefault("gps_global", None)          # never break the page over a view
         ctx.update(over)
         return render_template("stacks.html", **ctx)
 
@@ -1445,6 +1453,43 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", band=band or None,
                                 open=stack_id, dp=stack_id)
                         + "#stack-daemon-params-" + stack_id)
+
+    @app.post("/gps")
+    def gps_set():
+        """Set the GLOBAL position source. Same single entry point the CLI uses, so the two
+        surfaces cannot drift: everything (validation, the running-consumer refusal, the
+        gpsd-ownership warning) lives in `set_gps`, not here."""
+        if not _csrf_ok():
+            abort(400)
+        fields = {}
+        for form_key, api_key in (("gps_source", "source"), ("gps_host", "host"),
+                                  ("gps_port", "port"), ("gps_device", "device"),
+                                  ("gps_baud", "nmea_baud"), ("gps_lat", "fixed_lat"),
+                                  ("gps_lon", "fixed_lon"), ("gps_alt", "fixed_alt")):
+            raw = request.form.get(form_key)
+            if raw is None:
+                continue
+            raw = raw.strip()
+            if api_key in ("port", "nmea_baud"):
+                if not raw:
+                    continue
+                try:
+                    fields[api_key] = int(raw)
+                except ValueError:
+                    flash(f"{form_key.replace('gps_', '')} must be a number", "warn")
+                    return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
+                                    + "#stack-settings-daemon")
+            elif api_key.startswith("fixed_") and not raw:
+                # Blank means UNCHANGED, not cleared: the form never renders the current
+                # coordinates back, so an empty box carries no intent to erase them. Switching
+                # the source away from `fixed` is what clears a stored position.
+                continue
+            else:
+                fields[api_key] = raw
+        result = service.set_gps(**fields)
+        flash(result.summary, "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open="daemon", cfg="daemon")
+                        + "#stack-settings-daemon")
 
     @app.post("/hardware")
     def hardware_set():

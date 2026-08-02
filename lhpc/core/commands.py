@@ -35,10 +35,34 @@ class CommandError(Exception):
     """A command template / step could not be built safely."""
 
 
+def _controller_python() -> str:
+    """Absolute path of the interpreter running THIS controller.
+
+    Controller-derived, exactly like `{runtime}` and `{source}` — it is never influenced by
+    a saved or ephemeral user value. Components that are lhpc's own internal services (the
+    GPS bridge) run through it, so they cannot pick up whatever `python3`/`lhpc` happens to
+    be on PATH — the same reasoning as the managed Meshtastic CLI being invoked by absolute
+    path in its post-steps.
+
+    Prefers the sibling `python3` when it exists, so the running process's executable
+    BASENAME is deterministic. Process identity is matched on that basename, and
+    `sys.executable` is `.../bin/python` in a venv on some boxes and `.../bin/python3` on
+    others — which silently made a live component read as stopped.
+    """
+    import os
+    import sys
+    exe = sys.executable or "python3"
+    sibling = os.path.join(os.path.dirname(exe), "python3")
+    if os.path.basename(exe) != "python3" and os.path.exists(sibling):
+        return sibling
+    return exe
+
+
 def _paths_subst(text: str, runtime: str, source: str, band: str) -> str:
     """Substitute ONLY controller-derived paths into a literal token/value."""
     out = (text.replace("{runtime}", runtime)
                .replace("{source}", source)
+               .replace("{controller_python}", _controller_python())
                .replace("{band}", band or ""))
     if "{" in out and "}" in out:
         raise CommandError(f"unresolved placeholder in token: {text!r}")
@@ -286,9 +310,39 @@ def _post_label(v) -> str:
     return v.strip()
 
 
+def _expand_gps_tokens(tokens, gps: dict | None):
+    """Replace controller-owned GPS tokens in a post-step argv template.
+
+    These come from the ONE resolved GPS plan, never from a run param — a stack must not be
+    able to choose its own position source. `{gps_fixed_args}` expands to SEVERAL tokens (or
+    none), which is why this runs before `expand_argv` rather than being a string replace.
+    """
+    g = gps or {}
+    out = []
+    for tok in tokens:
+        if tok == "{gps_mode}":
+            out.append(str(g.get("gps_mode", "NOT_PRESENT")))
+        elif tok == "{gps_fixed_args}":
+            out.extend(str(a) for a in g.get("gps_fixed_args", ()))
+        else:
+            out.append(tok)
+    return out
+
+
+def _gps_token_value(spec: str, gps: dict | None) -> str:
+    """Resolve a `skip_if_empty` reference to the text used for the empty test."""
+    g = gps or {}
+    if spec == "{gps_fixed_args}":
+        return " ".join(str(a) for a in g.get("gps_fixed_args", ()))
+    if spec == "{gps_mode}":
+        return str(g.get("gps_mode", ""))
+    return spec
+
+
 def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                          band: str = "", binding: dict | None = None, gated: bool = False,
-                         result_path: str = "", meta: dict | None = None) -> str:
+                         result_path: str = "", meta: dict | None = None,
+                         gps: dict | None = None) -> str:
     """Serialize typed post-start steps into a self-contained Python launcher that runs them
     detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
     time + session/group) ties the runner to one exact main launch — it re-checks that main before
@@ -332,7 +386,14 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
         if kind == "delay":
             resolved.append({"kind": "delay", "seconds": float(step.get("seconds", 0))})
         elif kind == "exec":
-            argv = expand_argv(step["argv"], comp, params, op, runtime, source, band)
+            # A step whose only reason to exist is a GPS value that resolved to nothing is
+            # SKIPPED, not run with an empty argument — `meshtastic --host X` with no action
+            # would succeed while doing nothing, which is exactly the false success the
+            # required-both-ways contract is meant to rule out.
+            if "skip_if_empty" in step and not _gps_token_value(step["skip_if_empty"], gps).strip():
+                continue
+            argv = expand_argv(_expand_gps_tokens(step["argv"], gps),
+                               comp, params, op, runtime, source, band)
             exe = shutil.which(argv[0]) or argv[0]
             for cand in step.get("paths", []):
                 c = _paths_subst(cand, runtime, source, band)
@@ -408,7 +469,18 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             raise CommandError(
                 f"post-start result path escapes the runtime root: {result_path!r}")
         root_s, rel_parts = str(runtime), parts
-    return (_POST_RUNNER.replace("__STEPS__", repr(resolved))
+    # Collect the exact coordinate values any step will pass, so the launcher can mask them
+    # if a child fails and quotes its own arguments back.
+    pos_values = []
+    for _s in resolved:
+        if _s.get("kind") != "exec":
+            continue
+        _av = _s.get("argv") or []
+        for _i, _tok in enumerate(_av):
+            if _tok in ("--setlat", "--setlon", "--setalt") and _i + 1 < len(_av):
+                pos_values.append(str(_av[_i + 1]))
+    return (_POST_RUNNER.replace("__POS_VALUES__", repr(sorted(set(pos_values))))
+            .replace("__STEPS__", repr(resolved))
             .replace("__BINDING__", repr(binding))
             .replace("__GATED__", repr(bool(gated)))
             .replace("__META__", repr(dict(meta or {})))
@@ -426,8 +498,11 @@ def _post_data(template: str, comp, params, op, runtime, source, band) -> str:
 
 
 _POST_RUNNER = '''\
-import os, select, socket, stat, sys, time, subprocess
+import os, re as _re, select, socket, stat, sys, time, subprocess
 STEPS = __STEPS__
+# Exact position values THIS launcher passes to a child, so a failing step's error text
+# cannot echo them back into the log. Filled by the renderer; empty when no GPS step runs.
+_POS_VALUES = __POS_VALUES__
 BINDING = __BINDING__
 GATED = __GATED__
 META = __META__
@@ -538,6 +613,22 @@ def _clean(text):
                      if 0x20 <= ord(c) < 0x7F and c not in ('"', "'", "`"))
     return joined[:_MAX_DETAIL]
 
+def _scrub(text):
+    # POSITION SCRUB. A failing GPS step reports what it was asked to do, so a child's error
+    # text can carry the operator's coordinates ("--setlat 51.4779"), a raw NMEA sentence, or
+    # gpsd JSON. This log is written to disk and read by the console, so the child's output is
+    # masked before it is emitted anywhere. Two layers: the exact values THIS launcher passed,
+    # and generic position-shaped patterns for anything the child produced on its own.
+    if not text:
+        return text
+    for _v in _POS_VALUES:
+        if _v:
+            text = text.replace(_v, "<redacted>")
+    text = _re.sub(r"\\$G[A-Z]{3,4}[^\\r\\n]*", "<nmea redacted>", text)
+    text = _re.sub(r"(?i)\\b(lat|lon|latitude|longitude)\\b(\\s*[:=]\\s*)-?\\d+(\\.\\d+)?",
+                   r"\\1\\2<redacted>", text)
+    return text
+
 def _record(entry):
     # Flushed on EVERY append, so a failed step can never leave a successful empty sidecar
     # behind when the launcher exits non-zero.
@@ -594,7 +685,7 @@ for s in STEPS:
                 cp = subprocess.run(s["argv"], shell=False, timeout=120,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 rc = cp.returncode
-                err = (cp.stderr or b"").decode("utf-8", "replace")
+                err = _scrub((cp.stderr or b"").decode("utf-8", "replace"))
                 if err:
                     sys.stderr.write(err if err.endswith("\\n") else err + "\\n")
             except subprocess.TimeoutExpired:

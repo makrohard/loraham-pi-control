@@ -392,7 +392,10 @@ def test_build_steps_provision_managed_tools_in_root(tmp_path):
 # from the host, which would make these tests pass for the wrong reason on either kind of box.
 
 def _scopes(tmp_path):
-    return _svc(tmp_path)._declared_dep_scopes()
+    # (core, gui, gps) since 0.1.8 — GPS deps are a third, separately opt-in bucket
+    # (`--with-gps`), because gpsd is only needed for a receiver on THIS box.
+    core, gui, _gps = _svc(tmp_path)._declared_dep_scopes()
+    return core, gui
 
 
 def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
@@ -414,7 +417,7 @@ def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
 
 def test_default_script_body_is_exactly_the_core_scope(tmp_path):
     svc = _svc(tmp_path)
-    core, gui = svc._declared_dep_scopes()
+    core, gui, _gps = svc._declared_dep_scopes()
     script = svc.deps_script()
     # Drop the --dry-run guard first: it NAMES GUI packages in its denylist regex (to refuse them),
     # which must not be confused with installing them.
@@ -430,10 +433,10 @@ def test_default_script_body_is_exactly_the_core_scope(tmp_path):
 def test_moving_a_dep_between_scopes_changes_the_revision(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     before = svc.deps_script()
-    core, gui = svc._declared_dep_scopes()
+    core, gui, _gps = svc._declared_dep_scopes()
     # Same command SET, different scope: a revision that hashed commands alone would not move.
     monkeypatch.setattr(type(svc), "_declared_dep_scopes",
-                        lambda self: (sorted(core + gui), []))
+                        lambda self: (sorted(core + gui), [], []))
     after = svc.deps_script()
     def _rev(s):
         return next(ln for ln in s.splitlines() if "dependency revision" in ln)
@@ -453,7 +456,7 @@ def test_core_declaration_wins_over_a_gui_declaration(tmp_path, monkeypatch):
                     break
     assert dup is not None
     monkeypatch.setattr(type(dup), "gui", property(lambda self: False), raising=False)
-    core, gui = svc._declared_dep_scopes()
+    core, gui, _gps = svc._declared_dep_scopes()
     assert dup.install in core
     assert dup.install not in gui
     assert core.count(dup.install) == 1
@@ -681,7 +684,9 @@ def test_optional_and_gui_counters_are_disjoint(tmp_path):
 # Depends drag SDL2 -> PulseAudio/Wayland/Mesa/LLVM onto a headless rig).
 
 def _mesh(svc):
-    return svc.stack("meshtastic").components[0]
+    # By ID, not by position: the stack also carries an optional GPS feed component, and
+    # "the meshtasticd component" is what every caller here means.
+    return next(c for c in svc.stack("meshtastic").components if c.id == "meshtastic")
 
 
 def test_meshtastic_is_a_normal_managed_source_with_the_usual_selectors(tmp_path):
