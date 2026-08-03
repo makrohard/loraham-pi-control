@@ -284,7 +284,7 @@ class SelfUpdateOpsMixin:
         that drifted for some OTHER reason, never units whose template changed in the
         update being applied.
 
-        What makes that acceptable TODAY is an invariant, not a mechanism: 0.1.7 does not
+        What makes that acceptable TODAY is an invariant, not a mechanism: 0.1.8 does not
         change any unit's bytes (see tests/test_updater_units.py::
         test_unit_bytes_unchanged_since_0_1_6). The moment a release does change them,
         this is not enough — a real two-stage migration is required, and until it exists

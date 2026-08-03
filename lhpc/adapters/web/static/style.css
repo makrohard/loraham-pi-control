@@ -686,6 +686,35 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
    per-metric hues (operator call) — warn/crit still repaints them, so an unhealthy metric is
    unmistakable. The numeric value is always present, colour is never the only signal. */
 .sysbar-fill { background: var(--ok); }
+/* Time spans BOTH the gauge and value columns: the pill leaves most of the gauge cell empty,
+   and the fixed 11rem value column wrapped the timestamp onto three lines. One flex line, and
+   the text never breaks mid-timestamp. */
+/* Two deliberate lines — local (with its zone) above UTC — each unbreakable, so a timestamp is
+   never split mid-value. The row spans both columns because the fixed 11rem value column wrapped
+   it onto three ragged lines while the pill left most of the gauge cell empty. */
+.sysrow-time .sys-time-val { display: flex; flex-direction: column; min-width: 0; }
+.sysrow-time .sys-time-line { font-size: .85rem; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.sysrow-time .sys-time-utc { color: var(--muted); }
+/* The recovery command is REAL text in the row — selectable and copyable, and reachable on a
+   touch device, which a title tooltip is not. */
+/* Guidance is ordinary prose — NOT select-all, because a sentence is not a command. */
+.sysrow-time .sys-time-hint { font-size: .78rem; margin-top: .15rem; color: var(--muted);
+  overflow-wrap: anywhere; }
+/* ...and the command is its own element, so select-all copies EXACTLY a runnable line. LHPC
+   never executes it; the operator does, exactly like the dependency hints. */
+.sysrow-time .sys-time-cmd { font-size: .78rem; font-family: ui-monospace, monospace;
+  color: var(--muted); user-select: all; overflow-wrap: anywhere; }
+
+/* Narrow phones: the pill plus a full timestamp cannot share one line, and `.card` clips its
+   overflow — so the timestamps were cut off rather than wrapped. Let the pill sit on its own
+   line and give the timestamp block the full width; the timestamps themselves stay unbreakable
+   so a value is never split down the middle. */
+@media (max-width: 480px) {
+  .sysrow-time .sys-gaugewrap { flex-wrap: wrap; }
+  .sysrow-time .sys-time-val { flex: 1 1 100%; }
+}
+
 .sysrow-cpu  polyline { stroke: var(--sys-cpu); }
 .sysrow-mem  polyline { stroke: var(--sys-mem); }
 .sysrow-swap polyline { stroke: var(--sys-swap); }

@@ -20,7 +20,7 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - [Maintenance](maintenance.md) — routine upkeep of an installed box.
 - [Field notes](field-notes.md) — fresh-install checklist, Pi Zero 2 W vs Pi 5 build
   durations, QEMU-stack expectations, log naming, and per-board `gpiochip`/GPIO notes.
-- [Test matrix](test-matrix.md) — what 0.1.7 proves on live hardware, and how.
+- [Test matrix](test-matrix.md) — what 0.1.7 and 0.1.8 prove on live hardware, and how.
 - [GPS](gps.md) — the one global position source, what lhpc automates and what stays
   yours (gpsd itself), and the per-stack behaviour.
 - [Backlog](backlog.md) — accepted deferrals, and what holds the line for each

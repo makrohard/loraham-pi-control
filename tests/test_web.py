@@ -635,6 +635,11 @@ def test_system_api_is_read_only_json(tmp_path):
     assert r.status_code == 200
     j = r.get_json()
     assert isinstance(j["ts"], float)
+    # Time row: always present (the clock is always readable, even when its sync state is not),
+    # with a state the panel can pin. `unknown` is its own state and never folded into red.
+    tm = j["time"]
+    assert tm["state"] in ("green", "yellow", "red", "unknown")
+    assert tm["local"] and tm["utc"] and tm["tz"]
 
 
 def test_dashboard_system_box_collapsed_by_default(tmp_path):

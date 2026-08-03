@@ -87,6 +87,8 @@ class FileSystem(Protocol):
     def read_text(self, path: str, max_bytes: int) -> str: ...   # bounded; "" on any OSError
     def statvfs(self, path: str) -> dict | None: ...    # {"total_b","free_b","dev"}; None on OSError
     def listdir(self, path: str, max_entries: int) -> list[str]: ...  # bounded; [] on any OSError
+    def mtime(self, path: str) -> float | None: ...     # epoch seconds; None on any OSError
+    def readlink(self, path: str) -> str: ...           # link target, "" when not a symlink
 
 
 class UnixClient(Protocol):
@@ -544,6 +546,22 @@ class RealFileSystem:
         except OSError:
             return ""
 
+    def mtime(self, path: str) -> float | None:
+        """Modification time in epoch seconds, or None. Fail-soft like the other readers: a
+        missing file is a normal answer ("no such artifact"), never an error to the caller."""
+        try:
+            return os.stat(path).st_mtime
+        except OSError:
+            return None
+
+    def readlink(self, path: str) -> str:
+        """The symlink target, or "" when the path is not a symlink / unreadable. Used to name
+        the timezone from `/etc/localtime` without parsing binary tzdata."""
+        try:
+            return os.readlink(path)
+        except OSError:
+            return ""
+
     def statvfs(self, path: str) -> dict | None:
         """{"total_b","free_b","dev"} or None. free_b is the UNPRIVILEGED-available space
         (f_bavail × f_frsize); dev identifies the filesystem so callers can drop duplicates."""
@@ -760,6 +778,8 @@ class FakeSystem:
     files: dict[str, str] = field(default_factory=dict)          # path -> text (fs.read_text)
     statvfs_data: dict[str, dict] = field(default_factory=dict)  # path -> {"total_b","free_b","dev"}
     dirs: dict[str, list[str]] = field(default_factory=dict)     # path -> entries (fs.listdir)
+    mtimes: dict[str, float] = field(default_factory=dict)       # path -> epoch seconds (fs.mtime)
+    links: dict[str, str] = field(default_factory=dict)          # path -> target (fs.readlink)
     calls: list[list[str]] = field(default_factory=list)
     # Distinct names from the group methods (a dataclass field cannot share a method's name). Permissive
     # defaults so existing tests that start hardware stacks stay green; the missing-capability case is
@@ -802,6 +822,12 @@ class FakeSystem:
 
     def statvfs(self, path: str) -> dict | None:
         return self.statvfs_data.get(path)
+
+    def mtime(self, path: str) -> float | None:
+        return self.mtimes.get(path)
+
+    def readlink(self, path: str) -> str:
+        return self.links.get(path, "")
 
     def listdir(self, path: str, max_entries: int) -> list[str]:
         # Mirror the REAL semantics: first max_entries in directory (insertion) order, then sorted.

@@ -131,7 +131,7 @@ arbitration. While it is open, your node also serves its own pages and files.
 ## Clients: on the Pi or on your phone
 
 Reticulum's client-access interface (TCP 4242) is what Sideband and MeshChat
-attach to. In 0.1.7 it is **loopback-only**: the setting offers no other value,
+attach to. It is **loopback-only**: the setting offers no other value,
 and the node refuses a non-loopback bind even if the config is edited by hand.
 That port carries no authentication of its own, and an allow-list is firewall
 *intent*, not enforcement — a firewall may be absent, stale or never applied.

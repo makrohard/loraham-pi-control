@@ -98,6 +98,22 @@ t.apply(full);
 t.resetDynamic();                                       // fresh baseline hides them too
 out.hiddenAfterReset = ['sys-swap-row', 'sys-disk2-row', 'sys-power-row'].map(id => byId(id).hidden);
 
+// --- sequence 3: the clock advances LOCALLY between polls ----------------------------------
+// One sample, then the display is ticked without any further response: the seconds must move
+// and both lines must stay in step, because polling once a second to move a digit costs real
+// CPU on a Zero 2W and still stutters on a slow response.
+let fakeNow = 1785886200000;
+const realNow = Date.now;
+Date.now = () => fakeNow;
+t.apply({ ts: 20, time: { state: 'green', label: 'synced', epoch: 1785886200,
+                          local: '2026-08-04 01:30:00', utc: '2026-08-03 23:30:00',
+                          tz: 'Europe/Berlin', rtc_present: true } });
+out.t0 = [byId('sys-time-val').textContent, byId('sys-time-utc').textContent];
+fakeNow += 3000;                                        // three seconds pass, NO new response
+t.tickClock();
+out.t3 = [byId('sys-time-val').textContent, byId('sys-time-utc').textContent];
+Date.now = realNow;
+
 console.log(JSON.stringify(out));
 """
 
@@ -123,3 +139,13 @@ def test_optional_rows_follow_current_sample():
     assert out["shown"] == [False, False, False]            # all revealed by valid data
     assert out["hiddenAfterOmit"] == [True, True, True]     # omitted source -> hidden again
     assert out["hiddenAfterReset"] == [True, True, True]    # fresh baseline hides them too
+
+
+def test_the_clock_advances_between_polls_without_a_request():
+    """The seconds move from a LOCAL 1 Hz timer anchored on each response — polling every second
+    to animate a digit would have doubled `/api/system` (2.3% of a core on a Zero 2W, measured)
+    for something cosmetic, and would still stutter whenever a response was slow."""
+    out = _run_harness()
+    assert out["t0"] == ["2026-08-04 01:30:00 Europe/Berlin", "2026-08-03 23:30:00 UTC"]
+    assert out["t3"] == ["2026-08-04 01:30:03 Europe/Berlin", "2026-08-03 23:30:03 UTC"], (
+        "both lines must advance together, with no new sample")

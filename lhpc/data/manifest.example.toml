@@ -2424,7 +2424,7 @@ kind = "enum"
 default = "127.0.0.1"
 choices = ["127.0.0.1"]
 group = "Network exposure"
-label = "Client-access bind (loopback only in 0.1.7)"
+label = "Client-access bind (loopback only)"
 note = "RNS client access on 4242 has NO application-level authentication, so a non-loopback bind would rely entirely on the allow-list plus a managed firewall that may be absent, stale or not live-verified. Locked to loopback for this release; remote clients reach it through an SSH tunnel. Lifting this needs the start path to REFUSE a non-loopback bind unless the firewall is installed, current and live-verified for that exact bind/allow pair."
 
 [[stack.component]]

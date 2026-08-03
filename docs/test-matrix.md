@@ -1,4 +1,6 @@
-# Release test matrix — 0.1.7 (reticulum stack)
+# Release test matrix
+
+## 0.1.7 — reticulum stack
 
 Three boxes, live hardware, both bands. `rnstatus` interface counters are the RX/TX
 evidence; log greps are not (see field-notes).
@@ -9,7 +11,7 @@ evidence; log greps are not (see field-notes).
 | `lhpc-zero` (Zero 2 W) | Uputronics CE0 433 + CE1 868 | RF peer, field box (AP + mTLS) |
 | `lhpc-zero-wave` (Zero 2 W) | Waveshare SX1262 868 | zero-to-hero install, SX1262 proof |
 
-## Zero-to-hero (fresh Zero 2 W + Waveshare) — 16 min
+### Zero-to-hero (fresh Zero 2 W + Waveshare) — 16 min
 
 | phase | time |
 |---|---|
@@ -19,14 +21,14 @@ evidence; log greps are not (see field-notes).
 | `lhpc install reticulum` | 69 s |
 | `lhpc build reticulum` (nomadnet, lxmd, rns; sideband GUI-skipped) | 158 s |
 
-## Wipe and rebuild (Pi 5)
+### Wipe and rebuild (Pi 5)
 
 `lhpc uninstall --yes` removed 16 of 17 sources and REFUSED the one with local changes
 (naming `clean` as the escape). After `clean --purge`: install 17 s, build 125 s
 (Sideband included — the Pi 5 has the GUI deps), first start verified, RF proven again
 from a tree that no longer existed 4 minutes earlier. Config, secrets and PKI survived.
 
-## RF — every direction proven
+### RF — every direction proven
 
 868: all six directions between SX1276, SX127x and SX1262.
 
@@ -37,13 +39,13 @@ Exact commit set for that run: driver `3fef542`, RNS `b48b96e6`, lhpc = the comm
 that pins them (`lhpc/data/manifest.example.toml`, `pin_commit`).
 433: both directions between SX1278 and Uputronics 433.
 
-## Coexistence (one SPI bus, `spi0.lock`)
+### Coexistence (one SPI bus, `spi0.lock`)
 
 * daemon 433 + Reticulum 868 — both `READY`, interleaved
 * daemon 868 (MeshCore) + Reticulum 433 direct-SPI
 * MeshCom 433 + Meshtastic 868 (field box, survives reboot)
 
-## Refused as designed
+### Refused as designed
 
 * meshtastic 868 while Reticulum owns 868 — radio + `spi.bus.0.unlocked` conflicts
 * igate while kiss holds 433; kiss while Reticulum holds 433
@@ -53,11 +55,38 @@ that pins them (`lhpc/data/manifest.example.toml`, `pin_commit`).
 * source update while a consumer runs; drifted checkout not overwritten
 * start with a build receipt that no longer matches its sources
 
-## Granularity, on purpose
+### Granularity, on purpose
 
 `install` adopts a whole STACK; `update` refreshes ONE source. A component id given
 to `install` now names its owning stack and both commands, instead of "Unknown stack".
 
-## Boot restore
+### Boot restore
 
 Field box power-cycled twice: `2 restored, 0 failed`, AP up, console mTLS-gated.
+
+## 0.1.8 — GPS
+
+Two boxes, one live receiver. Evidence is the node's own state (`meshtastic --info`:
+`gpsMode`, `latitudeI`) and the feed's readiness marker; log greps are not evidence.
+
+| box | receiver | role |
+|---|---|---|
+| `loraham` (Pi 5) | u-blox USB, live 3D fix | gpsd host, direct-NMEA owner |
+| `lhpc-zero` (Zero 2 W) | none | remote-gpsd consumer |
+
+All four sources — `gpsd` local, `gpsd` remote, `nmea` direct, `fixed` — plus `off`
+were run against all three consumers (meshtastic, meshcom, reticulum): resolve, start,
+rendered config, feed readiness, stop, box left clean.
+
+### Refused as designed
+
+* direct `nmea` on a receiver gpsd already owns — identity from `st_rdev`, not the path
+* changing the global source, or a stack's `use_gps`, while a consumer runs
+* a stack whose source cannot be resolved — the start is refused, never downgraded to `off`
+* the MeshCom fixture feed bypassing a global `off`
+
+### Expected, not a fault
+
+* meshtastic probes the receiver for ~37 s before accepting a passive feed — until it
+  gives up, a healthy start reads as `No GNSS Module`
+* losing the source mid-run degrades the feed's readiness rather than wedging it

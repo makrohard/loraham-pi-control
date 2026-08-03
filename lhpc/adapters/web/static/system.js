@@ -10,7 +10,7 @@
   var box = document.getElementById("sysbox");
   if (!box) return;
   var POLL_MS = 2000, HIST = 60;
-  var timer = null;
+  var timer = null, clockTimer = null;
   var inflightCtl = null;   // AbortController of the ACTIVE request — the ownership token:
                             // only the request holding it may clear the slot, so a late/aborted
                             // response can never unlock polling for a newer generation.
@@ -35,6 +35,34 @@
         m = Math.floor((s % 3600) / 60);
     return (d ? d + "d " : "") + h + "h " + m + "m";
   }
+  // --- local clock tick --------------------------------------------------------------------
+  // The server's offset from THIS browser's clock, plus the zone offset the server reported, so
+  // the row can advance both lines itself between polls.
+  var clock = { skew: null, offset_s: 0, tz: "" };
+
+  function tzOffsetSeconds(local, utc) {
+    // Both strings describe the SAME instant; their difference is the zone offset, so the
+    // browser never has to know anything about the zone itself.
+    var l = Date.parse(local.replace(" ", "T") + "Z"), u = Date.parse(utc.replace(" ", "T") + "Z");
+    return (isFinite(l) && isFinite(u)) ? Math.round((l - u) / 1000) : 0;
+  }
+
+  function stamp(ms) {
+    // Formats in UTC deliberately: the caller pre-applies the zone offset, so the browser's own
+    // timezone never leaks into a reading the server is responsible for.
+    var d = new Date(ms);
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate()) + " " +
+           p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + ":" + p(d.getUTCSeconds());
+  }
+
+  function tickClock() {
+    if (clock.skew === null) return;                  // nothing anchored yet
+    var utcMs = Date.now() + clock.skew;
+    set("sys-time-val", stamp(utcMs + clock.offset_s * 1000) + (clock.tz ? " " + clock.tz : ""));
+    set("sys-time-utc", stamp(utcMs) + " UTC");
+  }
+
   function set(id, text) {
     var el = document.getElementById(id);
     if (el && el.textContent !== String(text)) el.textContent = text;
@@ -67,10 +95,10 @@
   }
   function rowOf(id) { var el = document.getElementById(id); return el ? el.closest("tr") : null; }
   function hideOptionalRows() {
-    // The three source-dependent rows are hidden UNLESS the current sample proves them:
+    // The source-dependent rows are hidden UNLESS the current sample proves them:
     // called before every apply() and on every fresh baseline, so an omitted source (or a
     // reopen) can never leave last session's values on screen.
-    ["sys-swap-row", "sys-disk2-row", "sys-power-row"].forEach(function (id) {
+    ["sys-swap-row", "sys-disk2-row", "sys-power-row", "sys-time-row"].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) el.hidden = true;
     });
@@ -243,6 +271,75 @@
       set("sys-power-val", num(d.power.core_mv)
           ? "core " + (d.power.core_mv / 1000).toFixed(3) + " V" : "");
     }
+    // Time: LHPC only REPORTS the clock — it never sets, steps or disciplines it, and the hint
+    // below is text the operator runs themselves. The pin is the SYNC STATE; no string claims the
+    // time is CORRECT, because nothing here can prove that without an external reference.
+    // `unknown` is its own state, never folded into bad. Yellow is a legitimate steady state —
+    // a daemon that has not synced yet, or a clock restored from an RTC — so it is worded as
+    // unverified rather than as a fault; no source at all is red, not yellow.
+    var trow = document.getElementById("sys-time-row");
+    var tpill = document.getElementById("sys-time-pill");
+    if (trow && tpill && d.time && d.time.local) {
+      trow.hidden = false;
+      var tst = d.time.state;
+      // Label comes from the backend, which distinguishes the red cases (no source vs a clock
+      // that reads earlier than files this box wrote); the fallback never invents a reason.
+      tpill.textContent = d.time.label || (tst === "green" ? "synced"
+        : tst === "yellow" ? "unverified"
+        : tst === "red" ? "no time source" : "unknown");
+      tpill.className = "pill " + (tst === "green" ? "pill-ok"
+        : tst === "yellow" ? "pill-warn"
+        : tst === "red" ? "pill-bad" : "");
+      // TWO deliberate lines: local (with the zone that reading is actually in) above UTC.
+      // The zone qualifies the LOCAL time, not the UTC one.
+      //
+      // Each poll re-anchors the offset between the server's clock and this browser's; a 1 Hz
+      // local timer moves the seconds in between, so the display cannot drift and costs nothing.
+      if (num(d.time.epoch) && d.time.utc) {
+        clock.skew = d.time.epoch * 1000 - Date.now();
+        clock.offset_s = tzOffsetSeconds(d.time.local, d.time.utc);
+        clock.tz = d.time.tz || "";
+        tickClock();
+      } else {
+        clock.skew = null;                            // no anchor -> show exactly what was sent
+        set("sys-time-val", d.time.local + (d.time.tz ? " " + d.time.tz : ""));
+        set("sys-time-utc", d.time.utc ? d.time.utc + " UTC" : "");
+      }
+      // Guidance and command are REAL text in the row when the state is not green — a title
+      // tooltip is neither copyable in the normal way nor reachable on a touch device. They are
+      // SEPARATE elements so select-all on the command copies exactly a runnable line: the old
+      // single string ended "(or install chrony)" and pasted into a shell as a syntax error.
+      // The conflict case deliberately offers guidance and NO command — which daemon to disable
+      // is the operator's call, and "enable NTP" would be wrong advice there.
+      var thint = document.getElementById("sys-time-hint");
+      if (thint) {
+        thint.textContent = d.time.hint || "";
+        thint.hidden = !d.time.hint;
+      }
+      var tcmd = document.getElementById("sys-time-cmd");
+      if (tcmd) {
+        tcmd.textContent = d.time.hint_cmd || "";
+        tcmd.hidden = !d.time.hint_cmd;
+      }
+      // The conflict detail must be visible, not tooltip-only: a touch device has no hover.
+      if (thint && tst !== "green" && d.time.detail && d.time.label === "conflict") {
+        thint.textContent = d.time.detail + " — " + (d.time.hint || "");
+        thint.hidden = false;
+      }
+      // Tooltip keeps the supporting detail: source, age, estimated error, RTC.
+      var tbits = [];
+      if (d.time.source) tbits.push("source: " + d.time.source);
+      if (d.time.detail) tbits.push(d.time.detail);
+      if (num(d.time.synced_age_s)) tbits.push("synced " + fmtUptime(d.time.synced_age_s) + " ago");
+      if (num(d.time.maxerror_us)) {
+        tbits.push("est. error \u00b1" + (d.time.maxerror_us / 1e6).toFixed(1) + " s");
+      }
+      // Only claim to know about the RTC when the backend actually reported it.
+      if (typeof d.time.rtc_present === "boolean") {
+        tbits.push("RTC: " + (d.time.rtc_present ? "yes" : "no"));
+      }
+      trow.title = tbits.join("\n");
+    }
     // Info footer (static-ish; cheap to refresh each tick for load/uptime).
     if (d.info) {
       // ONE flowing line that only ever wraps BETWEEN values: each value is its own nowrap
@@ -356,11 +453,17 @@
     restoreHist();                                  // graph shapes only; values stay …
     poll();
     timer = setInterval(poll, POLL_MS);
+    // 1 Hz DISPLAY tick — no request and no server work. Polling every second just to move a
+    // digit would have doubled the endpoint's cost (2.3% of a core on a Zero 2W, measured) for
+    // something cosmetic, and a slow response would still make it stutter.
+    clockTimer = setInterval(tickClock, 1000);
   }
   function stop() {
     if (timer === null) return;
     clearInterval(timer);
     timer = null;
+    if (clockTimer !== null) { clearInterval(clockTimer); clockTimer = null; }
+    clock.skew = null;                              // a reopen re-anchors on a fresh sample
     if (inflightCtl) { inflightCtl.abort(); inflightCtl = null; }
     saveHist();                                     // BEFORE the wipe: collapse must not lose it
     prev = null;
@@ -386,5 +489,5 @@
   if (box.open) start();   // belt-and-braces: the id-keyed restore may have opened it already
   // Test hook (inert in production): lets the node-driven regression harness call the state
   // machine directly — apply/reset with controlled samples, no fetch/timers involved.
-  box.lhpcTest = { apply: apply, resetDynamic: resetDynamic };
+  box.lhpcTest = { apply: apply, resetDynamic: resetDynamic, tickClock: tickClock };
 })();
