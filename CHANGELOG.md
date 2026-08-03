@@ -2,6 +2,9 @@
 
 ## 0.1.8
 
+- Fixed: any `socat` running on the box was claimed as the KISS serial bridge, so an unrelated one made that component read RUNNING/DEGRADED and blocked other stacks from starting
+- Fixed: `lhpc doctor` now says when gpsd answers but owns **no receiver** — a restart with Debian's `DEVICES=""`/`USBAUTO` default leaves it with nothing, and every position source then silently yields nothing
+- Test hygiene: the binary-switch tests no longer read the real machine's process list, so their result no longer depends on what happens to be running
 - **One global position source** (`lhpc gps`) shared by Meshtastic, MeshCom and Sideband: a gpsd on this box or another, a receiver read directly, or a fixed position. Per-stack settings only turn GPS on or off — Sideband's old independent source selector no longer applies, and any values still saved are reported as ignored
 - Meshtastic gains GPS for the first time: lhpc presents the source as the serial device meshtasticd requires, applies `position.gps_mode` in **both** directions, and uses the node's native fixed-position support (no synthesized stream, no chip-probe delay)
 - MeshCom production GPS comes from the same mechanism; the fixture relay is now explicitly a test facility and never joins a normal start

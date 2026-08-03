@@ -33,7 +33,9 @@ does is available here too.
 `lhpc explain <stack>` — explain a stack and its components (order, bands, ownership).
 
 ### doctor
-`lhpc doctor` — bounded local health checks.
+`lhpc doctor` — bounded health checks. Local except for one thing: when the position source is
+`gpsd`, it asks that gpsd (which may be on another box) whether it actually owns a receiver —
+one bounded query, because a gpsd that answers while owning nothing yields no position at all.
 
 ### deps
 `lhpc deps` — list every declared system prerequisite (apt packages, the SPI/`config.txt` overlay,

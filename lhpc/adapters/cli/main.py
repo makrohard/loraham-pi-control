@@ -312,7 +312,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_explain = sub.add_parser("explain", help="Explain a stack and its components")
     p_explain.add_argument("stack", help="Stack id (e.g. loraham, meshcom, meshcore)")
 
-    sub.add_parser("doctor", help="Bounded local health checks")
+    sub.add_parser("doctor",
+                   help="Bounded health checks (local; contacts a configured gpsd only)")
 
     p_deps = sub.add_parser("deps", help="Show declared system dependencies (or render a bootstrap script)")
     p_deps.add_argument("--script", action="store_true",

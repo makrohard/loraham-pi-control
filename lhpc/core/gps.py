@@ -163,17 +163,27 @@ def device_lock_key(path: str) -> tuple[str, str]:
 def gpsd_devices(host: str, port: int, timeout: float = 3.0) -> tuple[list, str]:
     """(device paths gpsd reports, error). Used to refuse direct-NMEA on a device gpsd
     already owns — opening it behind gpsd's back yields two readers fighting over one
-    receiver, which presents as intermittent position loss rather than a clean failure."""
+    receiver, which presents as intermittent position loss rather than a clean failure.
+
+    `timeout` is the TOTAL budget for the whole exchange, connect included. It used to be a
+    per-`recv` timeout applied across up to 40 reads, so a chatty-but-unhelpful gpsd could hold
+    the caller for 40x the number it was given — which is not a bound at all, and `doctor`
+    promises a bounded check.
+    """
     import json
     import socket
+    import time as _time
+    deadline = _time.monotonic() + max(0.05, timeout)
+
+    def _left() -> float:
+        return deadline - _time.monotonic()
+
     try:
         with socket.create_connection((host, port), timeout) as s:
-            s.settimeout(timeout)
             s.sendall(b'?DEVICES;\n')
             buf = b""
-            deadline_reads = 40
-            while deadline_reads > 0:
-                deadline_reads -= 1
+            while _left() > 0:
+                s.settimeout(_left())
                 chunk = s.recv(4096)
                 if not chunk:
                     break
@@ -192,8 +202,6 @@ def gpsd_devices(host: str, port: int, timeout: float = 3.0) -> tuple[list, str]
     except (TimeoutError, OSError) as exc:
         return [], f"{type(exc).__name__}: {exc}"
     return [], "gpsd did not report a DEVICES message"
-
-
 def gpsd_owns_device(device: str, host: str, port: int) -> tuple[bool | None, str]:
     """(owned, detail). None means "could not be proven either way" — the caller must
     refuse, not assume it is free.

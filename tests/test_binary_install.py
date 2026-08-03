@@ -1139,8 +1139,17 @@ RADIOLIB_PATH = "src/RadioLib"
 
 def _svc_binary_switch_selector(tmp_path, monkeypatch):
     """A REAL runner: these tests turn on actual git checkouts (HEAD, remote, dirtiness), which
-    is exactly what the switch pre-flight reads. No network — every repo is local."""
+    is exactly what the switch pre-flight reads. No network — every repo is local.
+
+    `RealSystem` also scans the REAL procfs, so `_binary_running_components()` saw whatever the
+    developer's box happened to be running: with the daemon up, eight of these failed with
+    "Refusing to retire ... component(s) running", and passed again once it was stopped. A suite
+    whose colour depends on machine state gets believed when it should not be, or ignored when it
+    should not be. The running-probe is therefore stubbed here; the tests that are ABOUT that
+    refusal set their own (see `_running`).
+    """
     monkeypatch.setattr(ControllerService, "binary_target", lambda self: "aarch64-trixie")
+    monkeypatch.setattr(ControllerService, "_binary_running_components", lambda self, sid: [])
     return ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 
 

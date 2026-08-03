@@ -77,8 +77,9 @@ What it means in practice:
 
 ## Fast vs explicit
 
-- Fast & bounded (no network, no build, no mutation, no RF): `status`, `explain`,
-  `doctor`, `logs`, `web` page loads.
+- Fast & bounded (no build, no mutation, no RF): `status`, `explain`, `doctor`, `logs`,
+  `web` page loads. These do no network I/O, with one exception: when the position source is
+  `gpsd`, `doctor` makes one bounded query to that gpsd to see whether it owns a receiver.
 - Explicit & gated (print a plan, need `--yes` or a confirmation): `install`,
   `build`, `update`, `stack start/stop`, `test`, `uninstall`.
 

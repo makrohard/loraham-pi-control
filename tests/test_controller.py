@@ -809,8 +809,8 @@ def test_doctor_surfaces_git_from_the_same_source(tmp_path, monkeypatch):
     assert "nginx: not installed (optional" in out                  # optional -> not alarming
     # P2-1: a missing REQUIRED dep makes doctor non-OK and says so in the summary.
     assert res.ok is False
-    assert res.summary == ("doctor: required dependencies missing; bounded local checks only "
-                           "(no init, no network, no RF).")
+    assert res.summary == ("doctor: required dependencies missing; bounded checks only "
+                           "(no init, no RF; contacts only a configured gpsd).")
 
 
 @pytest.mark.contract
@@ -828,7 +828,8 @@ def test_doctor_ok_when_only_optional_dep_missing(tmp_path, monkeypatch):
     ])
     res = svc.doctor()
     assert res.ok is True
-    assert res.summary == "doctor: bounded local checks only (no init, no network, no RF)."
+    assert res.summary == ("doctor: bounded checks only "
+                           "(no init, no RF; contacts only a configured gpsd).")
 
 
 def test_controller_dep_detection_uses_abspath_fallback(tmp_path, monkeypatch):

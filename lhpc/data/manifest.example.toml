@@ -867,6 +867,11 @@ main = "loraham-kiss-tnc"
 
     [stack.component.process]
     exec_name = "socat"
+    # `socat` is a general-purpose tool an operator may be running for anything. Matching on the
+    # executable alone claimed ANY socat on the box as this component, which then read as
+    # RUNNING/DEGRADED and blocked unrelated stack starts ("kiss must be stopped first") with
+    # nothing of ours actually running. The PTY link path is ours and appears in the real argv.
+    all_args = ["state/loraham_kiss"]
 
     [[stack.component.require]]
     cmd = "socat"

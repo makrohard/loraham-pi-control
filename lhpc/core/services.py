@@ -869,6 +869,31 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append(f"  ! POSITION SOURCE DISABLED — {gcfg.reason}")
             details.append("    stacks that would use GPS will start without a position:")
             details.append("      lhpc gps --source <off|gpsd|nmea|fixed>")
+        elif gcfg is not None and getattr(gcfg, "source", "") == "gpsd":
+            # gpsd ANSWERING is not gpsd HAVING A RECEIVER. Debian's default is `DEVICES=""` with
+            # `USBAUTO`, so gpsd depends on a udev hotplug event: restart it while the receiver is
+            # already plugged in and it comes back owning nothing, accepts our connection happily,
+            # and streams nothing forever. Every GPS source then silently yields no position, with
+            # nothing anywhere naming the cause (hit exactly this on hardware).
+            from .gps import gpsd_devices
+            # `doctor` is documented as BOUNDED: one TOTAL deadline for the whole exchange, so a
+            # configured-but-unhelpful gpsd cannot stall a health check.
+            _devs, _err = gpsd_devices(gcfg.host, gcfg.port, timeout=1.0)
+            # `systemctl`/`gpsdctl` act on the machine they run on. For a REMOTE gpsd, printing
+            # them bare sends the operator to fix the wrong box.
+            # `local_gpsd` is the CANONICAL answer (it knows 127.0.0.2, `localhost.`, and
+            # expanded IPv6 loopback); a second hand-rolled check would drift from it.
+            _where = "" if gcfg.local_gpsd else f"   # ON {gcfg.host}, not here"
+            if _err:
+                details.append("")
+                details.append(f"  ! gpsd at {gcfg.host}:{gcfg.port} is not answering — {_err}")
+                details.append("    a stack with GPS on will refuse to start:")
+                details.append(f"      sudo systemctl status gpsd{_where}")
+            elif not _devs:
+                details.append("")
+                details.append(f"  ! gpsd at {gcfg.host}:{gcfg.port} answers but owns NO receiver")
+                details.append("    it will deliver no position at all; re-attach the device:")
+                details.append(f"      sudo gpsdctl add /dev/ttyACM0{_where or '      # its path'}")
         for sid, keys in self.legacy_gps_values().items():
             details.append("")
             details.append(f"  ! {sid} has old per-stack position values on disk "
@@ -882,9 +907,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
         return ActionResult(
             ok=not required_missing,
-            summary=("doctor: required dependencies missing; bounded local checks only "
-                     "(no init, no network, no RF)." if required_missing
-                     else "doctor: bounded local checks only (no init, no network, no RF)."),
+            # The ONLY network access is a bounded ?DEVICES query to the gpsd the operator
+            # configured, and only when the source IS gpsd — say so rather than promising
+            # "no network" and then opening a socket.
+            summary=("doctor: required dependencies missing; bounded checks only "
+                     "(no init, no RF; contacts only a configured gpsd)." if required_missing
+                     else "doctor: bounded checks only "
+                          "(no init, no RF; contacts only a configured gpsd)."),
             details=details,
             next_commands=["lhpc status", "lhpc status --versions"],
         )
