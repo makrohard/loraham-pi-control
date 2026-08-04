@@ -1613,7 +1613,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--src", "https://github.com/makrohard/MeshCom-Firmware.git", "--ref", "feature/external-radio-tcp-draft"], announce = "[clone] MeshCom-Firmware (feature/external-radio-tcp-draft) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.03"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.03) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
@@ -1839,16 +1839,15 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     # The QEMU build CLONES this repo BY REF (see meshcom-qemu's `setup.sh --ref` step), so the
-    # pin records the commit that ref was proven at rather than driving the checkout. Refreshed
-    # 2026-07-30: the fork was cleaned (branch rebased for an upstream PR), which ORPHANED the
-    # previous pin — it survives only on `backup/pre-rebase-extradio`, so CI's reachability gate
-    # would have reddened. The external-radio build surface is unchanged
-    # (EXTERNAL_RADIO_HOST/PORT/PASSWORD) and the QEMU overlay patch still applies cleanly.
+    # pin records the commit that ref was proven at rather than driving the checkout. The
+    # external-radio feature merged upstream (icssw-org PR #1072), so this now tracks the
+    # CANONICAL repo at release v4.35p.08.03 (feature verbatim vs the tested fork tip; the QEMU
+    # overlay patch applies cleanly). EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     path = "src/MeshCom-Firmware"
-    pin_commit = "67c13ac202e145dace65eb57ef4ceaa84b6699d8"
-    pin_tag = "v4.35p-g67c13ac"
-    remote = "https://github.com/makrohard/MeshCom-Firmware.git"
-    branch = "feature/external-radio-tcp-draft"
+    pin_commit = "fbf12c94aac9f40d96847a93d0fb70ce68fed050"
+    pin_tag = "v4.35p.08.03"
+    remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
+    branch = "dev"
 
 # =====================================================================
 # Stack: meshcore — MeshCore Pi node (daemon-backed, 868)

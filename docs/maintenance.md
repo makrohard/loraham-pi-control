@@ -40,15 +40,25 @@ known open work. Tick the per-release / per-pin-bump boxes as you go.
   (OBS binary repo is gone) and **meshcom-qemu builds qemu-system-xtensa from source** — a toolchain
   change upstream can break the recipe silently.
 
-## Recurring: binary channel (`lhpc-binaries` repo)
-Tied to every pin bump: rebuild the aarch64/Trixie artifact (daemon/meshtastic/meshcom), re-run the
-smoke gate, republish; `index.json` + `SHA256SUMS` regenerate. meshcom firmware isn't bit-reproducible
-(sha changes each build — expected). Keep controller-side consumption (fetch → verify sha → extract →
-source-fallback) in lockstep with any `lib_index` schema change. Actions are SHA-pinned and the build
-container is digest-pinned — bump those deliberately.
+## Recurring: binary channel (`lhpc-binaries` repo) — recompiling a stack
+The builder rebuilds *exactly* the manifest pin (it does not track "latest"). To ship a newer
+`daemon`/`meshtastic`/`meshcom`:
+1. Bump the stack's `pin_commit`/`pin_tag` in `manifest.example.toml` (meshcom: also confirm the QEMU
+   overlay patch still applies — `apply-overlay.sh` fails closed if it drifted).
+2. Commit + push this repo; note the commit SHA.
+3. `lhpc-binaries` → Actions → **build-binary** → `stack`, `lhpc_ref = <that SHA>`, `source_commit` blank,
+   `smoke_test=true` (CLI: `gh workflow run build.yml -f stack=… -f lhpc_ref=… -f smoke_test=true`). It
+   runtime-tests + smoke-gates, then publishes the content-addressed asset + regenerates `index.json`/`SHA256SUMS`.
+4. On the Pi: `lhpc install <stack> --source binary` fetches the new `index.json` (no on-box build;
+   `update --source binary` is deliberately conservative and won't cross a pin bump).
+
+Bump the pin **before** publishing — the pins-must-match gate rejects a binary whose `components` ≠ the
+manifest pins. meshcom firmware isn't bit-reproducible (new sha each build — expected); keep consumption
+(fetch → verify sha → extract → source-fallback) in lockstep with any `lib_index` change; Actions are
+SHA-pinned and the container digest-pinned. Builder internals: [lhpc-binaries README](https://github.com/makrohard/lhpc-binaries#updating-a-binary).
 
 ## Per-release
-- [ ] Version bump (`pyproject.toml`, now `0.1.6`) + `CHANGELOG.md` + tag
+- [ ] Version bump (`pyproject.toml`, now `0.1.9`) + `CHANGELOG.md` + tag
 - [ ] Refresh known-working pins to the run-proven set
 - [ ] **From-zero acceptance** on fresh hardware — `bootstrap-deps → install.sh → auto-install` on a
       freshly flashed Pi Zero 2W (~4 h) and Pi 5 (~44 min). This is the real net for the install path
