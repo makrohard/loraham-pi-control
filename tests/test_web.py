@@ -1098,8 +1098,9 @@ def test_daemon_433_ok_868_fail_partial_no_start(tmp_path, monkeypatch):
 # --- component identity end to end through the web (stack-target collisions) -----------------
 
 def _collide_app(tmp_path):
-    from test_stack_params import _SCOPE2_MANIFEST
-    m = tmp_path / "col.toml"; m.write_text(_SCOPE2_MANIFEST)
+    m = tmp_path / "col.toml"
+    m.write_text((Path(__file__).resolve().parent / "data"
+                  / "scope2_manifest.toml").read_text())
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "files").mkdir(parents=True, exist_ok=True)
     return m, _real_app(tmp_path, manifest=m)

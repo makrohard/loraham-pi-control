@@ -38,6 +38,13 @@ A = "a" * 40
 B = "b" * 40
 
 
+def _outcomes(res):
+    """What the start actually produced — an `any(...)` assertion otherwise reports only False,
+    which is unusable when the run that fails is a CI runner you cannot attach to."""
+    return [(r.component, getattr(r.outcome, "name", r.outcome), (r.summary or "")[:90])
+            for r in res.results]
+
+
 def _install(tmp_path, rel):
     d = tmp_path / rel
     d.mkdir(parents=True, exist_ok=True)
@@ -3075,7 +3082,8 @@ def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch):
     set_call(svc)
     res = svc.start("voice", apply=True)
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
-               and "config generation failed" in (r.summary or "") for r in res.results)
+               and "config generation failed" in (r.summary or "") for r in res.results), \
+        _outcomes(res)
 
 
 def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
@@ -3101,7 +3109,8 @@ def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
     set_call(svc)
     res = svc.start("voice", apply=True)
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.MANUAL_REQUIRED
-               and "linked source is read-only" in (r.summary or "") for r in res.results)
+               and "linked source is read-only" in (r.summary or "") for r in res.results), \
+        _outcomes(res)
 
 
 def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeypatch):

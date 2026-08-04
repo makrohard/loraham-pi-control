@@ -377,6 +377,10 @@ def test_operator_inactive_real_advance_syncs_venv(tmp_path, monkeypatch):
     from lhpc.core.services import ActionResult
     svc, fake, root = _op_inactive(tmp_path, monkeypatch,
                                    ActionResult(True, "advanced", data={}), pip=CR(0, "", ""))
+    # NOT about systemd units: this root is a temp directory with no checkout, so the post-update
+    # unit refresh has nothing real to verify. The refresh has its own coverage below and in
+    # test_updater_units.py, against a canonical unit set.
+    monkeypatch.setattr(type(svc), "_refresh_units_post_update", lambda self: (True, "n/a"))
     r = svc.self_update_apply_operator()
     assert r.ok and r.data.get("update_applied")
     assert list(_pip_key(root)) in fake.calls                                    # venv sync ran

@@ -991,65 +991,10 @@ def test_the_feed_refuses_a_device_that_changed_underneath_it(tmp_path):
 
 # --- against a FAKE gpsd (the real socket client, not a stub) -------------------------------
 
-class _FakeGpsd:
-    """A minimal gpsd: answers ?DEVICES with a device list and streams NMEA after ?WATCH."""
-
-    def __init__(self, devices=(), sentences=(), close_after=None):
-        self.devices = list(devices)
-        self.sentences = list(sentences)
-        self.close_after = close_after
-        self._srv = socket.socket()
-        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv.bind(("127.0.0.1", 0))
-        self._srv.listen(4)
-        self.port = self._srv.getsockname()[1]
-        self._stop = threading.Event()
-        self._t = threading.Thread(target=self._serve, daemon=True)
-        self._t.start()
-
-    def _serve(self):
-        import json
-        while not self._stop.is_set():
-            try:
-                self._srv.settimeout(0.3)
-                conn, _ = self._srv.accept()
-            except (TimeoutError, OSError):
-                continue
-            with conn:
-                conn.settimeout(1.0)
-                try:
-                    req = conn.recv(4096)
-                except (TimeoutError, OSError):
-                    req = b""
-                if b"?DEVICES" in req:
-                    conn.sendall(json.dumps(
-                        {"class": "DEVICES",
-                         "devices": [{"path": p} for p in self.devices]}).encode() + b"\n")
-                    continue
-                sent = 0
-                while not self._stop.is_set():
-                    for s in self.sentences:
-                        try:
-                            conn.sendall(s.encode() + b"\r\n")
-                        except OSError:
-                            return
-                        sent += 1
-                        if self.close_after and sent >= self.close_after:
-                            return
-                    time.sleep(0.05)
-
-    def close(self):
-        self._stop.set()
-        try:
-            self._srv.close()
-        except OSError:
-            pass
-
-
-def test_the_real_gpsd_client_reads_the_device_list(tmp_path):
+def test_the_real_gpsd_client_reads_the_device_list(tmp_path, fake_gpsd):
     """Exercises the actual socket client, not a stubbed return — this is what decides
     whether a receiver is already owned."""
-    srv = _FakeGpsd(devices=["/dev/null", "/dev/zero"])
+    srv = fake_gpsd(devices=["/dev/null", "/dev/zero"])
     try:
         paths, err = gps_mod.gpsd_devices("127.0.0.1", srv.port, timeout=3.0)
         assert err == "" and paths == ["/dev/null", "/dev/zero"]
@@ -1057,10 +1002,10 @@ def test_the_real_gpsd_client_reads_the_device_list(tmp_path):
         srv.close()
 
 
-def test_ownership_matches_by_device_identity_not_by_path(tmp_path):
+def test_ownership_matches_by_device_identity_not_by_path(tmp_path, fake_gpsd):
     """gpsd may report the receiver under a different path than the operator configured;
     matching on st_rdev is what makes the two recognisably the same device."""
-    srv = _FakeGpsd(devices=["/dev/null"])
+    srv = fake_gpsd(devices=["/dev/null"])
     try:
         owned, detail = gps_mod.gpsd_owns_device("/dev/null", "127.0.0.1", srv.port)
         assert owned is True and detail == "/dev/null"
@@ -1071,7 +1016,7 @@ def test_ownership_matches_by_device_identity_not_by_path(tmp_path):
         srv.close()
 
 
-def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(tmp_path):
+def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(tmp_path, fake_gpsd):
     """The gpsd pump end to end: NMEA reaches the output, readiness goes ready, and a server
     that goes away drives the feed to source-lost instead of silently stalling."""
     from lhpc.core.gps_bridge import Readiness, _Output, _pump_gpsd
@@ -1086,7 +1031,7 @@ def test_the_feed_relays_sentences_from_a_live_gpsd_and_degrades_when_it_closes(
             self.data += d
             self._bytes += len(d)
 
-    srv = _FakeGpsd(sentences=["$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,*44"],
+    srv = fake_gpsd(sentences=["$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,*44"],
                     close_after=6)
     out = _Sink()
     ready = Readiness(str(tmp_path / "r.json"), Paths(runtime_root=tmp_path))
@@ -1150,9 +1095,12 @@ def test_binary_install_does_not_self_contend_on_its_own_source_guard(tmp_path, 
     from lhpc.core import binary_install as _bi
 
     svc = _svc(tmp_path)
-    target = svc.binary_target()
-    if not target:
-        pytest.skip("not a supported binary target")
+    # The guard/adoption logic under test is platform-independent; the target only names the
+    # index entry. Skipping where the host is not aarch64 meant this never ran on CI (x86_64
+    # runners) — the one place it would be noticed if the self-contention bug came back. Force
+    # the supported target instead of skipping.
+    target = svc.binary_target() or "aarch64-trixie"
+    monkeypatch.setattr(type(svc), "binary_target", lambda self: target)
     spec = svc.binary_spec("meshcom")
 
     idx = {"schema": 2, "stacks": {"meshcom": {
@@ -1249,6 +1197,14 @@ def test_status_treats_an_expired_marker_as_degraded(tmp_path):
     assert ok is False and "gone" in note
 
 
+# How long a test may wait for a real feed thread to publish its endpoint/readiness. These are
+# WAITS, not bounds: the loop exits the moment the artefact appears, so a generous budget costs
+# nothing when things are healthy and stops a loaded box from failing a correct implementation.
+# 6.0s was not enough — this file's PTY end-to-end case took 4.2s cold on an idle Pi 5, and failed
+# once inside the full suite.
+_FEED_UP_S = 30.0
+
+
 def _run_feed(paths, consumer, stop):
     from lhpc.core.gps_bridge import run
     return run(consumer, paths, stop=stop)
@@ -1270,7 +1226,7 @@ def test_run_refuses_an_unknown_consumer(tmp_path):
     assert run("not-a-consumer", Paths(runtime_root=tmp_path)) == EXIT_CONFIG
 
 
-def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path):
+def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path, fake_gpsd):
     """The full path: resolve the plan, publish the PTY, relay from a live gpsd, then remove
     BOTH the endpoint and the readiness marker on the way out."""
     import threading
@@ -1281,7 +1237,7 @@ def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
 
-    srv = _FakeGpsd(sentences=["$GPGGA,000000.00,,,,,0,00,,,M,,M,,*66"])
+    srv = fake_gpsd(sentences=["$GPGGA,000000.00,,,,,0,00,,,M,,M,,*66"])
     save_gps(paths, source="gpsd", host="127.0.0.1", port=srv.port)
     stop = threading.Event()
     rc = {}
@@ -1290,14 +1246,14 @@ def test_run_serves_a_pty_consumer_end_to_end_and_tears_down(tmp_path):
     t.start()
     state = os.path.join(bridge_state_dir(tmp_path, "meshtastic"), "readiness.json")
     link = os.path.join(bridge_state_dir(tmp_path, "meshtastic"), "nmea0")
-    deadline = time.time() + 6.0
+    deadline = time.time() + _FEED_UP_S
     while not os.path.exists(state) and time.time() < deadline:
         time.sleep(0.05)
     assert os.path.islink(link), "the PTY endpoint must be published"
-    assert os.path.exists(state), "readiness must be written"
+    assert os.path.exists(state), f"readiness must be written (waited {_FEED_UP_S}s)"
 
     stop.set()
-    t.join(timeout=6.0)
+    t.join(timeout=_FEED_UP_S)
     srv.close()
     assert rc.get("v") == EXIT_OK
     assert not os.path.islink(link), "a stopped feed must leave no live-looking endpoint"
@@ -1318,7 +1274,7 @@ def test_run_serves_a_fixed_position_without_any_source(tmp_path):
     t = threading.Thread(target=lambda: _run_feed(paths, "meshtastic", stop), daemon=True)
     t.start()
     link = os.path.join(bridge_state_dir(tmp_path, "meshtastic"), "nmea0")
-    deadline = time.time() + 6.0
+    deadline = time.time() + _FEED_UP_S
     while not os.path.islink(link) and time.time() < deadline:
         time.sleep(0.05)
     assert os.path.islink(link)
@@ -1335,7 +1291,7 @@ def test_run_serves_a_fixed_position_without_any_source(tmp_path):
     finally:
         os.close(fd)
         stop.set()
-        t.join(timeout=6.0)
+        t.join(timeout=_FEED_UP_S)
 
 
 def test_a_device_sending_binary_is_reported_not_waited_on(tmp_path):
@@ -2203,12 +2159,12 @@ def _run_gpsd_pump(tmp_path, srv, seconds=1.2):
     return ready
 
 
-def test_a_gpsd_that_sends_nothing_never_admits_a_start(tmp_path):
+def test_a_gpsd_that_sends_nothing_never_admits_a_start(tmp_path, fake_gpsd):
     """gpsd accepts connections whether or not it owns a receiver — after a restart it commonly
     reports `devices: []` and streams nothing (hit exactly this on hardware). Announcing
     `connected` on the completed handshake admitted that, and the heartbeat kept it alive
     indefinitely, so the stack came up position-blind."""
-    srv = _FakeGpsd(sentences=[])
+    srv = fake_gpsd(sentences=[])
     try:
         ready = _run_gpsd_pump(tmp_path, srv)
     finally:
@@ -2229,9 +2185,9 @@ def test_a_gpsd_that_sends_nothing_never_admits_a_start(tmp_path):
         comp)[0] is False
 
 
-def test_a_gpsd_that_sends_only_a_banner_never_admits_a_start(tmp_path):
+def test_a_gpsd_that_sends_only_a_banner_never_admits_a_start(tmp_path, fake_gpsd):
     """Non-navigation traffic is not evidence of a position source either."""
-    srv = _FakeGpsd(sentences=[_nmea(b"$GPTXT,01,01,02,u-blox ag - www.u-blox.com").decode()])
+    srv = fake_gpsd(sentences=[_nmea(b"$GPTXT,01,01,02,u-blox ag - www.u-blox.com").decode()])
     try:
         ready = _run_gpsd_pump(tmp_path, srv)
     finally:
@@ -2241,9 +2197,9 @@ def test_a_gpsd_that_sends_only_a_banner_never_admits_a_start(tmp_path):
     assert ready.nav == 0
 
 
-def test_a_gpsd_sending_navigation_without_a_fix_is_admitted_as_connected(tmp_path):
+def test_a_gpsd_sending_navigation_without_a_fix_is_admitted_as_connected(tmp_path, fake_gpsd):
     """The cold-receiver case must still start the stack."""
-    srv = _FakeGpsd(sentences=[_nmea(b"$GPGGA,120000.00,,,,,0,00,99.9,0.0,M,0.0,M,,").decode()])
+    srv = fake_gpsd(sentences=[_nmea(b"$GPGGA,120000.00,,,,,0,00,99.9,0.0,M,0.0,M,,").decode()])
     try:
         ready = _run_gpsd_pump(tmp_path, srv)
     finally:
@@ -2251,8 +2207,8 @@ def test_a_gpsd_sending_navigation_without_a_fix_is_admitted_as_connected(tmp_pa
     assert ready.state == "connected" and ready.nav > 0 and ready.fixes == 0, ready.state
 
 
-def test_a_gpsd_sending_a_real_fix_becomes_ready(tmp_path):
-    srv = _FakeGpsd(sentences=[
+def test_a_gpsd_sending_a_real_fix_becomes_ready(tmp_path, fake_gpsd):
+    srv = fake_gpsd(sentences=[
         _nmea(b"$GPGGA,120000.00,5128.6740,N,00000.0900,W,1,08,0.9,45.0,M,46.9,M,,").decode()])
     try:
         ready = _run_gpsd_pump(tmp_path, srv)

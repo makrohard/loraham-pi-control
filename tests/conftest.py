@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -19,6 +22,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "no_default_hardware: opt OUT of the test-baseline hardware setup so the test sees "
                    "the true fresh-install default (no radio hardware configured).")
+    config.addinivalue_line(
+        "markers", "no_default_display: opt OUT of the test-baseline graphical session, so the test "
+                   "sees the real compositor-socket detection (headless).")
     config.addinivalue_line(
         "markers", "slow: a genuinely slow test (real bash sub-process building a real venv, or a "
                    "timed retry loop). Excluded by the fast lane `-m 'not slow'`; always run by the "
@@ -113,6 +119,38 @@ def _fw_host_isolation(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _home_isolation(monkeypatch, tmp_path_factory):
+    """HERMETIC: HOME is host-global, and `_user_unit_dir()` resolves `~/.config/systemd/user` from
+    it. So the managed-unit verdict depended on whether the developer had lhpc installed: on this
+    Pi the real units point at the real root, read FOREIGN against a temp runtime root, and the
+    post-update refresh returned "not this deployment's — left untouched" (ok); on a CI runner with
+    no units at all it ran the repair and failed. Three self-update tests passed here and failed
+    there for that reason alone — and nothing in the suite said so.
+
+    Point HOME at an empty per-test directory: the fresh-machine answer, identical everywhere.
+    Tests that need a populated HOME set it themselves (their monkeypatch runs after this one and
+    wins), which is why this redirects HOME rather than patching `_user_unit_dir` — patching the
+    method would have overridden those tests' own redirect."""
+    monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home-iso")))
+
+
+@pytest.fixture(autouse=True)
+def _default_display(request, monkeypatch):
+    """A graphical session is part of the working-box BASELINE, like the radios above.
+
+    `display_available()` globs for a live compositor socket (`/run/user/<uid>/wayland-*`,
+    `/tmp/.X11-unix/X*`) — real host evidence, outside the injected System. So a GUI-capable
+    component (`loraham-voice`, `sideband`) STARTED on the developer's desktop Pi and came back
+    SKIPPED("needs a graphical session") on a headless CI runner: three tests asserted a start
+    outcome here and got a skip there. Default it to present; tests about the detection itself
+    take @pytest.mark.no_default_display."""
+    if request.node.get_closest_marker("no_default_display"):
+        return
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "display_available", staticmethod(lambda: True))
+
+
+@pytest.fixture(autouse=True)
 def _default_hardware(request, monkeypatch):
     """A fresh install has NO radio hardware configured (the daemon refuses to start), but nearly every
     test exercises a working box. So the test BASELINE defaults to the LoRaHAM dual-radio setup — i.e.
@@ -123,6 +161,84 @@ def _default_hardware(request, monkeypatch):
         return
     from lhpc.core import config as _config
     monkeypatch.setattr(_config, "HW_DEFAULT", "loraham", raising=False)
+
+
+# --- fake gpsd -----------------------------------------------------------------------------
+# Shared because two modules need it (gps + doctor). It lives HERE, not in a test module, so
+# nothing has to import one test module from another: `from tests.test_gps import ...` only
+# resolved because the local lane runs `python -m pytest`, which puts the working directory on
+# sys.path. CI runs the `pytest` console script, which does not — so 0.1.8 collected fine on
+# both boxes and died on collection in CI.
+
+class _FakeGpsd:
+    """A minimal gpsd: answers ?DEVICES with a device list and streams NMEA after ?WATCH."""
+
+    def __init__(self, devices=(), sentences=(), close_after=None):
+        self.devices = list(devices)
+        self.sentences = list(sentences)
+        self.close_after = close_after
+        self._srv = socket.socket()
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", 0))
+        self._srv.listen(4)
+        self.port = self._srv.getsockname()[1]
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._serve, daemon=True)
+        self._t.start()
+
+    def _serve(self):
+        import json
+        while not self._stop.is_set():
+            try:
+                self._srv.settimeout(0.3)
+                conn, _ = self._srv.accept()
+            except (TimeoutError, OSError):
+                continue
+            with conn:
+                conn.settimeout(1.0)
+                try:
+                    req = conn.recv(4096)
+                except (TimeoutError, OSError):
+                    req = b""
+                if b"?DEVICES" in req:
+                    conn.sendall(json.dumps(
+                        {"class": "DEVICES",
+                         "devices": [{"path": p} for p in self.devices]}).encode() + b"\n")
+                    continue
+                sent = 0
+                while not self._stop.is_set():
+                    for s in self.sentences:
+                        try:
+                            conn.sendall(s.encode() + b"\r\n")
+                        except OSError:
+                            return
+                        sent += 1
+                        if self.close_after and sent >= self.close_after:
+                            return
+                    time.sleep(0.05)
+
+    def close(self):
+        self._stop.set()
+        try:
+            self._srv.close()
+        except OSError:
+            pass
+
+
+@pytest.fixture
+def fake_gpsd():
+    """Factory for a minimal in-process gpsd. Every server it hands out is closed at teardown,
+    so a failing assertion cannot leak the accept thread into the rest of the session."""
+    made: list = []
+
+    def _make(**kw):
+        srv = _FakeGpsd(**kw)
+        made.append(srv)
+        return srv
+
+    yield _make
+    for srv in made:
+        srv.close()
 
 
 def set_call(svc, callsign="DJ0CHE"):

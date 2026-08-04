@@ -110,8 +110,8 @@ Everything else is the **net**: the full suite is a thorough regression net that
 read top-to-bottom. A change is understood through the contract; it is *protected* by the net.
 
 ```
-.venv/bin/python -m pytest -q -p no:cacheprovider -m contract    # the readable core (~20s)
-.venv/bin/python -m pytest -q -p no:cacheprovider -m safety      # the invariant subset
+.venv/bin/pytest -q -p no:cacheprovider -m contract    # the readable core (~20s)
+.venv/bin/pytest -q -p no:cacheprovider -m safety      # the invariant subset
 ```
 
 The contract lane is deliberately tagged on isolation-robust cases only. Two promises still lack a
@@ -119,20 +119,26 @@ widest-seam case: a real firewall-apply route test, and a sandbox-safe boot-rest
 
 ## Running — three tiers
 
+Run the **console script** (`.venv/bin/pytest`), not `python -m pytest`. The `-m` form puts the
+working directory on `sys.path`; CI's console script does not, and the dev venv's editable install
+exposes only `lhpc`. A module that reached for a sibling test module therefore collected here and
+died in CI — 0.1.8 shipped that way. `tests/test_suite_hygiene.py` now fails on it either way.
+
+
 1. **Focused (inner loop)** — one file or a `-k` subset while iterating:
    ```
-   .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_webserver.py
+   .venv/bin/pytest -q -p no:cacheprovider tests/test_webserver.py
    ```
 2. **Fast lane** — the whole suite minus the genuinely-slow tests (real-bash full-venv installs and
    timed loops carry `@pytest.mark.slow`):
    ```
-   .venv/bin/python -m pytest -q -p no:cacheprovider -m "not slow" --basetemp="$HOME/pt-lhpc"
+   .venv/bin/pytest -q -p no:cacheprovider -m "not slow" --basetemp="$HOME/pt-lhpc"
    rm -rf -- "$HOME/pt-lhpc"
    ```
 3. **Complete coverage gate** — everything, INCLUDING `slow` and every env-supported test, with
    coverage. This is the gate a change must pass (coverage must not regress):
    ```
-   .venv/bin/python -m pytest -q -p no:cacheprovider --cov=lhpc --cov-branch \
+   .venv/bin/pytest -q -p no:cacheprovider --cov=lhpc --cov-branch \
        --basetemp="$HOME/pt-lhpc"
    rm -rf -- "$HOME/pt-lhpc"
    ```
@@ -150,7 +156,7 @@ Run the suite with a **dedicated, fixed basetemp** and remove exactly that path 
 broad glob:
 
 ```
-.venv/bin/python -m pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"
+.venv/bin/pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc"
 rm -rf -- "$HOME/pt-lhpc"
 ```
 

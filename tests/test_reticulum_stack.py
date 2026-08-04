@@ -408,6 +408,7 @@ def test_sideband_is_recognised_as_needing_a_display():
     assert not svc.needs_display(_comp("lxmd"))
 
 
+@pytest.mark.no_default_display
 def test_display_detection_uses_sockets_not_our_environment(monkeypatch, tmp_path):
     """The controller runs as a systemd user service and never inherits DISPLAY, so
     the environment is not evidence. A live compositor socket is."""

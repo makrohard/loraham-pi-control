@@ -14,6 +14,13 @@ from lhpc.core.probes.backends import FakeSystem
 
 
 # ===== merged from test_post_start.py =====
+def _outcomes(res):
+    """What the start actually produced — an `any(...)` assertion otherwise reports only False,
+    which is unusable when the run that fails is a CI runner you cannot attach to."""
+    return [(r.component, getattr(r.outcome, "name", r.outcome), (r.summary or "")[:90])
+            for r in res.results]
+
+
 def _real_life(tmp_path):
     return Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
                      RealSystem())
@@ -1862,4 +1869,5 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     set_call(svc)
     res = svc.start("voice", apply=True, band="433")
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
-               and "running-band marker" in (r.summary or "") for r in res.results)
+               and "running-band marker" in (r.summary or "") for r in res.results), \
+        _outcomes(res)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from lhpc.core.config import save_operator_config
@@ -803,65 +805,8 @@ def test_direct_persistence_writes_only_allowed_owner_fields(tmp_path):
 
 # --- Component-scoped persisted run/file keys (collision-free) -------------------------------
 
-_SCOPE2_MANIFEST = '''
-[[stack]]
-id = "ostack2"
-name = "Owner Two"
-main = "tgt"
-[[stack.component]]
-id = "tgt"
-name = "Target"
-kind = "service"
-run = "true"
-readiness = "process"
-depends_on = ["dep"]
-  [[stack.component.param]]
-  name = "rp"
-  kind = "str"
-  default = "rp-tgt"
-  [[stack.component.param]]
-  name = "uniq"
-  kind = "str"
-  default = "uniq-tgt"
-  [stack.component.config_file]
-  path = "{runtime}/config/files/tgt.conf"
-  fmt = "env"
-    [[stack.component.config_file.param]]
-    name = "fp"
-    key = "FP"
-    default = "fp-tgt"
-[[stack.component]]
-id = "dep"
-name = "Dependency"
-kind = "service"
-run = "true"
-readiness = "process"
-  [[stack.component.param]]
-  name = "rp"
-  kind = "str"
-  default = "rp-dep"
-  [stack.component.config_file]
-  path = "{runtime}/config/files/dep.conf"
-  fmt = "env"
-    [[stack.component.config_file.param]]
-    name = "fp"
-    key = "FP"
-    default = "fp-dep"
-[[stack.component]]
-id = "sib"
-name = "Sibling"
-kind = "service"
-run = "true"
-readiness = "process"
-optional = true
-  [stack.component.config_file]
-  path = "{runtime}/config/files/sib.conf"
-  fmt = "env"
-    [[stack.component.config_file.param]]
-    name = "sp"
-    key = "SP"
-    default = "sp-sib"
-'''
+_SCOPE2_MANIFEST = (pathlib.Path(__file__).resolve().parent / "data"
+                    / "scope2_manifest.toml").read_text()
 
 
 def _scope2_svc(tmp_path):

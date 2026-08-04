@@ -221,6 +221,11 @@ def test_self_update_apply_cli_yes(capsys, monkeypatch):
         return ActionResult(True, "Update applied — restart the web console to load it.",
                             next_commands=["stop the console (Ctrl-C) and re-run:  lhpc web"])
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    # NOT about systemd units: this runtime root is a temp directory with no checkout, so the
+    # post-update unit refresh has nothing real to verify. Its own contract is covered by
+    # test_selfupdate.py / test_updater_units.py against a canonical unit set.
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (True, "n/a"))
     assert main(["self-update", "--apply", "--overwrite", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "Update applied" in out and "lhpc web" in out and seen["force"] is True
@@ -236,6 +241,11 @@ def test_self_update_overwrite_implies_apply(capsys, monkeypatch):
         seen["force"] = force
         return ActionResult(True, "Update applied — restart the web console to load it.")
     monkeypatch.setattr(ControllerService, "self_update_apply", fake_apply)
+    # NOT about systemd units: this runtime root is a temp directory with no checkout, so the
+    # post-update unit refresh has nothing real to verify. Its own contract is covered by
+    # test_selfupdate.py / test_updater_units.py against a canonical unit set.
+    monkeypatch.setattr(ControllerService, "_refresh_units_post_update",
+                        lambda self: (True, "n/a"))
     monkeypatch.setattr(ControllerService, "self_update_check",
                         lambda self: (_ for _ in ()).throw(AssertionError("check must not run")))
     assert main(["self-update", "--overwrite", "--yes"]) == 0

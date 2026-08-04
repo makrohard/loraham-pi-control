@@ -1153,6 +1153,19 @@ def _svc_binary_switch_selector(tmp_path, monkeypatch):
     return ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 
 
+def test_the_binary_switch_fixture_ignores_the_real_machine(tmp_path, monkeypatch):
+    """This fixture builds a service on `RealSystem`, whose process probe scans the REAL procfs.
+    Eight tests in this file failed whenever the developer's own daemon was running ("Refusing to
+    retire ... component(s) running") and passed when it was stopped.
+
+    A suite whose result depends on machine state gets believed when it should not be — so the
+    running-probe is stubbed here, and tests ABOUT the refusal set their own.
+    """
+    svc = _svc_binary_switch_selector(tmp_path, monkeypatch)
+    assert svc._binary_running_components("daemon") == [], (
+        "the fixture must not consult the real machine")
+
+
 def _lay_down_binary_switch_selector(svc, tmp_path, stack="daemon"):
     """A completed binary install: the artifact's files plus its receipt."""
     spec = svc.binary_spec(stack)

@@ -41,11 +41,12 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install package and audit tooling
-        # Lint/test tooling comes PINNED from pyproject's [dev] extra (same discipline as the
-        # SHA-pinned actions, and the SAME versions a local `pip install .[dev]` gets): a new
-        # ruff release changed the default rule set and turned main red with zero code changes
-        # (0.16.0, 2026-07-24). pip-audit deliberately FLOATS — its value is the freshest
-        # vulnerability database, and its findings gate dependencies, not our code style.
+        # Lint/test tooling comes from pyproject's [dev] extra — the SAME versions a local
+        # `pip install .[dev]` gets. Those versions FLOAT on purpose; what stops a new release
+        # from turning main red with zero code changes is the frozen CONFIG, not a frozen tool:
+        # ruff's rule set is enumerated in [tool.ruff.lint] select (after 0.16.0 changed its
+        # default selection, 2026-07-24) and bandit runs high-severity-only. pip-audit floats
+        # too — its value is the freshest vulnerability database.
         run: |
           python -m pip install --upgrade pip
           pip install .[dev] pip-audit
@@ -63,7 +64,10 @@ jobs:
         run: ruff check tests --select F,E9
 
       - name: Tests
-        run: pytest -q
+        # `-rs` NAMES every skip. A skip is a test that did not run, and the count alone hides
+        # which: this runner skips one more than the Pi does, and nothing in the log said which
+        # or why. Cheap to print, and it turns a silent coverage hole into a visible line.
+        run: pytest -q -rs
 
       # The two SECURITY gates run even when the tests failed. They are the only steps ordered
       # AFTER pytest, so a single test failure used to skip them entirely and a run could go red

@@ -5,14 +5,16 @@ symptom looked like, because that is what the next person will see.
 """
 from __future__ import annotations
 
-import pathlib
-import tempfile
-
 import pytest
 
 from lhpc.core.probes.process import matches
-from tests.test_gps import _FakeGpsd, _svc
 
+
+def _svc(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    return ControllerService(paths=Paths(runtime_root=tmp_path))
 
 
 def _stub_gpsd(monkeypatch, devices=(), err=""):
@@ -64,28 +66,7 @@ def test_our_own_kiss_bridge_is_still_matched(tmp_path):
     assert matches(spec, ours) is True
 
 
-def test_the_binary_switch_fixture_ignores_the_real_machine():
-    """`_svc_binary_switch_selector` builds a service on `RealSystem`, whose process probe scans
-    the REAL procfs. Eight tests in that file failed whenever the developer's own daemon was
-    running ("Refusing to retire ... component(s) running") and passed when it was stopped.
-
-    A suite whose result depends on machine state gets believed when it should not be — so the
-    running-probe is stubbed in the fixture, and tests ABOUT the refusal set their own.
-    """
-    import pytest as _pytest
-
-    mp = _pytest.MonkeyPatch()
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            from tests.test_binary_install import _svc_binary_switch_selector
-            svc = _svc_binary_switch_selector(pathlib.Path(td), mp)
-            assert svc._binary_running_components("daemon") == [], (
-                "the fixture must not consult the real machine")
-    finally:
-        mp.undo()
-
-
-def test_doctor_names_a_gpsd_that_owns_no_receiver(tmp_path):
+def test_doctor_names_a_gpsd_that_owns_no_receiver(tmp_path, fake_gpsd):
     """gpsd ANSWERING is not gpsd HAVING A RECEIVER. Debian defaults to `DEVICES=""` + `USBAUTO`,
     so gpsd depends on a udev hotplug: restart it while the receiver is already plugged in and it
     returns owning nothing, accepts connections happily, and streams nothing. Every GPS source
@@ -94,7 +75,7 @@ def test_doctor_names_a_gpsd_that_owns_no_receiver(tmp_path):
     """
     from lhpc.core.config import save_gps
     svc = _svc(tmp_path)
-    srv = _FakeGpsd(devices=[])
+    srv = fake_gpsd(devices=[])
     try:
         save_gps(svc._paths, source="gpsd", host="127.0.0.1", port=str(srv.port))
         svc._invalidate_config()
@@ -105,11 +86,11 @@ def test_doctor_names_a_gpsd_that_owns_no_receiver(tmp_path):
     assert "gpsdctl add" in text, "and it must name the fix"
 
 
-def test_doctor_is_quiet_when_gpsd_owns_a_receiver(tmp_path):
+def test_doctor_is_quiet_when_gpsd_owns_a_receiver(tmp_path, fake_gpsd):
     """The check must not cry wolf on a healthy box."""
     from lhpc.core.config import save_gps
     svc = _svc(tmp_path)
-    srv = _FakeGpsd(devices=["/dev/ttyACM0"])
+    srv = fake_gpsd(devices=["/dev/ttyACM0"])
     try:
         save_gps(svc._paths, source="gpsd", host="127.0.0.1", port=str(srv.port))
         svc._invalidate_config()

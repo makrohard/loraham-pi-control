@@ -291,7 +291,7 @@ def _roundtrip_model():
 def test_expected_listing_matches_live_roundtrip_fixture():
     import pathlib
     from lhpc.core import firewall_helper as fh
-    live = pathlib.Path("tests/data/nft_live_roundtrip.json").read_text()
+    live = (pathlib.Path(__file__).resolve().parent / "data" / "nft_live_roundtrip.json").read_text()
     verdict, detail = fh.compare_live(live, _roundtrip_model())
     assert (verdict, detail) == ("verified", "")
 
@@ -301,7 +301,7 @@ def test_compare_live_verdict_matrix():
     import pathlib
     from lhpc.core import firewall_helper as fh
     m = _roundtrip_model()
-    live = _json.loads(pathlib.Path("tests/data/nft_live_roundtrip.json").read_text())
+    live = _json.loads((pathlib.Path(__file__).resolve().parent / "data" / "nft_live_roundtrip.json").read_text())
 
     extra = _json.loads(_json.dumps(live))               # a foreign rule appended -> mismatch
     extra["nftables"].append({"rule": {"family": "inet", "table": "lhpc", "chain": "input",

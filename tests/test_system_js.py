@@ -102,12 +102,12 @@ out.hiddenAfterReset = ['sys-swap-row', 'sys-disk2-row', 'sys-power-row'].map(id
 // One sample, then the display is ticked without any further response: the seconds must move
 // and both lines must stay in step, because polling once a second to move a digit costs real
 // CPU on a Zero 2W and still stutters on a slow response.
-let fakeNow = 1785886200000;
+let fakeNow = __EPOCH__ * 1000;
 const realNow = Date.now;
 Date.now = () => fakeNow;
-t.apply({ ts: 20, time: { state: 'green', label: 'synced', epoch: 1785886200,
-                          local: '2026-08-04 01:30:00', utc: '2026-08-03 23:30:00',
-                          tz: 'Europe/Berlin', rtc_present: true } });
+t.apply({ ts: 20, time: { state: 'green', label: 'synced', epoch: __EPOCH__,
+                          local: '__LOCAL__', utc: '__UTC__',
+                          tz: '__TZ__', rtc_present: true } });
 out.t0 = [byId('sys-time-val').textContent, byId('sys-time-utc').textContent];
 fakeNow += 3000;                                        // three seconds pass, NO new response
 t.tickClock();
@@ -118,11 +118,33 @@ console.log(JSON.stringify(out));
 """
 
 
+# The clock sequence's single source of truth. `stamp()` in system.js formats in UTC and the
+# caller pre-applies the zone offset, so the expected text is pure arithmetic on this instant —
+# derived here rather than written out twice.
+_CLOCK_EPOCH = 1785799800                     # 2026-08-03 23:30:00 UTC
+_CLOCK_TZ = "Europe/Berlin"
+_CLOCK_OFFSET_S = 7200                        # what the two strings below encode (CEST, +02:00)
+
+
+def _utc_text(epoch):
+    import datetime
+    return datetime.datetime.fromtimestamp(epoch, datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _expected(epoch):
+    """The two lines the row must show for `epoch`: local (offset applied) then UTC."""
+    return [f"{_utc_text(epoch + _CLOCK_OFFSET_S)} {_CLOCK_TZ}", f"{_utc_text(epoch)} UTC"]
+
+
 def _run_harness():
     node = shutil.which("node")
     if not node:
         pytest.skip("node not available (runs on the hosted CI runners)")
-    res = subprocess.run([node, "-e", _HARNESS, "harness", str(_JS)],
+    harness = (_HARNESS.replace("__EPOCH__", str(_CLOCK_EPOCH))
+                          .replace("__LOCAL__", _utc_text(_CLOCK_EPOCH + _CLOCK_OFFSET_S))
+                          .replace("__UTC__", _utc_text(_CLOCK_EPOCH))
+                          .replace("__TZ__", _CLOCK_TZ))
+    res = subprocess.run([node, "-e", harness, "harness", str(_JS)],
                          capture_output=True, text=True, timeout=30)
     assert res.returncode == 0, res.stderr
     return json.loads(res.stdout.strip().splitlines()[-1])
@@ -146,6 +168,6 @@ def test_the_clock_advances_between_polls_without_a_request():
     to animate a digit would have doubled `/api/system` (2.3% of a core on a Zero 2W, measured)
     for something cosmetic, and would still stutter whenever a response was slow."""
     out = _run_harness()
-    assert out["t0"] == ["2026-08-04 01:30:00 Europe/Berlin", "2026-08-03 23:30:00 UTC"]
-    assert out["t3"] == ["2026-08-04 01:30:03 Europe/Berlin", "2026-08-03 23:30:03 UTC"], (
+    assert out["t0"] == _expected(_CLOCK_EPOCH)
+    assert out["t3"] == _expected(_CLOCK_EPOCH + 3), (
         "both lines must advance together, with no new sample")
