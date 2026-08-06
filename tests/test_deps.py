@@ -405,14 +405,64 @@ def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
     # default on a headless rig, so its private deps have no business in every bootstrap).
     # python3-dev is GUI-scoped on purpose: only Sideband needs a compiler
     # (materialyoucolor has no aarch64 wheel). The node builds without one.
+    # libx11-dev is Sideband's DISPLAY gate, not a build input: Kivy vendors its own SDL2, so
+    # Sideband pulled no GUI apt dep at all and python3-dev was the only thing gating it — which a
+    # headless build that installs python3-dev for other reasons satisfies, shipping a graphical
+    # app on a headless image. See the manifest comment on the sideband require.
     assert sorted(gui) == ["sudo apt install -y libasound2-dev",
                            "sudo apt install -y libcodec2-dev",
                            "sudo apt install -y libgtk-3-dev",
+                           "sudo apt install -y libx11-dev",
                            "sudo apt install -y python3-dev",
                            "sudo apt install -y python3-tk"]
     assert not set(core) & set(gui)                 # a command lives in exactly one scope
     assert not any("gtk" in c or "python3-tk" in c or "asound" in c or "codec2" in c for c in core)
     assert any("ncurses" in c for c in core)        # shared with chat -> core wins
+
+
+def test_every_display_component_has_a_gui_gate():
+    """A component that needs a DISPLAY must be excluded from headless installs.
+
+    THE INVARIANT, not an inventory: exclusion is driven ENTIRELY by having at least one
+    `gui = true` require, so a graphical component that declares none is silently installed on a
+    headless box. That is not hypothetical — Sideband shipped on the Raspberry Pi OS *Lite* image
+    exactly this way. Kivy vendors its own SDL2, so Sideband pulled no GUI apt package to gate on,
+    and its only gui-scoped require was python3-dev — a COMPILER need that any build installing
+    python3-dev for unrelated reasons (loraham-images does, for Reticulum's spidev/gpiod C
+    extensions) satisfies. The literal GUI-scope assertion above could not catch that: it checks
+    which install commands are gui-scoped, never whether a component that needs a display has one.
+
+    "Has SOME gui = true require" is deliberately NOT the assertion — Sideband had one
+    (python3-dev) throughout the bug, so that weaker form passes on the broken manifest and proves
+    nothing. The gate must name a GRAPHICAL package: one a headless image can never legitimately
+    acquire from lhpc. The pattern mirrors the fail-closed denylist the generated bootstrap script
+    applies to its default transaction, so both ends agree on what "graphical" means.
+    """
+    import pathlib
+    import re
+    import tomllib
+
+    from lhpc.core.manifest import _DEFAULT_MANIFEST
+
+    # Same families as bootstrap-deps.sh's DRY_BAD denylist. python3-dev/build-essential and other
+    # generic build tooling deliberately do NOT match: they are not evidence of a display.
+    graphical = re.compile(r"\b(libgtk-|libgdk-|python3-tk|tk[0-9]|libsdl|libx11|libxcb|libxext|"
+                           r"libwayland-|libegl|libgl[0-9x]|mesa-|xserver-|xwayland|libqt|kivy)")
+    stacks = parse_manifest(tomllib.loads(pathlib.Path(_DEFAULT_MANIFEST).read_text()))
+    ungated = []
+    for s in stacks:
+        for c in getattr(s, "components", ()):
+            env = " ".join(f"{k}={v}" for k, v in (c.run_env or ()))
+            if "DISPLAY" not in f"{getattr(c, 'run', '') or ''} {env}":
+                continue
+            if not any(getattr(r, "gui", False) and graphical.search(getattr(r, "install", "") or "")
+                       for r in (c.requires or ())):
+                ungated.append(f"{s.id}/{c.id}")
+    assert not ungated, (
+        f"component(s) needing a DISPLAY with no GRAPHICAL `gui = true` require: {ungated}. "
+        "They will be installed on a headless image. A generic build dep (python3-dev) is not a "
+        "display gate — name a graphical package, as the sideband component does with libx11-dev."
+    )
 
 
 def test_default_script_body_is_exactly_the_core_scope(tmp_path):

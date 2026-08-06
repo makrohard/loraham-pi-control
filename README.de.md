@@ -143,7 +143,7 @@ sudo apt install -y --no-install-recommends socat                               
 sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
 sudo apt install -y --no-install-recommends libssl-dev libslirp0 meson ninja-build libglib2.0-dev libpixman-1-dev libslirp-dev zlib1g-dev libgcrypt20-dev   # meshcom (Bridge + QEMU, headless aus dem Quellcode gebaut)
 sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (aus dem Quellcode gebaut)
-sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev python3-tk python3-dev           # nur mit --with-gui (Voice, MeshCore Node Manager)
+sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev libx11-dev python3-tk python3-dev           # nur mit --with-gui (Voice, MeshCore Node Manager, Sideband)
 
 sudo systemctl disable --now nginx.service               # Paket behalten, den ROOT-Dienst abschalten
 # Boards mit wenig RAM (<600 MB): eine Swapdatei bewahrt die meshtasticd-/meshcom-Builds vor dem OOM-Kill

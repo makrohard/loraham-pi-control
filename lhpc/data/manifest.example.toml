@@ -2670,6 +2670,29 @@ cmd = "python3-config"
 install = "sudo apt install -y python3-dev"
 note = "Python headers. Sideband is the ONE component here that needs a compiler: sbapp pulls materialyoucolor, a C++ extension with no aarch64 wheel, which fails with 'Python.h: No such file or directory' without this. The node itself needs no compiler."
 [[stack.component.require]]
+# THE DISPLAY GATE. Sideband is a graphical app, but because Kivy vendors its own SDL2 it pulls no
+# GTK/X11 apt package of its own — so there was nothing for the headless bootstrap to gate on, and
+# the only `gui = true` require here is python3-dev (a COMPILER need for materialyoucolor). A build
+# that installs python3-dev for unrelated reasons — loraham-images does, for Reticulum's spidev/gpiod
+# C extensions — therefore satisfied the whole gate and Sideband installed on a HEADLESS image
+# (verified: lite shipped `sideband stopped/src match` while voice and meshcore-nodegui correctly
+# showed not-applicable/src missing). Voice gates on libgtk-3-dev and the Node Manager on tkinter;
+# this is the equivalent for Kivy. Be precise about WHAT IT DETECTS: libx11-dev is a -dev package and
+# is NOT on a stock Raspberry Pi OS Desktop (which ships libx11-6/libx11-data). It is present exactly
+# when `bootstrap-deps.sh --with-gui` has run, because libgtk-3-dev Depends on it — so this gate means
+# "the operator opted into GUI support", not "a display exists". That is a HEURISTIC and the right one
+# available: an X/Wayland server would be the literal signal, but installing one is forbidden here
+# (docs/field-notes.md: never a desktop environment, display manager or X/Wayland server) and Trixie
+# desktop is Wayland-first, so Xorg's presence proves nothing. Consequence of piggybacking on
+# libgtk-3-dev's dependency: adding this changes the --with-gui closure by ZERO packages; the entire
+# effect of this entry is the probe. Residual hole, accepted: a headless box that acquired libx11-dev
+# from an unrelated dev chain (libcairo2-dev, xorg-dev, fldigi build-deps...) installs Sideband again
+# and fails at run time for want of a DISPLAY — the pre-fix behaviour, not anything worse.
+gui = true
+check_file = "/usr/include/X11/Xlib.h"
+install = "sudo apt install -y libx11-dev"
+note = "X11 client headers — the marker that `--with-gui` was run (libgtk-3-dev already pulls them). Sideband needs a DISPLAY at run time; without this it is skipped on a headless box, like Voice and the Node Manager GUI."
+[[stack.component.require]]
 check_file = "{runtime}/src/sideband/.venv/bin/sideband"
 provisioned = true
 install = "lhpc build reticulum"

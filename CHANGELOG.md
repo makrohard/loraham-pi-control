@@ -3,6 +3,14 @@
 ## Unreleased
 
 - Dashboard endpoint pills show a working address for the current viewer, never a dead link
+- Sideband is no longer installed on headless systems. It is a graphical Kivy app, but because Kivy
+  vendors its own SDL2 it declared no graphical package to gate on, so only `python3-dev` kept it out
+  of a headless install — and any box installing that for other reasons got Sideband anyway. It now
+  also gates on `libx11-dev`, the marker that `bootstrap-deps.sh --with-gui` was run. The `--with-gui`
+  package closure is unchanged (`libgtk-3-dev` already pulled `libx11-dev`).
+  **Upgrading a box that already has Sideband:** it stays on disk and still reports `stopped`, but can
+  no longer be started or rebuilt. Remove `<runtime>/src/sideband` and `<runtime>/state/sideband` to
+  reclaim the space, or run `bootstrap-deps.sh --with-gui` if that machine really does have a display.
 
 ## 0.1.9
 

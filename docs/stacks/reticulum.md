@@ -46,12 +46,14 @@ Reticulum plus the driver into it. **The node needs no compiler**: the Python
 SPI/GPIO bindings come from the `python3-libgpiod` and `python3-spidev` system
 packages, which is what makes it installable on a Pi Zero.
 
-**Sideband is the exception.** `sbapp` pulls `materialyoucolor`, a C++ extension
-with no aarch64 wheel, so that optional component needs `python3-dev` (installed
-by `bootstrap-deps.sh --with-gui`). Without it the Sideband build fails with
-`Python.h: No such file or directory` — the node itself builds and runs fine, and
-the failure does not block it. Measured on a Pi Zero 2 W: install 26 s, build
-237 s, start 7 s.
+**Sideband is the exception.** It is a graphical Kivy app, so it is installed only
+where `bootstrap-deps.sh --with-gui` has been run. Two GUI-only requirements gate
+it: `python3-dev` (`sbapp` pulls `materialyoucolor`, a C++ extension with no
+aarch64 wheel) and `libx11-dev`, which acts as the display marker — Kivy vendors
+its own SDL2, so Sideband declares no other graphical package to gate on. Without
+`--with-gui` the component is simply skipped, never attempted and never a build
+error; the node itself builds and runs fine. Measured on a Pi Zero 2 W: install
+26 s, build 237 s, start 7 s.
 
 ## Settings
 
