@@ -1616,8 +1616,9 @@ def test_stance_strings_updated_to_managed_firewall():
     fw = pathlib.Path("docs/firewall.md").read_text()
     assert "uses native\nnftables" in fw or "uses native nftables" in fw
     assert "table inet lhpc" in fw and "never edits your firewall" in fw
-    # README advertises the managed firewall.
-    assert "Managed firewall" in pathlib.Path("README.md").read_text()
+    # README advertises the managed firewall (case-insensitive: it appears as "the managed firewall"
+    # in the Remote-access section).
+    assert "managed firewall" in pathlib.Path("README.md").read_text().lower()
 
 
 def test_apply_script_renders_from_real_candidate(tmp_path):

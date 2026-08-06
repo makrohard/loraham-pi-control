@@ -329,16 +329,21 @@ def client_auth_required(cfg: WebserverConfig, stack_webs=()) -> bool:
                for p in stack_webs)
 
 
-def listener_scope(system, port: int) -> str:
+def listener_scope(system, port: int, listeners=None) -> str:
     """"loopback" | "exposed" | "absent" for a local TCP `port`, from /proc/net/tcp.
 
     AUTHORITATIVE, and read on THIS host — a client-side probe cannot distinguish a loopback bind
     from a firewalled one. Used to tell the operator when an upstream (e.g. meshtasticd :9443, which
-    has no bind knob) is reachable directly on the LAN, bypassing this proxy's authentication."""
-    try:
-        listeners = system.procfs.tcp_listeners()
-    except Exception:
-        return "absent"
+    has no bind knob) is reachable directly on the LAN, bypassing this proxy's authentication.
+
+    Pass `listeners` (one `tcp_listeners()` snapshot) to classify many ports against a SINGLE read —
+    a dashboard render checks one port per endpoint/stack, and re-reading /proc/net/tcp{,6} each time
+    is measurable on a Zero 2W."""
+    if listeners is None:
+        try:
+            listeners = system.procfs.tcp_listeners()
+        except Exception:
+            return "absent"
     found = False
     for ln in listeners:
         if ln.port != port:

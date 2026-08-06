@@ -64,7 +64,33 @@ def _repo_dirname(src: dict) -> str:
     return ""
 
 
-def _branch_tip_ref(repo: pathlib.Path, branch: str):
+def _remote_for_url(repo: pathlib.Path, url: str):
+    """The git remote NAME whose fetch URL matches `url` (ignoring a trailing `.git`/`/`), or None.
+    A checkout's `origin` may be a personal FORK while the manifest declares the CANONICAL upstream;
+    the pin must be validated against the declared remote, not whichever repo `origin` happens to be."""
+    if not url:
+        return None
+    want = str(url).removesuffix(".git").rstrip("/")
+    out = subprocess.run(["git", "-C", str(repo), "remote", "-v"],
+                         capture_output=True, text=True, check=False)
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].removesuffix(".git").rstrip("/") == want:
+            return parts[0]
+    return None
+
+
+def _branch_tip_ref(repo: pathlib.Path, branch: str, remote_url: str | None = None):
+    # Prefer the tip of the remote the manifest DECLARES (the canonical upstream). When `origin` is a
+    # fork, its branch legitimately lacks the upstream release pin, so validating against it is wrong;
+    # if the declared upstream is not fetched locally, return None so the caller skips (cannot prove it
+    # against a fork). Fall back to origin only when the declared remote IS origin (or unknown).
+    name = _remote_for_url(repo, remote_url)
+    if name and name != "origin":
+        for ref in (f"{name}/{branch}", f"refs/remotes/{name}/{branch}"):
+            if _git_has(repo, ref):
+                return ref
+        return None
     for ref in (f"origin/{branch}", f"refs/remotes/origin/{branch}", branch, f"refs/heads/{branch}"):
         if _git_has(repo, ref):
             return ref
@@ -118,7 +144,15 @@ def validate_pinned_components(manifest: dict, src_root: pathlib.Path) -> dict:
                 f"`git -C {repo} fetch origin {src.get('branch') or 'main'}` and re-run. The CI "
                 "pin-validation job resolves this against the live remote.")
             branch = src.get("branch") or "main"
-            tip = _branch_tip_ref(repo, branch)
+            tip = _branch_tip_ref(repo, branch, src.get("remote"))
+            declared = _remote_for_url(repo, src.get("remote"))
+            if tip is None and declared and declared != "origin":
+                # The manifest declares a CANONICAL upstream remote (e.g. icssw-org) different from
+                # this checkout's `origin` (a fork), and it is not fetched locally — cannot validate
+                # ancestry against the right repo. The pin-presence assert above still guards a truly
+                # orphaned/absent pin, so skip this ancestry check rather than fail against a fork.
+                counts["consumers"] += 1
+                continue
             assert tip is not None, f"{comp['id']}: pinned branch '{branch}' tip not found in {repo_name}"
             assert _is_ancestor(repo, pin, tip), (
                 f"{comp['id']}: pinned commit {pin} is NOT an ancestor of {tip} in {repo_name} — "

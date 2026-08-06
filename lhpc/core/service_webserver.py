@@ -294,6 +294,10 @@ class WebserverOpsMixin:
         and `logs_component` for a per-service log link."""
         from .model import RunState
         up = (RunState.RUNNING, RunState.DEGRADED)
+        try:
+            snap = self._system.procfs.tcp_listeners()      # ONE /proc/net/tcp read for the whole box
+        except Exception:
+            snap = []
         mon = self.webserver_monitor(served_via_nginx=served_via_nginx).data or {}
         rows: list[dict] = [{"kind": "console", "name": "LHCP", "posture": mon.get("posture"),
                              "port": mon.get("desired", {}).get("port"), "logs_component": None}]
@@ -306,7 +310,7 @@ class WebserverOpsMixin:
             if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
             if self.stack_web_upstream(stk.id) is not None:
-                rows.append(self._dashboard_web_row(stk))
+                rows.append(self._dashboard_web_row(stk, snap))
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
                     # Network ports only (host:port). Skip non-network client endpoints like the KISS
@@ -314,48 +318,69 @@ class WebserverOpsMixin:
                     # a filesystem device, not an interface to advertise in the network-exposure box.
                     if (getattr(ep, "client", False) and ep.scheme not in ("http", "https")
                             and ":" in ep.address):
-                        rows.append(self._dashboard_port_row(stk, comp, ep))
+                        rows.append(self._dashboard_port_row(stk, comp, ep, snap))
         return rows
 
-    def _dashboard_web_row(self, stk) -> dict:
+    def _dashboard_web_row(self, stk, listeners=None) -> dict:
         """The web-UI (http/https) box row: proxied port + posture, or the DIRECT listen address when
         the reverse proxy is not enabled (the adapter reattaches the reached host, like the console)."""
         v = self.stack_web_view(stk.id) or {}
         swc = v.get("cfg")
         enabled = bool(swc and swc.enabled)
+        from .webserver import listener_scope
         web_ep = next((ep for c in stk.components for ep in c.endpoints
                        if getattr(ep, "client", False) and ep.scheme in ("http", "https")), None)
         direct_port = web_ep.address.rsplit(":", 1)[-1] if (web_ep and ":" in web_ep.address) else ""
+        # Live bind scope of the DIRECT (un-proxied) web port — the adapter links to the request host
+        # only when it is genuinely exposed, else 127.0.0.1 (a loopback-only web UI must not be a dead
+        # remote link). The proxied path keys off posture (also live), so this is only the direct case.
+        direct_scope = (listener_scope(self._system, int(direct_port), listeners)
+                        if str(direct_port).isdigit() else "absent")
         return {"kind": "stack", "name": stk.name, "sid": stk.id, "enabled": enabled,
                 "posture": v.get("posture") if enabled else None,
                 "port": swc.port if enabled else None,
-                "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else ""}
+                # The proxy's LIVE listen scope (exposed|loopback|absent) — the adapter links to the
+                # proxy socket only where it actually listens, so an enabled-but-local-only or inactive
+                # proxy never renders a dead request-host link.
+                "listen_scope": v.get("listen_scope") if enabled else None,
+                "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else "",
+                "direct_scope": direct_scope}
 
-    def _dashboard_port_row(self, stk, comp, ep) -> dict:
-        """A `kind="port"` box row for a no-authentication TCP service. Exposure comes from the
-        component's bind allow-list (the `validator="bind"` param); a service with no such control
-        (meshtasticd's API always binds 0.0.0.0) is shown public. The colour IS the warning — these
-        ports have no auth. `logs_component` (set only when the service has a bind control) drives a
-        per-service log link."""
+    def _bind_exposure(self, stk_id: str, comp) -> tuple[str, str, bool]:
+        """Exposure (level, label, has_bind_control) of a component's no-auth listener, from its bind
+        allow-list param (`validator="bind"`). A service with no such control (meshtasticd's API
+        always binds 0.0.0.0) is public. SHARED by the Webserver-box port rows AND the running-stack
+        interface pins so both classify a service's reachability identically."""
         from .webserver import port_exposure
-        bind_val, has_bind = None, False
         for kind, params in (("run", comp.run_params),
                              ("file", comp.config_file.params if comp.config_file else ())):
             for p in params:
                 if getattr(p, "validator", "") == "bind":
-                    bind_val = self._resolved_param_value(
-                        stk.id, kind, comp.id, p.name, self._config_band(stk.id, ""))
-                    has_bind = True
-                    break
-            if has_bind:
-                break
-        level, label = port_exposure(bind_val) if has_bind else ("bad", "public")
+                    val = self._resolved_param_value(
+                        stk_id, kind, comp.id, p.name, self._config_band(stk_id, ""))
+                    level, label = port_exposure(val)
+                    return level, label, True
+        return "bad", "public", False
+
+    def _dashboard_port_row(self, stk, comp, ep, listeners=None) -> dict:
+        """A `kind="port"` box row for a no-authentication TCP service. Exposure comes from the
+        component's bind allow-list (the `validator="bind"` param); a service with no such control
+        (meshtasticd's API always binds 0.0.0.0) is shown public. The colour IS the warning — these
+        ports have no auth. `logs_component` (set only when the service has a bind control) drives a
+        per-service log link. `scheme` lets the box render the address as a link."""
+        from .webserver import listener_scope
+        level, label, has_bind = self._bind_exposure(stk.id, comp)
         port = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
         # The exposure pill reflects the SAVED bind allow-list; the RUNNING process keeps its
         # launch-time value until restarted. Surface the durable restart-required marker next to
         # the pill so a saved-but-not-applied bind change is never displayed as already effective
         # (tri-state read: an unsafe marker also reads truthy -> shown as pending, fail-closed).
+        # `live_scope` is the ACTUAL listener bind (ground truth) — the adapter picks the LINK host
+        # from it, never from the saved policy above (a fixed-loopback service like MeshCom QEMU has
+        # no bind knob yet must not get a request-host link).
+        live_scope = listener_scope(self._system, int(port), listeners) if str(port).isdigit() else "absent"
         return {"kind": "port", "name": stk.name, "sid": stk.id, "port": port,
+                "scheme": ep.scheme or "tcp", "live_scope": live_scope,
                 "exposure": {"level": level, "label": label},
                 "restart_required": bool(self.restart_required(stk.id)) if has_bind else False,
                 "logs_component": comp.id if has_bind else None}

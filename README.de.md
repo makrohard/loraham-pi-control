@@ -11,7 +11,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 
 ## Inhalt
 
-- [Überblick](#überblick) — [Stacks](#stacks) · [Hardware](#hardware) · [Nicht enthalten](#nicht-enthalten)
+- [Überblick](#überblick) — [Stacks](#stacks) · [Hardware](#hardware)
 - [Installation](#installation) — von der frisch geflashten Karte zu laufenden Stacks (Schritte 0–8)
 - [Stacks konfigurieren & betreiben](#stacks-konfigurieren--betreiben) · [Fernzugriff](#fernzugriff) · [Autostart](#autostart) · [Binary-Kanal](#binary-kanal-vorkompiliert) · [Aktualisieren](#aktualisieren)
 - [Fehlerbehebung](#fehlerbehebung) · [Dokumentation](#dokumentation)
@@ -56,13 +56,11 @@ funktionieren, sind aber nicht validiert):
 **SPI-Modus:** `soft-cs` (`dtparam=spi=on` + `dtoverlay=spi0-0cs`) deckt LoRaHAM Pi / Uputronics /
 Waveshare ab (inkl. dual, Chip-Selects als GPIOs); `hardware-cs` nur für kernelgesteuerte CE0/CE1.
 
-### Nicht enthalten
-
-- **Verwaltete Firewall (optional)** — ein nftables-Default-Deny-Regelwerk, das `lhpc` erzeugt und das du mit einem einzigen sudo-Befehl anwendest; es schließt Stack-Ports, die `lhpc` sonst nicht absichern kann (meshtasticd 4403/9443), und bearbeitet niemals deine eigene Firewall-Konfiguration ([Firewall](docs/firewall.md)).
-- **Es wird nie ein GUI/Desktop installiert** — nur GUI-*Anwendungs*-Bibliotheken, und nur mit `--with-gui`.
-- **Lizenz & Sendebetrieb** bleiben in der Verantwortung des Betreibers — HF wird nie automatisch gesendet.
-
 ## Installation
+
+> **Einfachster Weg — ein fertiges Image.** [`loraham-images`](https://github.com/makrohard/loraham-images)
+> liefert fertige Raspberry-Pi-OS-Images mit vorinstalliertem LHPC und allen Stacks — flashen, booten,
+> loslegen. Die Schritte unten sind die manuelle Alternative.
 
 Von der frisch geflashten Karte zu laufenden Stacks. Die Schritte laufen der Reihe nach.
 

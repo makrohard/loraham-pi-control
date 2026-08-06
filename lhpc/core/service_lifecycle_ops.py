@@ -3569,42 +3569,64 @@ class LifecycleOpsMixin:
         """User-facing interfaces a client connects to (KISS TCP, web UIs, serial
         PTYs) that are currently present — NOT internal transport sockets.
 
-        A proxied web UI links to the PROXY, not to its loopback upstream: handing a remote browser
-        `http://127.0.0.1:18083` is a dead link. The proxy link tracks the proxy's EFFECTIVE listen
-        scope (via `_stack_listen_scope`), so a loopback-only proxy is labelled as such and a
-        remotely-bound one links to the request host — reflecting reality, not the saved `mode`."""
+        Every pin must point at an address that WORKS for the current viewer. A proxied web UI links
+        to the PROXY, not its loopback upstream (handing a remote browser `http://127.0.0.1:18083` is
+        a dead link); its scope comes from `_stack_listen_scope`. For a NON-proxied listener the host
+        is decided from the LIVE socket table per port (`listener_scope`) — the ground truth, NOT the
+        saved bind policy: a fixed-loopback service with no bind knob (MeshCom QEMU forwards 127.0.0.1)
+        stays loopback, and a pending-restart bind change does not move the link until the RUNNING
+        listener actually changes. Only an "exposed" listener sets `remote_ok`, so the template points
+        the pin at `req_host` (127.0.0.1 locally, the AP/LAN IP remotely); loopback/absent stay
+        loopback-only (no dead remote link)."""
         if status is None:
             return []
+        from . import webserver as _ws
         swc = self.config().stackweb.get(stack_id) if stack_id else None
+        try:
+            snap = self._system.procfs.tcp_listeners()      # ONE /proc read for this component's pins
+        except Exception:
+            snap = []
         out = []
         for obs in status.endpoints:
             sp = obs.spec
             if not getattr(sp, "client", False) or not obs.present:
                 continue
             is_web = sp.scheme in ("http", "https")
-            link = f"{sp.scheme}://{sp.address}" if is_web else ""
+            port = sp.address.rsplit(":", 1)[-1] if ":" in sp.address else ""
+            link = f"{sp.scheme}://{sp.address}" if is_web else ""   # loopback fallback
             label = sp.description or sp.address
+            proxied = bool(is_web and swc is not None and swc.enabled)
+            # LIVE listener scope for THIS port from /proc/net/tcp (authoritative, per-port). Only a
+            # genuinely off-loopback listener earns a request-host link; a loopback/absent one never
+            # does (that was the dead-remote-link bug for fixed-loopback services like MeshCom QEMU).
+            scope = ""
+            if port.isdigit() and not proxied:
+                try:
+                    scope = _ws.listener_scope(self._system, int(port), snap)
+                except Exception:
+                    scope = ""
             entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
-                     "link": link, "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
+                     "link": link, "port": port, "is_web": is_web,
+                     "remote_ok": scope == "exposed",
+                     "proxy_scope": "", "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
                      "pending": False}
-            if is_web and swc is not None and swc.enabled:
+            if proxied:
                 # Truthful link: the reachable path is the nginx proxy on swc.port, so key off its
-                # EFFECTIVE live scope (/proc/net/tcp), NOT the desired `mode`. A stale 0.0.0.0
-                # listener (local-mode saved but Apply not run) is honestly shown as remote; a
-                # public mode not yet applied is honestly shown as loopback. `pending` marks any such
-                # desired-vs-live drift (an Apply will reconcile it).
-                entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # loopback/no-request fallback
+                # EFFECTIVE live scope (/proc/net/tcp), NOT the desired `mode`. Carry the scope so the
+                # template links per viewer and NEVER turns a known-absent proxy into an anchor. A
+                # stale 0.0.0.0 listener reads "exposed"; a public mode not applied reads "loopback";
+                # `pending` marks any such desired-vs-live drift (an Apply reconciles it).
                 scope = self._stack_listen_scope(swc)
+                entry.update(proxy_scope=scope, proxy_scheme=swc.scheme, proxy_port=swc.port)
                 if scope == "exposed":
-                    # Reached at the SAME host the browser used for the console (the adapter fills it
-                    # from request.host, correct via LAN IP / hostname / WAN — `local_ip()` can only
-                    # guess one interface).
-                    entry.update(proxy_port=swc.port, proxy_scheme=swc.scheme, proxy_remote=True,
-                                 pending=not swc.remote)
+                    entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # loopback/no-request fallback
+                    entry.update(proxy_remote=True, pending=not swc.remote)
                 elif scope == "loopback":
+                    entry["link"] = f"{swc.scheme}://127.0.0.1:{swc.port}/"   # works for a LOCAL viewer
                     entry["label"] = f"{label} (local only)"
                     entry["pending"] = bool(swc.remote)
                 else:                                # absent: proxy enabled but not listening yet
+                    entry["link"] = ""               # NO dead URL — the template shows an Apply link
                     entry["label"] = f"{label} (proxy not active — Apply)"
                     entry["pending"] = True
             out.append(entry)

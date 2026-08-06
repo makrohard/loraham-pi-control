@@ -9,7 +9,7 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 
 ## Contents
 
-- [Overview](#overview) — [Stacks](#stacks) · [Hardware](#hardware) · [Not included](#not-included)
+- [Overview](#overview) — [Stacks](#stacks) · [Hardware](#hardware)
 - [Install](#install) — flashed card to running stacks (steps 0–8)
 - [Configure & run stacks](#configure--run-stacks) · [Remote access](#remote-access) · [Autostart](#autostart) · [Binary channel](#binary-channel-prebuilt) · [Updating](#updating)
 - [Troubleshooting](#troubleshooting) · [Documentation](#documentation)
@@ -54,13 +54,11 @@ but are not validated):
 **SPI mode:** `soft-cs` (`dtparam=spi=on` + `dtoverlay=spi0-0cs`) covers LoRaHAM Pi / Uputronics /
 Waveshare (incl. dual, chip-selects as GPIOs); `hardware-cs` only for kernel-driven CE0/CE1.
 
-### Not included
-
-- **Managed firewall (opt-in)** — an nftables default-deny ruleset `lhpc` renders and you apply with one sudo command, closing stack ports it cannot otherwise gate (meshtasticd 4403/9443); it never edits your own firewall config ([firewall](docs/firewall.md)).
-- **No GUI/desktop is ever installed** — only GUI *application* libraries, and only with `--with-gui`.
-- **Licence & TX compliance** stay the operator's responsibility — TX is never implicit.
-
 ## Install
+
+> **Easiest path — a prebuilt image.** [`loraham-images`](https://github.com/makrohard/loraham-images)
+> ships ready-to-use Raspberry Pi OS images with LHPC and every stack preinstalled — flash, boot, use.
+> The steps below are the manual alternative.
 
 From a freshly flashed card to running stacks. Steps run in order.
 

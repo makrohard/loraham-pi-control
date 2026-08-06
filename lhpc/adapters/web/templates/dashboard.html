@@ -151,15 +151,39 @@
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=s.id) }}#stack-settings-{{ s.id }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {% for itf in c.interfaces %}
-                        {% if itf.proxy_remote and itf.proxy_port and req_host %}
-                          {# Point at the host the browser used to reach the console, on the proxy's
-                             port — correct whether they came via LAN IP, hostname or WAN. The two web-UI
-                             links are the ONLY links that open a new tab (they leave the console). #}
-                          <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
-                        {% elif itf.link %}
-                          <a class="iface iface-web" href="{{ itf.link }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                        {% set _settings = url_for('stacks_overview', open=s.id, cfg=s.id) ~ '#stack-settings-' ~ s.id %}
+                        {% if itf.is_web and itf.proxy_scope %}
+                          {# PROXIED web UI: link via the nginx PROXY, per its LIVE scope — exposed →
+                             reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote
+                             or absent → this stack's Settings (Apply), never a dead proxy URL. #}
+                          {% if itf.proxy_scope == 'exposed' and req_host %}
+                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://{{ req_host }}:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% elif itf.proxy_scope == 'loopback' and peer_loopback %}
+                            <a class="iface iface-web" href="{{ itf.proxy_scheme }}://127.0.0.1:{{ itf.proxy_port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% else %}
+                            <a class="iface iface-local" href="{{ _settings }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings.">{{ itf.label }} · {{ 'proxy not active — Apply' if itf.proxy_scope == 'absent' else 'local only' }}</a>
+                          {% endif %}
+                        {% elif itf.is_web %}
+                          {# Non-proxied web UI: link to the DIRECT endpoint where it's reachable
+                             (exposed → reached host; loopback → local viewer), else Settings. #}
+                          {% if itf.remote_ok and req_host %}
+                            <a class="iface iface-web" href="{{ itf.scheme }}://{{ req_host }}:{{ itf.port }}/" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% elif peer_loopback and itf.port %}
+                            <a class="iface iface-web" href="{{ itf.link or (itf.scheme ~ '://127.0.0.1:' ~ itf.port ~ '/') }}" target="_blank" rel="noopener">{{ itf.label }} ↗</a>
+                          {% else %}
+                            <a class="iface iface-local" href="{{ _settings }}" title="Reachable only on the Pi itself. Open it there, or expose it in this stack's Settings.">{{ itf.label }} · local only</a>
+                          {% endif %}
                         {% else %}
-                          <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
+                          {# Non-web (KISS/TCP/serial): a COPYABLE address, never an inert tcp:// link (no
+                             browser handler). Show the host that works for this viewer; a loopback-only
+                             service seen remotely is labelled 'local only'. #}
+                          {% if itf.remote_ok and req_host %}
+                            <span class="iface mono">{{ itf.scheme }}: {{ req_host }}:{{ itf.port }}</span>
+                          {% elif itf.port %}
+                            <span class="iface mono">{{ itf.scheme }}: 127.0.0.1:{{ itf.port }}{% if not peer_loopback %} · local only{% endif %}</span>
+                          {% else %}
+                            <span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>
+                          {% endif %}
                         {% endif %}
                         {% if itf.pending %}<span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span>{% endif %}
                       {% endfor %}
@@ -306,12 +330,35 @@
             <a class="wsname" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}">{{ w.name }}</a>
           {% endif %}
           {% if w.kind == 'port' %}
-            <span class="pill pill-{{ w.exposure.level }}" title="No authentication — the colour shows who may connect">{{ w.addr }} · {{ w.exposure.label }}</span>
+            {# A no-auth TCP address: COPYABLE text, never an inert tcp:// anchor. The stack name links
+               to Settings; here we show the address that works for this viewer. ABSENT is its own
+               state — the listener is DOWN, so it is neither a working address nor 'local only'. #}
+            {% if w.live_scope == 'absent' %}
+              <span class="pill pill-warn wsaddr" title="No process is listening on this port — the service is down; check its logs or restart it.">:{{ w.port }} · listener absent</span>
+            {% elif w.live_scope == 'exposed' or peer_loopback %}
+              <span class="pill pill-{{ w.exposure.level }} wsaddr" title="No authentication — the colour shows who may connect. Copy this address into the client app.">{{ w.addr }} · {{ w.exposure.label }}</span>
+            {% else %}
+              <span class="pill pill-{{ w.exposure.level }} wsaddr" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it in this stack's Settings">{{ w.addr }} · {{ w.exposure.label }} · local only</span>
+            {% endif %}
             {% if w.restart_required %}<span class="pill pill-warn" title="The saved allow-list is not applied yet — the running service keeps its launch-time value until restarted">restart pending</span>{% endif %}
             {% if w.logs_component %}<a class="logslink" href="{{ url_for('logs_view', target=w.logs_component) }}">logs</a>{% endif %}
-          {% elif w.posture %}{{ webserver_pills(w.posture, w.addr, link=true) }}
-          {% elif w.direct_addr %}<span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
-          {% else %}<span class="pill">not proxied</span>{% endif %}
+          {% elif w.posture %}
+            {# Enabled proxy: the scheme pill is a LIVE link only where the proxy actually listens
+               (w.addr set by the adapter from listen_scope + viewer). Loopback-remote / absent → no
+               dead proxy URL; link to this stack's Webserver Settings (Apply if the proxy is down). #}
+            {% if w.addr %}{{ webserver_pills(w.posture, w.addr, link=true) }}
+            {% else %}{{ webserver_pills(w.posture, '', link=false) }} <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings">{{ 'proxy not active — Apply' if w.listen_scope == 'absent' else 'local only' }}</a>{% endif %}
+          {% elif w.direct_port %}
+            {# Not-proxied web UI. Link the DIRECT listener only where it's up for this viewer
+               (w.direct_addr set by the adapter); ABSENT is its own state (down, not local-only). #}
+            {% if w.direct_addr %}
+              <span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
+            {% elif w.direct_scope == 'absent' %}
+              <a class="pill pill-warn wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}" title="The web-UI listener is not running — check its logs or restart it.">listener absent</a> <span class="pill">not proxied</span>
+            {% else %}
+              <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}" title="Reachable only on the Pi (127.0.0.1) — open it there, or expose it">{{ w.direct_scheme }} · local only · not proxied</a>
+            {% endif %}
+          {% else %}<a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ '#stack-webserver-' ~ w.sid }}">not proxied</a>{% endif %}
         </div>
       {% endfor %}
     </div>

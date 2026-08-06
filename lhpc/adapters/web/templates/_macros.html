@@ -42,7 +42,7 @@
    rendered inside <summary> elements, and an interactive element nested in a summary
    toggle is not reliably reachable by keyboard or assistive technology. Panels that
    show the pills in a summary offer the clickable URL in their body instead. #}
-{% macro webserver_pills(p, addr, link=false) %}<span class="pill pill-{{ p.auth_level }}">{{ p.auth }}</span> <span class="pill pill-{{ p.iface_level }}">{{ p.iface }}</span> {% if addr and link %}<a class="pill pill-{{ p.scheme_level }} wsurl" href="{{ p.scheme }}://{{ addr }}">{{ p.scheme }}://{{ addr }}</a>{% elif addr %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://{{ addr }}</span>{% else %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://</span>{% endif %} <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
+{% macro webserver_pills(p, addr, link=false) %}<span class="pill pill-{{ p.auth_level }}">{{ p.auth }}</span> <span class="pill pill-{{ p.iface_level }}">{{ p.iface }}</span> {% if addr and link %}<a class="pill pill-{{ p.scheme_level }} wsurl" href="{{ p.scheme }}://{{ addr }}">{{ p.scheme }}://{{ addr }}</a>{% elif addr %}<span class="pill pill-{{ p.scheme_level }}">{{ p.scheme }}://{{ addr }}</span>{% endif %}{# no addr: omit the scheme pill entirely (a bare "scheme://" reads like a truncation bug) — meaning is carried by the adjacent local-only / Apply / listener-absent pill #} <span class="pill pill-{{ p.run_level }}">{{ p.run }}</span>{% endmacro %}
 
 {% macro action_btn(op, target, label) %}
 <form method="post" action="{{ url_for('action') }}" class="act">

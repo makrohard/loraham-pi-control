@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Dashboard endpoint pills show a working address for the current viewer, never a dead link
+
 ## 0.1.9
 
 - MeshCom firmware now tracks canonical upstream (icssw-org) at release `v4.35p.08.03` — the external-radio backend merged upstream (PR #1072), retiring the fork pin; QEMU overlay + build surface unchanged

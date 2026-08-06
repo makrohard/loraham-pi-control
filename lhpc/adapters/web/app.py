@@ -319,16 +319,39 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 if w["kind"] == "console":
                     addr = _console_addr(w.get("port", ""))
                 elif w["kind"] == "port":
-                    # No-auth TCP service: loopback shows 127.0.0.1; when exposed, show the reached
-                    # host (the LAN IP/hostname the operator used), consistent with the console pill.
-                    host = ("127.0.0.1" if w.get("exposure", {}).get("level") == "ok"
-                            else (_url_host(request.host or "") or "0.0.0.0"))
-                    addr = f"{host}:{w['port']}"
+                    # No-auth TCP service, from the LIVE listener scope (not the saved policy):
+                    # exposed → reached host; loopback → 127.0.0.1; ABSENT → no address (the listener
+                    # is DOWN — neither remote nor local-only; the template says 'listener absent').
+                    ls = w.get("live_scope")
+                    if ls == "exposed":
+                        addr = f"{_url_host(request.host or '') or '0.0.0.0'}:{w['port']}"
+                    elif ls == "absent":
+                        addr = ""                  # listener DOWN — template says 'listener absent'
+                    else:                          # loopback (or unset) -> loopback address
+                        addr = f"127.0.0.1:{w['port']}"
+                elif w.get("enabled"):
+                    # Enabled proxy: link to the proxy socket ONLY where it LIVE-listens. Exposed →
+                    # reached host; loopback → 127.0.0.1 for a LOCAL viewer only; loopback-remote or
+                    # absent → no service address (the template shows an internal Settings/Apply link).
+                    ls = w.get("listen_scope")
+                    if ls == "exposed":
+                        addr = f"{_url_host(request.host or '')}:{w['port']}"
+                    elif ls == "loopback" and peer_is_loopback():
+                        addr = f"127.0.0.1:{w['port']}"
+                    else:
+                        addr = ""
                 else:
-                    addr = f"{_url_host(request.host or '')}:{w['port']}" if w.get("enabled") else ""
-                    # Not proxied but running: show the DIRECT web-UI address on the reached host.
-                    if not w.get("enabled") and w.get("direct_port"):
-                        w_entry = {**w, "direct_addr": f"{_url_host(request.host or '')}:{w['direct_port']}"}
+                    addr = ""
+                    # A running-but-not-proxied web UI: set direct_addr ONLY where the direct listener
+                    # is up for THIS viewer — exposed → reached host; loopback → 127.0.0.1 for a LOCAL
+                    # viewer. loopback-remote or ABSENT → no direct_addr (the template links internally,
+                    # and never turns a down/absent listener into a clickable dead URL).
+                    if w.get("direct_port"):
+                        ds = w.get("direct_scope")
+                        if ds == "exposed":
+                            w_entry = {**w, "direct_addr": f"{_url_host(request.host or '')}:{w['direct_port']}"}
+                        elif ds != "absent" and peer_is_loopback():   # loopback (or unset) + local viewer
+                            w_entry = {**w, "direct_addr": f"127.0.0.1:{w['direct_port']}"}
                 webservers.append({**w_entry, "addr": addr})
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
@@ -345,6 +368,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # The host the browser used to reach the console — a proxied web-UI link points here on
             # the proxy's port, so it is correct however the operator got here (LAN IP / hostname).
             req_host=_url_host(request.host or ""),
+            # Is the browser ON the Pi? (nginx-set X-LHPC-Peer; loopback when direct/no proxy.) A
+            # loopback-only service is a working link ONLY for a local viewer; for a remote one the
+            # pin must go to an internal page, never a dead 127.0.0.1 (which names the CLIENT there).
+            peer_loopback=peer_is_loopback(),
             # Durable restart-required flags (file reads only): a yellow "Restart now"
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
