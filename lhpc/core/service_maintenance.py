@@ -617,20 +617,35 @@ class MaintenanceOpsMixin:
         out = []
         dismissed = self._task_dismissed_ids()
 
+        def _age_window(age):
+            """`{"finished_ago_s": age}` while a finished banner is still fresh, else None.
+
+            Rejects the FUTURE as well as the past. A Pi has no RTC, and the image ships an
+            auto-install marker stamped at BUILD time, so a freshly flashed box starts with its
+            clock at the base-image date — weeks BEFORE that marker. The old test was
+            `age >= EXPIRY`, and a negative age never satisfies it, so the green "finished" pin
+            stayed up permanently; on a box with no route to NTP (Lite serving its own AP) it never
+            cleared at all. Measured: clock 2026-06-18, marker 2026-08-07, age -4.4e6 s.
+
+            A clock we cannot trust cannot measure age, and a transient success notice must fail
+            toward hidden — the run's real outcome is on its own page either way. The symmetric
+            window also tolerates benign skew of up to one expiry period."""
+            if age >= self._TASK_BANNER_EXPIRY_S or age <= -self._TASK_BANNER_EXPIRY_S:
+                return None
+            return {"finished_ago_s": max(0, age)}
+
         def _done_within(ts):
             epoch = self._parse_utc(ts)
-            if epoch is None or now - epoch >= self._TASK_BANNER_EXPIRY_S:
-                return None
-            return {"finished_ago_s": max(0, now - epoch)}
+            return None if epoch is None else _age_window(now - epoch)
 
         def _failed_extra(ts):
             epoch = self._parse_utc(ts)
             return {"finished_ago_s": max(0, now - epoch)} if epoch is not None else {}
 
         def _done_within_epoch(epoch):
-            if not isinstance(epoch, (int, float)) or now - epoch >= self._TASK_BANNER_EXPIRY_S:
+            if not isinstance(epoch, (int, float)):
                 return None
-            return {"finished_ago_s": max(0, int(now - epoch))}
+            return _age_window(int(now - epoch))
 
         def _failed_extra_epoch(epoch):
             return ({"finished_ago_s": max(0, int(now - epoch))}

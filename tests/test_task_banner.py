@@ -227,3 +227,29 @@ def test_malformed_hmac_status_is_surfaced_as_unsafe(tmp_path, monkeypatch):
                                       "sid": "meshcom", "action": "enable"})
     t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
     assert t["state"] == "unsafe" and "schema mismatch" in t["hint"]
+
+
+def test_a_finished_banner_dated_in_the_future_does_not_stay_forever(tmp_path, monkeypatch):
+    # THE flashed-image case. A Pi has no RTC and the image ships an auto-install marker stamped at
+    # BUILD time, so a fresh box wakes with its clock at the base-image date — weeks BEFORE that
+    # marker. The expiry test was `age >= 60`, which a negative age never satisfies, so the green
+    # "finished" pin stayed up permanently; on a Lite box serving its own AP there is no route to
+    # NTP, so it never cleared at all. Measured on hardware: clock 2026-06-18, marker 2026-08-07.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "auto_install_status",
+                        lambda self: {"run_id": "b" * 32, "state": "completed",
+                                      "finished_at": _utc(4_000_000)})       # ~46 days ahead
+    assert not any(t["kind"] == "auto-install" for t in svc.running_tasks())
+
+    # ...and the same for the other terminal kinds that share the window.
+    _write_hmac(svc, "done", finished_at=_utc(4_000_000))
+    assert not any(t["kind"] == "hmac" for t in svc.running_tasks())
+
+
+def test_benign_clock_skew_still_shows_a_just_finished_banner(tmp_path):
+    # The window is symmetric, not a hard "never in the future": a couple of seconds of skew
+    # between writing the marker and reading it must not hide a genuinely fresh result.
+    svc = _svc(tmp_path)
+    _write_hmac(svc, "done", finished_at=_utc(5))
+    t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
+    assert t["state"] == "done" and t["finished_ago_s"] == 0     # clamped, never negative
