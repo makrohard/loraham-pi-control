@@ -81,6 +81,36 @@ __all__ = [
 _CONFIG_STABLE_SHARED_TIMEOUT_S = 3.0
 
 
+def _qemu_boots_extradio(toks) -> bool:
+    """Does this QEMU argv boot an EXTERNAL-RADIO MeshCom image?
+
+    Reads the actual `-drive` specification — `-drive file=<path>,if=mtd` (and the `-drive=`
+    spelling) — and requires the image to be a PlatformIO `extradio` build:
+    `<...>/.pio/build/qemu-headless-extradio*/flash.bin`. The word appearing SOMEWHERE in the
+    argv proves nothing: a `--env` label, a log path or an unrelated argument would match, while
+    the guest still boots a plain image with no transmitter behind it."""
+    import posixpath
+    specs = []
+    for i, t in enumerate(toks):
+        if t == "-drive" and i + 1 < len(toks):
+            specs.append(toks[i + 1])
+        elif t.startswith("-drive="):
+            specs.append(t.split("=", 1)[1])
+    for spec in specs:
+        for part in str(spec).split(","):
+            if not part.startswith("file="):
+                continue
+            path = part.split("=", 1)[1]
+            head, leaf = posixpath.split(path)
+            head, env = posixpath.split(head)
+            head, build = posixpath.split(head)
+            if (leaf == "flash.bin" and build == "build"
+                    and posixpath.basename(head) == ".pio"
+                    and env.startswith("qemu-headless-extradio")):
+                return True
+    return False
+
+
 from .service_auto_install import AutoInstallOpsMixin
 from .service_binary_channel import BinaryChannelMixin
 from .service_binary_ops import BinaryOpsMixin
@@ -520,8 +550,155 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                             binary_cover=binary_cover).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
+        self._overlay_licensed_tx_enabled(snap)
         self._snapshot_state.cache = snap
         return snap
+
+    def _overlay_licensed_tx_enabled(self, snap) -> None:
+        """Report TX as ENABLED for a licensed stack whose RF chain is PROVEN LIVE end to end.
+
+        `TxState.ENABLED` has no other producer — the prober (`status.py`) emits only
+        DISABLED/UNKNOWN — so a stack demonstrably on the air still read "tx unknown".
+
+        POSITIVE proof, never "no negative marker was found". Starting from proven and merely
+        rejecting known-bad markers greens every unrecognised argv; the three conditions below
+        must ALL hold:
+
+          1. every REQUIRED tx-capable component of the stack (`tx_capable`, has a run command,
+             not `optional`) is RUNNING/DEGRADED with READABLE argv. Half a chain proves
+             nothing: a MeshCom bridge without the emulated node transmits into nowhere, and an
+             emulated node without the bridge has no path to the radio;
+          2. no live argv selects a no-RF mode — `--backend` anything but `loraham` (or absent,
+             which is the bridge's fake default), `--rx-only`, or a QEMU guest whose `-drive`
+             does not boot an `extradio` flash image;
+          3. a component that `depends_on` the LoRaHAM daemon has that daemon LIVE on its band.
+             The daemon owns the radio; without it the client has no transmitter at all.
+
+        A live-capability inference, NOT proof of a carrier: it never re-validates the callsign
+        and must not be described as proving a transmission. Only licensed stacks, only
+        UNKNOWN -> ENABLED. DISABLED is authoritative and is NEVER upgraded. Fail-soft like the
+        sibling overlays — status must not break because this inference failed."""
+        from .model import RunState, TxState
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        # /proc scan is LAZY: cmdlines() lists /proc and reads a file per PID, and this overlay
+        # runs on every build_snapshot (CLI `lhpc status` too). Most boxes have no licensed stack
+        # running, and those must not pay for it.
+        argv_cache: dict = {}
+
+        def _argvs():
+            if not argv_cache:
+                try:
+                    argv_cache.update(self._system.procfs.cmdlines() or {})
+                except Exception:
+                    pass
+                argv_cache.setdefault(-1, [])           # mark as attempted
+            return argv_cache
+
+        daemon_bands: set | None = None
+        for ss in snap.stacks:
+            try:
+                idf = self._identity_field(ss.stack.id)
+            except Exception:
+                continue          # identity resolution unavailable -> leave the probed truth
+            if not idf or idf.get("enforce") != "licensed":
+                continue
+            # The chain the stack DECLARES. `optional` helpers (KISS's serial PTY) and build-only
+            # artefacts (meshcom-firmware, kind="firmware", no run command) are not part of the
+            # live RF path, so they must not gate it — and must not stand in for it either.
+            required = [c for c in ss.stack.components
+                        if c.tx_capable and (c.run_cmd or c.run_argv) and not c.optional]
+            proven = bool(required)
+            for c in required:
+                st = ss.components.get(c.id)
+                if st is None or st.run_state not in up:
+                    proven = False                      # chain incomplete
+                    break
+                toks = [t for t in (_argvs().get(pid) for pid in (st.pids or ())) if t]
+                if not toks:
+                    proven = False                      # no readable argv: we know nothing
+                    break
+                if any(self._argv_rf_verdict(t) == "no-rf" for t in toks):
+                    proven = False
+                    break
+                if self.DAEMON_ID in (c.depends_on or ()):
+                    if daemon_bands is None:
+                        daemon_bands = self._live_daemon_bands(snap, _argvs())
+                    try:
+                        band = self._effective_band(ss.stack.id, c.band)
+                    except Exception:
+                        band = c.band
+                    if not daemon_bands or (band and band not in daemon_bands):
+                        proven = False                  # no radio behind this client
+                        break
+            if not proven:
+                continue
+            for c in ss.stack.components:
+                st = ss.components.get(c.id)
+                if (c.tx_capable and st is not None and st.run_state in up
+                        and st.tx_state is TxState.UNKNOWN):
+                    st.tx_state = TxState.ENABLED
+
+    def _live_daemon_bands(self, snap, argvs) -> set:
+        """Radio bands served by a LIVE LoRaHAM daemon, from this snapshot plus the daemon's own
+        argv. Empty = no daemon is up, so no daemon-backed client can be transmitting.
+
+        Same `--radio` topology reading as `_daemon_claimed_bands`, but scoped to the daemon
+        component the snapshot already reports as running: a daemon that IS up whose band cannot
+        be read from argv serves whatever it was started for, so both bands count (it is running
+        — inventing a band mismatch would deny a chain that is demonstrably complete)."""
+        from .model import RunState
+        bands: set = set()
+        for ss in snap.stacks:
+            st = ss.components.get(self.DAEMON_ID)
+            if st is None or st.run_state not in (RunState.RUNNING, RunState.DEGRADED):
+                continue
+            seen: set = set()
+            for pid in (st.pids or ()):
+                toks = list(argvs.get(pid) or ())
+                for i, t in enumerate(toks):
+                    if t == "--radio" and i + 1 < len(toks):
+                        seen.add(toks[i + 1])
+                    elif t.startswith("--radio="):
+                        seen.add(t.split("=", 1)[1])
+            bands |= (seen & {"433", "868"}) or {"433", "868"}
+        return bands
+
+    @staticmethod
+    def _argv_rf_verdict(argv) -> str:
+        """`"rf"` | `"no-rf"` | `"unknown"` for ONE live argv.
+
+        Token-wise, never a substring match on a joined command line — a path or another
+        process's arguments would match by accident. `"unknown"` is the honest answer for a
+        process this has no rule for; the caller treats it as "no opinion", not as proof.
+
+        Explicit no-RF modes:
+          * `--backend <x>` / `--backend=<x>` where x is not `loraham` (MeshCom's `fake`);
+          * a MeshCom bridge with NO `--backend` at all — upstream defaults to `fake`, so
+            silence is not consent;
+          * `--rx-only` (KISS declares it; harmless here until KISS is licensed);
+          * a QEMU guest whose `-drive` does not select an `extradio` firmware image — without
+            the external radio there is no transmitter behind the emulated node.
+        """
+        toks = list(argv or ())
+        if not toks:
+            return "unknown"
+        backend_ok = False
+        for i, t in enumerate(toks):
+            if t == "--rx-only":
+                return "no-rf"
+            if t == "--backend" or t.startswith("--backend="):
+                val = t.split("=", 1)[1] if "=" in t else (toks[i + 1] if i + 1 < len(toks) else "")
+                if val != "loraham":
+                    return "no-rf"
+                backend_ok = True
+        is_bridge = any("meshcom-loraham-bridge" in t for t in toks)
+        if is_bridge:
+            return "rf" if backend_ok else "no-rf"
+        if any(t.endswith("qemu-system-xtensa") or "/qemu-system-xtensa" in t for t in toks):
+            # The image the guest BOOTS decides, unconditionally — a stray `--backend loraham`
+            # on the emulator command line must not stand in for the external-radio firmware.
+            return "rf" if _qemu_boots_extradio(toks) else "no-rf"
+        return "rf" if backend_ok else "unknown"
 
     def _overlay_gui_unavailable(self, snap) -> None:
         """A component that CANNOT work here because a GUI-only dependency is absent (headless box,
@@ -1686,13 +1863,26 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if not order:
             return []
         keys = set()
+        # PER-BAND daemon claims are scoped by `_operation_bands`, never taken wholesale. The
+        # daemon is a PROVIDER of BOTH `loraham.daemon-socket.433` and `.868`, and it is in every
+        # daemon-backed stack's run order — so adding its provider claims verbatim made an 868-only
+        # stack (meshcore) lock the 433 socket, and a 433-only stack (meshcom) lock the 868 one.
+        # They then serialized against each other across bands that neither touches. The radio key
+        # already worked this way; the socket key has to follow the same rule.
+        _band_scoped = ("loraham.radio.", "loraham.daemon-socket.")
         for _, c in order:
             for r in c.resources:
                 if (r.mode in (ResourceMode.EXCLUSIVE, ResourceMode.PROVIDER)
-                        and not r.key.startswith("loraham.radio.")):
+                        and not r.key.startswith(_band_scoped)):
                     keys.add(r.key)
+        # Only a DAEMON-BACKED operation claims a daemon socket. A radio-direct stack
+        # (meshtastic, reticulum) drives the hardware itself and never touches one — adding the
+        # key for it would invent a conflict with every daemon client on the same band.
+        serves_daemon = any(c.id == self.DAEMON_ID for _, c in order)
         for b in self._operation_bands(target, band, radio, op):
             keys.add(f"loraham.radio.{b}")
+            if serves_daemon:
+                keys.add(f"loraham.daemon-socket.{b}")
         # The GPS receiver is a DYNAMIC exclusive claim: which device (if any) a stack opens
         # comes from the resolved global plan, not from a static manifest resource. Without
         # this, two stacks configured for direct NMEA would both open the same receiver — two

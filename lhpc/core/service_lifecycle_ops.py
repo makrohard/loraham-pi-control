@@ -1973,6 +1973,7 @@ class LifecycleOpsMixin:
         # before ANY automatic stop), or a dependent whose automatic stop fails / does not verify,
         # BLOCKS the daemon stop — the daemon is never stopped while a dependent is still running.
         dep_block = False
+        blocked_deps: list[str] = []            # dependents whose stop did not verify
         if cascade:
             interactive_deps = [dep for dep in dependents
                                 if (self.stack(dep) and self.stack(dep).main_component
@@ -1984,6 +1985,11 @@ class LifecycleOpsMixin:
                         summary="interactive dependent — stop it yourself before this stack"))
                     details.append(f"  [manual_required] dependent '{dep}' is interactive — "
                                    "stop it yourself first (daemon left running)")
+                # ONE blocked-dependent collection for both branches. An interactive dependent
+                # is the operator's OWN process (chat, meshcore-cli) — LHPC never signals one it
+                # does not own — so this is exactly the case the `kill <pid>` hint exists for.
+                # Recording it only on the automatic-stop path left that hint empty here.
+                blocked_deps.extend(interactive_deps)
                 dep_block = True                 # preflight block: stop NO automatic dependent
             else:
                 for dep in dependents:
@@ -1996,6 +2002,7 @@ class LifecycleOpsMixin:
                     details.append(f"  [{'stopped' if dep_res.ok else 'unverified'} dependent] {dep}")
                     if not dep_res.ok:
                         dep_block = True
+                        blocked_deps.append(dep)
 
         for _, comp in items:
             # Never stop the daemon while a dependent is still running / not verified stopped.
@@ -2006,6 +2013,12 @@ class LifecycleOpsMixin:
                 results.append(cr)
                 own_results.append(cr)
                 details.append(f"  [blocked] {comp.id}: a dependent is still running — daemon left up")
+                # NAME what is still up, and how to end it. An interactive client (meshcore-cli,
+                # chat) is the operator's OWN process — LHPC never signals one it does not own —
+                # so "a dependent is still running" alone leaves nothing to act on. The stop
+                # BUTTON already reports this well; make the daemon-stop path just as readable.
+                for hint in self._still_running_hints(blocked_deps):
+                    details.append(f"    {hint}")
                 continue
             if comp.units and not comp.run_argv:
                 # Externally supervised: LHPC cannot verify the stop -> MANUAL_REQUIRED.
@@ -3169,6 +3182,29 @@ class LifecycleOpsMixin:
         except (OSError, _PCE):
             return False
 
+    def _still_running_hints(self, stack_ids) -> list[str]:
+        """`kill <pid> to stop <component>` for each component of `stack_ids` still up.
+
+        These are the processes LHPC will not signal itself — an interactive client is started by
+        the operator in their own terminal and is not LHPC-owned, so the only honest advice is the
+        pid. Best-effort: a component whose pid is unknown is still named, without a kill line."""
+        from .model import RunState
+        out: list[str] = []
+        try:
+            snap = self.build_snapshot()
+        except Exception:
+            return out
+        for ss in snap.stacks:
+            if ss.stack.id not in (stack_ids or ()):
+                continue
+            for cid, st in ss.components.items():
+                if st.run_state not in (RunState.RUNNING, RunState.DEGRADED):
+                    continue
+                pids = [p for p in (getattr(st, "pids", None) or []) if p]
+                out.append(f"kill {pids[0]} to stop {cid}" if pids
+                           else f"{cid} is still running — stop it yourself")
+        return out
+
     def _interactive_marker(self, stack_id: str):
         sid = validators.path_component(stack_id, field="stack id")
         return self._paths.under("state", "interactive", f"{sid}.show")
@@ -3867,7 +3903,14 @@ class LifecycleOpsMixin:
                     # still USABLE. An interactive app here is daemon-backed (it reaches this code only
                     # via a band component), so it cannot be running once that daemon is stopped —
                     # stopping the daemon therefore closes a lingering-marker box instead of leaving it.
-                    marker_live = mark_band is not None and mark_band in usable_bands
+                    # `interactive_band` returns None = NO marker and "" = marked but band-less
+                    # (mark_interactive stores cfg_band, which is "" for a stack that is not
+                    # band-switchable, e.g. chat). That distinction IS the gate, so the
+                    # `is not None` test must stay: collapsing it would pin a permanent command
+                    # card on every never-started interactive stack. Only the band-less case
+                    # falls back to the stack's own band — the same fallback `col` uses below.
+                    marker_live = (mark_band is not None
+                                   and (mark_band or min(sbands)) in usable_bands)
                     active = running_up or marker_live
                     if not active:
                         startable.append(entry)                    # in the dropdown

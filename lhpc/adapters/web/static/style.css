@@ -384,6 +384,14 @@ input.wide { width: 100%; min-width: 16rem; }
 /* Box every sub-panel on /stacks — including nested ones — for a clear box-in-box hierarchy. Each
    nested box is inset by its parent's padding + the .advcfg margin. */
 .stacklist .advcfg { border: 1px solid var(--line); border-radius: 8px; padding: .35rem .7rem; }
+/* Deep nesting on a narrow phone: each box adds its own padding, so by the third or fourth level
+   the content column is almost gone. Keep the boxes (they show the level — that is the point) but
+   tighten the inset. Desktop is unchanged; this only applies below the phone breakpoint. */
+@media (max-width: 480px) {
+  .stackrow-body { padding: .25rem .35rem .6rem; }
+  .stacklist .advcfg { padding: .3rem .3rem; border-radius: 6px; margin: .3rem 0; }
+  .stacklist .advcfg .advcfg { padding-left: .25rem; padding-right: .25rem; }
+}
 .advcfg summary { cursor: pointer; color: var(--muted); font-size: .8rem;
                   text-transform: uppercase; letter-spacing: .4px; }
 .act { display: inline-block; margin: 0; }
@@ -506,6 +514,10 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .taskitem .ti-label { font-weight: 600; }
 .taskitem .ti-state { font-variant: small-caps; }
 .taskitem .ti-hint  { color: var(--muted); font-size: .85em; }
+/* Hides the hint when a task has none. A CLASS, not style="display:none" — the CSP sets no
+   'unsafe-inline', so style-src-attr blocks inline style attributes. taskbanner.js toggles
+   this same class when it refreshes a row. */
+.taskitem .ti-hint.is-empty { display: none; }
 .taskitem .ti-view  { margin-left: auto; white-space: nowrap; }
 .taskitem .ti-recover { white-space: nowrap; }
 /* View is always rendered, so the ✕/Recover control sits just right of View (both pinned right). */

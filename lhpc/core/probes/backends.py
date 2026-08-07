@@ -133,6 +133,13 @@ def _decode_hex_ip(ip_hex: str) -> str:
             b = bytes.fromhex(ip_hex)
             return ".".join(str(x) for x in reversed(b))
         if len(ip_hex) == 32:  # IPv6
+            # The ALL-ZERO address is the wildcard `::`, and it must reach the coverage layer
+            # LOOKING like one: `listener_scopes()` recognises only "::"/"0.0.0.0"/"" as a
+            # wildcard, so 32 raw zeroes read as a concrete address and an ipv6-only firewall
+            # rule would "cover" a socket that still accepts IPv4 (bindv6only=0). Narrow on
+            # purpose — every OTHER IPv6 form stays the raw hex, i.e. conservative/unreadable.
+            if set(ip_hex) == {"0"}:
+                return "::"
             return ip_hex.lower()
     except ValueError:
         pass

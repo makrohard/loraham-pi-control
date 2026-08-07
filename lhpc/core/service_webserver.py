@@ -25,22 +25,50 @@ class WebserverOpsMixin:
     # NEVER routed through the generic stack/component verbs (install/build/test/...): the
     # Webserver "component" is presentation only, so controller isolation is unaffected.
 
-    def webserver_monitor(self, served_via_nginx: bool | None = None) -> ActionResult:
+    def webserver_monitor(self, served_via_nginx: bool | None = None,
+                          listeners=None, fw_status=None) -> ActionResult:
         """READ-ONLY status (Monitor/GET): desired config + effective evidence + PKI state + warnings.
         No network/subprocess probe, no mutation — but the console listener SCOPE is read live from
         /proc (as the stack-proxy bypass warnings below already are), so the panel is accurate on load
         without a re-verify. `served_via_nginx` (request-scoped: is THIS session proxied through nginx?)
-        drives the console running pill — the adapter supplies it from the nginx-set X-LHPC-Peer header."""
+        drives the console running pill — the adapter supplies it from the nginx-set X-LHPC-Peer header.
+        `listeners`/`fw_status` let a whole dashboard render share ONE /proc read and ONE firewall
+        read (see `dashboard_webservers`)."""
         from . import webserver as _ws
         cfg = self.config().webserver
-        live_scope = _ws.listener_scope(self._system, cfg.port)   # "exposed" | "loopback" | "absent"
+        listeners = self._listeners(listeners)
+        applied = _ws.read_applied(self._paths)
+        ac = applied.get("console") or {}
+        # WHICH PORT is the console actually on? After a saved port move the running nginx still
+        # holds the port it was APPLIED with, so probing only the desired port would report
+        # "absent" and lose a live, still-exposed old listener entirely.
+        ports = [int(cfg.port)]
+        try:
+            old = int(ac.get("port") or 0)
+        except (TypeError, ValueError):
+            old = 0
+        if old and old != int(cfg.port):
+            ports.append(old)
+        scopes = {p: _ws.listener_scope(self._system, p, listeners) for p in ports}
+        live_port = next((p for p in ports if scopes[p] == "exposed"),
+                         next((p for p in ports if scopes[p] == "loopback"), int(cfg.port)))
+        live_scope = scopes[live_port]
+        # Does the VERIFIED firewall provably restrict the console's live listener? Only that may
+        # soften an unauthenticated remote console from red to yellow — it is reachable, but only
+        # from the allowed sources. `pending` (live listener disagreeing with desired intent) is
+        # handled inside monitor_view; an unproven/stale/transitional firewall yields None.
+        contained = (self._listener_restricted(live_port, listeners, fw_status)
+                     if live_scope == "exposed" else None)
         view = _ws.monitor_view(self._paths, cfg, live_listener_scope=live_scope,
-                                served_via_nginx=served_via_nginx)
+                                served_via_nginx=served_via_nginx,
+                                firewall_contained=contained,
+                                applied_console=ac, live_port=live_port)
         # The per-stack web-UI proxies are part of the config nginx loads — show them here too, with
         # the standing warning for any upstream that answers around this proxy.
         proxies = []
         for p in self._stack_web_proxies():
-            v = self.stack_web_view(p.swc.stack_id)
+            v = self.stack_web_view(p.swc.stack_id, listeners=listeners, fw_status=fw_status,
+                                    applied=applied)
             proxies.append({"stack_id": p.swc.stack_id, "port": p.swc.port, "mode": p.swc.mode,
                             "scheme": p.swc.scheme, "access_mode": p.swc.access_mode,
                             "upstream": p.upstream_address,
@@ -57,14 +85,76 @@ class WebserverOpsMixin:
                              "authentication. Firewall it or accept the exposure.")})
         return ActionResult(True, "webserver monitor", data=view)
 
+    def _listeners(self, listeners=None):
+        """One `tcp_listeners()` snapshot, or the caller's shared one. Fail-soft: [] reads as
+        'nothing is listening', which is the conservative answer everywhere it is used."""
+        if listeners is not None:
+            return listeners
+        try:
+            return self._system.procfs.tcp_listeners()
+        except Exception:
+            return []
+
+    def _listener_restricted(self, port, listeners=None, fw_status=None):
+        """True when the VERIFIED firewall provably restricts the LIVE listener on `port` to
+        allowed sources; None when nothing is proven, so the caller keeps its conservative colour.
+        Deliberately tri-state-collapsed to True/None: only a proven restriction may soften a
+        pill, and `denied`/`open`/`unknown` must each leave it alone here."""
+        try:
+            scopes = self.listener_scopes(int(port), self._listeners(listeners))
+            return True if self.firewall_containment(scopes, fw_status) == "restricted" else None
+        except Exception:
+            return None
+
+    def _upstream_bypassable(self, port, listeners=None, fw_status=None) -> bool:
+        """Is a stack's OWN (unproxied) upstream port genuinely reachable AROUND this proxy?
+
+        "Bound off-loopback" alone over-warned: Meshtastic's 4403/9443 are deny-default endpoints
+        that the managed firewall drops by default, so they are bound wide and still unreachable —
+        they bypass nothing. Containment decides:
+          * `denied`  — not bypassable;
+          * `restricted` — bypassable, for the allowed sources;
+          * `open` / `unknown` / unverified / transitional — bypassable, nothing was proven;
+          * loopback or absent — nothing to bypass.
+        """
+        try:
+            if not port:
+                return False
+            scopes = self.listener_scopes(int(port), self._listeners(listeners))
+            if not scopes or all(self.scope_is_loopback(s) for s in scopes):
+                return False
+            return self.firewall_containment(scopes, fw_status) != "denied"
+        except Exception:
+            return True                     # cannot prove containment -> keep the warning
+
+    def _ws_verify(self, cfg, proxies, *, probe_console: bool = False) -> dict:
+        """THE single seam through which this mixin calls `webserver.verify()`: it supplies the
+        containment-aware bypass test, and (by NOT passing an applied snapshot) guarantees that
+        verifying never advances one. Activation is recorded separately, by `_record_applied`."""
+        from . import webserver as _ws
+        return _ws.verify(self._system, self._paths, cfg, proxies, probe_console=probe_console,
+                          bypassable=self._upstream_bypassable)
+
+    def _record_applied(self, cfg, proxies) -> None:
+        """Advance the applied-policy snapshot. Called ONLY where activation is proven: the config
+        was promoted, the reload/restart succeeded, and the listener-match gate passed. Fail-soft —
+        a policy record that cannot be written must not turn a successful apply into a failure
+        (the stale snapshot then keeps the posture conservative, which is the safe direction)."""
+        from . import webserver as _ws
+        try:
+            _ws.record_applied(self._paths, cfg, proxies)
+        except Exception:
+            pass
+
     def webserver_verify(self) -> ActionResult:
         """Explicit verification: assemble + persist the effective-evidence checklist.
 
         Validates the SAME config `apply` would promote — stack web-UI proxies included. Verifying a
-        console-only config and reporting "verified" would be a claim about a config nginx never loads."""
-        from . import webserver as _ws
-        ev = _ws.verify(self._system, self._paths, self.config().webserver,
-                        self._stack_web_proxies(), probe_console=True)
+        console-only config and reporting "verified" would be a claim about a config nginx never loads.
+        It does NOT advance the applied-policy snapshot: proving the desired config is valid says
+        nothing about whether nginx ever loaded it."""
+        ev = self._ws_verify(self.config().webserver, self._stack_web_proxies(),
+                             probe_console=True)
         failed = [k for k, v in ev["checks"].items() if v == "failed"]
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"
@@ -210,7 +300,7 @@ class WebserverOpsMixin:
             out.append(_ws.StackWebProxy(swc, up[0], up[1]))
         return out
 
-    def _stack_listen_scope(self, swc) -> str:
+    def _stack_listen_scope(self, swc, listeners=None) -> str:
         """Effective network scope of a stackweb proxy's OWN nginx listen port, read live from
         /proc/net/tcp: "exposed" (answers off-loopback — reachable on the LAN), "loopback" (127.0.0.1
         only), or "absent" (nothing listening — proxy disabled, not applied, or nginx down).
@@ -222,11 +312,18 @@ class WebserverOpsMixin:
         from . import webserver as _ws
         if swc is None or not getattr(swc, "enabled", False) or not getattr(swc, "port", 0):
             return "absent"
-        return _ws.listener_scope(self._system, swc.port)
+        return _ws.listener_scope(self._system, swc.port, listeners)
 
-    def stack_web_view(self, stack_id: str) -> dict:
+    def stack_web_view(self, stack_id: str, listeners=None, fw_status=None,
+                       applied=None) -> dict:
         """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is
-        evidence from THIS host (/proc/net/tcp), not a hardcoded per-stack fact."""
+        evidence from THIS host (/proc/net/tcp), not a hardcoded per-stack fact.
+
+        The security pill follows the SAME desired-vs-applied rule as the console (`posture_for`):
+        a saved mode/scheme/auth/CIDR change does not reach nginx until Apply, so a LIVE proxy
+        listener is coloured by the policy last activated — and after a saved PORT move the old
+        listener is looked for on the applied port, not lost. `listeners`/`fw_status`/`applied`
+        are the render-wide shared reads."""
         from . import webserver as _ws
         from .config import (
             STACKWEB_MODES,
@@ -247,8 +344,27 @@ class WebserverOpsMixin:
             upstream_port = int(str(address).rsplit(":", 1)[1])
         except (IndexError, ValueError):
             upstream_port = 0
-        scope = _ws.listener_scope(self._system, upstream_port) if upstream_port else "absent"
-        listen_scope = self._stack_listen_scope(swc)
+        listeners = self._listeners(listeners)
+        scope = (_ws.listener_scope(self._system, upstream_port, listeners)
+                 if upstream_port else "absent")
+        if applied is None:
+            applied = _ws.read_applied(self._paths)
+        ap = _ws.applied_proxy(applied, stack_id)
+        # WHICH PORT does this proxy actually listen on? The desired port only becomes real at
+        # Apply; until then the running nginx still holds the applied one, so probe both or a
+        # saved port move hides a live listener behind a freshly-saved "local" intent.
+        listen_scope = self._stack_listen_scope(swc, listeners)
+        live_port = swc.port
+        try:
+            old_port = int(ap.get("port") or 0)
+        except (TypeError, ValueError):
+            old_port = 0
+        if listen_scope != "exposed" and old_port and old_port != swc.port:
+            old_scope = _ws.listener_scope(self._system, old_port, listeners)
+            if old_scope != "absent":
+                listen_scope, live_port = old_scope, old_port
+        contained = (self._listener_restricted(live_port, listeners, fw_status)
+                     if listen_scope == "exposed" else None)
         plan = _ws.plan_stack_exposure(swc, ws.port, used)
         return {
             "stack_id": stack_id, "cfg": swc, "upstream_address": address,
@@ -256,22 +372,31 @@ class WebserverOpsMixin:
             "upstream_scope": scope, "suggested_port": suggested,
             "modes": STACKWEB_MODES, "access_modes": WEBSERVER_ACCESS_MODES,
             "schemes": WEBSERVER_SCHEMES, "plan": plan,
-            "urls": _ws.stack_ui_urls(swc) if swc.enabled else [],
-            # The raw upstream port answers on a non-loopback interface: our proxy's auth is
-            # bypassable, whatever `mode` says. Standing fact, shown on every load.
-            "bypassable": scope == "exposed",
+            # The port that ANSWERS, so a saved-but-unapplied move never advertises a dead URL.
+            "urls": (_ws.stack_ui_urls(swc, live_port if listen_scope != "absent" else None)
+                     if swc.enabled else []),
+            # Is the raw upstream port genuinely reachable AROUND this proxy? Off-loopback alone
+            # is not enough — a deny-default endpoint the VERIFIED firewall drops bypasses nothing.
+            "bypassable": self._upstream_bypassable(upstream_port, listeners, fw_status),
             # EFFECTIVE listen scope of the proxy port + whether it disagrees with the desired mode
             # (i.e. an Apply is still pending to make the live listener match the saved intent).
             "listen_scope": listen_scope,
+            "live_port": live_port,
+            # A saved PORT move is pending exactly like a saved MODE move: the listener is live and
+            # healthy, just not on the port the operator now asks for. Without this the panel read
+            # "in sync" while nginx still served the old socket.
             "pending": bool(swc.enabled and (
-                listen_scope == "absent" or swc.remote != (listen_scope == "exposed"))),
-            # Security + running posture for the two summary pills. Security via posture(); the RUNNING
-            # pill for a PROXY is: grey "offline" (stack not started — its web-UI upstream is down),
-            # yellow "local-only" (started but nginx is not proxying it), green "proxied" (started + nginx).
+                listen_scope == "absent" or swc.remote != (listen_scope == "exposed")
+                or live_port != swc.port)),
+            # Security + running posture for the two summary pills. Security via posture_for() — the
+            # LIVE listener's applied policy, never a saved-but-unapplied one; the RUNNING pill for a
+            # PROXY is: grey "offline" (stack not started — its web-UI upstream is down), yellow
+            # "local-only" (started but nginx is not proxying it), green "proxied" (started + nginx).
             "posture": {
-                **_ws.posture(local=swc.mode == "local", public=swc.mode == "public",
-                              access_mode=swc.access_mode, has_cidrs=bool(swc.allowed_cidrs),
-                              scheme=swc.scheme),
+                **_ws.posture_for({"local": swc.mode == "local", "public": swc.mode == "public",
+                                   "access_mode": swc.access_mode,
+                                   "has_cidrs": bool(swc.allowed_cidrs), "scheme": swc.scheme},
+                                  ap, listen_scope, firewall_contained=contained),
                 "run": "offline" if scope == "absent" else (
                     "local-only" if listen_scope == "absent" else "proxied"),
                 "run_level": "off" if scope == "absent" else (
@@ -279,10 +404,12 @@ class WebserverOpsMixin:
             },
             # Same remote-exposure/auth/listener warnings the console shows (identical wording+values),
             # for an ENABLED proxy. A proxy binds 0.0.0.0 when remote, 127.0.0.1 when local.
+            # Name the socket that EXISTS: with a live listener, its bind/port are the APPLIED ones.
             "warnings": _ws.exposure_warnings(
                 remote=swc.remote, access_mode=swc.access_mode, allowed_cidrs=swc.allowed_cidrs,
-                bind="0.0.0.0" if swc.remote else "127.0.0.1", port=swc.port,
-                live_scope=listen_scope) if swc.enabled else [],
+                bind=(ap.get("bind") if (ap and listen_scope in ("exposed", "loopback"))
+                      else ("0.0.0.0" if swc.remote else "127.0.0.1")),
+                port=live_port, live_scope=listen_scope) if swc.enabled else [],
         }
 
     def dashboard_webservers(self, served_via_nginx: bool | None = None) -> list[dict]:
@@ -298,9 +425,31 @@ class WebserverOpsMixin:
             snap = self._system.procfs.tcp_listeners()      # ONE /proc/net/tcp read for the whole box
         except Exception:
             snap = []
-        mon = self.webserver_monitor(served_via_nginx=served_via_nginx).data or {}
+        try:
+            # ONE firewall read for the whole render, like `snap` above: firewall_status() re-reads
+            # the receipt and re-hashes the intent, which is measurable per row on a Zero 2W.
+            fw_status = self.firewall_status()
+        except Exception:
+            fw_status = None                                # -> containment "unknown", conservative
+        # ONE /proc cmdline scan at most, and only if a row actually needs it: `cmdlines()` lists
+        # /proc and reads a file per PID, and most rows are fixed-port endpoints that never ask.
+        argv_cache: dict = {}
+
+        def _argvs():
+            if not argv_cache:
+                try:
+                    argv_cache.update(self._system.procfs.cmdlines() or {})
+                except Exception:
+                    pass
+                argv_cache.setdefault(-1, [])               # mark as attempted
+            return argv_cache
+        mon = self.webserver_monitor(served_via_nginx=served_via_nginx,
+                                     listeners=snap, fw_status=fw_status).data or {}
         rows: list[dict] = [{"kind": "console", "name": "LHCP", "posture": mon.get("posture"),
-                             "port": mon.get("desired", {}).get("port"), "logs_component": None}]
+                             # The port a listener was actually FOUND on — after a saved port move
+                             # that is the old one, and it is what a browser still reaches.
+                             "port": mon.get("live_port") or mon.get("desired", {}).get("port"),
+                             "logs_component": None}]
         by_id = {ss.stack.id: ss for ss in self.build_snapshot().stacks}
         for stk in self.stacks():
             ss = by_id.get(stk.id)
@@ -310,21 +459,40 @@ class WebserverOpsMixin:
             if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
             if self.stack_web_upstream(stk.id) is not None:
-                rows.append(self._dashboard_web_row(stk, snap))
+                rows.append(self._dashboard_web_row(stk, snap, fw_status))
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
-                    # Network ports only (host:port). Skip non-network client endpoints like the KISS
-                    # socat PTY (scheme="serial", a local device path e.g. "state/loraham_kiss") — it is
-                    # a filesystem device, not an interface to advertise in the network-exposure box.
-                    if (getattr(ep, "client", False) and ep.scheme not in ("http", "https")
-                            and ":" in ep.address):
-                        rows.append(self._dashboard_port_row(stk, comp, ep, snap))
+                    if self._is_raw_endpoint(ep):
+                        rows.append(self._dashboard_port_row(
+                            stk, comp, ep, snap, fw_status,
+                            comp_state=ss.components.get(comp.id), get_argvs=_argvs))
         return rows
 
-    def _dashboard_web_row(self, stk, listeners=None) -> dict:
+    @staticmethod
+    def _is_raw_endpoint(ep) -> bool:
+        """Does this endpoint deserve its own RAW direct-listener security row?
+
+        Network ports only (host:port). Non-network client endpoints — the KISS socat PTY
+        (scheme="serial", a local device path like "state/loraham_kiss") — are filesystem devices,
+        not interfaces to advertise in a network-exposure box.
+
+        A web SCHEME is not a reason to skip the raw verdict. Meshtastic's :9443 is `https` and has
+        no authentication and no bind knob, so it is exactly as directly reachable as its :4403
+        API; excluding it by scheme left the box asserting containment it had never checked. The
+        rule is METADATA, not a stack name: any no-auth endpoint carrying managed-firewall
+        semantics gets a raw row, whatever its scheme. The friendly web-UI/proxy row is unaffected
+        and still rendered separately — one is the front door, this is the listener itself."""
+        if not getattr(ep, "client", False) or ":" not in ep.address:
+            return False
+        if ep.scheme not in ("http", "https"):
+            return True
+        meta = getattr(ep, "firewall", None)
+        return meta is not None and getattr(meta, "auth", "") == "none"
+
+    def _dashboard_web_row(self, stk, listeners=None, fw_status=None) -> dict:
         """The web-UI (http/https) box row: proxied port + posture, or the DIRECT listen address when
         the reverse proxy is not enabled (the adapter reattaches the reached host, like the console)."""
-        v = self.stack_web_view(stk.id) or {}
+        v = self.stack_web_view(stk.id, listeners=listeners, fw_status=fw_status) or {}
         swc = v.get("cfg")
         enabled = bool(swc and swc.enabled)
         from .webserver import listener_scope
@@ -336,21 +504,51 @@ class WebserverOpsMixin:
         # remote link). The proxied path keys off posture (also live), so this is only the direct case.
         direct_scope = (listener_scope(self._system, int(direct_port), listeners)
                         if str(direct_port).isdigit() else "absent")
+        # The port a browser can actually REACH. After a saved-but-unapplied port move the running
+        # nginx still holds the old one, so `live_port` is what the address must name — advertising
+        # the desired port would hand out a socket nobody listens on. Desired config is untouched
+        # and still reaches Settings through `cfg`; with no live listener there is nothing to
+        # correct, so the desired port stands.
+        listen_scope = v.get("listen_scope") if enabled else None
+        port = None
+        if enabled:
+            port = (v.get("live_port") or swc.port) if listen_scope != "absent" else swc.port
         return {"kind": "stack", "name": stk.name, "sid": stk.id, "enabled": enabled,
                 "posture": v.get("posture") if enabled else None,
-                "port": swc.port if enabled else None,
+                "port": port,
                 # The proxy's LIVE listen scope (exposed|loopback|absent) — the adapter links to the
                 # proxy socket only where it actually listens, so an enabled-but-local-only or inactive
                 # proxy never renders a dead request-host link.
-                "listen_scope": v.get("listen_scope") if enabled else None,
+                "listen_scope": listen_scope,
                 "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else "",
                 "direct_scope": direct_scope}
 
+    def _endpoint_bind_host(self, stk_id: str, comp, ep) -> str | None:
+        """The component's configured BIND HOST, from the endpoint's declared firewall metadata
+        (`bind_param`) — not from scanning for a `validator="bind"` param, which finds the
+        ALLOW-LIST instead. KISS declares both: `kiss_host` is the listen address, `kiss_bind` the
+        accepted-source filter. Returns None when the endpoint declares no bind_param (MeshCore
+        declares only allow_param)."""
+        meta = getattr(ep, "firewall", None)
+        name = getattr(meta, "bind_param", "") if meta is not None else ""
+        if not name:
+            return None
+        for kind, params in (("run", comp.run_params),
+                             ("file", comp.config_file.params if comp.config_file else ())):
+            for p in params:
+                if p.name == name:
+                    return self._resolved_param_value(
+                        stk_id, kind, comp.id, p.name, self._config_band(stk_id, ""))
+        return None
+
     def _bind_exposure(self, stk_id: str, comp) -> tuple[str, str, bool]:
-        """Exposure (level, label, has_bind_control) of a component's no-auth listener, from its bind
-        allow-list param (`validator="bind"`). A service with no such control (meshtasticd's API
-        always binds 0.0.0.0) is public. SHARED by the Webserver-box port rows AND the running-stack
-        interface pins so both classify a service's reachability identically."""
+        """Exposure (level, label, has_bind_control) from the component's bind ALLOW-LIST param
+        (`validator="bind"`). Only one caller (`_dashboard_port_row`); the third element says the
+        service has an allow-list control at all, which drives its log link and restart marker.
+
+        This answers "who is permitted to connect", NOT "where is the socket". A loopback socket is
+        unreachable off-box however broad the allow-list is, and a wildcard socket is reachable
+        however narrow it is — so the caller must combine this with live listener evidence."""
         from .webserver import port_exposure
         for kind, params in (("run", comp.run_params),
                              ("file", comp.config_file.params if comp.config_file else ())):
@@ -362,28 +560,118 @@ class WebserverOpsMixin:
                     return level, label, True
         return "bad", "public", False
 
-    def _dashboard_port_row(self, stk, comp, ep, listeners=None) -> dict:
-        """A `kind="port"` box row for a no-authentication TCP service. Exposure comes from the
-        component's bind allow-list (the `validator="bind"` param); a service with no such control
-        (meshtasticd's API always binds 0.0.0.0) is shown public. The colour IS the warning — these
-        ports have no auth. `logs_component` (set only when the service has a bind control) drives a
-        per-service log link. `scheme` lets the box render the address as a link."""
-        from .webserver import listener_scope
+    def _endpoint_live_port(self, comp, ep, pids, get_argvs) -> tuple:
+        """`(port, verified)` — the port this endpoint's component is ACTUALLY listening on.
+
+        A `port_param` endpoint MOVES. `kiss_port` is a start-time parameter and Start-without-
+        saving is supported, so the manifest address and the saved parameter are both DESIRED
+        values: the running process keeps whatever it was launched with. Read the port from that
+        component's own live argv instead, structurally — the RunParam's exact `arg` token, in
+        either `--arg value` or `--arg=value` form. Never search a joined command line: a path,
+        another flag's value, or a neighbouring process would match by accident.
+
+        UNVERIFIED (`verified=False`) whenever the answer is not unambiguous: any live PID with
+        unreadable argv, no live PID carrying the flag at all, a non-numeric value, or several
+        live PIDs naming different ports. (One PID carrying it is enough — a sibling that does
+        not, such as a helper sharing the component, does not make the answer ambiguous.)
+        Guessing the saved port instead would attach a firewall verdict to a socket that may not
+        exist, which is precisely the false-safe this replaces.
+
+        A fixed-port endpoint (no `port_param`) keeps its manifest port, and so does a component
+        with no live PIDs — there is no running listener to misrepresent."""
+        static = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
+        static_port = int(static) if str(static).isdigit() else None
+        meta = getattr(ep, "firewall", None)
+        name = getattr(meta, "port_param", "") if meta is not None else ""
+        if not name or not pids:
+            return static_port, True
+        arg = next((p.arg for p in comp.run_params if p.name == name and p.arg), "")
+        if not arg:
+            return static_port, False       # declared movable, but not observable from argv
+        argvs = get_argvs() if callable(get_argvs) else (get_argvs or {})
+        found: set = set()
+        for pid in pids:
+            toks = list(argvs.get(pid) or ())
+            if not toks:
+                return static_port, False   # a live PID whose argv we cannot read
+            for i, t in enumerate(toks):
+                if t == arg and i + 1 < len(toks):
+                    found.add(toks[i + 1])
+                elif t.startswith(arg + "="):
+                    found.add(t.split("=", 1)[1])
+        if len(found) != 1:
+            return static_port, False       # flag absent, or the live PIDs disagree
+        val = found.pop()
+        return (int(val), True) if val.isdigit() else (static_port, False)
+
+    def _dashboard_port_row(self, stk, comp, ep, listeners=None, fw_status=None,
+                            comp_state=None, get_argvs=None) -> dict:
+        """A `kind="port"` box row for a no-authentication TCP service (any scheme — an https
+        listener with no auth and no bind knob is exactly as directly reachable as a tcp one).
+
+        The exposure verdict is decided HERE, once, and `security_pill()` only aggregates it.
+        Order of truth:
+
+        1. WHICH PORT — `_endpoint_live_port`. The static manifest address is desired config, not
+           evidence, for any endpoint whose port is a start-time parameter. Ambiguity yields
+           `live_scope="unverified"`: a conservative review that never reads green or local.
+        2. WHICH SCOPE — the LIVE socket (/proc) on that port. Saved config can disagree (a
+           Start-without-saving, an out-of-band edit, plain drift), so a live non-loopback
+           listener is never labelled `local`, and a live loopback socket IS local however broad
+           the allow-list is. A bind host that cannot be parsed (or `::`, which also accepts
+           IPv4) counts as NON-loopback: never claim safety that has not been shown.
+        3. WHICH COLOUR — a LIVE non-loopback no-auth listener is red `public` by default. Only
+           the VERIFIED firewall may improve that: fully covering and denying the live scope
+           reads green `firewalled`; covering and restricting it reads yellow `LAN`. Everything
+           else — open, unknown, unverified, transitional, an overlapping `extra_allow` — stays
+           red. The SAVED allow-list is NOT running enforcement: the process keeps its launch-time
+           policy until it restarts, so the allow-list colours only an endpoint with NO live
+           listener, where it is plainly desired-config information.
+
+        `restart_required` and `logs_component` still key off the allow-list control, so the set
+        of services with a log link and a restart hint is unchanged.
+        These ports have no auth, so the colour is the whole warning."""
+        from .model import RunState
         level, label, has_bind = self._bind_exposure(stk.id, comp)
-        port = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
-        # The exposure pill reflects the SAVED bind allow-list; the RUNNING process keeps its
-        # launch-time value until restarted. Surface the durable restart-required marker next to
-        # the pill so a saved-but-not-applied bind change is never displayed as already effective
-        # (tri-state read: an unsafe marker also reads truthy -> shown as pending, fail-closed).
-        # `live_scope` is the ACTUAL listener bind (ground truth) — the adapter picks the LINK host
-        # from it, never from the saved policy above (a fixed-loopback service like MeshCom QEMU has
-        # no bind knob yet must not get a request-host link).
-        live_scope = listener_scope(self._system, int(port), listeners) if str(port).isdigit() else "absent"
-        return {"kind": "port", "name": stk.name, "sid": stk.id, "port": port,
-                "scheme": ep.scheme or "tcp", "live_scope": live_scope,
-                "exposure": {"level": level, "label": label},
-                "restart_required": bool(self.restart_required(stk.id)) if has_bind else False,
-                "logs_component": comp.id if has_bind else None}
+        static = ep.address.rsplit(":", 1)[-1] if ":" in ep.address else ep.address
+        live = (comp_state is not None
+                and comp_state.run_state in (RunState.RUNNING, RunState.DEGRADED))
+        pids = list(comp_state.pids or ()) if live else []
+        port, verified = self._endpoint_live_port(comp, ep, pids, get_argvs)
+
+        def row(port_shown, live_scope, level, label, warn_reason):
+            return {"kind": "port", "name": stk.name, "sid": stk.id, "port": str(port_shown),
+                    "scheme": ep.scheme or "tcp", "live_scope": live_scope,
+                    "exposure": {"level": level, "label": label},
+                    "warn_reason": warn_reason,
+                    "restart_required": bool(self.restart_required(stk.id)) if has_bind else False,
+                    "logs_component": comp.id if has_bind else None}
+
+        if not verified:
+            # A RUNNING component whose live port cannot be pinned down. This is NOT "absent" —
+            # something IS listening somewhere — and it is not safe either. Say so.
+            return row(static, "unverified", "warn", "unverified", "review")
+
+        scopes = self.listener_scopes(port, listeners) if port else []
+        if not scopes:
+            # Nothing is listening on it. The allow-list is all there is to show, and an absent
+            # listener contributes no reachability at all to the summary.
+            bind_host = self._endpoint_bind_host(stk.id, comp, ep)
+            if (level == "ok" and bind_host is not None
+                    and not self.scope_is_loopback({"addr": str(bind_host).strip()})):
+                # The configured bind host is non-loopback (or unparseable/`::`) — do not
+                # present it as local even while it is down.
+                level, label = "warn", "LAN"
+            return row(port or static, "absent", level, label, "")
+        if all(self.scope_is_loopback(s) for s in scopes):
+            return row(port, "loopback", "ok", "local", "")
+        # Live and reachable off-box, with no authentication in front of it.
+        verdict = self.firewall_containment(scopes, fw_status)
+        if verdict == "denied":
+            return row(port, "exposed", "ok", "firewalled", "")
+        if verdict == "restricted":
+            return row(port, "exposed", "warn", "LAN", "restricted_noauth")
+        return row(port, "exposed", "bad", "public", "review")
 
     def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
         """A STABLE per-stack default port: `console_port + 1 + position`, where position is the
@@ -604,7 +892,7 @@ class WebserverOpsMixin:
         # Stage + validate the loopback-only config; promote only on success (never clobber a
         # proven live config with an invalid one).
         ok, msg, _staged = _ws.stage_and_validate(self._system, self._paths, cfg, proxies)
-        ev = _ws.verify(self._system, self._paths, cfg, proxies)
+        ev = self._ws_verify(cfg, proxies)
         if not ok:
             return ActionResult(False, "reset requested; loopback config invalid — remote "
                                 f"cessation UNPROVEN ({msg})", data=ev)
@@ -633,6 +921,10 @@ class WebserverOpsMixin:
                 if console_exposed:
                     detail.append(f"  console listener still exposed on port {cfg.port}")
                 if proven:
+                    # Reset is an ACTIVATION: the loopback-only config was promoted, reloaded and
+                    # proven, so it becomes the applied policy. (After write_evidence above, which
+                    # would otherwise overwrite it.)
+                    self._record_applied(cfg, proxies)
                     return ActionResult(True, "webserver reset to defaults — remote exposure ceased "
                                         "(loopback-only config reloaded and proven)",
                                         details=detail, data=ev)
@@ -763,7 +1055,7 @@ class WebserverOpsMixin:
                                 f"configuration remains active ({msg})")
         _ws.promote_config(self._paths)
         state, rmsg = _ws.reload(self._system, self._paths)
-        ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+        ev = self._ws_verify(cfg, self._stack_web_proxies())
         if state == "repair_required":
             return ActionResult(False, "config valid but the nginx service is not active — "
                                 "repair required (operator context)",
@@ -783,6 +1075,10 @@ class WebserverOpsMixin:
                     and c.get("stack_listener_matches", "ok") == "ok")
 
         if _listeners_ok(ev):
+            # ACTIVATION PROVEN: promoted + reloaded + listeners match. Only here does the applied
+            # policy advance — a failed validate/reload/restart keeps the previous one, so the
+            # console and every proxy keep being rendered against what nginx is really serving.
+            self._record_applied(cfg, self._stack_web_proxies())
             return ActionResult(True, "webserver configuration applied and nginx reloaded", data=ev)
         # PRIVILEGE BOUNDARY (live-found): inside the managed web unit the user bus is DELIBERATELY
         # inaccessible (`InaccessiblePaths=%t/bus %t/systemd/private` — the escape-proof updater
@@ -797,12 +1093,13 @@ class WebserverOpsMixin:
         if rstate != "restarted":
             # The restart itself FAILED — never proceed to a verification that could mask it (a dead
             # nginx yields "absent" listeners, which must not read as any kind of success).
-            ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+            ev = self._ws_verify(cfg, self._stack_web_proxies())
             return ActionResult(False, f"nginx restart failed: {rmsg2}",
                                 next_commands=["systemctl --user restart lhpc-nginx.service",
                                                "lhpc webserver logs"], data=ev)
-        ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+        ev = self._ws_verify(cfg, self._stack_web_proxies())
         if _listeners_ok(ev):
+            self._record_applied(cfg, self._stack_web_proxies())
             return ActionResult(True, "webserver configuration applied; nginx restarted to rebind "
                                 "the listener (a bind change needs a restart, not a reload)", data=ev)
         scope = ev.get("effective", {}).get("listener_scope", "unknown")
@@ -858,8 +1155,9 @@ class WebserverOpsMixin:
                 continue                            # not yet claimed by the watcher
             if not _ws.nginx_master_active(self._paths):
                 continue                            # between declarative stop and OnSuccess start
-            ev = _ws.verify(self._system, self._paths, cfg, self._stack_web_proxies())
+            ev = self._ws_verify(cfg, self._stack_web_proxies())
             if listeners_ok(ev):
+                self._record_applied(cfg, self._stack_web_proxies())
                 return ActionResult(
                     True, "webserver configuration applied; nginx restarted via the managed restart "
                     "watcher (a bind change needs a restart, not a reload)", data=ev)
@@ -970,7 +1268,12 @@ class WebserverOpsMixin:
             return ActionResult(False, "could not enable/start lhpc-nginx.service",
                                 details=[detail[-1] if detail else "systemctl failed"],
                                 next_commands=["systemctl --user enable --now lhpc-nginx.service"])
-        ev = _ws.verify(self._system, self._paths, cfg, proxies)
+        ev = self._ws_verify(cfg, proxies)
+        # Same gate as apply: only a listener-verified start records the applied policy. A start
+        # whose listeners do not match leaves the previous snapshot, so the pill stays conservative.
+        if (ev["checks"].get("remote_listener_matches") == "ok"
+                and ev["checks"].get("stack_listener_matches", "ok") == "ok"):
+            self._record_applied(cfg, proxies)
         # The console's real URL, from its own scheme/exposure — never a hardcoded https, and never
         # `https://0.0.0.0:8443/`, which is a bind wildcard and not an address anyone can visit.
         urls = _ws.console_urls(cfg)

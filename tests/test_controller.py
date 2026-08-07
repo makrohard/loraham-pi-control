@@ -774,7 +774,7 @@ def test_controller_system_deps_shape_and_required_flags(tmp_path, monkeypatch):
     import shutil
     real = shutil.which
     monkeypatch.setattr(shutil, "which",
-                        lambda c: None if c in ("nginx", "systemctl") else real(c))
+                        lambda c, *a, **k: None if c in ("nginx", "systemctl") else real(c, *a, **k))
     groups = _svc(tmp_path).controller_system_deps()
     flat = {d["what"]: d for g in groups for d in g["deps"]}
     # git is REQUIRED and detected (present in the test env)
@@ -836,7 +836,7 @@ def test_controller_dep_detection_uses_abspath_fallback(tmp_path, monkeypatch):
     # P2-2: a narrow-PATH managed service where shutil.which() finds nothing still detects a tool that
     # exists at a normal absolute path (via the injectable fs.exists) — and never runs a subprocess.
     import shutil
-    monkeypatch.setattr(shutil, "which", lambda c: None)                     # PATH sees nothing
+    monkeypatch.setattr(shutil, "which", lambda c, *a, **k: None)                     # PATH sees nothing
     for cmd, present_path in (("git", "/usr/bin/git"), ("nginx", "/usr/sbin/nginx")):
         svc = ControllerService(system=FakeSystem(paths={present_path}).system,
                                 paths=Paths(runtime_root=tmp_path))

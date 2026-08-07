@@ -2164,3 +2164,167 @@ def test_verify_fails_when_the_console_is_not_serving(tmp_path):
     alive = FakeSystem(commands={**base, unit: CR(0, "", "")})
     res2 = ControllerService(system=alive.system, paths=paths).webserver_verify()
     assert res2.data["checks"]["console_running"] == "ok"
+
+
+def test_a_cidr_set_covering_the_whole_internet_is_public_not_lan():
+    # `0.0.0.0/1` + `128.0.0.0/1` IS the whole IPv4 internet, but neither entry is a default
+    # route — so a per-entry `/0` test called it a restricted LAN, skipping the elevated
+    # confirmation and letting it read as safely scoped. The SET has to be judged.
+    from lhpc.core.webserver import cidr_set_is_public
+    assert cidr_set_is_public(["0.0.0.0/1", "128.0.0.0/1"]) is True
+    assert cidr_set_is_public(["::/1", "8000::/1"]) is True          # IPv6 complement
+    assert cidr_set_is_public(["0.0.0.0/0"]) is True                 # still caught
+    assert cidr_set_is_public(["10.42.0.0/24"]) is False
+    assert cidr_set_is_public(["192.168.1.0/24", "10.0.0.0/8"]) is False
+    assert cidr_set_is_public([]) is False
+    # A family is judged on its OWN: all of IPv6 is public even beside a narrow IPv4 entry.
+    assert cidr_set_is_public(["10.0.0.0/8", "::/0"]) is True
+
+
+def test_whole_internet_cidr_set_demands_the_elevated_confirmation():
+    # The policy consequence of the above: `danger` must elevate, as it does for 0.0.0.0/0.
+    from lhpc.core.webserver import plan_exposure
+    from lhpc.core.config import WebserverConfig
+    import dataclasses as dc
+    base = WebserverConfig()
+    cfg = dc.replace(base, remote_exposed=True, bind="0.0.0.0", scheme="https",
+                     access_mode="auth-everywhere",
+                     allowed_cidrs=("0.0.0.0/1", "128.0.0.0/1"))
+    plan = plan_exposure(cfg)
+    assert plan["public"] is True and plan["danger"] == "elevated"
+    lan = dc.replace(cfg, allowed_cidrs=("192.168.0.0/24",))
+    assert plan_exposure(lan)["public"] is False
+
+
+# ---- DESIRED vs APPLIED nginx policy ------------------------------------------------------
+#
+# Saving is not applying. Every field the console pill colours — bind, port, scheme, access mode,
+# allowed CIDRs — is written by a Save and only reaches nginx at Apply, while the OLD listener
+# keeps serving the OLD policy. Rendering the saved policy against that live listener turned
+# "I intend to lock this down" into "it is locked down".
+
+def _console_apply(tmp_path, *, port=8443, listen_port=None, **ws):
+    """Apply an exposed console config and return the service, with the applied snapshot recorded.
+    The live listener is 0.0.0.0:`listen_port or port`, so the apply's listener gate passes."""
+    from lhpc.core import config as cfgmod
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    paths = svc0._paths
+    fields = {"access_mode": "no-auth", "allowed_cidrs": ["192.168.1.0/24"], "scheme": "https"}
+    cfgmod.save_webserver_config(paths, bind="0.0.0.0", port=port, remote_exposed=True,
+                                 **{**fields, **ws})
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+    fake = FakeSystem(commands={
+        ("nginx", "-v"): CommandResult(0, "", "nginx/1.24"),
+        ("nginx", "-t", "-c", _staged(paths)): CommandResult(0, "", "successful"),
+        ("nginx", "-s", "reload", "-c", _conf(paths)): CommandResult(0, "", ""),
+    }, listeners=[Listener("ipv4", "0.0.0.0", listen_port or port, 1)])
+    svc = ControllerService(system=fake.system, paths=paths)
+    assert svc.webserver_apply().ok
+    return svc
+
+
+def _sec(svc):
+    return svc.webserver_monitor().data["posture"]["sec_level"]
+
+
+def test_apply_records_the_activated_policy_and_verify_never_advances_it(tmp_path):
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path)
+    applied = webserver.read_applied(svc._paths)["console"]
+    assert applied["access_mode"] == "no-auth" and applied["port"] == 8443
+    assert applied["scheme"] == "https" and applied["allowed_cidrs"] == ["192.168.1.0/24"]
+    # Saving a stronger policy and VERIFYING it must not move the applied record: verify proves
+    # the desired config is VALID, which says nothing about nginx having loaded it.
+    cfgmod.save_webserver_config(svc._paths, access_mode="auth-everywhere")
+    svc._invalidate_config()
+    svc.webserver_verify()
+    assert webserver.read_applied(svc._paths)["console"]["access_mode"] == "no-auth"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("access_mode", "auth-everywhere"),          # stronger auth, not applied
+    ("scheme", "http"),                          # (http over a live https listener)
+    ("allowed_cidrs", ["192.168.1.5/32"]),       # narrower sources, not applied
+    ("bind", "127.0.0.1"),                       # narrower bind, not applied
+])
+def test_a_saved_narrowing_cannot_improve_the_live_console(tmp_path, field, value):
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path)
+    assert _sec(svc) == "bad"                    # applied: exposed + no-auth
+    cfgmod.save_webserver_config(svc._paths, **{field: value})
+    svc._invalidate_config()
+    svc.webserver_verify()                       # even an explicit verify changes nothing
+    assert _sec(svc) == "bad", f"saving {field} improved a listener nginx never rebound"
+
+
+def test_saving_https_over_a_live_http_console_does_not_improve_it(tmp_path):
+    # `http` cannot do client-cert auth, so a cleartext console is necessarily no-auth. Save the
+    # WHOLE green policy at once (https + auth-everywhere): desired is now impeccable and the live
+    # listener is still cleartext and unauthenticated, which is what the pill must say.
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path, scheme="http")
+    assert _sec(svc) == "bad" and svc.webserver_monitor().data["posture"]["scheme"] == "http"
+    cfgmod.save_webserver_config(svc._paths, scheme="https", access_mode="auth-everywhere")
+    svc._invalidate_config()
+    post = svc.webserver_monitor().data["posture"]
+    assert post["sec_level"] == "bad"            # the live listener still speaks cleartext http
+    assert post["scheme"] == "http"              # ...and the pill names the APPLIED scheme
+
+
+def test_only_a_successful_apply_lets_the_console_posture_improve(tmp_path):
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, access_mode="auth-everywhere")
+    svc._invalidate_config()
+    assert _sec(svc) == "bad"
+    assert svc.webserver_apply().ok               # NOW it is really loaded
+    assert webserver.read_applied(svc._paths)["console"]["access_mode"] == "auth-everywhere"
+    assert _sec(svc) == "ok"
+
+
+def test_a_saved_port_move_does_not_lose_the_still_live_old_listener(tmp_path):
+    # The worst shape of the same bug: after saving a new port the monitor probed ONLY the new
+    # port, found nothing, and reported "absent" — the old exposed no-auth listener vanished from
+    # the panel entirely instead of being represented as the exposure it still is.
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path, port=8443)
+    cfgmod.save_webserver_config(svc._paths, port=8500, bind="127.0.0.1", remote_exposed=False)
+    svc._invalidate_config()
+    view = svc.webserver_monitor().data
+    assert view["live_scope"] == "exposed"        # NOT "absent"
+    assert view["live_port"] == 8443              # the port that is actually bound
+    assert view["posture"]["sec_level"] == "bad"  # still an unauthenticated remote console
+
+
+def test_a_live_exposed_console_with_no_applied_record_is_never_green(tmp_path):
+    # Missing / old / malformed applied snapshot means the protecting policy is UNKNOWN. An
+    # unknown policy behind a live exposed listener must fail closed, not inherit whatever the
+    # desired config happens to say.
+    from lhpc.core import config as cfgmod
+    svc = _console_apply(tmp_path, access_mode="auth-everywhere")
+    assert _sec(svc) == "ok"
+    ev = webserver.read_evidence(svc._paths)
+    webserver.write_evidence(svc._paths, {**{k: v for k, v in ev.items() if k != "schema"},
+                                          "applied_snapshot": {"console": "not-a-dict"}})
+    assert webserver.read_applied(svc._paths) == {}      # malformed => unknown
+    assert _sec(svc) == "bad"
+    cfgmod.save_webserver_config(svc._paths, allowed_cidrs=["192.168.1.0/24"])
+    svc._invalidate_config()
+    assert _sec(svc) == "bad"                            # desired cannot fill the gap
+
+
+def test_a_live_loopback_console_is_still_local(tmp_path):
+    # The containment rule must not turn every unapplied change red: a loopback socket cannot be
+    # reached off-box whatever any policy says.
+    from lhpc.core import config as cfgmod
+    svc0 = _svc(tmp_path)
+    svc0.webserver_init(dns_sans=["pi.local"])
+    fake = FakeSystem(listeners=[Listener("ipv4", "127.0.0.1", 8443, 1)])
+    svc = ControllerService(system=fake.system, paths=svc0._paths)
+    assert svc.webserver_monitor().data["live_scope"] == "loopback"
+    assert _sec(svc) == "ok"
+    cfgmod.save_webserver_config(svc._paths, access_mode="no-auth")   # saved, not applied
+    svc._invalidate_config()
+    assert _sec(svc) == "ok"                     # loopback: still local, still green

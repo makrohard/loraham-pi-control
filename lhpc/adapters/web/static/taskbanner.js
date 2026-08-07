@@ -57,7 +57,9 @@
       var hint = row.querySelector(".ti-hint");
       if (hint) {                                   // defensive: a server row may omit it
         hint.textContent = t.hint || "";
-        hint.style.display = t.hint ? "" : "none";
+        // Toggle the SAME class the server renders, not an inline style: one mechanism, and
+        // nothing here re-introduces the style attribute the CSP blocks.
+        hint.classList.toggle("is-empty", !t.hint);
       }
       row.querySelector(".ti-view").setAttribute("href", t.href || "#");
 

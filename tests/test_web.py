@@ -746,6 +746,44 @@ def test_clear_stale_interactive_survives_unlink_io_error(tmp_path, monkeypatch)
     svc.dismiss_interactive("chat")                 # must NOT raise
 
 
+def _overview_433(tmp_path):
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    sysm = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+                                    b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
+    svc = ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))
+    return svc
+
+
+def test_interactive_command_block_survives_an_empty_band_marker(tmp_path):
+    # REGRESSION (adf433e "gui polish"): the dashboard gated an interactive app's command block
+    # on `mark_band in usable_bands`. A stack that is NOT band-switchable (chat) marks an EMPTY
+    # band — the start path passes cfg_band, which is "" there — and "" is never in usable_bands,
+    # so chat silently fell back into the plain start dropdown with no copy-paste block.
+    # Every pre-existing test wrote an explicit "433", which is why none of them caught it.
+    svc = _overview_433(tmp_path)
+    svc.mark_interactive("chat", "")                 # exactly what the start path writes
+    row = next(r for r in svc.radio_overview() if r["band"] == "433")
+    assert "chat" in [s["id"] for s in row["interactive"]], \
+        "an interactive app with a marker must render its command block, not vanish"
+    assert "chat" not in [s["id"] for s in row["startable"]], \
+        "it must not ALSO sit in the start dropdown"
+
+
+def test_interactive_without_a_marker_stays_in_the_dropdown(tmp_path):
+    # The OTHER half of the same gate, and the reason the fix may not be a bare
+    # `mark_band or min(sbands)`: interactive_band() returns None for "no marker" and "" for
+    # "marked but band-less". None is falsy too, so collapsing them would give every
+    # never-started interactive stack a permanent command card and drop it from the dropdown.
+    svc = _overview_433(tmp_path)                    # no mark_interactive call at all
+    row = next(r for r in svc.radio_overview() if r["band"] == "433")
+    assert "chat" in [s["id"] for s in row["startable"]], \
+        "a never-started interactive stack belongs in the dropdown"
+    assert "chat" not in [s["id"] for s in row["interactive"]], \
+        "it must NOT render a command block before the operator ever ran it"
+
+
 def test_daemon_start_stop_confirm_shows_band(tmp_path):
     # The daemon START and STOP confirm dialog must include the band (e.g. "start daemon 433").
     # Make the daemon installed+built so start reaches the confirm page (not the redirect guard).
@@ -2238,7 +2276,7 @@ def test_controller_system_deps_panel(tmp_path, monkeypatch):
     import shutil
     real = shutil.which
     monkeypatch.setattr(shutil, "which",
-                        lambda c: None if c in ("git", "nginx") else real(c))
+                        lambda c, *a, **k: None if c in ("git", "nginx") else real(c, *a, **k))
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     assert parse(body).by_id("controller-system-deps") is not None
     i = body.index('id="controller-system-deps"')

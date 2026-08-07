@@ -5,12 +5,17 @@
 {% block body_class %}{% if radio_mode != 'both' %}dash-narrow{% endif %}{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
-  {% if welcome and welcome.fresh %}
+  {% if welcome and welcome.fresh and not welcome_dismissed %}
   <div class="depnote depnote-ok">
     <strong>Welcome!</strong> Nothing is installed yet — set up all LoRaHAM stacks in one
     guided run:
     <a href="{{ url_for('auto_install_page') }}"><button type="button">Install and Build
       all Stacks</button></a>
+    {# Onboarding hint, not a fault: dismissable so it does not sit on the dashboard forever. #}
+    <form method="post" action="{{ url_for('welcome_dismiss') }}" class="act dismiss" title="Dismiss">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <button type="submit" aria-label="Dismiss the welcome note">&times;</button>
+    </form>
   </div>
   {% elif welcome and not welcome.fresh %}
   <div class="depnote depnote-warn">
@@ -251,7 +256,7 @@
                     <span class="badge badge-stopped">not running</span>
                     <form method="post" action="{{ url_for('interactive_dismiss', stack_id=s.id) }}" class="act dismiss" title="Dismiss">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                      <button type="submit">&times;</button>
+                      <button type="submit" aria-label="Dismiss {{ s.name }}">&times;</button>
                     </form></p>
                   {% if s.blocker %}
                     {% call banner('warn', url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id) %}{{ s.name }} is <strong>{{ s.blocker }}</strong>{% endcall %}
@@ -335,6 +340,8 @@
                state — the listener is DOWN, so it is neither a working address nor 'local only'. #}
             {% if w.live_scope == 'absent' %}
               <span class="pill pill-warn wsaddr" title="No process is listening on this port — the service is down; check its logs or restart it.">:{{ w.port }} · listener absent</span>
+            {% elif w.live_scope == 'unverified' %}
+              <span class="pill pill-warn wsaddr" title="The service is running, but its live port could not be read from /proc — this is the configured port and may not be the one it is listening on. Restart the service, or check its logs.">:{{ w.port }} · port unverified</span>
             {% elif w.live_scope == 'exposed' or peer_loopback %}
               <span class="pill pill-{{ w.exposure.level }} wsaddr" title="No authentication — the colour shows who may connect. Copy this address into the client app.">{{ w.addr }} · {{ w.exposure.label }}</span>
             {% else %}

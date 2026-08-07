@@ -413,19 +413,141 @@ class FirewallOpsMixin:
 
     # ---- consolidated security pill (dashboard summary) -------------------------------------
 
-    def security_pill(self, webservers=None) -> dict:
-        """ONE pill for the collapsed Webserver box, worst-case across effective external
-        exposure. GREEN: nothing no-auth is externally reachable without live-proven firewall
-        containment. YELLOW: a no-auth port is reachable but LAN-CIDR-scoped with the firewall
-        live-verified, or a state is declared-but-unattested. RED: pwless-remote exposure, or
-        an unauth 0.0.0.0 port whose only containment (the firewall) is not live-proven.
+    # ---- presentation: does the VERIFIED firewall contain a LIVE listener? --------------------
 
-        Reliance on filtering counts ONLY when live verification is current and matching —
-        declared/persistent alone never turns the pill green (an lhpc allow is not proven
-        reachability, and a declared drop is not proven live)."""
+    @staticmethod
+    def listener_scopes(port, listeners) -> list:
+        """Full scopes of the LIVE sockets on `port`, from /proc evidence. `[]` = nothing
+        listening. The live socket — not saved config — is what decides reachability: a
+        Start-without-saving, an out-of-band edit or plain drift can all leave the running
+        process on a different address than the stored parameter says."""
+        out = []
+        for lsn in listeners or []:
+            if getattr(lsn, "port", None) != port:
+                continue
+            ip = getattr(lsn, "ip", "")
+            out.append({"proto": "tcp", "family": getattr(lsn, "family", ""),
+                        "addr": "*" if ip in ("0.0.0.0", "::", "") else ip, "port": port})
+        return out
+
+    @staticmethod
+    def scope_is_loopback(scope) -> bool:
+        """Loopback ONLY for a concrete loopback address. A wildcard (`0.0.0.0`/`::`) is never
+        loopback — and `::` in particular accepts IPv4 too under the default bindv6only=0."""
+        import ipaddress as _ip
+        addr = (scope or {}).get("addr", "")
+        if addr in ("*", ""):
+            return False
+        try:
+            return _ip.ip_address(addr).is_loopback
+        except ValueError:
+            return False                    # unparseable => never claim it is safe
+
+    @staticmethod
+    def _cidrs_restrict(cidrs) -> bool:
+        """True when the allow-list genuinely narrows the source. Empty = no restriction, and a
+        default route (prefixlen 0) is the whole internet."""
+        from .webserver import cidr_set_is_public
+        if not cidrs:
+            return False
+        for c in cidrs:                     # one unreadable entry => claim nothing
+            try:
+                _ip_check = str(c).strip()
+                import ipaddress as _ip
+                _ip.ip_network(_ip_check, strict=False)
+            except (ValueError, TypeError):
+                return False
+        # SET coverage, not per-entry: `0.0.0.0/1 + 128.0.0.0/1` is the whole internet.
+        return not cidr_set_is_public(cidrs)
+
+    def firewall_containment(self, scopes, status=None) -> str:
+        """`denied` | `restricted` | `open` | `unknown` for a set of live listener scopes.
+
+        `unknown` means "prove nothing" — the caller keeps its conservative colour. It is the
+        answer whenever the firewall is absent, unverified, TRANSITIONAL (a verified transitional
+        ruleset may still carry older transition_allow scopes that widen reachability), or when
+        no candidate rule fully covers the listener.
+
+        Coverage uses `scope_covers` (directional), never `_scopes_overlap` — overlap would let
+        an IPv4-only rule vouch for a dual listener.
+
+        MODE MATTERS. secure-default ends in DROP, so a CIDR allow really is a restriction. In
+        compatibility the chain policy is ACCEPT and those CIDR allows are not installed as
+        restrictions at all; only the explicit early DROP for an unselected endpoint contains
+        anything there."""
+        from .firewall import _scopes_overlap, scope_covers
+        if status is not None:
+            st = status
+        else:
+            try:
+                st = self.firewall_status()
+            except Exception:
+                return "unknown"            # never fail a render over a firewall read
+        if not (st.get("installed") and st.get("config_ok") and st.get("live_ok")):
+            return "unknown"
+        if st.get("transitional"):
+            return "unknown"
+        cand = st.get("candidate") or {}
+        if not scopes:
+            return "unknown"
+        compat = cand.get("mode") == "compatibility"
+        endpoints = cand.get("endpoints") or []
+        ingress = cand.get("proxy_ingress") or []
+        extra = cand.get("extra_allow") or []
+
+        verdicts = []
+        for sc in scopes:
+            hit = None
+            for ep in endpoints:
+                if not scope_covers(ep, sc):
+                    continue
+                if not ep.get("selected"):
+                    # `selected=False` is NOT universally an early DROP. Only a deny_default
+                    # endpoint is dropped ahead of the accepts; in secure-default an ORDINARY
+                    # unselected endpoint just falls through to the chain policy, where a legal
+                    # extra_allow may ACCEPT it first. Compatibility installs the explicit drop
+                    # for any unselected endpoint. Claim `denied` only where it is provable.
+                    hit = "denied" if (compat or ep.get("deny_default")) else "unknown"
+                    break
+                hit = "restricted" if (not compat and self._cidrs_restrict(ep.get("allow_cidrs"))) \
+                    else "open"
+            if hit is None:
+                for ing in ingress:
+                    if not scope_covers(ing, sc):
+                        continue
+                    hit = "restricted" if (not compat
+                                           and self._cidrs_restrict(ing.get("allow_cidrs"))) \
+                        else "open"
+                    break
+            if hit is None:
+                return "unknown"            # nothing covers this live socket
+            # extra_allow may overlap an ordinary endpoint and widen it; validation only stops it
+            # bypassing a deny-default. A full early DROP still wins, but a claimed RESTRICTION
+            # cannot survive an overlapping wider allow — refuse to compute the union here.
+            if hit == "restricted" and any(_scopes_overlap(x, sc) for x in extra):
+                hit = "unknown"
+            verdicts.append(hit)
+        if "unknown" in verdicts:
+            return "unknown"
+        if all(v == "denied" for v in verdicts):
+            return "denied"
+        if "open" in verdicts:
+            return "open"
+        return "restricted"
+
+    def security_pill(self, webservers=None) -> dict:
+        """ONE pill for the collapsed Webserver box: the WORST of the rows' ALREADY-FINAL levels.
+
+        It only aggregates. Every row's colour — including any firewall improvement — is decided
+        once, where the row is built (`_dashboard_port_row` / `posture`), against the LIVE listener
+        and the verified firewall. This function must not re-read or re-interpret firewall state:
+        a second interpretation here would miss the transitional guard, disagree with
+        compatibility-mode semantics, and give the dashboard two sources of security truth.
+
+        GREEN: nothing unauthenticated is reachable beyond what the verified firewall provably
+        contains. YELLOW: something no-auth is reachable but restricted. RED: unauthenticated
+        exposure whose containment is absent or unproven."""
         rows = webservers if webservers is not None else self.dashboard_webservers()
-        fw = self.firewall_status()
-        fw_verified = bool(fw.get("live_ok")) and bool(fw.get("config_ok"))
         worst = "ok"
 
         def bump(level):
@@ -434,27 +556,51 @@ class FirewallOpsMixin:
             if order[level] > order[worst]:
                 worst = level
 
+        reasons: set = set()
         for w in rows:
             if w.get("kind") == "port":
+                if w.get("live_scope") == "absent":
+                    # NOTHING is listening on it. Its colour is desired-config information for the
+                    # row, not reachability, so it must not bump the box: a stopped helper whose
+                    # saved allow-list is LAN-shaped otherwise made the whole dashboard claim
+                    # "Exposure present". Clearing only `warn_reason` was not enough — `worst` was
+                    # already bumped from the level. UNVERIFIED is deliberately NOT absent: there
+                    # a listener does exist and its identity is what is in doubt.
+                    continue
                 lvl = w.get("exposure", {}).get("level", "bad")
                 if lvl == "ok":
-                    continue                          # loopback — safe
-                # CONSERVATIVE (P2-3): NEVER upgrade an externally-exposed port to green from
-                # firewall evidence. Enforcement is scoped by proto/family/address/port(+CIDR),
-                # so a drop on one scope does not prove a same-NUMBERED listener on a different
-                # address/family is filtered. The listener keeps its own exposure colour; the
-                # verified firewall state is reported SEPARATELY on the dashboard Firewall line.
+                    continue                          # loopback, or provably firewalled — safe
+                # The row's level is FINAL. The old rule here refused to improve a port from
+                # firewall evidence because a same-NUMBERED listener on another address/family is
+                # not proven filtered — that reasoning is now enforced properly by the directional
+                # `scope_covers` where the row is built, so there is nothing to re-check. (It was
+                # always a comment, never an upgrade algorithm; do not go looking for one.)
                 bump(lvl)
+                if lvl == "warn":
+                    # Use the reason the ROW resolved. A port row is also yellow for a LAN-shaped
+                    # allow-list or a live wildcard with no verdict — asserting a restriction for
+                    # those is the very over-claim this aggregation exists to prevent.
+                    reasons.add(w.get("warn_reason") or "review")
             elif w.get("posture"):
                 sec = w["posture"].get("sec_level", w["posture"].get("auth_level", "ok"))
                 if sec in ("warn", "bad"):
                     bump(sec)
+                if sec == "warn":
+                    reasons.add(w["posture"].get("warn_reason") or "review")
         if worst == "ok":
-            label, title = "secure", "No unauthenticated port is externally reachable."
+            # NOT "nothing is reachable": a port the verified firewall provably denies also reads
+            # green, and it is still bound. The claim is about unauthenticated REACHABILITY.
+            label, title = "secure", "No unauthenticated port is reachable from outside this box."
         elif worst == "warn":
-            label = "lan-exposed" if fw_verified else "review"
-            title = ("A no-auth port is reachable but LAN-scoped and firewall-filtered."
-                     if fw_verified else "Exposure present — verify the firewall / access mode.")
+            # Only claim restricted-source reachability when EVERY yellow says so. A mixed set
+            # (or any other cause) is a generic review — the old text asserted a no-auth
+            # restricted port for warnings that were nothing of the kind.
+            if reasons == {"restricted_noauth"}:
+                label = "lan-exposed"
+                title = "A no-auth port is reachable, but restricted to allowed sources."
+            else:
+                label = "review"
+                title = "Exposure present — verify the firewall / access mode."
         else:
             label = "exposed"
             title = ("An unauthenticated port is reachable beyond your LAN, or its only "

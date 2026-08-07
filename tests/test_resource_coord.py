@@ -144,3 +144,24 @@ def test_nested_same_thread_reenters_without_self_deadlock(tmp_path):
             assert svc._held_counts().get("lifecycle.meshtastic", 0) >= 2
         assert svc._held_counts().get("lifecycle.meshtastic", 0) >= 1   # outer still holds
     assert not svc._held_counts()                                  # all released
+
+
+def test_daemon_socket_lock_is_band_scoped_like_the_radio_lock(tmp_path):
+    # The daemon is a PROVIDER of BOTH loraham.daemon-socket.433 and .868, and it sits in every
+    # daemon-backed stack's run order. Its provider claims used to be added verbatim, so an
+    # 868-only stack (meshcore) locked the 433 socket and a 433-only stack (meshcom) locked the
+    # 868 one — and the two then serialized against each other across bands neither touches.
+    # The radio key was already band-scoped; the socket key must follow the same rule.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    keys = {sid: set(svc._operation_resource_keys(sid, op="start"))
+            for sid in ("meshcore", "meshcom", "kiss")}
+    assert "loraham.daemon-socket.868" in keys["meshcore"]
+    assert "loraham.daemon-socket.433" not in keys["meshcore"], "868-only stack locked 433"
+    for sid in ("meshcom", "kiss"):                      # both are 433
+        assert "loraham.daemon-socket.433" in keys[sid]
+        assert "loraham.daemon-socket.868" not in keys[sid], f"{sid} (433) locked 868"
+    # the radio key stays band-scoped, and non-band keys are untouched
+    assert "loraham.radio.868" in keys["meshcore"] and "loraham.radio.433" not in keys["meshcore"]
+    assert "tcp.port.5000" in keys["meshcore"] and "tcp.port.8001" in keys["kiss"]

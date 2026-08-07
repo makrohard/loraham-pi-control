@@ -842,6 +842,47 @@ class MaintenanceOpsMixin:
         return jobresult.terminalize(self._paths, run_id, attempt_id, "failed",
                                      detail="recovered — startup was unverified")
 
+    def _welcome_note_marker(self):
+        return self._paths.under("state", "welcome-note.dismissed")
+
+    def welcome_note_dismissed(self) -> bool:
+        """True once the operator dismissed the "nothing installed yet" welcome banner. Plain
+        marker, no signature: the banner is an onboarding hint, and an operator who has seen it
+        does not need it again. It reappears only if the marker is removed."""
+        from . import runtime_fs
+        try:
+            runtime_fs.read_text(self._paths, self._welcome_note_marker())
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def dismiss_welcome_note(self) -> bool:
+        return self._safe_marker_write(self._welcome_note_marker(), "1")
+
+    def _dep_note_marker(self):
+        return self._paths.under("state", "dep-note.dismissed")
+
+    @staticmethod
+    def dep_note_signature(summary) -> str:
+        """What the operator actually dismissed: the optional/GUI shortfall, by count. Dismissing
+        records this; a LARGER shortfall later does not match and the note returns. So "I know,
+        it's a headless box" is remembered, while a genuinely new missing dependency is not
+        silently swallowed."""
+        return (f"o{int((summary or {}).get('optional_missing') or 0)}"
+                f":g{int((summary or {}).get('gui_missing') or 0)}")
+
+    def dep_note_dismissed(self, summary) -> bool:
+        """True when the CURRENT optional/GUI shortfall is the one already dismissed."""
+        from . import runtime_fs
+        try:
+            return (runtime_fs.read_text(self._paths, self._dep_note_marker()).strip()
+                    == self.dep_note_signature(summary))
+        except (OSError, ValueError):
+            return False                       # missing/unreadable/symlinked -> show the note
+
+    def dismiss_dep_note(self, summary) -> bool:
+        return self._safe_marker_write(self._dep_note_marker(), self.dep_note_signature(summary))
+
     def dependency_overview(self) -> dict:
         """Read-only, GET-safe aggregation for the Dependency Overview page + Stacks banner: LHPC's own
         dependencies (including the web-server nginx dep) plus every INSTALLED stack's, each normalized to

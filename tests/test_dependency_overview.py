@@ -231,3 +231,19 @@ def test_stacks_banner_yellow_when_restart_pending(tmp_path):
     assert "depnote depnote-warn" in body and 'href="/dependencies"' in body   # proactive yellow banner
     assert "restart pending" in body
     assert "mandatory dependenc" not in body                                   # NOT counted mandatory-missing
+
+
+def test_optional_dependency_note_is_dismissable_and_returns_when_it_grows(tmp_path):
+    # On a headless box "GUI deps not installed" is EXPECTED and permanent, so the note must be
+    # dismissable or it sits on the dashboard forever. But dismissing records the CURRENT
+    # shortfall: a bigger one later is a different fact and must surface again.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    small = {"optional_missing": 1, "gui_missing": 2}
+    assert svc.dep_note_dismissed(small) is False          # nothing dismissed yet -> shown
+    assert svc.dismiss_dep_note(small) is True
+    assert svc.dep_note_dismissed(small) is True           # same shortfall -> stays hidden
+    assert svc.dep_note_dismissed({"optional_missing": 2, "gui_missing": 2}) is False
+    assert svc.dep_note_dismissed({"optional_missing": 1, "gui_missing": 3}) is False

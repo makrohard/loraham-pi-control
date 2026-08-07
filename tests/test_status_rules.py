@@ -251,3 +251,168 @@ def test_gui_unavailable_overlay_leaves_gui_capable_box_alone(tmp_path, monkeypa
     snap, ss = _meshcore_snapshot(svc)
     svc._overlay_gui_unavailable(snap)
     assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_INSTALLED
+
+
+# ---- licensed TX overlay -----------------------------------------------------------------
+
+def _tx_snap(tmp_path):
+    """A snapshot with every component's run/tx state pinned, ready for the overlay."""
+    from lhpc.core.services import ControllerService
+    from lhpc.core.model import TxState
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for st in ss.components.values():
+            st.run_state, st.tx_state = RunState.STOPPED, TxState.DISABLED
+    return svc, snap
+
+
+def _st(snap, cid):
+    return next(ss.components[cid] for ss in snap.stacks if cid in ss.components)
+
+
+_REAL_BRIDGE = ["build/meshcom-loraham-bridge", "--backend", "loraham", "--port", "7000"]
+_EXTRADIO = ["/x/qemu-system-xtensa", "-drive",
+             "file=/p/.pio/build/qemu-headless-extradio-gpsd/flash.bin,if=mtd"]
+_DAEMON_433 = ["/opt/loraham_daemon", "--radio", "433", "--tx-mode", "MANAGED"]
+
+
+def _meshcom_tx(tmp_path, *, bridge=_REAL_BRIDGE, qemu=_EXTRADIO, daemon=_DAEMON_433):
+    """MeshCom's TX state after the overlay, with each link of the RF chain supplied or withheld.
+
+    `None` for a link means that component is NOT running (no PID, no argv) — the chain is
+    incomplete, which is a different fact from a component running with a no-RF argv.
+    """
+    from lhpc.core.model import TxState
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    live = {cid: argv for cid, argv in (("meshcom-bridge", bridge), ("meshcom-qemu", qemu),
+                                        ("loraham-daemon", daemon)) if argv is not None}
+    pids = {cid: 101 + i for i, cid in enumerate(sorted(live))}
+    sysm = FakeSystem(cmdlines_data={pids[cid]: live[cid] for cid in live}).system
+    svc = ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for st in ss.components.values():
+            st.run_state, st.tx_state = RunState.STOPPED, TxState.DISABLED
+    for cid in live:
+        st = _st(snap, cid)
+        st.run_state, st.tx_state, st.pids = RunState.RUNNING, TxState.UNKNOWN, [pids[cid]]
+    svc._overlay_licensed_tx_enabled(snap)
+    # The STACK's verdict: did any live MeshCom component come out claiming TX? A withheld link
+    # simply stays STOPPED/DISABLED, so asking one fixed component would silently pass.
+    upgraded = [cid for cid in live if _st(snap, cid).tx_state is TxState.ENABLED]
+    return TxState.ENABLED if upgraded else TxState.UNKNOWN
+
+
+def test_meshcom_tx_enabled_needs_the_whole_live_rf_chain(tmp_path):
+    # TxState.ENABLED had ZERO producers: status.py emits only DISABLED/UNKNOWN, so meshcom read
+    # "tx unknown" while the daemon's own counters showed completed transmissions. But "licensed +
+    # running" is NOT capability: the emulated node has no radio of its own, so ENABLED demands the
+    # COMPLETE live chain — bridge on the real backend, a QEMU guest booted from an extradio image,
+    # and the daemon that actually owns the 433 radio. Any missing link is UNKNOWN, not ENABLED.
+    from lhpc.core.model import TxState
+    assert _meshcom_tx(tmp_path) is TxState.ENABLED
+    assert _meshcom_tx(tmp_path, qemu=None) is TxState.UNKNOWN        # bridge alone
+    assert _meshcom_tx(tmp_path, bridge=None) is TxState.UNKNOWN      # QEMU alone
+    assert _meshcom_tx(tmp_path, daemon=None) is TxState.UNKNOWN      # no radio behind it
+
+
+def test_meshcom_tx_rejects_every_no_rf_argv(tmp_path):
+    # Each of these is a LIVE, complete-looking chain that still cannot transmit. The verdict is
+    # read from argv TOKENS and from the `-drive` specification — never from a substring of the
+    # joined command line, which is what let a stray `qemu-headless-extradio` token vouch for a
+    # guest booting a plain image.
+    from lhpc.core.model import TxState
+    no_rf = {
+        "backend absent (upstream defaults to fake)": ["build/meshcom-loraham-bridge",
+                                                       "--port", "7000"],
+        "fake backend, space form": ["build/meshcom-loraham-bridge", "--backend", "fake"],
+        "fake backend, equals form": ["build/meshcom-loraham-bridge", "--backend=fake"],
+        "receive only": [*_REAL_BRIDGE, "--rx-only"],
+    }
+    for why, argv in no_rf.items():
+        assert _meshcom_tx(tmp_path, bridge=argv) is TxState.UNKNOWN, why
+
+    plain = ["/x/qemu-system-xtensa", "-drive",
+             "file=/p/.pio/build/qemu-headless-gpsd/flash.bin,if=mtd"]
+    # The WORD present, the IMAGE plain: a log path (or an --env label) carrying the string must
+    # not outvote the drive the guest actually boots from.
+    word_only = ["/x/qemu-system-xtensa", "-serial",
+                 "file:/var/log/qemu-headless-extradio-gpsd.log", "-drive",
+                 "file=/p/.pio/build/qemu-headless-gpsd/flash.bin,if=mtd"]
+    assert _meshcom_tx(tmp_path, qemu=plain) is TxState.UNKNOWN
+    assert _meshcom_tx(tmp_path, qemu=word_only) is TxState.UNKNOWN
+    # ... and the equals spelling of -drive still proves a genuine extradio image.
+    assert _meshcom_tx(tmp_path, qemu=["/x/qemu-system-xtensa",
+                                       "-drive=file=/p/.pio/build/qemu-headless-extradio/flash.bin"]
+                       ) is TxState.ENABLED
+
+
+def test_tx_overlay_needs_a_live_daemon_for_a_daemon_backed_client(tmp_path):
+    # The daemon owns the radio. A licensed client that `depends_on` it cannot be transmitting
+    # while it is down, however healthy the client's own process looks — and a daemon serving only
+    # 868 is no radio for a 433 client.
+    from lhpc.core.model import TxState
+    assert _meshcom_tx(tmp_path, daemon=["/opt/loraham_daemon", "--radio", "868"]) is TxState.UNKNOWN
+    assert _meshcom_tx(tmp_path, daemon=["/opt/loraham_daemon", "--radio=433"]) is TxState.ENABLED
+
+
+def test_tx_overlay_never_upgrades_disabled(tmp_path):
+    # DISABLED is authoritative — it means "not tx_capable" or "not running". Upgrading it would
+    # claim TX for a component the prober already ruled out.
+    from lhpc.core.model import TxState
+    svc, snap = _tx_snap(tmp_path)
+    st = _st(snap, "meshcom-bridge")
+    st.run_state, st.tx_state = RunState.RUNNING, TxState.DISABLED
+    svc._overlay_licensed_tx_enabled(snap)
+    assert _st(snap, "meshcom-bridge").tx_state is TxState.DISABLED
+
+
+def test_tx_overlay_leaves_daemon_and_unlicensed_stacks_unknown(tmp_path):
+    # The daemon is exempt in _identity_field; meshtastic/meshcore are "unlicensed" (node name).
+    # Neither may gain ENABLED from a licensed-stack inference.
+    from lhpc.core.model import TxState
+    svc, snap = _tx_snap(tmp_path)
+    for cid in ("loraham-daemon", "meshtastic", "meshcore-pi"):
+        s = _st(snap, cid)
+        s.run_state, s.tx_state = RunState.RUNNING, TxState.UNKNOWN
+    svc._overlay_licensed_tx_enabled(snap)
+    for cid in ("loraham-daemon", "meshtastic", "meshcore-pi"):
+        assert _st(snap, cid).tx_state is TxState.UNKNOWN, cid
+
+
+def test_tx_overlay_ignores_stopped_licensed_components(tmp_path):
+    from lhpc.core.model import TxState
+    svc, snap = _tx_snap(tmp_path)
+    st = _st(snap, "loraham-chat")                        # chat == licensed, but stopped
+    st.run_state, st.tx_state = RunState.STOPPED, TxState.UNKNOWN
+    svc._overlay_licensed_tx_enabled(snap)
+    assert _st(snap, "loraham-chat").tx_state is TxState.UNKNOWN
+
+
+def test_tx_overlay_is_fail_soft(tmp_path):
+    # Fail-soft like the sibling overlays: a broken identity lookup must not take the whole
+    # snapshot (and every caller composing it) down with it.
+    from lhpc.core.model import TxState
+    from lhpc.core.services import ControllerService
+    svc, snap = _tx_snap(tmp_path)
+    st = _st(snap, "meshcom-bridge")
+    st.run_state, st.tx_state = RunState.RUNNING, TxState.UNKNOWN
+    def boom(self, target):
+        raise RuntimeError("identity layer unavailable")
+    ControllerService._identity_field = boom
+    try:
+        svc._overlay_licensed_tx_enabled(snap)            # must NOT raise
+    finally:
+        del ControllerService._identity_field
+    assert _st(snap, "meshcom-bridge").tx_state is TxState.UNKNOWN
+
+
+def test_tx_overlay_needs_readable_argv_for_every_link(tmp_path):
+    # No readable argv is NOT "no negative marker found" — it is no evidence at all, and the
+    # overlay must read UNKNOWN rather than green a chain it cannot see.
+    from lhpc.core.model import TxState
+    assert _meshcom_tx(tmp_path, bridge=[], qemu=[]) is TxState.UNKNOWN
+    assert _meshcom_tx(tmp_path, qemu=[]) is TxState.UNKNOWN

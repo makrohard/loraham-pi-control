@@ -1515,6 +1515,11 @@ main = "meshcom-qemu"
 
   [[stack.component]]
   id = "meshcom-gps-relay"
+  # TEST FACILITY: replays a checked-in synthetic NMEA file. `optional` already keeps it out of
+  # auto-install; `test_fixture` additionally keeps it off the operator's start choices, where it
+  # sat beside the real feed and could not stand in for it (docs/gps.md) — position comes from the
+  # GLOBAL source via `use_gps`. Run it deliberately: `lhpc stack start meshcom-gps-relay`.
+  test_fixture = true
   readiness = "process"
   name = "MeshCom GPS relay (fixture)"
   kind = "service"
@@ -2031,7 +2036,11 @@ main = "meshcore-pi"
   # In-tree venv interpreter is the build artifact (honest `is_built`).
   bin = ".venv/bin/python"
   run_cwd = "{source}"
-  run_env = { DISPLAY = "@env:DISPLAY=:0" }
+  # MESHCORE_NM_HOME: the app creates its state dir at IMPORT time, and under
+  # ProtectHome=read-only that write fails (EROFS) before the GUI is built — the
+  # unit's `-%h/.meshcore_nm` entry is OPTIONAL, so a dir that does not exist yet is
+  # never made writable. Same fix as Sideband's KIVY_HOME: keep the state in-root.
+  run_env = { DISPLAY = "@env:DISPLAY=:0", MESHCORE_NM_HOME = "{runtime}/state/meshcore-nm" }
   readiness = "process"
   note = "Desktop GUI (needs a display/X server on the Pi)."
   start_note = "Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"
@@ -2054,8 +2063,8 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-node-manager"
-    pin_commit = "03b330e4eb5fc9030d08bcc360aa03eccd636539"
-    pin_tag = "v1.2.0-14-g03b330e"
+    pin_commit = "6d19a3d0a0c7f386463b14181aaa82b254ec07e4"
+    pin_tag = "6d19a3d"
     remote = "https://github.com/makrohard/meshcore-node-manager.git"
     branch = "meshcore-api-compat"
 

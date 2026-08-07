@@ -325,8 +325,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     ls = w.get("live_scope")
                     if ls == "exposed":
                         addr = f"{_url_host(request.host or '') or '0.0.0.0'}:{w['port']}"
-                    elif ls == "absent":
-                        addr = ""                  # listener DOWN — template says 'listener absent'
+                    elif ls in ("absent", "unverified"):
+                        # DOWN, or running on a port we could not read — either way there is no
+                        # address we can honestly hand out (the template says which it is).
+                        addr = ""
                     else:                          # loopback (or unset) -> loopback address
                         addr = f"127.0.0.1:{w['port']}"
                 elif w.get("enabled"):
@@ -376,6 +378,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # action per flagged stack.
             restart_required=service.restart_required_stacks(),
             welcome=service.auto_install_welcome(),
+            welcome_dismissed=service.welcome_note_dismissed(),
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
@@ -872,7 +875,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "firewall_view": _firewall_view_safe(service),
             "st": service.self_update_status(), "jobs": service.active_jobs(),
             "updater": service.updater_integration(),
-            "dep_summary": service.dependency_overview(),
+            "dep_summary": (_dep := service.dependency_overview()),
+            "dep_note_dismissed": service.dep_note_dismissed(_dep),
             "req_host": _url_host(request.host or ""),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
             "tasks": service.running_tasks(),
@@ -1025,6 +1029,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         service.dismiss_interactive(stack_id)
         return redirect(url_for("dashboard"))
+
+    @app.post("/welcome/dismiss")
+    def welcome_dismiss():
+        if not _csrf_ok():
+            abort(400)
+        service.dismiss_welcome_note()
+        return redirect(request.referrer or url_for("dashboard"))
+
+    @app.post("/dependencies/dismiss")
+    def dep_note_dismiss():
+        # Only the OPTIONAL/GUI note is dismissable — the mandatory-missing and restart-pending
+        # banners are a different branch of the same if/elif and stay permanent.
+        if not _csrf_ok():
+            abort(400)
+        service.dismiss_dep_note(service.dependency_overview())
+        return redirect(request.referrer or url_for("stacks_overview"))
 
     @app.get("/api/daemon/<band>")
     def daemon_api(band: str):
@@ -1278,8 +1298,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                           "ok" if _bok else "warn")
             if not then_start:
                 # Save-only: re-render with the (now saved) config — never starts.
+                # Re-render with the SAVED values — but only the keys the start form owns.
+                # stack_config() returns the whole saved config, HMAC-managed `password_file`
+                # included; handing that back as an ephemeral start override makes the NEXT
+                # submit post it, and the start then refuses ("managed by the HMAC password
+                # flow"). start_param_fields() is already HMAC-filtered (_form_run_params).
                 fresh = service.stack_config(target, band)
-                return _render_confirm(op, target, band, dict(fresh), None, source, frm)
+                owned = {f["key"] for f in service.start_param_fields(target, band)
+                         if f["kind"] == "run"}
+                return _render_confirm(op, target, band,
+                                       {k: v for k, v in dict(fresh).items() if k in owned},
+                                       None, source, frm)
             if not (stack_ok and daemon_res["ok"]):
                 # Save & start, but a later save failed (a per-band DAEMON save after a successful/
                 # absent stack save) -> DO NOT start. Earlier successful saves are RETAINED. Report

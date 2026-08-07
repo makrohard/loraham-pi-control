@@ -230,3 +230,133 @@ def test_meshcore_config_generation_writes_wifi_allow(tmp_path):
     assert 'wifi.port = 5000' in out                     # other keys preserved
     unchanged = update_toml(base, [p], {"meshcore_allow": ""}, lambda s: s)
     assert 'wifi.allow = "127.0.0.1"' in unchanged        # blank -> keep the base default
+
+
+# --- the LIVE port, and what may (and may not) colour it -----------------------------------
+#
+# `_dashboard_port_row` claims "the live listener is primary", but it read the STATIC manifest
+# port and the SAVED allow-list. KISS proves the gap: `kiss_port`/`kiss_host`/`kiss_bind` are all
+# start-time parameters and Start-without-saving is supported, so both inputs are desired config.
+
+from lhpc.core.probes.backends import Listener
+
+
+def _kiss_svc(tmp_path, argv, listeners, fw=None, monkeypatch=None):
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    fake = FakeSystem(cmdlines_data=({42: argv} if argv is not None else {}),
+                      listeners=[Listener(**l) for l in listeners])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    if fw is not None:
+        monkeypatch.setattr(type(svc), "firewall_status", lambda self: fw)
+    return svc
+
+
+def _kiss_row(svc):
+    return next((r for r in svc.dashboard_webservers()
+                 if r["kind"] == "port" and r["sid"] == "kiss"), None)
+
+
+def _argv(port="8001", host="127.0.0.1", *, equals=False):
+    if equals:
+        return ["./loraham-kiss-tnc", f"--kiss-port={port}", f"--kiss-host={host}"]
+    return ["./loraham-kiss-tnc", "--kiss-port", port, "--kiss-host", host]
+
+
+def _fw(*, mode="secure-default", eps=(), ing=(), extra=(), **kw):
+    st = {"installed": True, "config_ok": True, "live_ok": True, "transitional": False,
+          "candidate": {"mode": mode, "endpoints": list(eps), "proxy_ingress": list(ing),
+                        "extra_allow": list(extra)}}
+    st.update(kw)
+    return st
+
+
+def _ep(port, **kw):
+    return {"proto": "tcp", "family": "dual", "addr": "*", "port": port, **kw}
+
+
+@pytest.mark.parametrize("equals", [False, True])
+def test_the_row_follows_the_live_port_not_the_saved_one(tmp_path, equals):
+    # Start-without-saving on a different port and interface: the saved config still says
+    # 127.0.0.1:8001, the process is on 0.0.0.0:9001. Reading the static port found nothing there,
+    # so the row rendered the SAVED loopback policy — green "local" for a wide-open listener.
+    svc = _kiss_svc(tmp_path, _argv("9001", "0.0.0.0", equals=equals),
+                    [{"family": "ipv4", "ip": "0.0.0.0", "port": 9001, "inode": 1}])
+    row = _kiss_row(svc)
+    assert row["port"] == "9001" and row["live_scope"] == "exposed"
+    assert row["exposure"] == {"level": "bad", "label": "public"}
+
+
+def test_a_saved_allow_list_never_improves_a_running_listener(tmp_path):
+    # `kiss_bind` is applied at START. Saving a LAN allow-list changes nothing about the process
+    # that is already running, so it must not repaint a red row yellow.
+    svc = _kiss_svc(tmp_path, _argv("8001", "0.0.0.0"),
+                    [{"family": "ipv4", "ip": "0.0.0.0", "port": 8001, "inode": 1}])
+    assert _kiss_row(svc)["exposure"] == {"level": "bad", "label": "public"}
+    assert svc.save_stack_config("kiss", {"kiss_bind": "192.168.0.0/24"}).ok
+    assert _kiss_row(svc)["exposure"] == {"level": "bad", "label": "public"}
+
+
+@pytest.mark.parametrize("name,fw,expect", [
+    ("verified restriction", _fw(eps=[_ep(8001, selected=True, allow_cidrs=["10.42.0.0/24"])]),
+     {"level": "warn", "label": "LAN"}),
+    ("verified deny", _fw(eps=[_ep(8001, selected=False, deny_default=True, allow_cidrs=[])]),
+     {"level": "ok", "label": "firewalled"}),
+    ("an unrestricted allow", _fw(eps=[_ep(8001, selected=True, allow_cidrs=[])]),
+     {"level": "bad", "label": "public"}),
+    ("no covering rule", _fw(eps=[]), {"level": "bad", "label": "public"}),
+    ("a transitional ruleset", _fw(eps=[_ep(8001, selected=False, deny_default=True,
+                                            allow_cidrs=[])], transitional=True),
+     {"level": "bad", "label": "public"}),
+])
+def test_only_a_verified_firewall_may_colour_a_live_wildcard_listener(tmp_path, monkeypatch,
+                                                                      name, fw, expect):
+    svc = _kiss_svc(tmp_path, _argv("8001", "0.0.0.0"),
+                    [{"family": "ipv4", "ip": "0.0.0.0", "port": 8001, "inode": 1}], fw, monkeypatch)
+    assert _kiss_row(svc)["exposure"] == expect, name
+
+
+def test_a_live_loopback_listener_is_local(tmp_path):
+    svc = _kiss_svc(tmp_path, _argv("8001", "127.0.0.1"),
+                    [{"family": "ipv4", "ip": "127.0.0.1", "port": 8001, "inode": 1}])
+    row = _kiss_row(svc)
+    assert row["live_scope"] == "loopback"
+    assert row["exposure"] == {"level": "ok", "label": "local"}
+
+
+@pytest.mark.parametrize("name,argv", [
+    ("the port flag is absent", ["./loraham-kiss-tnc", "--config", "kiss.conf"]),
+    ("a non-numeric port value", ["./loraham-kiss-tnc", "--kiss-port", "$PORT"]),
+])
+def test_an_unresolvable_live_port_is_unverified_never_green(tmp_path, name, argv):
+    # The component IS running, so this is not "absent"; the port is in doubt, so it is not safe.
+    # Falling back to the static port would have attached a firewall verdict to a socket that may
+    # not be the one this process opened.
+    svc = _kiss_svc(tmp_path, argv, [{"family": "ipv4", "ip": "127.0.0.1", "port": 8001,
+                                      "inode": 1}])
+    row = _kiss_row(svc)
+    assert row is not None and row["live_scope"] == "unverified", name
+    assert row["exposure"] == {"level": "warn", "label": "unverified"}, name
+
+
+def test_disagreeing_live_pids_are_unverified(tmp_path):
+    # Two live PIDs of the same component naming different ports: there is no single answer, and
+    # picking one would be a guess dressed as evidence.
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    fake = FakeSystem(cmdlines_data={42: _argv("8001"), 43: _argv("9001")},
+                      listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    row = _kiss_row(svc)
+    assert row["live_scope"] == "unverified" and row["exposure"]["level"] == "warn"
+
+
+def test_an_absent_listener_does_not_make_the_dashboard_claim_exposure(tmp_path):
+    # The service is running but its TCP listener is DOWN, while the SAVED allow-list is
+    # LAN-shaped. The row rightly shows that saved policy, but nothing is reachable — so the box
+    # must not read "Exposure present".
+    svc = _kiss_svc(tmp_path, _argv("8001", "0.0.0.0"), [])       # no listeners at all
+    assert svc.save_stack_config("kiss", {"kiss_bind": "192.168.0.0/24"}).ok
+    rows = svc.dashboard_webservers()
+    row = _kiss_row(svc)
+    assert row["live_scope"] == "absent" and row["exposure"]["level"] == "warn"
+    pill = svc.security_pill(rows)
+    assert pill["level"] == "ok" and "Exposure" not in pill["title"]

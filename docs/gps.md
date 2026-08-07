@@ -83,8 +83,10 @@ sudo systemctl enable --now gpsd
 
 For a USB receiver, Debian's default `USBAUTO="true"` is usually enough. For a **network GPS
 server**, point gpsd at it in `/etc/default/gpsd`, e.g.
-`DEVICES="tcp://gps-server.lan:2947"`, then restart gpsd. lhpc only ever *reads* gpsd; if it
-cannot reach it, `lhpc doctor` says so and names the fix.
+`DEVICES="tcp://gps-server.lan:<raw-nmea-port>"`, then restart gpsd. That port is the device's
+**raw NMEA stream**, not 2947 — 2947 is gpsd's own protocol port, and a remote gpsd is reached
+with `--host` instead. lhpc only ever *reads* gpsd; if it cannot reach it, `lhpc doctor` says so
+and names the fix.
 
 Wiring a receiver to a HAT's serial pins, `dialout` group membership, and antenna placement
 are likewise outside lhpc.

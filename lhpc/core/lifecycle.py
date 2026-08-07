@@ -262,7 +262,14 @@ class Lifecycle:
                 # fixed path is absent (and vice-versa). A require with only one of the two keys behaves
                 # exactly as before. expanduser is best-effort: a wrong/unset HOME just falls back to the
                 # PATH probe, so a PATH install is always a reliable escape hatch.
-                on_path = bool(req.cmd) and shutil.which(req.cmd) is not None
+                # PATH, plus the sbin dirs explicitly. A DAEMON installs to /usr/sbin (gpsd does),
+                # which is not on a non-root user's PATH and is absent from a systemd user unit's
+                # PATH entirely — so `shutil.which` alone reported an installed gpsd as missing
+                # while `lhpc gps` was happily talking to it. Probing the standard sbin locations
+                # is what "is this tool present" honestly means for a system daemon.
+                on_path = bool(req.cmd) and (
+                    shutil.which(req.cmd) is not None
+                    or shutil.which(req.cmd, path="/usr/local/sbin:/usr/sbin:/sbin") is not None)
                 at_file = bool(req.check_file) and self.system.fs.exists(self._resolve_req_path(req.check_file))
                 if not (on_path or at_file):
                     missing.append(req)

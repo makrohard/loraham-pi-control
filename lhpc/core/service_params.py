@@ -696,11 +696,19 @@ class ParamsConfigMixin:
         up = (RunState.RUNNING, RunState.DEGRADED)
         # Libraries/firmware are build/flash artifacts — never "started", so they
         # get no autostart toggle or Run button.
+        # A production GPS feed is NOT an operator start choice: whether it runs is decided by
+        # the stack's `use_gps` switch plus the global source, and starting one directly is
+        # refused ("the current position plan does not use it"). Offering a checkbox let the
+        # operator contradict the position plan, and showed a second GPS entry next to the
+        # fixture on the confirm page.
+        _gps_feeds = self._all_gps_feed_ids()
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
                      "autostart": stored.get(f"autostart_{c.id}") == "on",
                      "running": live.get(c.id) in up}
                     for c in members if c.optional
-                    and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
+                    and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
+                    and c.id not in _gps_feeds
+                    and not c.test_fixture]
         main = s.main_component if s else None
         # Operator identity is only relevant to stacks that actually substitute
         # {callsign} into a run/pre command (e.g. iGate) — not the daemon.

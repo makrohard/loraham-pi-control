@@ -192,6 +192,10 @@ class StatusProber:
             runtime_root_exists=self._paths.runtime_root_exists,
         )
 
+        # NOTE: this is the FIRST of two tx_state sites. The prober cannot resolve operator
+        # identity, so it never emits ENABLED; `ControllerService._overlay_licensed_tx_enabled`
+        # upgrades UNKNOWN -> ENABLED for a running LICENSED stack. DISABLED set here is
+        # authoritative and the overlay never touches it. Do not "simplify" UNKNOWN away.
         if not comp.tx_capable:
             status.tx_state = TxState.DISABLED
         elif status.run_state in (RunState.RUNNING, RunState.DEGRADED):

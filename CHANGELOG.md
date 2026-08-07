@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Smoke-test fixes: MeshCore Node Manager starts under the read-only-home sandbox (its state moves to `state/meshcore-nm`; an old `~/.meshcore_nm` is left behind), the Chat command block renders again, licensed running stacks report TX enabled, Save on the start-confirm page no longer starts the stack, and exposure pills judge the live listener — its real port, and the policy nginx actually applied — against the verified firewall (a remotely exposed console reads red until one `webserver apply` records that policy)
 - Dashboard endpoint pills show a working address for the current viewer, never a dead link
 - Sideband is no longer installed on headless systems. It is a graphical Kivy app, but because Kivy
   vendors its own SDL2 it declared no graphical package to gate on, so only `python3-dev` kept it out

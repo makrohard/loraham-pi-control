@@ -171,3 +171,30 @@ def test_daemon_band_stop_orphans_only_that_bands_dependents(tmp_path, monkeypat
     assert svc.stop_dependents("daemon", bands={"868"}) == ["meshcore"]
     # Stopping the whole daemon (no band) orphans both.
     assert set(svc.stop_dependents("daemon")) == {"kiss", "meshcore"}
+
+
+def test_blocked_daemon_stop_names_the_interactive_dependent_and_its_pid(tmp_path, monkeypatch):
+    # An interactive dependent (chat, meshcore-cli) is the operator's OWN process — LHPC never
+    # signals one it does not own — so "a dependent is still running" alone leaves nothing to act
+    # on. The hint existed but its input list was only populated on the AUTOMATIC-stop path, so it
+    # was empty for exactly the interactive case it was added for.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core.model import RunState
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            st.run_state = RunState.RUNNING if cid == "loraham-chat" else RunState.STOPPED
+            if cid == "loraham-chat":
+                st.pids = [12334]
+    svc.build_snapshot = lambda fresh=False: snap
+    hints = svc._still_running_hints(["chat"])
+    assert any("kill 12334" in h and "loraham-chat" in h for h in hints), hints
+    # a component with no known pid is still NAMED, without inventing a kill line
+    for ss in snap.stacks:
+        for cid, st in ss.components.items():
+            if cid == "loraham-chat":
+                st.pids = []
+    hints = svc._still_running_hints(["chat"])
+    assert hints and "kill" not in hints[0] and "loraham-chat" in hints[0]

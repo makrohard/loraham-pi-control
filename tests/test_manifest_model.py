@@ -112,3 +112,17 @@ def test_meshcore_daemon_backed_does_not_claim_direct_spi():
     keys = {r.key: r.mode for r in node.resources}
     assert keys["loraham.daemon-socket.868"] is ResourceMode.CONSUMER
     assert "spi.bus.0" not in keys
+
+
+def test_gui_stacks_keep_their_state_out_of_a_read_only_home():
+    # lhpc-web.service runs ProtectHome=read-only. Both desktop GUIs create a state
+    # directory at import/startup, so each MUST be redirected into the runtime root or it
+    # dies with EROFS before its window exists. The unit's `-%h/.meshcore_nm` grant is
+    # OPTIONAL (leading `-`), so on a fresh box that path is never made writable — the
+    # env var is what actually fixes it, and the units are byte-frozen anyway.
+    comps = _index(load_manifest())
+    for cid, var in (("meshcore-nodegui", "MESHCORE_NM_HOME"), ("sideband", "KIVY_HOME")):
+        env = dict(comps[cid].run_env or ())      # run_env is a tuple of pairs, not a dict
+        assert var in env, f"{cid}: {var} missing — a read-only HOME would break startup"
+        assert env[var].startswith("{runtime}/"), \
+            f"{cid}: {var}={env[var]!r} must live under the runtime root, not HOME"

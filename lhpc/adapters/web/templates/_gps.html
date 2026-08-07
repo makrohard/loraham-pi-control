@@ -12,7 +12,15 @@
 {% if gps_global %}
   <details class="advcfg" id="gps-row"{% if request.args.get('open') == 'gps' %} open data-force-open="1"{% endif %}>
     <summary>Position (GPS)
-      <span class="pill pill-{{ 'ok' if gps_global.valid and gps_global.plan_valid and gps_global.source != 'off' else ('bad' if not (gps_global.valid and gps_global.plan_valid) else 'muted') }}">{{ gps_global.source }}</span>
+      {# GREEN means PROVEN, not merely configured. Selecting `gpsd` with no gpsd on the box is a
+         perfectly valid configuration, and this pill used to read green for it while `lhpc doctor`
+         said "gpsd ... answers but owns NO receiver". Positive evidence here is a RUNNING consumer:
+         a start is refused when the feed cannot reach its source, so a live consumer means the
+         source was proven at least once. Configured-but-unproven is neutral, never green. No probe
+         is added — gps_view() is display-only by design (see its docstring). #}
+      <span class="pill pill-{{ 'bad' if not (gps_global.valid and gps_global.plan_valid)
+                                else ('muted' if gps_global.source == 'off'
+                                      else ('ok' if gps_global.running else 'warn')) }}">{{ gps_global.source }}</span>
       {% if gps_global.running %}<span class="ver ver-red">in use</span>{% endif %}
     </summary>
 

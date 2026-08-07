@@ -2383,3 +2383,224 @@ def test_gate_never_names_a_script_it_could_not_render(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "_fw_integration_state", lambda self: "partial")
     ok, msg, cmds = svc.firewall_gate_activation({8445})          # partial + render failure
     assert not ok and not any("firewall-apply.sh" in c for c in cmds)
+
+
+# ---- directional coverage + containment verdict ------------------------------------------
+
+def _sc(proto="tcp", family="dual", addr="*", port=4403, **kw):
+    d = {"proto": proto, "family": family, "addr": addr, "port": port}
+    d.update(kw)
+    return d
+
+
+def test_scope_covers_is_directional_not_overlap():
+    # _scopes_overlap answers "could these touch?" and is deliberately permissive — right for
+    # REFUSING an extra_allow, inverted for PROVING protection. Each row below is a case where
+    # overlap says yes and coverage must say no; greening on overlap would put a green badge on a
+    # port that is still reachable.
+    from lhpc.core.firewall import _scopes_overlap, scope_covers
+    ipv4_only, dual_listener = _sc(family="ipv4"), _sc(family="dual")
+    concrete, wildcard = _sc(family="ipv4", addr="192.168.1.5"), _sc(family="ipv4", addr="*")
+    for protector, listener in ((ipv4_only, dual_listener), (concrete, wildcard)):
+        assert _scopes_overlap(protector, listener) is True      # the permissive answer
+        assert scope_covers(protector, listener) is False        # the correct one
+    assert scope_covers(_sc(), _sc(family="ipv4", addr="10.0.0.5")) is True   # dual covers ipv4
+    assert scope_covers(_sc(), _sc(port=8080)) is False                        # port must match
+    assert scope_covers(_sc(proto="udp"), _sc()) is False                      # proto must match
+
+
+def test_ipv6_wildcard_listener_needs_dual_coverage():
+    # tcp_listeners() tags each /proc record ipv4 or ipv6, never dual. A socket bound `::` with
+    # the default bindv6only=0 ALSO accepts IPv4 while appearing only as one ipv6 record, so an
+    # ipv6-only rule must not vouch for it.
+    from lhpc.core.firewall import scope_covers
+    v6_wildcard_listener = _sc(family="ipv6", addr="*")
+    assert scope_covers(_sc(family="ipv6", addr="*"), v6_wildcard_listener) is False
+    assert scope_covers(_sc(family="dual"), v6_wildcard_listener) is True
+
+
+def _fwstat(mode="secure-default", eps=(), ing=(), extra=(), **kw):
+    st = {"installed": True, "config_ok": True, "live_ok": True, "transitional": False,
+          "candidate": {"mode": mode, "endpoints": list(eps),
+                        "proxy_ingress": list(ing), "extra_allow": list(extra)}}
+    st.update(kw)
+    return st
+
+
+def test_firewall_containment_verdicts(tmp_path):
+    svc = _svc(tmp_path)
+    from types import SimpleNamespace
+    live = svc.listener_scopes(4403, [SimpleNamespace(family="ipv4", ip="0.0.0.0",
+                                                      port=4403, inode=1)])
+    allow = _sc(selected=True, allow_cidrs=["10.42.0.0/24"])
+    deny = _sc(selected=False, allow_cidrs=[])
+    open_ep = _sc(selected=True, allow_cidrs=[])
+    cases = [
+        # selected=False alone is NOT an early DROP: only a deny_default endpoint is dropped
+        # ahead of the accepts. An ORDINARY unselected endpoint falls to the chain policy, where
+        # a legal extra_allow may accept it first — so it must never read as denied/green.
+        ("secure-default: deny_default unselected IS denied",
+         _fwstat(eps=[dict(deny, deny_default=True)]), "denied"),
+        ("secure-default: ORDINARY unselected is NOT denied",
+         _fwstat(eps=[dict(deny, deny_default=False)]), "unknown"),
+        ("ordinary unselected + overlapping extra_allow is never denied",
+         _fwstat(eps=[dict(deny, deny_default=False)], extra=[_sc()]), "unknown"),
+        ("secure-default LAN allow is a restriction", _fwstat(eps=[allow]), "restricted"),
+        ("an unrestricted allow is open", _fwstat(eps=[open_ep]), "open"),
+        # compatibility has chain policy ACCEPT: its CIDR allows are NOT installed as restrictions.
+        ("compatibility CIDRs prove nothing", _fwstat("compatibility", eps=[allow]), "open"),
+        ("compatibility still drops unselected", _fwstat("compatibility", eps=[deny]), "denied"),
+        # A verified TRANSITIONAL ruleset may retain older transition_allow scopes that widen
+        # reachability, so it may never improve a colour.
+        ("transitional proves nothing", _fwstat(eps=[dict(deny, deny_default=True)], transitional=True), "unknown"),
+        ("stale config proves nothing", _fwstat(eps=[dict(deny, deny_default=True)], config_ok=False), "unknown"),
+        ("unverified live proves nothing", _fwstat(eps=[dict(deny, deny_default=True)], live_ok=False), "unknown"),
+        ("absent firewall proves nothing", _fwstat(eps=[dict(deny, deny_default=True)], installed=False), "unknown"),
+        ("an unrelated port never matches", _fwstat(eps=[_sc(selected=False, port=8080)]), "unknown"),
+        # extra_allow may overlap an ordinary endpoint and widen it; do not compute the union.
+        ("a wider overlapping extra_allow kills a restriction claim",
+         _fwstat(eps=[allow], extra=[_sc()]), "unknown"),
+    ]
+    for name, st, want in cases:
+        assert svc.firewall_containment(live, st) == want, name
+
+
+def test_containment_needs_proxy_ingress_or_endpoint_coverage(tmp_path):
+    svc = _svc(tmp_path)
+    from types import SimpleNamespace
+    live = svc.listener_scopes(8443, [SimpleNamespace(family="ipv4", ip="0.0.0.0",
+                                                      port=8443, inode=1)])
+    ing = _sc(port=8443, allow_cidrs=["10.42.0.0/24"])
+    assert svc.firewall_containment(live, _fwstat(ing=[ing])) == "restricted"
+    # ...but not in compatibility mode, where proxy_ingress CIDRs are not restrictions.
+    assert svc.firewall_containment(live, _fwstat("compatibility", ing=[ing])) == "open"
+    assert svc.firewall_containment([], _fwstat(ing=[ing])) == "unknown"   # nothing listening
+
+
+def _posture_row(**kw):
+    from lhpc.core.webserver import posture
+    return {"kind": "console", "posture": posture(**kw)}
+
+
+def test_security_pill_only_claims_restricted_source_when_that_is_the_reason(tmp_path):
+    # Every yellow used to read "lan-exposed / a no-auth port is reachable but restricted to
+    # allowed sources". That is false for the other legitimate yellows — local cleartext http, or
+    # an authenticated listener open to all source addresses. The reason is resolved where the row
+    # is built and carried; security_pill stays a pure aggregator and never re-reads firewall state.
+    svc = _svc(tmp_path)
+    noauth_restricted = _posture_row(local=False, public=False, access_mode="no-auth",
+                                     has_cidrs=True, scheme="https", firewall_contained=True)
+    assert noauth_restricted["posture"]["sec_level"] == "warn"
+    pill = svc.security_pill([noauth_restricted])
+    assert pill["level"] == "warn" and pill["label"] == "lan-exposed"
+    assert "restricted to allowed sources" in pill["title"]
+
+    # authenticated but open to ALL source addresses -> yellow for a different reason
+    authed_public = _posture_row(local=False, public=True, access_mode="auth-everywhere",
+                                 has_cidrs=True, scheme="https")
+    assert authed_public["posture"]["sec_level"] == "warn"
+    p2 = svc.security_pill([authed_public])
+    assert p2["level"] == "warn" and p2["label"] == "review"
+    assert "restricted to allowed sources" not in p2["title"]
+
+    # local cleartext http -> yellow, also not a restricted-source claim
+    local_http = _posture_row(local=True, public=False, access_mode="no-auth",
+                              has_cidrs=False, scheme="http")
+    assert local_http["posture"]["sec_level"] == "warn"
+    assert svc.security_pill([local_http])["label"] == "review"
+
+    # MIXED yellow causes -> generic review, never the specific claim
+    mixed = svc.security_pill([noauth_restricted, authed_public])
+    assert mixed["level"] == "warn" and mixed["label"] == "review"
+
+
+def test_a_yellow_port_row_only_claims_restriction_when_one_was_proven(tmp_path):
+    # port_exposure("192.168.1.0/24") returns ("warn","LAN") with NO firewall input at all, and
+    # two other paths in _dashboard_port_row also yield yellow without a verdict. Marking every
+    # yellow port row `restricted_noauth` re-introduced the exact over-claim the reason plumbing
+    # removes — and it bites a Zero where containment came back `unknown`.
+    svc = _svc(tmp_path)
+    proven = {"kind": "port", "exposure": {"level": "warn", "label": "LAN"},
+              "warn_reason": "restricted_noauth", "live_scope": "exposed"}
+    unproven = {"kind": "port", "exposure": {"level": "warn", "label": "LAN"},
+                "warn_reason": "review", "live_scope": "exposed"}
+    assert svc.security_pill([proven])["label"] == "lan-exposed"
+    p = svc.security_pill([unproven])
+    assert p["level"] == "warn" and p["label"] == "review"
+    assert "restricted to allowed sources" not in p["title"]
+    assert svc.security_pill([proven, unproven])["label"] == "review"     # mixed => generic
+
+
+def test_an_absent_listener_never_claims_reachability(tmp_path):
+    # A row may exist for status/UI purposes while nothing is listening. It is not an exposure,
+    # so it must not contribute "a no-auth port is reachable" wording.
+    svc = _svc(tmp_path)
+    absent = {"kind": "port", "exposure": {"level": "warn", "label": "LAN"},
+              "warn_reason": "", "live_scope": "absent"}
+    p = svc.security_pill([absent])
+    assert p["label"] != "lan-exposed", "an absent listener must not read as restricted exposure"
+    assert "restricted to allowed sources" not in p["title"]
+
+
+# ---- production /proc/net/tcp6 evidence reaches the coverage rule in the right shape -------
+
+def test_a_real_proc_net_tcp6_wildcard_row_is_wildcard_by_the_time_coverage_runs(tmp_path):
+    # The `::` rule in scope_covers was right and production evidence never reached it: the kernel
+    # writes the wildcard as 32 hex zeroes and the parser passed them through, so `listener_scopes`
+    # (which recognises only "::") produced a CONCRETE address — and an ipv6-only rule then
+    # "covered" a socket that still accepts IPv4. Drive the whole real chain, not scope_covers with
+    # a hand-written addr="*", which is the test shape that missed this.
+    from lhpc.core.probes.backends import parse_proc_net_tcp
+    from lhpc.core.firewall import scope_covers
+    table = ("  sl  local_address                         remote_address                        "
+             "st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+             "   0: 00000000000000000000000000000000:1F63 00000000000000000000000000000000:0000 "
+             "0A 00000000:00000000 00:00000000 00000000     0        0 26612 1 0000 100 0\n")
+    listeners = parse_proc_net_tcp(table, "ipv6")
+    assert [(l.family, l.port) for l in listeners] == [("ipv6", 0x1F63)]
+    scopes = _svc(tmp_path).listener_scopes(0x1F63, listeners)
+    assert scopes == [{"proto": "tcp", "family": "ipv6", "addr": "*", "port": 0x1F63}]
+    v6_only = {"proto": "tcp", "family": "ipv6", "addr": "*", "port": 0x1F63}
+    dual = {"proto": "tcp", "family": "dual", "addr": "*", "port": 0x1F63}
+    assert scope_covers(v6_only, scopes[0]) is False    # `::` accepts IPv4 too
+    assert scope_covers(dual, scopes[0]) is True
+
+
+def test_other_ipv6_forms_stay_conservative():
+    # Only the all-zero wildcard is normalised. ::1 and a concrete address keep their raw hex, so
+    # they can never be mistaken for a wildcard (nor claimed as loopback on unproven grounds).
+    from lhpc.core.probes.backends import _decode_hex_ip
+    assert _decode_hex_ip("0" * 32) == "::"
+    assert _decode_hex_ip("00000000000000000000000001000000") != "*"
+    assert _decode_hex_ip("00000000000000000000FFFF0100007F") != "*"
+
+
+# ---- a genuinely ABSENT raw listener is not an exposure -----------------------------------
+
+def _row(port, level, live_scope, warn_reason):
+    return {"kind": "port", "port": port, "live_scope": live_scope,
+            "exposure": {"level": level, "label": "LAN"}, "warn_reason": warn_reason}
+
+
+def test_an_absent_raw_listener_contributes_no_exposure_at_all(tmp_path):
+    # Clearing only `warn_reason` was not enough: security_pill bumped `worst` from the row's
+    # LEVEL first, so a stopped helper with a LAN-shaped saved allow-list still made the whole box
+    # read "Exposure present — verify the firewall / access mode."
+    svc = _svc(tmp_path)
+    pill = svc.security_pill([_row("5000", "warn", "absent", "")])
+    assert pill["level"] == "ok"
+    assert "Exposure" not in pill["title"] and "reachable" in pill["title"]
+    # A red absent row is no different — the listener is DOWN, not reachable-and-open.
+    assert svc.security_pill([_row("5000", "bad", "absent", "review")])["level"] == "ok"
+
+
+def test_an_unverified_running_endpoint_stays_a_review_and_never_disappears(tmp_path):
+    # UNVERIFIED is deliberately NOT absent: a listener exists, only its identity is in doubt.
+    svc = _svc(tmp_path)
+    pill = svc.security_pill([_row("8001", "warn", "unverified", "review")])
+    assert pill["level"] == "warn" and pill["label"] == "review"
+
+
+def test_a_restricted_live_endpoint_still_reads_lan_exposed(tmp_path):
+    pill = _svc(tmp_path).security_pill([_row("8001", "warn", "exposed", "restricted_noauth")])
+    assert pill["level"] == "warn" and pill["label"] == "lan-exposed"

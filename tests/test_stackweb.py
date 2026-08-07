@@ -758,7 +758,9 @@ def test_dashboard_port_row_excludes_non_network_serial_pty(tmp_path):
     # KISS has TWO client endpoints: the TCP interface (127.0.0.1:8001, scheme "kiss") and the optional
     # socat PTY (address "state/loraham_kiss", scheme "serial" — a local device path, not a network port).
     # The network-exposure box must advertise ONLY the TCP interface: one line for KISS, not two.
-    fake = FakeSystem(cmdlines_data={42: ["./loraham-kiss-tnc", "--config", "loraham_kiss_tnc.conf.example"]},
+    fake = FakeSystem(cmdlines_data={42: ["./loraham-kiss-tnc", "--config",
+                                          "loraham_kiss_tnc.conf.example", "--kiss-port", "8001",
+                                          "--kiss-host", "127.0.0.1"]},
                       listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)])
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     kiss = [r for r in svc.dashboard_webservers() if r.get("sid") == "kiss" and r["kind"] == "port"]
@@ -1270,3 +1272,297 @@ def test_webserver_panel_is_the_last_sub_section_and_styled_like_the_others(tmp_
     # LAST: after Install and after Settings
     assert row.index('id="stack-install-meshcom"') < row.index('id="stack-webserver-meshcom"')
     assert row.index('id="stack-settings-meshcom"') < row.index('id="stack-webserver-meshcom"')
+
+
+# ===== raw endpoint verdicts, proxy containment, and desired-vs-applied proxy policy =====
+#
+# Rendered through `dashboard_webservers` / `stack_web_view` / `security_pill`, not through the
+# helpers underneath them: every one of the bugs below was a wiring fault that the helper-level
+# tests were individually happy with.
+
+def _sc(port, *, proto="tcp", family="dual", addr="*", **kw):
+    return {"proto": proto, "family": family, "addr": addr, "port": port, **kw}
+
+
+def _fw(*, mode="secure-default", eps=(), ing=(), extra=(), **kw):
+    st = {"installed": True, "config_ok": True, "live_ok": True, "transitional": False,
+          "candidate": {"mode": mode, "endpoints": list(eps), "proxy_ingress": list(ing),
+                        "extra_allow": list(extra)}}
+    st.update(kw)
+    return st
+
+
+def _meshtastic_svc(tmp_path, listeners, fw=None, monkeypatch=None):
+    """meshtasticd RUNNING with the given live sockets, and an optional verified firewall."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    fake = FakeSystem(cmdlines_data={70: ["/opt/meshtasticd", "-c", "meshtasticd.yaml"]},
+                      listeners=[Listener(**l) for l in listeners])
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    if fw is not None:
+        monkeypatch.setattr(type(svc), "firewall_status", lambda self: fw)
+    return svc
+
+
+_MT_4403 = {"family": "ipv4", "ip": "0.0.0.0", "port": 4403, "inode": 1}
+_MT_9443 = {"family": "ipv4", "ip": "0.0.0.0", "port": 9443, "inode": 2}
+
+
+def _port_rows(svc):
+    return {r["port"]: r for r in svc.dashboard_webservers() if r["kind"] == "port"}
+
+
+def test_a_raw_https_endpoint_gets_its_own_security_verdict(tmp_path):
+    # 9443 is Meshtastic's web GUI: scheme https, NO authentication, no bind knob. Excluding it
+    # from the raw model by SCHEME meant the box asserted containment for 4403 while an equally
+    # open listener sat next to it. The rule is the endpoint's no-auth firewall metadata, not a
+    # hardcoded stack or port.
+    rows = _port_rows(_meshtastic_svc(tmp_path, [_MT_4403, _MT_9443]))
+    assert set(rows) >= {"4403", "9443"}                       # BOTH are represented
+    assert rows["9443"]["scheme"] == "https"
+    for p in ("4403", "9443"):
+        assert rows[p]["exposure"] == {"level": "bad", "label": "public"}, p
+
+
+def test_deny_default_greens_both_raw_meshtastic_endpoints(tmp_path, monkeypatch):
+    fw = _fw(eps=[_sc(4403, selected=False, deny_default=True, allow_cidrs=[]),
+                  _sc(9443, selected=False, deny_default=True, allow_cidrs=[])])
+    svc = _meshtastic_svc(tmp_path, [_MT_4403, _MT_9443], fw, monkeypatch)
+    rows = _port_rows(svc)
+    for p in ("4403", "9443"):
+        assert rows[p]["exposure"] == {"level": "ok", "label": "firewalled"}, p
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "ok"
+
+
+def test_an_open_raw_9443_reds_the_box_even_while_4403_stays_denied(tmp_path, monkeypatch):
+    # The aggregate must never stay green because the API half is contained: the web GUI is a
+    # separate listener and an unauthenticated one.
+    fw = _fw(eps=[_sc(4403, selected=False, deny_default=True, allow_cidrs=[]),
+                  _sc(9443, selected=True, allow_cidrs=[])])          # opened by the operator
+    svc = _meshtastic_svc(tmp_path, [_MT_4403, _MT_9443], fw, monkeypatch)
+    rows = _port_rows(svc)
+    assert rows["4403"]["exposure"]["label"] == "firewalled"
+    assert rows["9443"]["exposure"] == {"level": "bad", "label": "public"}
+    assert svc.security_pill(svc.dashboard_webservers())["level"] == "bad"
+
+
+def test_a_denied_upstream_is_not_reachable_around_the_proxy(tmp_path, monkeypatch):
+    # "Bound off-loopback" alone raised "reachable directly, bypassing this proxy's
+    # authentication" for endpoints the managed firewall drops by default — they bypass nothing.
+    fw = _fw(eps=[_sc(9443, selected=False, deny_default=True, allow_cidrs=[])])
+    svc = _meshtastic_svc(tmp_path, [_MT_9443], fw, monkeypatch)
+    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_view("meshtastic")["bypassable"] is False
+    warnings = svc.webserver_monitor().data.get("warnings", [])
+    assert not any("bypassing" in w["text"] for w in warnings)
+    assert svc.webserver_verify().data["checks"].get("upstream_bypass_stacks", []) == []
+
+
+@pytest.mark.parametrize("verdict,eps,bypassable", [
+    ("restricted", [_sc(9443, selected=True, allow_cidrs=["192.168.0.0/24"])], True),
+    ("open", [_sc(9443, selected=True, allow_cidrs=[])], True),
+    ("unknown", [], True),
+])
+def test_anything_short_of_denied_still_bypasses_the_proxy(tmp_path, monkeypatch, verdict,
+                                                           eps, bypassable):
+    svc = _meshtastic_svc(tmp_path, [_MT_9443], _fw(eps=eps), monkeypatch)
+    svc.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert svc.stack_web_view("meshtastic")["bypassable"] is bypassable, verdict
+
+
+def test_a_loopback_or_absent_upstream_bypasses_nothing(tmp_path):
+    loopback = _meshtastic_svc(tmp_path, [{"family": "ipv4", "ip": "127.0.0.1",
+                                           "port": 9443, "inode": 1}])
+    loopback.stack_web_configure("meshtastic", mode="local", port=8445)
+    assert loopback.stack_web_view("meshtastic")["bypassable"] is False
+
+
+def _proxy_applied(tmp_path, monkeypatch=None, fw=None, **cfg):
+    """A meshtastic proxy whose policy has really been APPLIED, with its listener live on 8445."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    import os
+    from lhpc.core import runtime_fs
+    paths = Paths(runtime_root=tmp_path)
+    boot = ControllerService(system=FakeSystem().system, paths=paths)
+    boot.webserver_init(dns_sans=["pi.local"])
+    boot.stack_web_configure("meshtastic", **cfg)
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+    staged = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    live = str(paths.under(*webserver.NGINX_CONF))
+    fake = FakeSystem(commands={("nginx", "-v"): CR(0, "", "nginx/1.24"),
+                                ("nginx", "-t", "-c", staged): CR(0, "", "ok"),
+                                ("nginx", "-s", "reload", "-c", live): CR(0, "", "")},
+                      cmdlines_data={70: ["/opt/meshtasticd", "-c", "meshtasticd.yaml"]},
+                      listeners=[Listener("ipv4", "127.0.0.1", 8443, 1),   # loopback console
+                                 Listener("ipv4", "0.0.0.0", 8445, 3),     # the proxy itself
+                                 Listener("ipv4", "127.0.0.1", 9443, 2)])  # upstream, loopback
+    svc = ControllerService(system=fake.system, paths=paths)
+    if fw is not None:
+        monkeypatch.setattr(type(svc), "firewall_status", lambda self: fw)
+    assert svc.webserver_apply().ok
+    return svc
+
+
+def test_a_saved_proxy_narrowing_cannot_improve_the_live_proxy(tmp_path):
+    # Same law as the console: mode/scheme/auth/CIDRs only reach nginx at Apply, so the live
+    # listener keeps being coloured by the policy that was actually activated.
+    svc = _proxy_applied(tmp_path, mode="lan", port=8445, scheme="https", access_mode="no-auth",
+                         cidrs=["192.168.0.0/24"], confirm=True, confirm_public=True)
+    applied = webserver.applied_proxy(webserver.read_applied(svc._paths), "meshtastic")
+    assert applied["access_mode"] == "no-auth" and applied["port"] == 8445
+    assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad"
+    for field in ({"access_mode": "auth-everywhere"}, {"mode": "local"},
+                  {"cidrs": ["192.168.0.5/32"]}):
+        svc.stack_web_configure("meshtastic", **field)
+        assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad", field
+    svc.webserver_verify()                                    # verify never advances it
+    assert webserver.applied_proxy(webserver.read_applied(svc._paths),
+                                   "meshtastic")["access_mode"] == "no-auth"
+
+
+def test_a_verified_source_restriction_makes_a_live_no_auth_proxy_yellow(tmp_path, monkeypatch):
+    fw = _fw(ing=[_sc(8445, allow_cidrs=["192.168.0.0/24"])])
+    svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="https",
+                         access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
+                         confirm_public=True)
+    p = svc.stack_web_view("meshtastic")["posture"]
+    assert p["sec_level"] == "warn" and p["warn_reason"] == "restricted_noauth"
+
+
+@pytest.mark.parametrize("name,fw", [
+    ("compatibility CIDRs are not restrictions",
+     _fw(mode="compatibility", ing=[_sc(8445, allow_cidrs=["192.168.0.0/24"])])),
+    ("a transitional ruleset proves nothing",
+     _fw(ing=[_sc(8445, allow_cidrs=["192.168.0.0/24"])], transitional=True)),
+    ("an unverified ruleset proves nothing",
+     _fw(ing=[_sc(8445, allow_cidrs=["192.168.0.0/24"])], live_ok=False)),
+    ("an unrestricted allow is not a restriction", _fw(ing=[_sc(8445, allow_cidrs=[])])),
+])
+def test_unproven_containment_never_softens_a_live_no_auth_proxy(tmp_path, monkeypatch, name, fw):
+    svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="https",
+                         access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
+                         confirm_public=True)
+    assert svc.stack_web_view("meshtastic")["posture"]["sec_level"] == "bad", name
+
+
+def test_remote_cleartext_http_proxy_stays_red_under_a_verified_restriction(tmp_path, monkeypatch):
+    fw = _fw(ing=[_sc(8445, allow_cidrs=["192.168.0.0/24"])])
+    svc = _proxy_applied(tmp_path, monkeypatch, fw, mode="lan", port=8445, scheme="http",
+                         access_mode="no-auth", cidrs=["192.168.0.0/24"], confirm=True,
+                         confirm_public=True)
+    p = svc.stack_web_view("meshtastic")["posture"]
+    assert p["scheme_level"] == "bad" and p["sec_level"] == "bad"
+
+
+def test_the_intended_zero_state_is_constructible(tmp_path, monkeypatch):
+    # The whole batch, in one rendered dashboard, exactly as the Zero 2W is meant to read:
+    # secure-default firewall, an unauthenticated https console and Meshtastic proxy restricted to
+    # the AP's /24, both raw Meshtastic listeners dropped, and KISS bound wide but restricted.
+    import os
+    from lhpc.core import config as cfgmod
+    from lhpc.core import runtime_fs
+    LAN = ["10.42.0.0/24"]
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    boot = ControllerService(system=FakeSystem().system, paths=paths)
+    boot.webserver_init(dns_sans=["pi.local"])
+    cfgmod.save_webserver_config(paths, bind="0.0.0.0", port=8443, remote_exposed=True,
+                                 access_mode="no-auth", allowed_cidrs=LAN, scheme="https")
+    boot._invalidate_config()
+    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+                             access_mode="no-auth", cidrs=LAN, confirm=True, confirm_public=True)
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+    staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),
+                    str(paths.under(*webserver.NGINX_CONF)))
+    fake = FakeSystem(
+        commands={("nginx", "-v"): CR(0, "", "nginx/1.24"),
+                  ("nginx", "-t", "-c", staged): CR(0, "", "ok"),
+                  ("nginx", "-s", "reload", "-c", live): CR(0, "", "")},
+        cmdlines_data={70: ["/opt/meshtasticd", "-c", "meshtasticd.yaml"],
+                       42: ["./loraham-kiss-tnc", "--kiss-port", "8001", "--kiss-host", "0.0.0.0"]},
+        listeners=[Listener("ipv4", "0.0.0.0", 8443, 1), Listener("ipv4", "0.0.0.0", 8445, 2),
+                   Listener("ipv4", "0.0.0.0", 4403, 3), Listener("ipv4", "0.0.0.0", 9443, 4),
+                   Listener("ipv4", "0.0.0.0", 8001, 5)])
+    svc = ControllerService(system=fake.system, paths=paths)
+    fw = _fw(eps=[_sc(4403, selected=False, deny_default=True, allow_cidrs=[]),
+                  _sc(9443, selected=False, deny_default=True, allow_cidrs=[]),
+                  _sc(8001, selected=True, allow_cidrs=LAN)],
+             ing=[_sc(8443, allow_cidrs=LAN), _sc(8445, allow_cidrs=LAN)])
+    monkeypatch.setattr(type(svc), "firewall_status", lambda self: fw)
+    assert svc.webserver_apply().ok                        # activation recorded
+
+    rows = svc.dashboard_webservers()
+    by_port = {r["port"]: r for r in rows if r["kind"] == "port"}
+    console = next(r for r in rows if r["kind"] == "console")
+    proxy = next(r for r in rows if r["kind"] == "stack" and r["sid"] == "meshtastic")
+    assert console["posture"]["sec_level"] == "warn"                    # https no-auth, LAN-bound
+    assert console["posture"]["warn_reason"] == "restricted_noauth"
+    assert proxy["posture"]["sec_level"] == "warn"
+    assert by_port["4403"]["exposure"] == {"level": "ok", "label": "firewalled"}
+    assert by_port["9443"]["exposure"] == {"level": "ok", "label": "firewalled"}
+    assert by_port["8001"]["exposure"] == {"level": "warn", "label": "LAN"}   # never "local"
+    assert by_port["8001"]["warn_reason"] == "restricted_noauth"
+    pill = svc.security_pill(rows)
+    assert pill["level"] == "warn" and pill["label"] == "lan-exposed"
+    assert not any("bypassing" in w["text"]
+                   for w in svc.webserver_monitor().data.get("warnings", []))
+
+
+def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(tmp_path):
+    # `stack_web_view` already finds the OLD applied port after a saved-but-unapplied port change,
+    # but that truth stopped there: the panel read "in sync" and the dashboard advertised the NEW
+    # port, which nothing is listening on. The operator was handed a dead address while a working
+    # one was live one line away.
+    import os
+    from lhpc.core import runtime_fs
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    boot = ControllerService(system=FakeSystem().system, paths=paths)
+    boot.webserver_init(dns_sans=["pi.local"])
+    boot.stack_web_configure("meshtastic", mode="lan", port=8445, scheme="https",
+                             access_mode="no-auth", cidrs=["192.168.0.0/24"],
+                             confirm=True, confirm_public=True)
+    runtime_fs.mkdir(paths, "state", "run")
+    runtime_fs.write_marker(paths, paths.under(*webserver.NGINX_PID), str(os.getpid()))
+    staged, live = (str(paths.under(*webserver.NGINX_CONF_STAGED)),
+                    str(paths.under(*webserver.NGINX_CONF)))
+    fake = FakeSystem(
+        commands={("nginx", "-v"): CR(0, "", "nginx/1.24"),
+                  ("nginx", "-t", "-c", staged): CR(0, "", "ok"),
+                  ("nginx", "-s", "reload", "-c", live): CR(0, "", "")},
+        cmdlines_data={70: ["/opt/meshtasticd", "-c", "meshtasticd.yaml"]},
+        listeners=[Listener("ipv4", "127.0.0.1", 8443, 1),    # loopback console
+                   Listener("ipv4", "0.0.0.0", 8445, 2),      # the APPLIED proxy port
+                   Listener("ipv4", "127.0.0.1", 9443, 3)])   # upstream, loopback
+    svc = ControllerService(system=fake.system, paths=paths)
+    assert svc.webserver_apply().ok                            # 8445 is now the applied policy
+
+    # Save the SAME policy on a new port — no Apply. nginx keeps the 8445 socket it holds.
+    assert svc.stack_web_configure("meshtastic", port=8555, confirm=True,
+                                   confirm_public=True).ok
+
+    v = svc.stack_web_view("meshtastic")
+    assert v["cfg"].port == 8555                               # desired is untouched, for Settings
+    assert v["live_port"] == 8445 and v["listen_scope"] == "exposed"
+    assert v["pending"] is True                                # an Apply really is outstanding
+
+    row = next(r for r in svc.dashboard_webservers()
+               if r["kind"] == "stack" and r["sid"] == "meshtastic")
+    assert row["port"] == 8445
+
+    app = create_app(lambda: svc)
+    client = app.test_client()
+    body = client.get("/", headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert "127.0.0.1:8445" in body                             # the address that answers
+    assert ":8555" not in body                                  # ...and not the one that does not
+
+    # The Settings panel branches on the same live scope, so it must name the same port. It read
+    # "Currently listening on port 8555 on all interfaces" and offered an Open link to 8555 —
+    # describing, and linking to, a socket nothing is bound to.
+    panel = client.get("/stacks?open=meshtastic",
+                       headers={"Host": "127.0.0.1"}).get_data(as_text=True)
+    assert "Currently listening on port 8445 on all interfaces" in panel
+    assert "Currently listening on port 8555" not in panel
+    assert "127.0.0.1:8445" in panel                             # the Open link and the pill
+    assert ":8555" not in panel.replace('value="8555"', "")      # ...except the desired-port FIELD

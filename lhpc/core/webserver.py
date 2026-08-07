@@ -92,7 +92,7 @@ def plan_exposure(cfg: WebserverConfig) -> dict:
         problems.append("remote_exposed is true but bind is loopback; set bind=0.0.0.0")
     if not cfg.allowed_cidrs:
         problems.append("remote exposure requires at least one allowed source CIDR")
-    public = any(_is_public_default_route(c) for c in cfg.allowed_cidrs)
+    public = cidr_set_is_public(cfg.allowed_cidrs)
     no_auth = cfg.access_mode == "no-auth"
     cleartext = cfg.scheme == "http"
     # Remote + (public | no client auth | unencrypted http) each demand the strong phrase — mirror
@@ -131,7 +131,7 @@ def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
 
     if not swc.allowed_cidrs:
         problems.append("remote exposure requires at least one allowed source CIDR")
-    public = any(_is_public_default_route(c) for c in swc.allowed_cidrs)
+    public = cidr_set_is_public(swc.allowed_cidrs)
     no_auth = swc.access_mode == "no-auth"
     cleartext = swc.scheme == "http"
     # Remote + (public | no client auth | unencrypted) each demand the strong phrase.
@@ -146,6 +146,32 @@ def _is_public_default_route(cidr: str) -> bool:
     except ValueError:
         return False
     return net.prefixlen == 0        # 0.0.0.0/0 (or ::/0) — the whole internet
+
+
+def cidr_set_is_public(cidrs) -> bool:
+    """Does the SET of allowed CIDRs cover an entire address family?
+
+    Per-entry `/0` checking is not enough: `0.0.0.0/1` + `128.0.0.0/1` is the whole IPv4
+    internet, yet neither entry is a default route, so an allow-list of the two read as a
+    restricted LAN. `collapse_addresses` merges adjacent ranges, so the union is judged rather
+    than the individual entries. Each family is judged on its own — an allow-list that opens all
+    of IPv6 is public even if its IPv4 half is narrow.
+
+    Unparseable entries are skipped: CIDRs are validated where they are saved, and treating a
+    typo as "the whole internet" here would flag a config that never reaches nginx."""
+    fams: dict[int, list] = {4: [], 6: []}
+    for c in cidrs or ():
+        try:
+            net = ipaddress.ip_network(str(c).strip(), strict=False)
+        except (ValueError, TypeError):
+            continue
+        fams[net.version].append(net)
+    for ver, total in ((4, 1 << 32), (6, 1 << 128)):
+        nets = fams[ver]
+        if nets and sum(n.num_addresses
+                        for n in ipaddress.collapse_addresses(nets)) >= total:
+            return True
+    return False
 
 
 _LOOPBACK_NET = ipaddress.ip_network("127.0.0.0/8")
@@ -175,7 +201,7 @@ _AUTH_LABEL = {"no-auth": "no-auth", "local-open-remote-auth": "remote-auth",
 
 
 def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = True,
-            scheme: str = "https") -> dict:
+            scheme: str = "https", firewall_contained: bool | None = None) -> dict:
     """SECURITY posture for the FIRST webserver/proxy summary pill — the same meaning for the controller
     console and every per-stack proxy. The RUNNING (second) pill is context-specific and computed by the
     caller (see monitor_view / stack_web_view).
@@ -203,8 +229,12 @@ def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = Tr
         iface = "LAN"
     else:
         iface = "unset"           # off loopback, no CIDRs — plan_exposure refuses it; never reaches nginx
+    # A VERIFIED firewall that provably restricts this listener softens the unauthenticated case
+    # from red to yellow — reachable, but only from the allowed sources. It softens ONLY this
+    # dimension: `scheme_level` below still reds remote cleartext http, and `max()` keeps it.
+    contained = firewall_contained is True and exposed and not authed and not public and has_cidrs
     if exposed and not authed:
-        sec_level = "bad"
+        sec_level = "warn" if contained else "bad"
     elif exposed and authed and (public or not has_cidrs):
         # public 0.0.0.0/0, or a remote intent with no CIDRs at all — the pill must AGREE with the
         # "no allowed source CIDR" warning shown right below it, not read green.
@@ -219,14 +249,133 @@ def posture(*, local: bool, public: bool, access_mode: str, has_cidrs: bool = Tr
     #                  or unset (off loopback, no CIDRs — not appliable) -> yellow.
     #   scheme_level — https -> green; http on loopback -> yellow; http off loopback (remote
     #                  cleartext) -> red.
-    auth_level = "ok" if (authed or local) else "bad"
+    # The no-auth verdict lives in TWO places — here and `sec_level` above — and `max()` below
+    # takes the worst, so softening only one of them would be silently undone.
+    auth_level = "ok" if (authed or local) else ("warn" if contained else "bad")
     iface_level = "warn" if iface in ("All interfaces", "unset") else "ok"
     scheme_level = "ok" if scheme == "https" else ("warn" if local else "bad")
     # `sec_level` stays the WORST across the dimensions (kept for non-pill consumers/back-compat).
     _rank = {"ok": 0, "warn": 1, "bad": 2}
     sec_level = max(sec_level, auth_level, iface_level, scheme_level, key=_rank.__getitem__)
+    # WHY this row is yellow, resolved HERE and carried — so the summary can aggregate without
+    # re-reading firewall state. Only "unauthenticated but verified source-restricted" earns the
+    # `lan-exposed` wording; every other yellow (local cleartext http, authenticated-but-public,
+    # an unappliable no-CIDR intent) is a different fact and must read as a generic review.
+    warn_reason = "restricted_noauth" if (contained and sec_level == "warn") else (
+        "review" if sec_level == "warn" else "")
     return {"iface": iface, "auth": auth, "sec_level": sec_level, "scheme": scheme,
-            "auth_level": auth_level, "iface_level": iface_level, "scheme_level": scheme_level}
+            "auth_level": auth_level, "iface_level": iface_level, "scheme_level": scheme_level,
+            "warn_reason": warn_reason}
+
+
+def posture_for(desired: dict, applied: dict | None, live_scope: str,
+                firewall_contained: bool | None = None) -> dict:
+    """`posture()` for a listener, resolved against what is ACTUALLY live.
+
+    SAVING IS NOT APPLYING. Every field the summary pill colours — bind, scheme, access mode,
+    allowed CIDRs — is written by a Save and only takes effect at Apply, while the old nginx keeps
+    serving the OLD policy on the OLD socket. Colouring a live listener with the saved policy
+    therefore turns "I intend to lock this down" into "it is locked down": narrowing the bind,
+    adding client auth, switching to https or tightening the CIDR list each read safer immediately,
+    before a single byte reached nginx. So:
+
+      * nothing live (`absent`) — the pill describes DESIRED config. There is no listener to
+        misrepresent, and intent is all there is to show;
+      * live LOOPBACK — local, whatever any policy says: the socket cannot be reached off-box.
+        Auth/scheme still come from the applied policy, which describes that same live listener;
+      * live EXPOSED — the APPLIED policy, never the saved one;
+      * live EXPOSED with NO recorded applied policy (never applied, or the record is old or
+        malformed) — nothing is known about what protects it, so fail closed: unauthenticated,
+        no source restriction, never green. One Apply records it and the pill recovers.
+
+    `desired`/`applied` are the plain field dicts described in `applied_snapshot_of`. An
+    independently live-verified firewall containment may still soften the applied verdict — that
+    is evidence about the running socket, not about saved intent."""
+    if live_scope == "loopback":
+        pol = applied or {}
+        return posture(local=True, public=False,
+                       access_mode=pol.get("access_mode", desired["access_mode"]),
+                       has_cidrs=bool(pol.get("allowed_cidrs", ())) if pol else desired["has_cidrs"],
+                       scheme=pol.get("scheme", desired["scheme"]))
+    if live_scope != "exposed":
+        return posture(local=desired["local"], public=desired["public"],
+                       access_mode=desired["access_mode"], has_cidrs=desired["has_cidrs"],
+                       scheme=desired["scheme"], firewall_contained=firewall_contained)
+    if not applied:
+        # `access_mode="unknown"` is not one of the two authenticated modes, and `has_cidrs=False`
+        # renders the iface as "unset" — the honest "we cannot say" state, which is red.
+        # `firewall_contained` is withheld here ON PURPOSE, not by oversight: containment softens
+        # "unauthenticated but source-restricted", and with no applied policy we do not know
+        # whether this listener is authenticated at all. (posture() would drop it anyway on
+        # has_cidrs=False — do not rely on that coincidence.)
+        return posture(local=False, public=False, access_mode="unknown", has_cidrs=False,
+                       scheme=desired["scheme"])
+    return posture(local=False, public=bool(applied.get("public")),
+                   access_mode=applied.get("access_mode", "unknown"),
+                   has_cidrs=bool(applied.get("allowed_cidrs")),
+                   scheme=applied.get("scheme", desired["scheme"]),
+                   firewall_contained=firewall_contained)
+
+
+def applied_snapshot_of(cfg: WebserverConfig, stack_webs=()) -> dict:
+    """The policy that was just ACTIVATED in nginx — the console's and every enabled proxy's.
+
+    Recorded ONLY by the Apply path, and only after the config was promoted, the reload/restart
+    succeeded AND the listener-match gate passed. `verify()` never writes it: validating the
+    desired config proves it COULD be loaded, not that it IS. Kept beside `desired_snapshot`
+    rather than replacing it — the two differ exactly in the saved-but-not-applied window that
+    `posture_for` exists to render honestly."""
+    return {
+        "console": {"bind": cfg.bind, "port": int(cfg.port), "scheme": cfg.scheme,
+                    "access_mode": cfg.access_mode,
+                    "allowed_cidrs": list(cfg.allowed_cidrs),
+                    "public": cidr_set_is_public(cfg.allowed_cidrs)},
+        "proxies": [{"stack_id": p.swc.stack_id, "mode": p.swc.mode,
+                     # Bind semantics, as the renderer emits them: a proxy listens 0.0.0.0 when
+                     # remote and 127.0.0.1 when local (see `_stack_blocks`).
+                     "bind": "0.0.0.0" if p.swc.remote else "127.0.0.1",
+                     "remote": bool(p.swc.remote), "port": int(p.swc.port),
+                     "scheme": p.swc.scheme, "access_mode": p.swc.access_mode,
+                     "allowed_cidrs": list(p.swc.allowed_cidrs),
+                     "public": p.swc.mode == "public"}
+                    for p in stack_webs if p.swc.enabled],
+        "at": _now_iso(),
+    }
+
+
+def read_applied(paths: Paths) -> dict:
+    """The last ACTIVATED policy from the existing evidence file, or `{}`.
+
+    `{}` means UNKNOWN — missing, written by an older version, or structurally wrong — and an
+    unknown policy behind a live exposed listener must never read green (`posture_for`). No new
+    state file: this rides in the evidence `verify()` already writes."""
+    snap = read_evidence(paths).get("applied_snapshot")
+    if not isinstance(snap, dict):
+        return {}
+    if not isinstance(snap.get("console"), dict) or not isinstance(snap.get("proxies"), list):
+        return {}
+    return snap
+
+
+def applied_proxy(applied: dict, stack_id: str) -> dict:
+    """One stack's entry from an applied snapshot, or `{}` (unknown => conservative)."""
+    for p in (applied or {}).get("proxies") or []:
+        if isinstance(p, dict) and p.get("stack_id") == stack_id:
+            return p
+    return {}
+
+
+def record_applied(paths: Paths, cfg: WebserverConfig, stack_webs=()) -> dict:
+    """Advance `applied_snapshot` in the evidence file. ONLY the Apply/start path calls this, and
+    only once activation is proven. A failed validate/reload/restart, and every standalone
+    `verify`, leave the previous snapshot byte-for-byte alone."""
+    ev = read_evidence(paths)
+    if not ev:
+        return {}                              # no evidence to amend; nothing was proven either
+    snap = applied_snapshot_of(cfg, stack_webs)
+    write_evidence(paths, {**{k: v for k, v in ev.items() if k != "schema"},
+                           "applied_snapshot": snap})
+    return snap
 
 
 def exposure_warnings(*, remote: bool, access_mode: str, allowed_cidrs, bind: str, port: int,
@@ -863,22 +1012,30 @@ def console_urls(cfg: WebserverConfig) -> list[str]:
     return ([f"{cfg.scheme}://{ip}:{cfg.port}/", loopback] if ip else [loopback])
 
 
-def stack_ui_urls(swc) -> list:
-    """URLs a stack's proxied web UI answers on, most useful first — DISPLAY only.
+def stack_ui_urls(swc, port: int | None = None) -> list:
+    """URLs a stack's proxied web UI ANSWERS on, most useful first — DISPLAY only.
 
     A `local` proxy really is loopback-only, so we never hand a remote browser a LAN URL it cannot
-    reach, nor a loopback URL pretending to be reachable. `local_ip()` fail-softs to ''."""
+    reach, nor a loopback URL pretending to be reachable. `local_ip()` fail-softs to ''.
+
+    `port` overrides the desired one with the port a listener was actually found on: after a saved
+    but unapplied port move the running nginx still holds the OLD socket, and offering the new
+    number here would hand out URLs that connect to nothing. Defaults to the desired port, which
+    is the honest answer when nothing is live."""
     if not swc.enabled:
         return []
-    loopback = f"{swc.scheme}://127.0.0.1:{swc.port}/"
+    p = port or swc.port
+    loopback = f"{swc.scheme}://127.0.0.1:{p}/"
     if not swc.remote:
         return [loopback]
     ip = local_ip()
-    return ([f"{swc.scheme}://{ip}:{swc.port}/", loopback] if ip else [loopback])
+    return ([f"{swc.scheme}://{ip}:{p}/", loopback] if ip else [loopback])
 
 
 def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | None = None,
-                 served_via_nginx: bool | None = None) -> dict:
+                 served_via_nginx: bool | None = None,
+                 firewall_contained: bool | None = None,
+                 applied_console: dict | None = None, live_port: int | None = None) -> dict:
     """READ-ONLY status for Monitor/GET. Merges DESIRED config (intent) with EFFECTIVE evidence +
     read-only PKI state. It never infers active/exposed from desired config, and makes NO
     network/subprocess probe — but the console's listener SCOPE is local /proc evidence, allowed here.
@@ -887,17 +1044,29 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     when the caller supplies it (the GUI path does) it is authoritative, so the panel is correct
     without a re-verify. When None, fall back to the scope persisted by the last `verify()`. It is a
     SCOPE STRING, not a bool, on purpose: a bool collapses `loopback` and `absent`, which would make
-    "listener is still loopback-only" a lie when nginx is not running at all."""
+    "listener is still loopback-only" a lie when nginx is not running at all.
+
+    `applied_console` is the console half of the last ACTIVATED policy (see `applied_snapshot_of`)
+    and `live_port` the port the caller actually found a listener on — after a saved port move
+    that is the OLD port, and the still-live old listener is what has to be represented."""
     ev = read_evidence(paths)
     effective = ev.get("effective", {}) if isinstance(ev.get("effective"), dict) else {}
     scope = live_listener_scope if live_listener_scope is not None else effective.get("listener_scope")
     proven = (scope == "exposed") if scope is not None else bool(effective.get("remote_listener"))
     if live_listener_scope is not None:
         effective = {**effective, "remote_listener": proven, "listener_scope": scope}
+    applied_console = applied_console or {}
+    port = int(live_port) if live_port else int(cfg.port)
+    # Name the socket that EXISTS. With a live listener behind an applied policy, its bind/port are
+    # the applied ones — after a saved port or bind change the desired pair describes a listener
+    # nobody can reach yet, and reporting it as "remote listener active" would be a lie.
+    bind = cfg.bind
+    if scope in ("exposed", "loopback") and applied_console.get("bind"):
+        bind = applied_console["bind"]
     # Shared remote-exposure/auth/listener warnings (identical wording+values on the console AND every
     # per-stack proxy — see exposure_warnings). The console appends its own extra lines below.
     warnings = exposure_warnings(remote=cfg.remote_exposed, access_mode=cfg.access_mode,
-                                 allowed_cidrs=cfg.allowed_cidrs, bind=cfg.bind, port=cfg.port,
+                                 allowed_cidrs=cfg.allowed_cidrs, bind=bind, port=port,
                                  live_scope=scope)
     # Declared system (apt) dependencies with their LAST-PROVEN present/absent status (from cached
     # verify evidence — nginx presence is not re-checked here; only the listener scope, if the caller
@@ -935,13 +1104,17 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
         # "lhpc-web" when served directly (the raw dev server / no proxy). No grey — lhpc-web is always up
         # while this page renders.
         "posture": {
-            **posture(local=_is_loopback_bind(cfg.bind),
-                      public=any(_is_public_default_route(c) for c in cfg.allowed_cidrs),
-                      access_mode=cfg.access_mode, has_cidrs=bool(cfg.allowed_cidrs),
-                      scheme=cfg.scheme),
+            **posture_for({"local": _is_loopback_bind(cfg.bind),
+                           "public": cidr_set_is_public(cfg.allowed_cidrs),
+                           "access_mode": cfg.access_mode,
+                           "has_cidrs": bool(cfg.allowed_cidrs), "scheme": cfg.scheme},
+                          applied_console, scope, firewall_contained=firewall_contained),
             "run": "nginx" if via_nginx else "lhpc-web",
             "run_level": "ok" if via_nginx else "warn",
         },
+        # The port a listener was actually found on — the OLD one while a saved port move is
+        # unapplied. `desired.port` stays untouched for the settings form.
+        "live_port": port,
         "pending": bool(scope is not None
                         and (scope == "absent" or cfg.remote_exposed != (scope == "exposed"))),
         "checks": checks,
@@ -953,7 +1126,7 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
 
 
 def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
-           probe_console: bool = False) -> dict:
+           probe_console: bool = False, bypassable=None) -> dict:
     """Assemble the effective-state proof checklist and PERSIST it as evidence. Static + config
     checks are proven here (deps present, CA/cert present, nginx -t valid). The console's LISTENER
     SCOPE is proven from /proc/net/tcp (local evidence, not a network/subprocess probe); the
@@ -962,8 +1135,18 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
     unless the listener is actually bound off-loopback.
 
     `stack_webs` MUST be the same proxy set `apply` would promote. Validating a console-only config
-    and then reporting "verified" would be a lie about a config that is never loaded."""
+    and then reporting "verified" would be a lie about a config that is never loaded.
+
+    `applied_snapshot` is CARRIED FORWARD verbatim, never recomputed here: verifying proves the
+    desired config is valid and says nothing about whether it was activated. Only the Apply path
+    advances it (`record_applied`), so a Save + Verify cycle can never make the still-running old
+    policy look like the new one.
+
+    `bypassable` (optional) decides whether a stack's off-loopback upstream really is reachable
+    around the proxy; without it any off-loopback upstream counts, which over-warns for an
+    endpoint the verified firewall provably drops."""
     checks: dict = {}
+    prior = read_evidence(paths)
     plan = plan_exposure(cfg)
     problems = list(plan["problems"])
     # Each stack proxy is part of the desired config; its problems are the config's problems.
@@ -1036,7 +1219,9 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
             "scheme": p.swc.scheme, "access_mode": p.swc.access_mode,
             "allowed_cidrs": list(p.swc.allowed_cidrs),
             "upstream": p.upstream_address, "upstream_scheme": p.upstream_scheme,
-            "upstream_scope": scope, "bypassable": scope == "exposed",
+            "upstream_scope": scope,
+            "bypassable": (bool(bypassable(up_port)) if bypassable is not None
+                           else scope == "exposed"),
             "listener_scope": own_scope,
             # EXACT scope required: local ⇒ "loopback", lan/public ⇒ "exposed". ABSENT always FAILS —
             # an enabled proxy with no listener is a dead front-end, not a successful local bind
@@ -1087,5 +1272,7 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
             "remote_exposed": cfg.remote_exposed, "scheme": cfg.scheme,
         },
     }
+    if prior.get("applied_snapshot") is not None:
+        evidence["applied_snapshot"] = prior["applied_snapshot"]
     write_evidence(paths, evidence)
     return evidence

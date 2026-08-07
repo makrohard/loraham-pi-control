@@ -118,13 +118,18 @@
       sub.addEventListener("toggle", function () {
         if (!sub.open) { return; }                 // react to USER OPEN only
         if (programmaticOpen) { return; }           // scripted open (restore/hashchange) — leave it be
-        var sibs = sub.parentElement ? sub.parentElement.children : [];
-        for (var i = 0; i < sibs.length; i++) {
-          var o = sibs[i];
-          if (o !== sub && o.tagName === "DETAILS" && o.classList.contains("advcfg") && o.open) {
-            o.open = false;
-          }
-        }
+        // Scope by the owning stack BODY and use the ancestor chain — not parentElement.children.
+        // Install / Info / Settings are NOT siblings (they sit at different depths in
+        // _stack_body.html), so a sibling scan closed nothing and all three could stand open.
+        // Rule: opening a panel closes every other panel in the same stack body that is neither
+        // an ANCESTOR of it (those must stay open to keep it visible) nor INSIDE it.
+        var body = sub.closest(".stackrow-body");
+        if (!body) { return; }
+        body.querySelectorAll("details.advcfg").forEach(function (o) {
+          if (o === sub || !o.open) { return; }
+          if (o.contains(sub) || sub.contains(o)) { return; }
+          o.open = false;
+        });
       });
     });
   }

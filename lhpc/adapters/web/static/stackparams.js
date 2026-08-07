@@ -51,8 +51,11 @@
     return false;
   }
 
-  // A Save/Reset button (not the main Apply) must never trigger the prompt.
+  // A Save/Reset button (not the main Apply) must never trigger the prompt. ONE predicate for
+  // both truths — the submitter when the browser reports it, and the one-shot click intent when
+  // it does not — so the two can never disagree about what a panel submit is.
   function isPanelSubmit(by) {
+    if (saveIntent != null) return true;   // != null: `var` hoists as undefined until assigned
     if (!by) return false;
     if (by.name === "_save") return true;
     var c = by.className || "";
@@ -67,7 +70,30 @@
       form.appendChild(el);
     }
     el.value = value;
+    // Injected fields belong to ONE submission. They used to persist: after a "Save & start",
+    // `_save`/`_save_then_start` stayed in the DOM, so a later unchanged-params Apply still
+    // posted them and silently became a save. Drop them on the next macrotask — after the
+    // browser has serialized this submission, before any later click can reuse them.
+    setTimeout(dropInjected, 0);
   }
+  function dropInjected() {
+    form.querySelectorAll("input[data-injected]").forEach(function (el) { el.remove(); });
+  }
+
+  // ONE-SHOT Save intent. Both inline panel Save buttons (`_save=stack` and `_save=daemon`) live
+  // inside the confirm form, which carries `confirmed=yes` — so a submission that loses the
+  // submitter is a CONFIRMED APPLY and starts the stack. Recording the intent on click makes
+  // `_save` independent of `e.submitter`. It is deliberately one-shot and cleared on the next
+  // macrotask: a click whose submission never happens (native validation, another guard) must
+  // never leak into a later Apply.
+  var saveIntent = null;
+  function armSaveIntent(value) {
+    saveIntent = value;
+    setTimeout(function () { saveIntent = null; }, 0);
+  }
+  form.querySelectorAll('button[name="_save"]').forEach(function (btn) {
+    btn.addEventListener("click", function () { armSaveIntent(btn.value || "stack"); });
+  });
 
   // Minimal 3-choice modal (Save+start / Start without saving / Cancel). DOM-built from static
   // strings only — keeps the repo's "textContent, never innerHTML" invariant grep-clean.
@@ -109,7 +135,12 @@
 
   form.addEventListener("submit", function (e) {
     if (form.dataset.proceed === "1") { form.dataset.proceed = ""; return; }  // second pass: allow
-    if (isPanelSubmit(e.submitter)) return;                     // Save/Reset: no prompt
+    if (isPanelSubmit(e.submitter)) {                           // Save/Reset: no prompt
+      // A pending Save intent carries this submission: pin `_save` for it, because the form is
+      // `confirmed=yes` and without the field this request IS a start. Then consume the intent.
+      if (saveIntent !== null) { addHidden("_save", saveIntent); saveIntent = null; }
+      return;
+    }
     if (!anyChanged()) return;                                  // unchanged: ephemeral == config
     e.preventDefault();
     pendingSubmitter = e.submitter || null;

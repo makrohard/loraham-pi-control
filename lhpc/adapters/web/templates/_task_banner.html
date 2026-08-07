@@ -11,12 +11,14 @@
                                'unsafe': 'UNSAFE — needs attention'}.get(t.state, t.state) }}</span>
     {# Always render the hint span (hidden when empty) so it matches taskbanner.js's row shape — the
        client re-render does `row.querySelector('.ti-hint')` and would crash on a hint-less task. #}
-    <span class="ti-hint"{% if not t.hint %} style="display:none"{% endif %}>{{ t.hint }}</span>
+    {# A class, never style="display:none" — the console's CSP has no 'unsafe-inline', so
+       style-src-attr blocks an inline style attribute and the browser reports it. #}
+    <span class="ti-hint{% if not t.hint %} is-empty{% endif %}">{{ t.hint }}</span>
     <a class="ti-view" href="{{ t.href }}">view &rarr;</a>
     {% if t.state == 'unsafe' and t.kind == 'job' %}
     <button type="button" class="ti-recover">Recover</button>
     {% elif t.state == 'failed' and not t.no_dismiss %}
-    <button type="button" class="ti-close" title="Dismiss">&times;</button>
+    <button type="button" class="ti-close" title="Dismiss" aria-label="Dismiss">&times;</button>
     {% endif %}
   </div>
   {% endfor %}

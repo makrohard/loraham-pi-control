@@ -434,6 +434,10 @@ class Component:
                                  # interpreter already exists) can never read "built"
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
+    # A TEST FACILITY, not an operator choice: never offered as an optional start, never
+    # auto-installed. `optional` alone could not express this — it made the meshcom GPS relay
+    # (which replays a synthetic NMEA file) sit on the confirm page beside the real feed.
+    test_fixture: bool = False
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters
     requires_daemon_tx: str = ""             # daemon TX mode this component needs (MANAGED/DIRECT)
     interactive: bool = False    # must be run by the operator in a terminal (e.g. a TUI);

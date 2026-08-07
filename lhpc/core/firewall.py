@@ -144,7 +144,11 @@ def _cidr_list_errors(cidrs, fam: str, path: str, errors: list) -> None:
 
 def _scopes_overlap(a: dict, b: dict) -> bool:
     """Full-scope overlap (proto + family + address + port) — NEVER the bare port number.
-    Wildcard addresses overlap anything in an overlapping family; 'dual' overlaps both."""
+    Wildcard addresses overlap anything in an overlapping family; 'dual' overlaps both.
+
+    SYMMETRIC, and deliberately permissive: it answers "could these two touch?", which is the
+    right question when REFUSING an extra_allow that grazes a deny scope. It is the WRONG
+    question for proving protection — see `scope_covers` below."""
     if a.get("proto") != b.get("proto") or a.get("port") != b.get("port"):
         return False
     fa, fb = a.get("family"), b.get("family")
@@ -152,6 +156,40 @@ def _scopes_overlap(a: dict, b: dict) -> bool:
         return False
     aa, ab = a.get("addr"), b.get("addr")
     return aa == "*" or ab == "*" or aa == ab
+
+
+def scope_covers(protector: dict, listener: dict) -> bool:
+    """Does `protector` cover the ENTIRE `listener` scope? DIRECTIONAL — coverage, not overlap.
+
+    `_scopes_overlap` must never be used for this: it treats ipv4-vs-dual and
+    concrete-vs-wildcard as a match, so an IPv4-only rule would "prove" a dual listener safe and
+    a rule for one address would "prove" a wildcard listener safe. Both are false negatives for
+    reachability, i.e. a green badge on a port that is still reachable.
+
+    Coverage requires: same proto, same port, the protector's family to CONTAIN the listener's,
+    and the protector's address to contain the listener's (a wildcard protector covers a concrete
+    listener; a concrete protector never covers a wildcard one).
+
+    IPv6 wildcard caveat: `tcp_listeners()` reads /proc/net/tcp and /proc/net/tcp6 and tags each
+    record ipv4 or ipv6 — never dual. A socket bound `::` with the default bindv6only=0 also
+    accepts IPv4 while appearing only as one ipv6 record, so an ipv6 protector would wrongly
+    cover it. A wildcard IPv6 listener therefore demands a DUAL protector."""
+    if protector.get("proto") != listener.get("proto"):
+        return False
+    if protector.get("port") != listener.get("port"):
+        return False
+    pf, lf = protector.get("family"), listener.get("family")
+    la = listener.get("addr") or "*"
+    if lf == "ipv6" and la == "*":
+        # `::` accepts IPv4 too; only dual protection covers both halves.
+        if pf != "dual":
+            return False
+    elif pf != "dual" and pf != lf:
+        return False
+    # Same normalisation the siblings use (_scopes_overlap / firewall_helper): a missing addr
+    # means the wildcard, not "matches nothing".
+    pa = protector.get("addr") or "*"
+    return pa == "*" or pa == la
 
 
 # --- validation ------------------------------------------------------------------------------

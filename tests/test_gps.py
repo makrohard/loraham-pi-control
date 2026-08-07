@@ -2215,3 +2215,34 @@ def test_a_gpsd_sending_a_real_fix_becomes_ready(tmp_path, fake_gpsd):
     finally:
         srv.close()
     assert ready.state == "ready" and ready.fixes > 0, ready.state
+
+
+def test_production_gps_feed_is_not_an_optional_start_choice(tmp_path):
+    # Whether a production feed runs is decided by the stack's `use_gps` switch plus the global
+    # source — never by a per-start checkbox. Offering one let the operator contradict the
+    # position plan (and a direct start is refused anyway: "the current position plan does not
+    # use it"), and it put a SECOND GPS entry beside the fixture on the confirm page.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    feeds = svc._all_gps_feed_ids()
+    assert "meshcom-gps" in feeds and "meshtastic-gps" in feeds
+    for sid in ("meshcom", "meshtastic"):
+        offered = {o["id"] for o in svc.config_view(sid)["optional"]}
+        assert not (offered & feeds), f"{sid} still offers a production GPS feed: {offered & feeds}"
+
+
+def test_the_gps_fixture_is_not_an_operator_start_choice(tmp_path):
+    # meshcom-gps-relay replays a checked-in synthetic NMEA file. It sat on the confirm page as an
+    # ordinary optional component, beside the real feed — two GPS entries, one of which silently
+    # ignores the global source. `optional` could not express "test facility" (it already means
+    # "not started with the stack"), hence the explicit `test_fixture` declaration.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    relay = next(c for c in svc.stack("meshcom").components if c.id == "meshcom-gps-relay")
+    assert relay.test_fixture is True and relay.optional is True
+    assert not {o["id"] for o in svc.config_view("meshcom")["optional"]}, \
+        "meshcom must offer no GPS start choices at all — use_gps is the opt-out"
+    # ...but a genuine optional component is still offered (guard against over-filtering).
+    assert "loraham-kiss-serial" in {o["id"] for o in svc.config_view("kiss")["optional"]}

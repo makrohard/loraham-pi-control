@@ -349,6 +349,17 @@ validation, and PKI presence. Live listener / HTTPS-cert-presented / mTLS-behavi
 revocation-enforcement are proven only under opt-in integration with a real proxy; in their
 absence remote exposure is treated as **not proven active**.
 
+**Verify does not activate anything, and it does not record activation.** Beside the desired
+config, the evidence file keeps an *applied snapshot*: the console's and every enabled proxy's
+bind/port/scheme/access-mode/allowed-CIDRs as they were when nginx last **successfully loaded
+them** (config promoted, reload or restart succeeded, listeners verified). That is what the
+security pills colour a LIVE listener with — never the freshly saved policy, which nginx has not
+seen yet. So narrowing the bind, adding client authentication, switching to HTTPS or tightening
+the allow-list all read unchanged until you run `apply`; a saved port change keeps the *old* port
+represented, because that is where the socket still is. Until the first `apply` on an upgraded
+box there is no applied snapshot, and a live **exposed** listener therefore reads red ("policy
+unknown") — one `apply` records it. A loopback listener is unaffected.
+
 ## Applying changes / recovery
 
 `lhpc webserver apply` (or the GUI **Apply**) regenerates the Nginx config, **validates it with

@@ -1092,3 +1092,18 @@ def test_empty_non_default_override_is_kept(tmp_path):
     assert svc.save_config_bundle("s", values={"opt": ""}).ok
     assert cfgmod.load_stack_config(svc._paths, "s").get("opt") == ""   # empty override persisted
     assert svc.stack_config("s")["opt"] == ""
+
+
+def test_save_only_rerender_never_hands_back_the_hmac_managed_param(tmp_path):
+    # Save on the start-confirm page re-renders with the SAVED values. stack_config() returns the
+    # whole saved config — `password_file` included — and handing that back as an ephemeral start
+    # override made the NEXT submit post it, so the start refused with "managed by the HMAC
+    # password flow". start_param_fields() is the HMAC-filtered set the form legitimately owns;
+    # the re-render must be restricted to it.
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    owned = {f["key"] for f in svc.start_param_fields("meshcom") if f["kind"] == "run"}
+    assert owned, "meshcom should expose start params"
+    assert not [k for k in owned if k.endswith("password_file")], \
+        "an HMAC-managed param must never be offered as a start override"
