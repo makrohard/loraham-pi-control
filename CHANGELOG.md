@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `meshcore-cli` repinned to `v1.5.0-68-g3921259` (self-reported v1.6.0) — rxlog/msgs handlers and the aliases mechanism; the `meshcli` entrypoint and every flag this manifest renders (`-t -p -j -D`) are unchanged
 - MeshCom firmware repinned to icssw-org release `v4.35p.08.06` (adds the PL country preset; `lora_setchip` and `mheard` fixes) — the QEMU overlay patch is untouched by that range
 - Smoke-test fixes: MeshCore Node Manager starts under the read-only-home sandbox (its state moves to `state/meshcore-nm`; an old `~/.meshcore_nm` is left behind), the Chat command block renders again, licensed running stacks report TX enabled, Save on the start-confirm page no longer starts the stack, and exposure pills judge the live listener — its real port, and the policy nginx actually applied — against the verified firewall (a remotely exposed console reads red until one `webserver apply` records that policy)
 - Dashboard endpoint pills show a working address for the current viewer, never a dead link

@@ -2122,8 +2122,8 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    pin_commit = "56b246b4d45174817936c0fc910897b52bec66b4"
-    pin_tag = "v1.5.0-63-g56b246b"
+    pin_commit = "3921259a5255620f027d53540e127f444a4ae89b"
+    pin_tag = "v1.5.0-68-g3921259"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
