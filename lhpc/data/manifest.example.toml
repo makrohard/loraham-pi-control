@@ -172,8 +172,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
-    pin_tag = "v112"
+    pin_commit = "10f410706116c685e459900dab9879606237b5b2"
+    pin_tag = "v112-1-g10f4107"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -305,8 +305,8 @@ operator_box = false   # callsign lives in the app's own config file (CALL)
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
-    pin_tag = "v112"
+    pin_commit = "10f410706116c685e459900dab9879606237b5b2"
+    pin_tag = "v112-1-g10f4107"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -380,8 +380,8 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "e9b7cd22326c7e34930737d2010047da3e902fa0"
-    pin_tag = "v112"
+    pin_commit = "10f410706116c685e459900dab9879606237b5b2"
+    pin_tag = "v112-1-g10f4107"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"

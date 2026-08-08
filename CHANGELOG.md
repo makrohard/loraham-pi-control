@@ -4,6 +4,7 @@
 
 - `meshcore-cli` repinned to `v1.5.0-68-g3921259` (self-reported v1.6.0) — rxlog/msgs handlers and the aliases mechanism; the `meshcli` entrypoint and every flag this manifest renders (`-t -p -j -D`) are unchanged
 - MeshCom firmware repinned to icssw-org release `v4.35p.08.06` (adds the PL country preset; `lora_setchip` and `mheard` fixes) — the QEMU overlay patch is untouched by that range
+- LoRaHAM daemon, chat and iGate repinned to `v112-1-g10f4107` — relicensed to plain GPLv3 with the original author's permission, so the extra non-commercial and reporting conditions are gone and the repo now ships the licence text. Licence headers, READMEs and the iGate startup banner only; no functional change
 - Smoke-test fixes: MeshCore Node Manager starts under the read-only-home sandbox (its state moves to `state/meshcore-nm`; an old `~/.meshcore_nm` is left behind), the Chat command block renders again, licensed running stacks report TX enabled, Save on the start-confirm page no longer starts the stack, and exposure pills judge the live listener — its real port, and the policy nginx actually applied — against the verified firewall (a remotely exposed console reads red until one `webserver apply` records that policy)
 - Dashboard endpoint pills show a working address for the current viewer, never a dead link
 - Sideband is no longer installed on headless systems. It is a graphical Kivy app, but because Kivy
