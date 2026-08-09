@@ -882,7 +882,13 @@ class MaintenanceOpsMixin:
         """What the operator actually dismissed: the optional/GUI shortfall, by count. Dismissing
         records this; a LARGER shortfall later does not match and the note returns. So "I know,
         it's a headless box" is remembered, while a genuinely new missing dependency is not
-        silently swallowed."""
+        silently swallowed.
+
+        `external_missing` is deliberately NOT part of the signature: an upstream app the
+        operator never opted into is not a shortfall of THIS box, and folding it in would
+        invalidate every existing dismissal on upgrade (the note would return on every
+        deployment to report a third-party .deb nobody asked for). It stays visible on
+        /dependencies, which is where opting in is decided."""
         return (f"o{int((summary or {}).get('optional_missing') or 0)}"
                 f":g{int((summary or {}).get('gui_missing') or 0)}")
 
@@ -907,7 +913,7 @@ class MaintenanceOpsMixin:
         colour (yellow if any mandatory unmet, else green if only optional). Composes existing GET-safe
         probes only (shutil.which / fs.exists / find_spec / missing_requirements / is_dir) — no subprocess."""
         def norm(label, satisfied, mandatory, detail, install, runtime=False, note="",
-                 restart_pending=False, gui=False):
+                 restart_pending=False, gui=False, external=False):
             # NARROW action parse: ONLY `lhpc install <target>` / `lhpc build <target>` where the op is a
             # real web action and the target resolves to a known stack — anything else stays copyable.
             op = target = None
@@ -916,12 +922,16 @@ class MaintenanceOpsMixin:
                     and parts[1] in self.WEB_ACTIONS and self.stack(parts[2]) is not None):
                 op, target, install = parts[1], parts[2], ""
             # GUI-only deps are opt-in (--with-gui), so they are never a mandatory core miss on a
-            # headless box — but they stay visible and carry the remediation.
+            # headless box — but they stay visible and carry the remediation. An `external` upstream
+            # app (a versioned release LHPC's bootstrap cannot carry) is warn-level for the same
+            # reason: it gates only its own stack, so it must not yellow the banner for a box that
+            # never runs that stack.
             return {"label": label, "satisfied": bool(satisfied),
-                    "mandatory": bool(mandatory) and not bool(gui),
+                    "mandatory": bool(mandatory) and not bool(gui) and not bool(external),
                     "detail": detail or "", "install": install or "", "op": op, "target": target,
                     "runtime": bool(runtime), "note": note or "",
-                    "restart_pending": bool(restart_pending), "gui": bool(gui)}
+                    "restart_pending": bool(restart_pending), "gui": bool(gui),
+                    "external": bool(external)}
 
         sections: list = []
         # LHPC + web server: controller_system_deps groups carry the explicit required flag (nginx here).
@@ -944,7 +954,8 @@ class MaintenanceOpsMixin:
                     mandatory = not (comp is not None and comp.optional)
                     deps_.append(norm(it.label, it.satisfied, mandatory, it.detail,
                                       it.install_cmd, runtime=it.runtime,
-                                      restart_pending=it.restart_pending, gui=it.gui))
+                                      restart_pending=it.restart_pending, gui=it.gui,
+                                      external=it.external))
             sections.append({"title": s.name, "kind": "stack", "stack": s.id, "deps": deps_})
 
         # A restart-pending groups grant stays UNSATISFIED (start is still gated) but is NOT a mandatory
@@ -958,12 +969,19 @@ class MaintenanceOpsMixin:
         # figures can be shown side by side without double-counting the same dependency.
         optional_missing = sum(1 for sec in sections for d in sec["deps"]
                                if not d["satisfied"] and not d["mandatory"]
-                               and not d.get("gui") and not d.get("restart_pending"))
+                               and not d.get("gui") and not d.get("external")
+                               and not d.get("restart_pending"))
         gui_missing = sum(1 for sec in sections for d in sec["deps"]
                           if not d["satisfied"] and d.get("gui"))
+        # Own DISJOINT bucket, like gui_missing: an uninstalled upstream app is not an "optional
+        # dependency missing" for this box — it is one stack the operator has not opted into. A
+        # source-less stack is always listed (nothing to adopt), so counting it as optional made
+        # every deployment permanently unable to report a clean dependency page.
+        external_missing = sum(1 for sec in sections for d in sec["deps"]
+                               if not d["satisfied"] and d.get("external"))
         return {"sections": sections, "mandatory_missing": mandatory_missing,
                 "optional_missing": optional_missing, "restart_pending": restart_pending,
-                "gui_missing": gui_missing}
+                "gui_missing": gui_missing, "external_missing": external_missing}
 
     def _running_source_consumers(self, paths: set) -> list:
         """Component ids that are RUNNING/DEGRADED and consume any of the given source paths —

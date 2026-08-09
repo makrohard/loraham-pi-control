@@ -25,6 +25,7 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 | `igate` | 433 | APRS iGate | [aprs](docs/stacks/aprs.md) |
 | `voice` | 433 / 868 | LoRa voice GUI | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| `graywolf` | via `kiss` | Graywolf APRS station (web UI, digipeater, iGate) — substitutes `igate` | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
 | `meshcore` | 868 | MeshCore Pi node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
@@ -491,7 +492,7 @@ Serving model and the one-click mechanism: [`docs/deployment.md`](docs/deploymen
 | Understand it | [Architecture](docs/architecture.md) |
 | Use it | [CLI](docs/cli.md) · [Operations & safety](docs/operations.md) · [Maintenance](docs/maintenance.md) · [Field notes](docs/field-notes.md) |
 | Web console & remote access | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WiFi access point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
-| Stacks | [Adding a stack](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Stacks | [Adding a stack](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
 | Reference & policy | [Hardening](docs/hardening-0.1.md) · [Provenance](docs/provenance.md) |
 
 Full index: [`docs/README.md`](docs/README.md).

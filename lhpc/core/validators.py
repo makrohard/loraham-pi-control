@@ -271,6 +271,34 @@ def aprs_symbol(value, *, field: str = "value") -> str:
     return s
 
 
+def aprs_filter(value, *, field: str = "value") -> str:
+    """An APRS-IS server filter expression, e.g. `r/48.46/9.96/100 p/DL/DK b/DL1ABC*`.
+
+    The syntax is built out of `/`-separated tokens, so the generic safe-text rules (which
+    forbid `/` and `*`) cannot apply. This stays a strict allow-list — letters, digits and
+    the punctuation the filter grammar actually uses (`/ - . , * space`) — so nothing that
+    could act as shell or protocol syntax survives, even though the value only ever travels
+    as one argv token to a `shell=False` child. Blank means: no filter."""
+    s = str(value).strip()
+    if s == "":
+        return ""
+    if len(s) > 256:
+        raise ValidationError(f"{field}: too long (max 256)")
+    _reject_control(s, field)
+    if not re.fullmatch(r"[A-Za-z0-9/*.,\- ]+", s):
+        raise ValidationError(f"{field}: invalid APRS-IS filter {s!r} — allowed: letters, "
+                              f"digits and / * . , - and spaces")
+    # A value is always its own argv token, so one starting with '-' would be read as an
+    # OPTION by the consumer, not as data — the same rule validate_param applies to bare
+    # positional text. APRS-IS negation filters (`-b/N0CALL*`) are therefore refused here;
+    # set those in graywolf's own UI, where no argv boundary is in the way.
+    if s.startswith("-"):
+        raise ValidationError(
+            f"{field}: a filter may not start with '-' (it would be parsed as an option) — "
+            f"set negation filters in the application's own UI")
+    return s
+
+
 def sync_word(value, *, field: str = "sync word") -> str:
     """A LoRa sync word: a single byte written as hex (e.g. `0x12`, range 0x00–0xFF). Blank is
     allowed (means: leave the source default)."""
@@ -295,6 +323,7 @@ _NAMED = {
     "node_short": node_short_name,
     "path": path_value,
     "aprs_symbol": aprs_symbol,
+    "aprs_filter": aprs_filter,
     "sync": sync_word,
     "text": safe_text,
 }

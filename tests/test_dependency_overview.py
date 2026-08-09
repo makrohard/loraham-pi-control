@@ -81,6 +81,17 @@ def test_group_capability_satisfied_when_in_groups(tmp_path):
     assert _mt_group_dep(ov)["satisfied"] is True
 
 
+def _card(body: str, title: str) -> str:
+    """The one /dependencies card whose <h2> is `title`.
+
+    Page-wide "text not in body" assertions cannot survive a manifest that legitimately
+    contains other rows with that text (an `external` upstream dep renders the see-docs
+    line by design), so a test about ONE dependency scopes itself to ONE card."""
+    i = body.index(f">{title}")
+    j = body.find('<div class="card">', i)
+    return body[i:j if j != -1 else len(body)]
+
+
 def test_uninstalled_stacks_are_not_listed(tmp_path):
     svc = _svc(tmp_path, install=[])                               # nothing installed
     ov = svc.dependency_overview()
@@ -89,10 +100,13 @@ def test_uninstalled_stacks_are_not_listed(tmp_path):
     sourced = {s.id for s in svc.stacks()
                if s.main_component and s.main_component.source}
     assert not (listed & sourced)
-    # EVERY stack is sourced now (meshtastic became a managed build), so nothing is listed until it
-    # is installed. The source-less branch still exists in the code; it simply has no occupant in
-    # the shipped manifest today.
-    assert listed == set()
+    # A stack with NO source has nothing to adopt, so `is_installed` is trivially true and it is
+    # listed from the start. graywolf is that shape: its material is an upstream .deb the operator
+    # installs, so its dependency has to be visible without an install step. Every other stack is
+    # sourced and stays hidden.
+    unsourced = {s.id for s in svc.stacks()
+                 if s.main_component and not s.main_component.source}
+    assert listed == unsourced == {"graywolf"}
 
 
 def test_nginx_is_an_optional_controller_dep(tmp_path):
@@ -101,6 +115,29 @@ def test_nginx_is_an_optional_controller_dep(tmp_path):
     nginx = [d for sec in ov["sections"] if sec["kind"] == "controller"
              for d in sec["deps"] if "nginx" in d["label"]]
     assert nginx and nginx[0]["mandatory"] is False
+
+
+def test_external_upstream_dep_is_warn_level_but_still_gates_start(tmp_path):
+    """An `external` requirement (an upstream release LHPC's bootstrap cannot carry, e.g.
+    the graywolf .deb) must NOT yellow the page for a box that never runs that stack —
+    while still blocking that stack's own start. Absent this split, every deployment
+    without graywolf installed would report a permanent mandatory-missing dependency."""
+    svc = _svc(tmp_path)
+    ov = svc.dependency_overview()
+    gw = [d for sec in ov["sections"] if sec.get("stack") == "graywolf"
+          for d in sec["deps"] if d.get("external")]
+    assert gw, "the graywolf binary dep is not surfaced"
+    dep = gw[0]
+    assert dep["satisfied"] is False           # not installed on the test host
+    assert dep["mandatory"] is False           # ... but warn-level, like a GUI-only dep
+    assert dep["install"] == ""                # no apt command exists for it, by design
+    assert "graywolf" in dep["label"]          # the note carries the operator instruction
+    assert ov["mandatory_missing"] == 0        # the banner stays green for everyone else
+
+    # START is still gated: the stack cannot run without the binary.
+    comp = next(c for s in svc.stacks() if s.id == "graywolf" for c in s.components)
+    missing = svc._lifecycle().missing_requirements(comp)
+    assert [r.cmd for r in missing] == ["graywolf"]
 
 
 def test_build_dependency_becomes_a_narrow_install_action(tmp_path):
@@ -143,7 +180,8 @@ def test_pending_group_grant_shows_restart_command_not_seedocs(tmp_path):
     assert "restart pending" in body                       # badge + summary
     # the copyable restart command renders (Jinja HTML-escapes the quotes; copy.js copies textContent).
     assert "loginctl terminate-user" in body and "apply the grant:" in body
-    assert "no automatic install command" not in body and "sudo usermod" not in body
+    card = _card(body, "Meshtastic")
+    assert "no automatic install command" not in card and "sudo usermod" not in card
 
 
 def test_pending_only_page_is_not_all_satisfied_nor_mandatory_missing(tmp_path):
@@ -180,7 +218,8 @@ def test_command_less_controller_dep_shows_its_note_not_seedocs(tmp_path, monkey
                 for d in sec["deps"] if "systemd" in d["label"])
     assert not sysd["satisfied"] and sysd["install"] == "" and sysd["note"]
     body = _client(svc).get("/dependencies").get_data(as_text=True)
-    assert "managed-service mode is unavailable" in body and "no automatic install command" not in body
+    assert "managed-service mode is unavailable" in body
+    assert "no automatic install command" not in _card(body, "LHPC")
 
 
 def test_dependencies_page_renders_install_action_form(tmp_path):

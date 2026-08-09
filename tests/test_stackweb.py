@@ -554,12 +554,28 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     # The default is deterministic per stack, NOT "first free above the console" — which handed
     # every not-yet-enabled stack 8444, so accepting two suggestions collided on 8444.
     svc = _svc(tmp_path)
-    assert svc.stack_web_view("meshcom")["suggested_port"] == 8444
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8445   # distinct even when neither is enabled
+    # console_port + 1 + position among the web-UI stacks sorted BY ID, so "graywolf"
+    # takes the first slot and the mesh* stacks follow it.
+    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
+    assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
+    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8446   # distinct even when none is enabled
     # stable after one is enabled
-    svc.stack_web_configure("meshcom", mode="local", port=8444)
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8445
-    assert svc.stack_web_view("meshcom")["suggested_port"] == 8444
+    svc.stack_web_configure("meshcom", mode="local", port=8445)
+    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8446
+    assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
+    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
+
+
+def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
+    # Positional defaults are only stable while the eligible SET is stable: adding a stack whose
+    # id sorts earlier shifts everyone after it, and on an upgraded box that shift can land on a
+    # port another stack has ALREADY saved. A suggestion Apply would refuse ("already used by
+    # another stack's web UI") is a dead prefill, so a taken port is skipped.
+    svc = _svc(tmp_path)
+    assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
+    svc.stack_web_configure("meshcom", mode="local", port=8444)      # the pre-upgrade choice
+    assert svc.stack_web_view("graywolf")["suggested_port"] == 8445   # not the taken 8444
+    assert svc.stack_web_view("meshcom")["suggested_port"] == 8444    # its own saved port stands
 
 
 def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path):
@@ -572,7 +588,7 @@ def test_default_port_prefills_the_form_so_saving_enables_the_proxy(tmp_path):
     i = body.index('id="stack-webserver-meshcom"')
     panel = body[i:body.index("</details>", i)]
     m = re.search(r'<input name="port"[^>]*>', panel)
-    assert m and 'value="8444"' in m.group(0), m.group(0) if m else "no port input"
+    assert m and 'value="8445"' in m.group(0), m.group(0) if m else "no port input"
 
 
 def test_enabled_stack_reaches_the_rendered_nginx_config(tmp_path):

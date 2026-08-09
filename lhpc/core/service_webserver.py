@@ -680,10 +680,25 @@ class WebserverOpsMixin:
         gave every not-yet-enabled stack the SAME port (8444), so accepting two suggestions collided.
 
         A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
-        no port key, so a fresh deployment's rendered nginx stays unchanged."""
+        no port key, so a fresh deployment's rendered nginx stays unchanged.
+
+        Positional stability holds only while the eligible SET does not change. Adding a stack
+        whose id sorts earlier shifts everyone after it, and on an upgraded box the shifted
+        suggestion can land on a port another stack has already SAVED — the prefill would then be
+        refused at Apply ("already used by another stack's web UI"), i.e. a one-click default that
+        cannot be accepted. So ports already claimed by another stack are skipped: the positional
+        value is the starting point, not the answer."""
         eligible = sorted(self.stack_web_eligible())
         pos = eligible.index(stack_id) if stack_id in eligible else 0
-        return min(max(console_port, 1023) + 1 + pos, 65535)
+        saved = self.config().stackweb
+        taken = {int(cfg.port) for sid, cfg in saved.items()
+                 if sid != stack_id and getattr(cfg, "port", 0)}
+        port = min(max(console_port, 1023) + 1 + pos, 65535)
+        while port in taken or port == console_port:
+            if port >= 65535:
+                return 65535
+            port += 1
+        return port
 
     @staticmethod
     def _exposure_missing(plan, *, confirm, confirm_public, cidr_flag) -> list:

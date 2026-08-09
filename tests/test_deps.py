@@ -711,21 +711,29 @@ def test_all_gui_declarations_stay_gui_only(tmp_path):
     assert deps[0]["mandatory"] is False                              # GUI-only is never mandatory
 
 
-def test_optional_and_gui_counters_are_disjoint(tmp_path):
+def test_optional_gui_and_external_counters_are_disjoint(tmp_path):
+    # Three warn-level buckets, each counted ONCE: an opt-in GUI toolkit, an upstream app the
+    # operator installs themselves (`external`), and everything else optional. Overlap would
+    # double-report the same dependency in the page header.
     svc = _svc(tmp_path)
     ov = svc.dependency_overview()
     for sec in ov["sections"]:
         for d in sec["deps"]:
-            if d.get("gui"):
+            if d.get("gui") or d.get("external"):
                 assert d["mandatory"] is False
     gui = [d for sec in ov["sections"] for d in sec["deps"]
            if not d["satisfied"] and d.get("gui")]
+    ext = [d for sec in ov["sections"] for d in sec["deps"]
+           if not d["satisfied"] and d.get("external")]
     opt = [d for sec in ov["sections"] for d in sec["deps"]
            if not d["satisfied"] and not d["mandatory"] and not d.get("gui")
-           and not d.get("restart_pending")]
+           and not d.get("external") and not d.get("restart_pending")]
     assert ov["gui_missing"] == len(gui)
+    assert ov["external_missing"] == len(ext)
     assert ov["optional_missing"] == len(opt)
-    assert not [d for d in gui if d in opt]                           # no dep counted twice
+    assert ext, "the graywolf binary should be reported as an external dependency"
+    for a, b in ((gui, opt), (ext, opt), (gui, ext)):                 # no dep counted twice
+        assert not [d for d in a if d in b]
 
 
 # --- managed server-only Meshtastic ---------------------------------------------------------------

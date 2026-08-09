@@ -27,6 +27,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 | `igate` | 433 | APRS-iGate | [aprs](docs/stacks/aprs.md) |
 | `voice` | 433 / 868 | LoRa-Sprache (GUI) | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS-TNC über TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) — ersetzt `igate` | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
 | `meshcore` | 868 | MeshCore-Pi-Node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
@@ -507,7 +508,7 @@ Betriebsmodell und Ein-Klick-Mechanik: [`docs/deployment.md`](docs/deployment.md
 | Verstehen | [Architektur](docs/architecture.md) |
 | Benutzen | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Wartung](docs/maintenance.md) · [Feldnotizen](docs/field-notes.md) |
 | Web-Konsole & Fernzugriff | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
-| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
 | Referenz & Richtlinien | [Härtung](docs/hardening-0.1.md) · [Provenienz](docs/provenance.md) |
 
 Gesamtindex: [`docs/README.md`](docs/README.md).

@@ -637,10 +637,15 @@ class ParamsConfigMixin:
                 if getattr(req, "gps", False) and not self._local_gpsd_needed():
                     continue
                 is_gui = bool(getattr(req, "gui", False))
+                # An `external` upstream app (a versioned release LHPC's bootstrap cannot carry)
+                # is warn-level for the same reason a GUI-only dep is: it gates exactly one stack
+                # and there is no command LHPC could offer. Merged as "gui-like" for the mandatory
+                # verdict so it never blocks the install gate for the WHOLE box.
+                is_ext = bool(getattr(req, "external", False))
                 # ORDER-INDEPENDENT MERGE: collect the raw declaration facts here and derive
                 # `gui` / `mandatory` from ALL of them after the sweep (below). Deriving them
                 # incrementally made the verdict depend on which component declared the dep first.
-                decls.setdefault(key, []).append((is_gui, bool(c.optional)))
+                decls.setdefault(key, []).append((is_gui or is_ext, bool(c.optional)))
                 if key in by_key:
                     continue
                 sat = req not in missing
@@ -661,6 +666,8 @@ class ParamsConfigMixin:
                          # visible and actionable, but a headless box is not "missing a mandatory
                          # dependency" for lacking a toolkit it can never use.
                          "gui": is_gui,
+                         # EXTERNAL: surfaced and START-gating, never an install-gate blocker.
+                         "external": is_ext,
                          # a MANAGED tool provisioned into the runtime root by the build/setup step does
                          # not exist until `lhpc build`, so it must NOT block install (still gates start).
                          "provisioned": bool(req.provisioned),
@@ -673,7 +680,9 @@ class ParamsConfigMixin:
         # it appears in the manifest.
         for key, entry in by_key.items():
             ds = decls.get(key, ())
-            entry["gui"] = bool(ds) and all(g for g, _o in ds)
+            # `ds` carries the gui-OR-external flag; keep the reported `gui` bit truthful to the
+            # declaration itself (an external dep is not a GUI dep) while both stay warn-level.
+            entry["gui"] = bool(ds) and all(g for g, _o in ds) and not entry.get("external")
             entry["mandatory"] = any((not g) and (not o) for g, o in ds)
         return out
 

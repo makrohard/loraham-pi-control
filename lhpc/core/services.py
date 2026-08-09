@@ -595,6 +595,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return argv_cache
 
         daemon_bands: set | None = None
+        # Component status by id across the WHOLE snapshot (see the cross-stack chain below).
+        comp_status = {cid: st for s in snap.stacks for cid, st in s.components.items()}
+        stack_of = {c.id: s.id for s in self.stacks() for c in s.components}
         for ss in snap.stacks:
             try:
                 idf = self._identity_field(ss.stack.id)
@@ -605,11 +608,21 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # The chain the stack DECLARES. `optional` helpers (KISS's serial PTY) and build-only
             # artefacts (meshcom-firmware, kind="firmware", no run command) are not part of the
             # live RF path, so they must not gate it — and must not stand in for it either.
-            required = [c for c in ss.stack.components
+            #
+            # The closure spans STACKS. A stack whose transmitter is another stack's component
+            # (graywolf reaches RF only through loraham-kiss-tnc) would otherwise be judged on
+            # its own process alone: every condition below would pass while nothing capable of
+            # transmitting was running, and a licence-relevant "TX enabled" would be asserted
+            # for a station with no transmitter. Pulling the declared dependencies in keeps the
+            # inference POSITIVE and can only ever make it stricter.
+            required = [c for c in self._tx_chain_components(ss.stack)
                         if c.tx_capable and (c.run_cmd or c.run_argv) and not c.optional]
             proven = bool(required)
             for c in required:
-                st = ss.components.get(c.id)
+                # A chain member may live in ANOTHER stack's section, so resolve the status
+                # snapshot-wide; `ss.components` alone would report every cross-stack member as
+                # absent and no such stack could ever be proven.
+                st = ss.components.get(c.id) or comp_status.get(c.id)
                 if st is None or st.run_state not in up:
                     proven = False                      # chain incomplete
                     break
@@ -624,7 +637,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     if daemon_bands is None:
                         daemon_bands = self._live_daemon_bands(snap, _argvs())
                     try:
-                        band = self._effective_band(ss.stack.id, c.band)
+                        band = self._effective_band(stack_of.get(c.id, ss.stack.id), c.band)
                     except Exception:
                         band = c.band
                     if not daemon_bands or (band and band not in daemon_bands):
@@ -637,6 +650,30 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 if (c.tx_capable and st is not None and st.run_state in up
                         and st.tx_state is TxState.UNKNOWN):
                     st.tx_state = TxState.ENABLED
+
+    def _tx_chain_components(self, stack) -> list:
+        """`stack`'s own components plus every component reachable through `depends_on`,
+        across stacks, de-duplicated and order-stable.
+
+        Used only by the licensed-TX inference: the RF path of a stack may leave it (the
+        graywolf stack transmits through the kiss stack's TNC), and a chain that is judged
+        on half its members proves nothing. Resolution is best-effort — an unresolvable id
+        is skipped rather than raised, because this is an inference, not a gate."""
+        by_id = {c.id: c for s in self.stacks() for c in s.components}
+        seen: set = set()
+        out: list = []
+        pending = [c.id for c in stack.components]
+        while pending:
+            cid = pending.pop(0)
+            if cid in seen:
+                continue
+            seen.add(cid)
+            comp = by_id.get(cid)
+            if comp is None:
+                continue
+            out.append(comp)
+            pending.extend(comp.depends_on or ())
+        return out
 
     def _live_daemon_bands(self, snap, argvs) -> set:
         """Radio bands served by a LIVE LoRaHAM daemon, from this snapshot plus the daemon's own

@@ -50,6 +50,9 @@ class DepItem:
     note: str = NOT_EXECUTED_NOTE
     runtime: bool = False  # run-time capability (e.g. group membership) — "grant" not "install"
     restart_pending: bool = False  # groups grant CONFIGURED but not yet EFFECTIVE — restart, not usermod
+    external: bool = False  # an UPSTREAM app the operator installs themselves (no apt command LHPC
+    #                      could carry). Warn-level like `gui`: surfaced and START-enforced, never a
+    #                      mandatory core miss.
     gui: bool = False    # GUI-ONLY: excluded from the headless-safe default bootstrap (opt-in
     #                      --with-gui). Still SHOWN — it is warn-level, never a mandatory core miss.
 
@@ -144,6 +147,7 @@ def stack_report(lifecycle, paths, stacks, stack_id: str, comp_index: dict,
                 # a genuinely-missing grant shows the usermod grant command.
                 install_cmd=GROUP_RESTART_CMD if pending else _fix,
                 runtime=bool(req.groups or req.absent_file), restart_pending=pending,
+                external=bool(getattr(req, "external", False)),
                 gui=bool(gui_eff.get(key))))
         for dep_id in c.build_requires:
             dep = comp_index.get(dep_id)

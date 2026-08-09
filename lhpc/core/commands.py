@@ -75,6 +75,14 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
     by_name = {p.name: p for p in comp.run_params}
     out: list[str] = []
     for tok in tokens:
+        # `{asset}/...` -> a read-only packaged-data path, exactly as in build_step_argv and
+        # the build launcher. Same placeholder, same meaning everywhere: without it a post-step
+        # that runs a SHIPPED helper (graywolf's provisioning) would die at start with
+        # "unresolved placeholder" while the identical token works in a build step. Resolved
+        # first because it is controller-derived, never operator input.
+        if tok == "{asset}" or tok.startswith("{asset}/"):
+            out.append(_asset_token(tok))
+            continue
         if tok.startswith("{") and tok.endswith("}") and tok.count("{") == 1:
             inner = tok[1:-1]
             kind, _, name = inner.partition(":")

@@ -891,6 +891,181 @@ main = "loraham-kiss-tnc"
     mode = "exclusive"
 
 # =====================================================================
+# Stack: graywolf — APRS stack (web UI + iGate) behind the KISS TNC
+# =====================================================================
+[[stack]]
+id = "graywolf"
+name = "Graywolf APRS"
+summary = "Graywolf APRS station (web UI on 127.0.0.1:8080, digipeater, iGate) driving the radio through the LoRaHAM KISS TNC. The modern substitute for loraham-igate."
+main = "graywolf"
+operator_box = false   # the station callsign is this stack's own param (needs an APRS SSID)
+
+  [[stack.component]]
+  id = "graywolf"
+  readiness = "endpoint"
+  name = "Graywolf APRS station"
+  kind = "service"
+  # Band-agnostic BY CONSTRUCTION: graywolf only speaks KISS over TCP to the TNC, and the
+  # TNC owns the band (and the daemon sockets). Nothing here touches SPI, a radio or a
+  # daemon socket, so this component claims no radio/daemon resource at all.
+  purpose = "APRS digipeater + iGate with a web UI; reaches the radio only through the LoRaHAM KISS TNC on TCP."
+  tx_capable = true
+  band = "433"
+  bands = ["433", "868"]
+  # The band is NOT graywolf's own (it speaks only TCP) — it selects which TNC/daemon chain to
+  # bring up, exactly as the kiss stack does, so an 868 LoRa-APRS station is reachable too.
+  # loraham-daemon is named alongside the TNC even though the TNC already depends on it: the
+  # daemon owns the transmitter, and the licensed-TX inference only checks daemon liveness for a
+  # component that DECLARES the dependency. Without it a running graywolf would read "tx
+  # enabled" with no radio behind it at all.
+  depends_on = ["loraham-kiss-tnc", "loraham-daemon"]
+  requires_daemon_tx = "MANAGED"
+  start_order = 1
+  # EXTERNALLY INSTALLED upstream release (Go service + Rust modem), NOT built here: the
+  # source build needs Go + Rust + Node, which we refuse to put on a Pi. See the require
+  # block below for the one-time .deb install.
+  run_argv = ["graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
+  # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
+  # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
+  # belongs on loopback. Reach it over an SSH tunnel; exposing it would need a real bind param.
+  bin = "graywolf"
+  note = "Needs the upstream graywolf .deb (see require). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time, and graywolf replaces loraham-igate rather than joining it. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/state/graywolf", mode = "700" } ]
+  # No tcp_wait: its port must be a manifest literal, and the provisioning step below does
+  # its own bounded readiness wait against the API it is about to write to.
+  post_steps = [
+    { kind = "exec", label = "provision", required = true, argv = [
+        "{controller_python}", "{asset}/scripts/graywolf-provision.py",
+        "--api-addr", "127.0.0.1:8080",
+        "--state-dir", "{runtime}/state/graywolf",
+        "--channel-name", "LoRaHAM KISS",
+        "{param:tnc_host}", "{param:tnc_port}", "{param:call}",
+        "{param:igate}", "{param:igate_server}", "{param:igate_port}",
+        "{param:igate_filter}",
+        "{param:gate_rf_to_is}", "{param:gate_is_to_rf}",
+      ] },
+  # Each value carries its OWN `arg` (below), never a literal flag token here: `emit_param`
+  # emits ZERO tokens for an empty value, so a literal "--igate-filter" would be left dangling
+  # in front of the next flag and argparse would reject the whole argv. Flag and value must
+  # drop together — the convention every other stack in this manifest follows.
+  ]
+
+    # REQUIRED and unconditional: provisioning is what makes the station work, so a failed
+    # push must fail the start instead of leaving graywolf up with an empty config.
+    # No `install` command ON PURPOSE. Every declared install string lands in
+    # `lhpc deps --script` (and so in the bootstrap), and graywolf is an optional upstream
+    # app pinned to a versioned .deb URL — not a core apt package. The operator installs it
+    # once; docs/stacks/graywolf.md carries the exact commands.
+    [[stack.component.require]]
+    cmd = "graywolf"
+    external = true
+    note = "graywolf binary — install the upstream arm64 .deb once (see docs/stacks/graywolf.md)"
+
+    [stack.component.process]
+    exec_name = "graywolf"
+
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:8080"
+    ready = true
+    role = "listener"
+    description = "Graywolf web UI"
+    client = true
+    scheme = "http"
+    # Loopback-only with no bind/port knob, so the Managed Firewall has nothing to open or
+    # block here — no allow-list params, and NOT deny-default (that is for the endpoints
+    # which do bind 0.0.0.0, e.g. meshtastic's 4403/9443). Graywolf authenticates with its
+    # own account (generated password under state/), and the sanctioned remote path is this
+    # stack's web proxy in the console.
+    firewall = { auth = "password" }
+
+    [[stack.component.resource]]
+    key = "tcp.port.8080"
+    kind = "tcp-port"
+    mode = "exclusive"
+    # The KISS listener belongs to loraham-kiss-tnc; graywolf only dials it. Recorded as a
+    # CONSUMER so the dependency is visible without falsely conflicting with the TNC's own
+    # exclusive claim on the same port.
+    [[stack.component.resource]]
+    key = "tcp.port.8001"
+    kind = "tcp-port"
+    mode = "consumer"
+
+    # Where the TNC listens. Defaults match the kiss stack's own defaults.
+    [[stack.component.param]]
+    name = "tnc_host"
+    kind = "str"
+    validator = "host"
+    arg = "--tnc-host"
+    default = "127.0.0.1"
+    label = "KISS TNC host"
+    [[stack.component.param]]
+    name = "tnc_port"
+    kind = "int"
+    arg = "--tnc-port"
+    default = "8001"
+    min = 1
+    max = 65535
+    label = "KISS TNC port"
+    # Graywolf needs a callsign WITH an APRS SSID (e.g. N0CALL-10); it derives the APRS-IS
+    # passcode from this callsign itself, so no passcode is ever stored by LHPC.
+    [[stack.component.param]]
+    name = "call"
+    kind = "str"
+    validator = "callsign"
+    arg = "--callsign"
+    default = "{callsign}"
+    label = "Station callsign (e.g. N0CALL-10)"
+    [[stack.component.param]]
+    name = "igate"
+    kind = "enum"
+    arg = "--igate"
+    choices = ["0", "1"]
+    default = "0"
+    label = "Enable APRS-IS iGate"
+    [[stack.component.param]]
+    name = "igate_server"
+    kind = "str"
+    validator = "host"
+    arg = "--igate-server"
+    default = "rotate.aprs2.net"
+    label = "APRS-IS server"
+    advanced = true
+    [[stack.component.param]]
+    name = "igate_port"
+    kind = "int"
+    arg = "--igate-port"
+    default = "14580"
+    min = 1
+    max = 65535
+    label = "APRS-IS port"
+    advanced = true
+    [[stack.component.param]]
+    name = "igate_filter"
+    kind = "str"
+    validator = "aprs_filter"
+    arg = "--igate-filter"
+    default = ""
+    label = "APRS-IS server filter (e.g. r/48.4/9.9/100)"
+    advanced = true
+    [[stack.component.param]]
+    name = "gate_rf_to_is"
+    kind = "enum"
+    arg = "--gate-rf-to-is"
+    choices = ["0", "1"]
+    default = "1"
+    label = "Gate RF → APRS-IS"
+    advanced = true
+    [[stack.component.param]]
+    name = "gate_is_to_rf"
+    kind = "enum"
+    arg = "--gate-is-to-rf"
+    choices = ["0", "1"]
+    default = "0"
+    label = "Gate APRS-IS → RF (transmits!)"
+    advanced = true
+
+# =====================================================================
 # Stack: meshtastic — native meshtasticd on 868 (direct SPI)
 # =====================================================================
 [[stack]]

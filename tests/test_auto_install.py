@@ -565,7 +565,11 @@ def test_blocked_rows_without_fail_are_not_success(tmp_path, monkeypatch):
     assert rows["kiss"] == "blocked"
     assert rows["daemon"] == "success"                           # successes reported truthfully
     assert "REMAIN installed" in r.summary
-    assert "1 blocked" in r.summary and "0 failed" in r.summary  # only the mocked kiss group
+    # graywolf reaches the radio only through loraham-kiss-tnc, so blocking that group
+    # must block graywolf too — a blocked dependency never reads as success downstream.
+    assert rows["graywolf"] == "blocked"
+    blocked = sum(1 for v in rows.values() if v == "blocked")
+    assert f"{blocked} blocked" in r.summary and "0 failed" in r.summary
 
 
 @pytest.mark.needs_session

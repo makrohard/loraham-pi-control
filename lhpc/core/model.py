@@ -161,6 +161,12 @@ class Requirement:
     #                             only by `bootstrap-deps.sh --with-gui`; still probed, still surfaced, but
     #                             WARN-only in the install gate — a headless box is not broken for lacking
     #                             it, it simply cannot run that component.
+    external: bool = False      # an UPSTREAM application the operator installs themselves (a versioned
+    #                             release, not an apt package LHPC's bootstrap could ever carry — e.g.
+    #                             the graywolf .deb). Same warn-level shape as `gui`: still probed, still
+    #                             surfaced, still enforced at START, but never a MANDATORY miss — a box
+    #                             is not broken for lacking it, it simply cannot run that one stack.
+    #                             Carries no `install` command by design (see docs for the steps).
     gps: bool = False           # needed ONLY when the global position source is a LOCAL gpsd. Same
     #                             soft-dependency shape as `gui` (opt-in `--with-gps`, warn-level), but
     #                             additionally SUPPRESSED ENTIRELY when the configured gpsd is remote or

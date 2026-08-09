@@ -45,6 +45,7 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
 - [Adding & maintaining a stack](adding-a-stack.md) — the single-manifest model for
   extending `lhpc`.
 - Per stack: [daemon](stacks/daemon.md) · [KISS/TCP TNC](stacks/kiss.md) ·
+  [Graywolf APRS](stacks/graywolf.md) ·
   [Chat & iGate (APRS)](stacks/aprs.md) · [MeshCore](stacks/meshcore.md) ·
   [MeshCom](stacks/meshcom.md) · [Meshtastic](stacks/meshtastic.md) ·
   [Reticulum](stacks/reticulum.md) · [Voice](stacks/voice.md)
