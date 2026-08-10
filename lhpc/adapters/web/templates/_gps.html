@@ -28,9 +28,9 @@
        job and one form; a second collapsible layer would just be a click in the way. #}
     <div class="ws-sub-wrap">
       <section class="cfgsec">
-        <p class="muted">Where every stack gets its position. Meshtastic, MeshCom and Sideband all
-          follow this one setting; each stack then has its own <code>use_gps</code> switch in its
-          own Settings. lhpc never installs or configures gpsd itself.</p>
+        <p class="muted">Where every stack gets its position. Meshtastic, MeshCom, Sideband and
+          Graywolf all follow this one setting; each stack then has its own <code>use_gps</code>
+          switch in its own Settings. lhpc never installs or configures gpsd itself.</p>
 
         {% if not gps_global.valid %}
           <p class="depnote depnote-warn"><strong>Position is DISABLED</strong> — {{ gps_global.reason }}.

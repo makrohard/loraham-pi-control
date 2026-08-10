@@ -141,6 +141,11 @@ and a fixed-position beacon will keep beaconing those coordinates: check the bea
   the PTY is dead. This is not reslock-enforced (a KISS client slot is not a declarable
   resource) — it is an operator constraint, like `chat` vs `igate`.
 - `chat` retunes the same radio; don't pair it with a transmitting graywolf.
+- **One band at a time.** graywolf speaks only TCP and claims no radio itself, but the band it
+  is started on selects which TNC/daemon chain it uses. There is one radio, so a start on the
+  other band is refused — whether graywolf itself is already up on a band, or the chain it needs
+  (`kiss`, and the daemon behind it) is. Stop the holder first, or start graywolf on the band the
+  chain already serves. The band is chosen in the console; `lhpc stack start` takes no band flag.
 
 ## Web UI credentials
 

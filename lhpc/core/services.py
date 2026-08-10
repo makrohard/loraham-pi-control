@@ -1613,8 +1613,23 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return False
         return str(cfg.get("use_gps", "")).strip().lower() == "on"
 
-    # Stacks whose components can consume a position.
-    _GPS_STACKS: ClassVar[tuple] = ("meshtastic", "meshcom", "reticulum")
+    # The GPS switch param. A stack is GPS-capable IFF one of its components declares it —
+    # see _gps_stacks(); there is deliberately no second list to keep in sync.
+    GPS_PARAM: ClassVar[str] = "use_gps"
+
+    def _gps_stacks(self) -> frozenset:
+        """Stacks whose components can consume a position: those declaring the `use_gps` param.
+
+        DERIVED, never hardcoded. A literal list drifted the moment a stack gained the param:
+        graywolf declared `use_gps`, the list did not name it, so `gps_enabled_for` answered
+        False for a box whose saved value was "on" — the start form's honest echo of "on" then
+        looked like a per-start change and EVERY start was refused. The manifest is the only
+        place that knows, so it is the only place that decides.
+        """
+        return frozenset(
+            s.id for s in self.stacks()
+            for c in s.components
+            if any(p.name == self.GPS_PARAM for p in c.run_params))
 
     def gps_owner_stack(self, target: str) -> str:
         """The GPS-capable stack a target belongs to, or "".
@@ -1625,13 +1640,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         """
         if not target:
             return ""
-        if target in self._GPS_STACKS:
+        gps_stacks = self._gps_stacks()
+        if target in gps_stacks:
             return target
         try:
             owner = self._owner_stack_id(target)
         except (KeyError, AttributeError):
             owner = ""
-        return owner if owner in self._GPS_STACKS else ""
+        return owner if owner in gps_stacks else ""
 
     def _gps_components_for(self, target: str) -> set:
         """GPS feed components this stack must run under the current plan.
@@ -1724,8 +1740,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # Optional components are soft: included only when the operator has
             # opted into auto-starting them (even via another component's depends_on).
             cfg = load_stack_config(self._paths, target)
+            # A PRODUCTION feed is excluded from the auto-start choice: it is not one. A saved
+            # `autostart_meshcom-gps = on` (the confirm page used to offer it as a checkbox) forced
+            # the feed into the order while `use_gps` was off, and starting a feed the plan does not
+            # want is refused — "the current position plan does not use it" — so the whole stack
+            # stopped starting, durably, from one stale tick. The plan below is the ONLY admitter.
+            _feeds = self._all_gps_feed_ids()
             allowed_optional = {c.id for c in s.components
-                                if c.optional and cfg.get(f"autostart_{c.id}") == "on"}
+                                if c.optional and cfg.get(f"autostart_{c.id}") == "on"
+                                and c.id not in _feeds}
             # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
             # resolved global GPS plan, computed HERE — before anything downstream acquires a
             # lock — so run order, claims and the rendered config all describe the same plan.

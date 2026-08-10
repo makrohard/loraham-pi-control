@@ -226,9 +226,12 @@ def test_param_groups_required_on_top_then_by_component(tmp_path):
     assert groups[0]["header"] == "Required"
     assert [r["name"] for r in groups[0]["rows"]] == ["mc_callsign"]   # identity pulled to top
     headers = [g["header"] for g in groups]
-    # "(fixture)" since 0.1.8 — production GPS comes from the global source, so the name
-    # has to say this one replays a synthetic file.
-    assert "MeshCom GPS relay (fixture)" in headers                   # a per-component group
+    # The `test_fixture` relay is NOT run by a stack start, so its knobs stay off the stack's
+    # confirm page: they rendered as a SECOND GPS entry beside the real `use_gps` switch, one the
+    # operator could not actually use. Named DIRECTLY it still exposes them.
+    assert "MeshCom GPS relay (fixture)" not in headers
+    assert [g["header"] for g in svc.stack_start_param_groups("meshcom-gps-relay")] == \
+        ["MeshCom GPS relay (fixture)"]
     # the identity field is NOT duplicated inside its component group
     qemu = next(g for g in groups if g["header"] == "MeshCom QEMU node")
     assert "mc_callsign" not in [r["name"] for r in qemu["rows"]]
@@ -1107,3 +1110,27 @@ def test_save_only_rerender_never_hands_back_the_hmac_managed_param(tmp_path):
     assert owned, "meshcom should expose start params"
     assert not [k for k in owned if k.endswith("password_file")], \
         "an HMAC-managed param must never be offered as a start override"
+
+
+def test_use_gps_is_shown_saved_only_and_never_blocks_a_start(tmp_path):
+    """`use_gps` is refused as a per-start override, so rendering it as an editable control
+    offered a change that could only end in a failed start — and on graywolf it failed even
+    UNTOUCHED, because the form posts every field it renders and the echo was misread as a
+    change. It is shown (the operator must see what this start will use) with NO input element,
+    so the page cannot post it, and the start is unaffected either way."""
+    svc = _svc(tmp_path)
+    for sid in ("graywolf", "meshcom"):
+        svc.save_stack_config(sid, {"use_gps": "on"})
+        row = next(r for g in svc.stack_start_param_groups(sid)
+                   for r in g["rows"] if r["name"] == "use_gps")
+        assert row["locked"] is True
+        assert row["value"] == "on"                       # visible, and truthful
+        # The hint names the STACK, not the component that happens to declare the param.
+        assert f"lhpc config {sid} use_gps on|off" in row["locked_hint"]
+
+        # The echo the web form falls back to is accepted -> the start is not refused.
+        clean, err = svc._normalize_run_params(sid, {"use_gps": "on"})
+        assert err == "" and "use_gps" not in clean       # accepted, and not applied per start
+        # A REAL change is still refused, with the command that does work.
+        _clean, err = svc._normalize_run_params(sid, {"use_gps": "off"})
+        assert "cannot be changed for a single start" in err

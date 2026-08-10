@@ -19,7 +19,12 @@
               data-adv="{{ 'y' if r.advanced else 'n' }}">
             <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
             <td>
-              {% if r.kind == 'flag' %}
+              {# Saved-only: NO input element, so this field is never submitted and can never turn
+                 into a rejected start. Deliberately not a disabled input — that still looks like a
+                 control the operator could enable. #}
+              {% if r.locked %}
+                <span class="pill">{{ r.value }}</span>
+              {% elif r.kind == 'flag' %}
                 <input type="checkbox" name="{{ r.field }}" value="1"{% if r.value in ('1','on','true','True') %} checked{% endif %}
                        class="spin" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
               {% elif r.choices %}
@@ -41,7 +46,7 @@
                        placeholder="{{ r.default }}" data-default="{{ r.default }}" data-config="{{ r.config_value }}">
               {% endif %}
             </td>
-            <td class="dphelp muted">{{ r.label }}</td>
+            <td class="dphelp muted">{{ r.label }}{% if r.locked %}<br><em>{{ r.locked_hint }}</em>{% endif %}</td>
           </tr>
         {% endfor %}
       {% endfor %}

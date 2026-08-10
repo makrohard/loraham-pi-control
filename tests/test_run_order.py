@@ -762,3 +762,57 @@ def test_default_restart_locks_only_running_band(tmp_path):
     rband = svc._effective_band("kiss", "")
     keys2 = [k for k in svc._lifecycle_lock_keys("restart", "kiss", band=rband) if "radio" in k]
     assert keys2 == ["claim.loraham.radio.868"]        # only the running band
+
+
+# --- a cross-stack chain member already up on the OTHER band ------------------
+
+def _band_svc(tmp_path, cmdlines, socks, bands):
+    from lhpc.core import config as _cfg
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system,
+                            paths=Paths(runtime_root=tmp_path))
+    _cfg.save_hardware_setup(svc._paths, "loraham")
+    svc._invalidate_config()
+    for sid, b in bands.items():
+        svc._set_running_band(sid, b)
+    return svc
+
+
+_D433 = {100: ["loraham_daemon", "--radio", "433"], 200: ["/x/loraham-kiss-tnc", "--config", "c"]}
+_S433 = {"/tmp/loraconf433.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+
+
+def test_start_on_the_other_band_is_refused_when_a_dependency_holds_one(tmp_path):
+    """One radio serves ONE band. The "already running on the other band" refusal covered only the
+    target's OWN stack, so graywolf — which owns no radio and pulls in the KISS TNC and the daemon
+    — was admitted on 868 while that chain ran on 433: every member read already_healthy, so
+    nothing started, nothing blocked, and graywolf came up on 868 talking to a 433 TNC. Chain
+    members are exempt as conflict HOLDERS (they are in this very run order), so the mismatch has
+    to be caught by the band rule or not at all."""
+    svc = _band_svc(tmp_path, _D433, _S433, {"kiss": "433"})
+    # preconditions: the dependency really is live on the other band
+    assert svc.running_band("kiss", "") == "433" and svc._band_owner_is_up("kiss")
+    assert "loraham-kiss-tnc" in [c.id for _, c in svc._run_order("graywolf")]
+
+    res = svc.run_action("start", "graywolf", band="868", apply=False)
+    assert res.ok is False
+    assert "kiss" in res.summary and "433" in res.summary and "868" in res.summary
+    # The offered ways out both work: stop the holder, or join it on its band.
+    assert "lhpc stack stop kiss --yes" in (res.next_commands or [])
+
+
+def test_the_dependency_band_rule_does_not_block_the_matching_band(tmp_path):
+    """The rule must fire on a MISMATCH only — blocking a start onto the band the chain already
+    serves would make the normal case (add graywolf to a running 433 chain) impossible."""
+    svc = _band_svc(tmp_path, _D433, _S433, {"kiss": "433"})
+    assert svc.run_action("start", "graywolf", band="433", apply=False).ok is True
+    # ... and with nothing running, either band is free.
+    idle = _band_svc(tmp_path / "idle", {}, {}, {})
+    assert idle.run_action("start", "graywolf", band="868", apply=False).ok is True
+
+
+def test_a_bandless_stack_start_is_never_blocked_by_the_dependency_rule(tmp_path):
+    """No requested band = no mismatch to judge. The rule keys off an EXPLICIT band, so an
+    ordinary bandless start still inherits the chain's band instead of being refused."""
+    svc = _band_svc(tmp_path, _D433, _S433, {"kiss": "433"})
+    assert svc.run_action("start", "graywolf", apply=False).ok is True

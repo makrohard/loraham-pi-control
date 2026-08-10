@@ -84,7 +84,17 @@
 {% endmacro %}
 
 {# Grouped lifecycle actions for a stack — one group per line. #}
-{% macro stack_actions(stack_id, installed, has_source, buildable=False) %}
+{% macro stack_actions(stack_id, installed, has_source, buildable=False, removable=False) %}
+{# A fetched-binary stack (no clone) still has an artifact on disk, and the CLI removes it —
+   so it gets its own removal line instead of silently having none. Not labelled "Source":
+   there is no source here, and Update/source-check have nothing to act on. #}
+{% if removable and not has_source %}
+  <div class="actline">
+    <span class="grouplabel">Package</span>
+    {{ action_btn('uninstall', stack_id, 'Uninstall') }}
+    {{ action_btn('clean', stack_id, 'Clean all') }}
+  </div>
+{% endif %}
 {% if has_source %}
   <div class="actline">
     <span class="grouplabel">Source</span>

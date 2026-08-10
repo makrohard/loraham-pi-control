@@ -2287,3 +2287,76 @@ def test_graywolf_needs_no_gps_bridge_component():
     assert [c.id for c in gw.components] == ["graywolf"]
     assert any(p.name == "use_gps" for p in gw.components[0].run_params)
     del pathlib
+
+
+def test_gps_capable_stacks_are_derived_from_the_manifest(tmp_path):
+    """The GPS-capable set was a hardcoded tuple, and it drifted: graywolf declared `use_gps`
+    while the tuple named only the older three, so `gps_enabled_for("graywolf")` answered False
+    on a box whose SAVED value was "on". The start form echoes the saved value, that echo then
+    read as a per-start CHANGE, and every graywolf start was refused with "use_gps cannot be
+    changed for a single start". Deriving the set from the manifest is what makes that
+    unrepresentable — a stack declaring the param IS GPS-capable, by construction."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    declared = {s.id for s in svc.stacks()
+                for c in s.components
+                if any(p.name == "use_gps" for p in c.run_params)}
+    assert svc._gps_stacks() == declared
+    assert "graywolf" in declared                      # the stack the old tuple missed
+
+    for sid in declared:
+        assert svc.gps_owner_stack(sid) == sid
+        # ... and the saved switch is actually readable for each, in BOTH states.
+        svc.save_stack_config(sid, {"use_gps": "on"})
+        assert svc.gps_enabled_for(sid) is True
+        svc.save_stack_config(sid, {"use_gps": "off"})
+        assert svc.gps_enabled_for(sid) is False
+
+    # A stack with no such param stays out — the switch is not invented for it.
+    assert svc.gps_owner_stack("kiss") == ""
+
+
+def _gsvc(tmp_path):
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+
+def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
+    """LIVE-FOUND on the box: MeshCom would not start. The Confirm:start page offered the GPS feed
+    AND the test fixture as auto-start checkboxes — two GPS controls beside the real `use_gps`
+    switch. Ticking the feed saved `autostart_meshcom-gps = on`, which forced it into the run order
+    while `use_gps` was off, and starting a feed the plan does not want is REFUSED ("the current
+    position plan does not use it") — so one stale tick stopped the whole stack from starting, and
+    kept stopping it. The plan is the only admitter; the checkboxes are gone."""
+    svc = _gsvc(tmp_path)
+    feeds = svc._all_gps_feed_ids()
+    assert "meshcom-gps" in feeds                                  # precondition
+
+    # Neither a feed nor a fixture is offered as a checkbox any more.
+    offered = {o["id"] for o in svc.optional_start_components("meshcom")}
+    assert not (offered & feeds)
+    assert "meshcom-gps-relay" not in offered                      # test_fixture
+    # ... and the same is true for every stack that has a feed at all.
+    for sid in {svc.stack_of(f) for f in feeds}:
+        assert not ({o["id"] for o in svc.optional_start_components(sid)} & feeds), sid
+
+    # The exact broken state from the box: feed ticked, GPS off -> feed stays OUT.
+    svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on"})
+    assert svc.gps_enabled_for("meshcom") is False
+    assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
+
+    # And the plan still admits it when GPS is genuinely on — the checkbox was never what
+    # turned the feed on, so removing it takes nothing away.
+    svc.set_gps(source="gpsd", host="127.0.0.1", port=2947)
+    svc.save_stack_config("meshcom", {"use_gps": "on"})
+    svc._invalidate_config()
+    assert svc.gps_plan("meshcom").enabled
+    assert "meshcom-gps" in [c.id for _, c in svc._run_order("meshcom")]

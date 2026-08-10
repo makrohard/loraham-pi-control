@@ -726,6 +726,34 @@ class LifecycleOpsMixin:
                          f"  Stop it first, then start it on {band} MHz."],
                 next_commands=[f"lhpc stack stop {_sid} --yes",
                                f"lhpc stack start {_sid} --yes"])
+        # The SAME rule, one stack removed: this run also starts the chain it depends on, and a
+        # chain member already up on the OTHER band is the identical "one band at a time" case.
+        # graywolf on 868 pulls in the KISS TNC and the daemon; with that chain live on 433 every
+        # member read already_healthy, so nothing was started, nothing was blocked, and graywolf
+        # came up on 868 talking to a 433 TNC — one radio, two bands claimed, no warning. Members
+        # are skipped as conflict holders precisely BECAUSE they are in this run order, so the
+        # band mismatch has to be caught here or not at all.
+        if band:
+            for _dep in dict.fromkeys(self.stack_of(c.id) for _, c in order):
+                if not _dep or _dep == _sid:
+                    continue
+                _dlive = self.running_band(_dep, "")
+                if _dlive and _dlive != band and self.stack_bands(_dep) \
+                        and self._band_owner_is_up(_dep):
+                    return ActionResult(
+                        False,
+                        f"Cannot start '{target}' on {band} MHz: it needs '{_dep}', which is "
+                        f"already running on {_dlive} MHz.",
+                        details=["  [blocked] the radio serves ONE band at a time, and this "
+                                 f"start would need '{_dep}' on {band} MHz",
+                                 f"  Stop '{_dep}' first, or start '{target}' on {_dlive} MHz "
+                                 "instead."],
+                        # `lhpc stack start` takes no --band (the band is chosen in the console),
+                        # so the remedy is the same shape as the own-stack refusal above: stop the
+                        # holder, then start. Naming a flag that does not exist would be worse
+                        # than naming none.
+                        next_commands=[f"lhpc stack stop {_dep} --yes",
+                                       f"lhpc stack start {target} --yes"])
         life = self._lifecycle()
         radio, tx = self._daemon_needs(order, params, cfg_band)
         # The stack whose daemon params to apply once the daemon is up (a direct component target
@@ -4161,15 +4189,22 @@ class LifecycleOpsMixin:
         return daemon_control.read_socket_line(self._system, band)
 
     def optional_start_components(self, target: str) -> list:
-        """Optional, non-interactive SERVICE components of a stack (e.g. KISS Serial,
-        the MeshCom GPS relay) with their saved auto-start choice — rendered as
-        checkboxes on the Confirm:start page. File-only read."""
+        """Optional, non-interactive SERVICE components of a stack (e.g. KISS Serial) with their
+        saved auto-start choice — rendered as checkboxes on the Confirm:start page. File-only read.
+
+        Excludes position feeds and `test_fixture` components, the SAME rule the Settings auto-start
+        list already applies. A GPS feed runs only when the resolved position plan needs it, and
+        starting one directly is refused — so its checkbox was a SECOND GPS control beside
+        `use_gps`, and the one that turned a start into a failure. The fixture additionally replays
+        a synthetic position and must never sit where the real feed belongs."""
         s = self.stack(target)
         if s is None:
             return []
         cfg = load_stack_config(self._paths, target)
+        feeds = self._all_gps_feed_ids()
         return [{"id": c.id, "name": c.name,
                  "autostart": cfg.get(f"autostart_{c.id}") == "on"}
                 for c in s.components
                 if c.optional and c.kind == ComponentKind.SERVICE
-                and not getattr(c, "interactive", False)]
+                and not getattr(c, "interactive", False)
+                and c.id not in feeds and not c.test_fixture]

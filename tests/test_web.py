@@ -2053,7 +2053,11 @@ def test_confirm_start_optional_component_checkboxes(tmp_path, monkeypatch):
     assert "Start KISS serial" in body
     body2 = c.post("/action", data={"_csrf": tok, "op": "start",
                                     "target": "meshcom"}).data.decode()
-    assert 'name="opt_start_meshcom-gps-relay"' in body2
+    # Position feeds and test fixtures are NOT auto-start choices — see
+    # test_a_position_feed_is_never_an_operator_autostart_choice. Ordinary optional components
+    # (KISS serial, above) still are, which is what keeps this exclusion narrow.
+    assert 'name="opt_start_meshcom-gps-relay"' not in body2
+    assert 'name="opt_start_meshcom-gps"' not in body2
     c.post("/action", data={"_csrf": tok, "op": "start", "target": "kiss",
                             "confirmed": "yes", "opt_start_loraham-kiss-serial": "on"})
     assert load_stack_config(svc._paths, "kiss").get(
@@ -2441,3 +2445,37 @@ def test_the_gps_card_never_renders_a_coordinate(tmp_path):
     body = _client(tmp_path).get("/stacks").get_data(as_text=True)
     for coord in ("51.4779", "-0.0015"):
         assert coord not in body, f"{coord} leaked into the page"
+
+
+def test_fetched_binary_stack_offers_uninstall_in_the_console(tmp_path):
+    """The removal actions hung off `has_source`, so a stack whose artifact is FETCHED instead of
+    cloned (graywolf) got no Uninstall button at all — while `lhpc uninstall graywolf` worked and
+    did remove it. Installable from the console but removable only from a shell is not a state the
+    console may leave the operator in."""
+    from lhpc.core.services import ControllerService as _CS
+
+    def app_for(root):
+        (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+        return create_app(service_factory=lambda: _CS(
+            system=FakeSystem().system, paths=Paths(runtime_root=root))).test_client()
+
+    # NOT built: nothing on disk to remove, so no removal button is offered.
+    body = app_for(tmp_path).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "uninstall" not in body.split("graywolf-actions")[-1][:400].lower()
+
+    # BUILT: the fetched artifact exists -> Uninstall (and Clean) must be reachable.
+    root = tmp_path / "built"
+    (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=root))
+    comp = svc.stack("graywolf").main_component
+    art = root / comp.bin
+    art.parent.mkdir(parents=True, exist_ok=True)
+    art.write_text("#!/bin/sh\n")
+    art.chmod(0o755)
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    marker = svc._lifecycle().source_dir(comp) / comp.build_marker
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
+    assert svc.unbuilt_components("graywolf") == []          # precondition: it IS built
+    body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'value="uninstall"' in body and "graywolf" in body

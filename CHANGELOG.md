@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix: a stack whose `use_gps` was on could not be started from the console at all. The GPS-capable set was a hardcoded list that did not name `graywolf`, so its saved switch read as off, the start form's echo of the saved value looked like a per-start change, and the start was refused as "use_gps cannot be changed for a single start". The set is now derived from the manifest — declaring the param IS being GPS-capable
+- Fix: **MeshCom would not start** once the GPS-feed checkbox on the Confirm:start page had ever been ticked. That saved `autostart_meshcom-gps = on`, which forced the feed into the run order while `use_gps` was off, and a feed the position plan does not want is refused — so one stale tick stopped the stack durably. A position feed is admitted from the resolved plan only, and is no longer offered as an auto-start choice (nor is the synthetic test fixture); the confirm page showed both beside the real switch as a second and third GPS control
+- `use_gps` is shown on the Confirm:start page as a saved setting with no input field, instead of an editable control whose only possible effect was a failed start
+- Fix: starting a stack on the other band while a stack it DEPENDS on holds one is refused. The "one band at a time" rule covered only the target's own stack, so graywolf — which owns no radio and pulls in the KISS TNC and the daemon — was admitted on 868 while that chain ran on 433, coming up on 868 talking to a 433 TNC
+- Fix: a stack whose artifact is fetched rather than cloned (`graywolf`) now has **Uninstall** and **Clean all** buttons. Both hung off having a source repo, so it could be installed from the console but only removed from a shell
+
 ## 0.1.10
 
 - `graywolf` follows the global position source: a `use_gps` switch like the other consumers', with the resolved plan pushed to graywolf's own GPS settings (gpsd host/port, serial NMEA device, or actively off). It needs no bridge component — it speaks gpsd and serial natively

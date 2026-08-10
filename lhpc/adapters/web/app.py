@@ -778,6 +778,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                              and (main.build_steps or main.build_cmd))
             installed = bool(has_source and main_status and main_status.source_state.value
                              in ("match", "dirty", "differs", "unknown", "not-a-repo"))
+            _unbuilt = service.unbuilt_components(stack.id)
+            # A fetched-binary stack has no clone, so the source-gated Uninstall/Clean line never
+            # rendered for it — yet `lhpc uninstall graywolf` works and DOES remove the fetched
+            # artifact. The console has to offer the removal the CLI already accepts, otherwise a
+            # stack can be installed from the console but only removed from a shell. Gated on the
+            # artifact actually existing, so it is not offered when there is nothing to remove.
+            removable = bool(buildable and not _unbuilt)
             interactive = bool(main and main.interactive)
             member_ids = {c.id for c in stack.components}
             # Freshness, resolved per component against the head the verdict was computed from.
@@ -817,6 +824,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
+                "removable": removable,
                 "deps": own + cross,
                 "state": rollup[stack.id],
                 "running": rollup[stack.id] in _RUNNING,
@@ -831,7 +839,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # Folded-in detail sections (all read-only / GET-safe):
                 "system_deps": service.system_deps(stack.id),
                 "deps_report": service.deps_report(stack.id),
-                "needs_build": service.unbuilt_components(stack.id),
+                "needs_build": _unbuilt,
                 "needs_build_deps": service.unbuilt_build_deps(stack.id),   # must build BEFORE the main
                 "daemon_params": service.daemon_params_view(stack.id, band),
                 "kw_offer": service.known_working_offer(stack.id, snapshot),

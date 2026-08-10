@@ -1675,10 +1675,19 @@ class ParamsConfigMixin:
     def _stack_param_components(self, target: str):
         """Components whose run/file params make up the editable 'Stack parameters' set (never the
         daemon — its radio params are the separate daemon panel). Target-scoped: a stack target
-        exposes all components, a direct component target only itself."""
+        exposes all components, a direct component target only itself.
+
+        A `test_fixture` component is skipped for a STACK target, the same rule the optional-
+        component list already applies: a stack start never runs the fixture, so its knobs on the
+        confirm page were a second, non-functional GPS entry beside the real switch. Named
+        DIRECTLY (`lhpc stack start meshcom-gps-relay`) it still exposes its own params — that is
+        the deliberate path the manifest documents."""
         if self._is_daemon_target(target):
             return []
-        return self._target_components(target)
+        comps = self._target_components(target)
+        if self.stack(target):
+            comps = [c for c in comps if not c.test_fixture]
+        return comps
 
     def stack_start_params(self, target: str, band: str = "", params: dict | None = None,
                            file_over: dict | None = None) -> list[dict]:
@@ -1704,8 +1713,14 @@ class ParamsConfigMixin:
                 cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
                 is_id = bool(idf and idf["comp"] == c.id and idf["name"] == p.name
                              and idf["kind"] == kind)
+                locked = kind == "run" and p.name == self.GPS_PARAM
+                # The switch is stored per STACK (bandless), so the hint must name the stack even
+                # when the param is declared on a component (`meshcom-qemu` -> `meshcom`).
+                hint = (f"saved setting — change it with `lhpc config "
+                        f"{self.gps_owner_stack(target) or target} {p.name} on|off`"
+                        ) if locked else ""
                 rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
-                                            c.name, key, c.id))
+                                            c.name, key, c.id, locked, hint))
         return rows
 
     def start_param_fields(self, target: str, band: str = "") -> list[dict]:
@@ -1749,9 +1764,15 @@ class ParamsConfigMixin:
 
     @staticmethod
     def _param_row(p, field: str, kind: str, value, saved: str, default: str, is_identity: bool,
-                   comp_name: str = "", key: str = "", component: str = "") -> dict:
+                   comp_name: str = "", key: str = "", component: str = "",
+                   locked: bool = False, locked_hint: str = "") -> dict:
+        # `locked` = SAVED-ONLY: shown so the operator knows what this start will use, but with no
+        # form input at all, so the page cannot post it. It is the only honest rendering — the value
+        # is refused as a per-start override, so an editable control offered a change that turned
+        # into a failed start, and the row still had to appear or the setting was invisible.
         return {"field": field, "name": p.name, "key": key, "component": component,
                 "kind": p.kind, "comp_name": comp_name,
+                "locked": bool(locked), "locked_hint": locked_hint,
                 "choices": list(p.choices), "label": p.label or p.name,
                 "value": "" if value is None else str(value),
                 "config_value": "" if saved is None else str(saved), "default": default,
