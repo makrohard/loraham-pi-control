@@ -2624,3 +2624,71 @@ def test_the_controller_hands_its_auto_verdict_to_the_bridge_process(tmp_path, m
     seen.clear()
     life.start(stack, main)
     assert AUTO_ENV not in seen.get("env", {})
+
+
+def _admission_svc(tmp_path, feed_marker_text):
+    """A service whose meshtastic feed marker holds `feed_marker_text`, ready for the START
+    gate (`_gps_feed_admission`) — the piece that decides whether the stack start proceeds."""
+    svc = _svc(tmp_path)
+    d = tmp_path / "state" / "gps" / "meshtastic"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "readiness.json").write_text(feed_marker_text)
+    return svc, _feed_comp(svc, "meshtastic", "meshtastic-gps")
+
+
+def test_auto_admits_a_stack_whose_gpsd_vanished_or_delivers_nothing(tmp_path, fake_gpsd,
+                                                                      monkeypatch):
+    """AUDIT-FOUND: freezing the auto verdict was not enough. gpsd disappearing (or owning no
+    receiver) after admission left the feed starting/source-lost, the gate refused it, and
+    the stack did not start — a refusal produced purely by `auto`. Under `auto` those two
+    LIVE-feed states are non-gating: the stack starts without position and the feed is NOT
+    stopped, so a gpsd appearing later starts delivering with no restart. Markers come from
+    the REAL pump, never hand-written."""
+    from lhpc.core import gps as gps_mod
+
+    # (1) gpsd DISAPPEARED before the bridge connected: dial a closed port -> source-lost.
+    srv = fake_gpsd(sentences=[])
+    port = srv.port
+    srv.close()                                            # nothing listens here any more
+    ready = _run_gpsd_pump(tmp_path, type("S", (), {"port": port})())
+    assert ready.state in ("starting", "source-lost"), ready.state
+
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: True)   # auto froze "gpsd"
+    svc, comp = _admission_svc(tmp_path, (tmp_path / "readiness.json").read_text())
+    assert svc.gps_settings()["source"] == "auto"          # the default, untouched
+    ok, ev = svc._gps_feed_admission(comp)
+    assert ok is True and "WITHOUT position" in ev
+
+    # (2) gpsd LISTENING but no receiver / no NMEA: the pump stays `starting`.
+    srv2 = fake_gpsd(sentences=[])
+    try:
+        ready2 = _run_gpsd_pump(tmp_path, srv2)
+    finally:
+        srv2.close()
+    assert ready2.state == "starting", ready2.state
+    svc2, comp2 = _admission_svc(tmp_path / "b", (tmp_path / "readiness.json").read_text())
+    ok2, ev2 = svc2._gps_feed_admission(comp2)
+    assert ok2 is True and "WITHOUT position" in ev2
+
+    # A feed with NO marker at all (dead/never-published bridge) still fails normally.
+    svc3 = _svc(tmp_path / "c")
+    comp3 = _feed_comp(svc3, "meshtastic", "meshtastic-gps")
+    assert svc3._gps_feed_admission(comp3)[0] is False
+
+
+def test_explicit_gpsd_with_an_empty_gpsd_still_refuses_the_start(tmp_path, fake_gpsd):
+    """The soft rule is `auto`-only: an operator who NAMED gpsd gets today's fail-closed
+    refusal for a gpsd that streams nothing — starting position-blind would hide breakage
+    they explicitly configured against."""
+    srv = fake_gpsd(sentences=[])
+    try:
+        ready = _run_gpsd_pump(tmp_path, srv)
+    finally:
+        srv.close()
+    assert ready.state == "starting"
+
+    svc, comp = _admission_svc(tmp_path, (tmp_path / "readiness.json").read_text())
+    save_gps(svc._paths, source="gpsd")                    # EXPLICIT
+    svc._invalidate_config()
+    ok, ev = svc._gps_feed_admission(comp)
+    assert ok is False and "not reachable" in ev

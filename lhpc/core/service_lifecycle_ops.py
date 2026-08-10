@@ -167,6 +167,31 @@ class LifecycleOpsMixin:
             return False
         return True
 
+    def _gps_feed_admission(self, comp) -> tuple[bool, str]:
+        """The START gate's verdict on a GPS feed: `_gps_feed_ready`, softened for `auto`.
+
+        AUDIT-FOUND: freezing the auto verdict was not enough — a gpsd that disappeared (or
+        owns no receiver and streams nothing) after admission left the feed in
+        starting/source-lost, the gate refused it, the feed was STOPPED, and the stack did
+        not start: a refusal produced purely by `auto`, which promises "no gpsd → run
+        without position, never a refusal". Under `auto` only, a LIVE feed whose upstream is
+        missing is NON-GATING: the stack starts without position and the feed stays up (its
+        pump keeps reconnecting, so a gpsd or receiver appearing later starts delivering
+        without a restart). An EXPLICIT gpsd source keeps today's fail-closed refusal, and a
+        dead feed process or unpublished marker still fails normally — only the two
+        upstream-missing states are soft.
+        """
+        ready_ok, ev = self._gps_feed_ready(comp)
+        if ready_ok:
+            return True, ev
+        if getattr(getattr(self.config(), "gps", None), "source", "") == "auto":
+            st = self.gps_feed_state(comp) or {}
+            if str(st.get("state", "")) in ("starting", "source-lost"):
+                return True, ("running WITHOUT position (auto: "
+                              f"{st.get('detail') or st.get('state')}; the feed stays up "
+                              "and reconnects if gpsd delivers later)")
+        return False, ev
+
     def _gps_feed_ready(self, comp) -> tuple[bool, str]:
         """(ok, evidence) for a GPS feed at START time, polled within the readiness budget."""
         budget = getattr(comp, "readiness_timeout", 0.0) or self.ENDPOINT_VERIFY_TIMEOUT_S
@@ -1089,7 +1114,8 @@ class LifecycleOpsMixin:
                 # publishing an endpoint that delivers nothing, and the app reading it would
                 # report no position with no indication why. Verified against the marker the
                 # feed writes from its upstream, never against the endpoint path existing.
-                ready_ok, ev = self._gps_feed_ready(comp)
+                # (`auto` softens exactly the upstream-missing states — see _gps_feed_admission.)
+                ready_ok, ev = self._gps_feed_admission(comp)
                 if not ready_ok:
                     cleanup = life.stop(comp, band=cfg_band)
                     record(comp, stack, Outcome.UNVERIFIED,
