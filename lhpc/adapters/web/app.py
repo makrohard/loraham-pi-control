@@ -238,6 +238,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # at the start of EVERY request so no request ever serves state from a previous one — freshness
         # is guaranteed; the memo only coalesces the repeated reads inside this one render.
         service.invalidate_snapshot()
+        # Same boundary for the frozen `auto` GPS verdict: re-probe once per request so a gpsd
+        # appearing/leaving is noticed, while every operation keeps ONE verdict internally.
+        service.refresh_gps_auto()
 
     @app.before_request
     def _trusted_host():

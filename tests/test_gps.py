@@ -2461,8 +2461,12 @@ def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_p
         assert svc.gps_block(sid) == ("", []), sid
     assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
 
-    # A gpsd appears: auto resolves to a normal localhost gpsd plan everywhere.
+    # A gpsd appears: the verdict is FROZEN per loaded config, so the change is noticed at
+    # the request boundary (refresh_gps_auto — what the web app calls per request), never
+    # mid-operation.
     monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: True)
+    assert svc.gps_settings()["resolved_source"] == "off"    # the loaded config's verdict stands
+    svc.refresh_gps_auto()                                   # request boundary
     assert svc.gps_settings()["resolved_source"] == "gpsd"
     plan = svc.gps_plan("graywolf")
     assert plan.source == "gpsd" and (plan.host, plan.port) == ("127.0.0.1", 2947)
@@ -2515,14 +2519,108 @@ def test_fixed_source_says_that_graywolf_gets_no_position(tmp_path):
 
 
 def test_meshcore_cli_build_byte_compiles_the_pinned_source():
-    """AUDIT-FOUND: the pinned meshcore-cli uses Python 3.12+ f-string syntax while LHPC
-    supports >=3.11, so on a 3.11 box meshcli installed fine and died with a SyntaxError at
-    FIRST RUN. The build now byte-compiles the source, moving that failure to build time
-    with the exact file and line. This test pins the CONTRACT so the step cannot be dropped
-    silently; repinning backward was rejected — it would lose the rxlog/msgs handlers."""
+    """AUDIT-FOUND: upstream meshcore-cli shipped Python-3.12-only f-string syntax while
+    LHPC supports >=3.11 (Bookworm). The pin now sits at the last 3.11-clean commit, and the
+    build byte-compiles the source so a future pin that regresses fails the BUILD with file
+    and line instead of a SyntaxError at first run. This test pins both halves of that
+    contract: the guard step exists, and the pinned commit is the 3.11-clean one."""
     from lhpc.core.manifest import load_manifest
     mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
+    assert mc.source.pin_commit == "56b246b4d45174817936c0fc910897b52bec66b4"
     compile_steps = [st for st in mc.build_steps
                      if "compileall" in " ".join(st.get("argv", []))]
     assert len(compile_steps) == 1
     assert compile_steps[0]["argv"][0] == ".venv/bin/python"  # the venv the code will run in
+
+
+def test_the_auto_probe_accepts_only_listeners_reachable_at_the_advertised_endpoint():
+    """AUDIT-FOUND: the parser matched LISTEN + port only, so an ::1-only, a 192.168.x-bound,
+    or a non-gpsd 2947 listener activated `auto` — and every consumer was then pointed at
+    127.0.0.1:2947, where nothing listened: the promised soft "no gpsd" turned into GPS-feed
+    start failures. Only 127.0.0.1 and the IPv4 wildcard prove that endpoint. These are the
+    DIRECT parser tests the mocked-out suite lacked."""
+    from lhpc.core.gps import _tcp4_shows_local_gpsd
+
+    hdr = ("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt"
+           "   uid  timeout inode\n")
+
+    def row(addr_hex, port, state="0A"):
+        return (f"   0: {addr_hex}:{port:04X} 00000000:0000 {state} 00000000:00000000"
+                f" 00:00000000 00000000  0        0 12345 1 0000000000000000 100 0 0 10 0\n")
+
+    assert _tcp4_shows_local_gpsd(hdr + row("0100007F", 2947)) is True     # 127.0.0.1
+    assert _tcp4_shows_local_gpsd(hdr + row("00000000", 2947)) is True     # 0.0.0.0 wildcard
+    assert _tcp4_shows_local_gpsd(hdr + row("0100007F", 2947, state="01")) is False  # ESTABLISHED
+    assert _tcp4_shows_local_gpsd(hdr + row("0100007F", 2948)) is False    # wrong port
+    assert _tcp4_shows_local_gpsd(hdr + row("0101A8C0", 2947)) is False    # 192.168.1.1-bound
+    assert _tcp4_shows_local_gpsd(hdr) is False                            # nothing at all
+    # Several rows: one reachable listener among noise is enough.
+    noisy = hdr + row("0101A8C0", 2947) + row("0100007F", 8080) + row("00000000", 2947)
+    assert _tcp4_shows_local_gpsd(noisy) is True
+
+
+def test_one_loaded_config_is_one_frozen_auto_decision(tmp_path, monkeypatch):
+    """AUDIT-FOUND: `auto` re-probed live /proc state on every resolution, so one applied
+    start could see gpsd when planning the run order and not-gpsd when rendering or when the
+    bridge process resolved again — admitting a feed that then failed the whole start, a
+    refusal `auto` promises never to produce. The verdict is now FROZEN into the loaded
+    GpsConfig, and the controller hands it to the bridge process via AUTO_ENV."""
+    from lhpc.core import gps as gps_mod
+    from lhpc.core.config import load_config
+    from lhpc.core.gps import plan_from_config
+    from lhpc.core.paths import Paths
+
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=tmp_path)
+
+    # gpsd is up at load time; the loaded config freezes that verdict...
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: True)
+    cfg = load_config(paths)
+    assert cfg.gps.source == "auto" and cfg.gps.auto_listening is True
+    # ...so a later flap changes NOTHING for consumers of this config object.
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening",
+                        lambda: (_ for _ in ()).throw(AssertionError("re-probed a frozen config")))
+    for _ in range(3):
+        assert plan_from_config(cfg).source == "gpsd"
+
+    # The bridge boundary: an explicit hint overrides everything — the controller's verdict
+    # wins over whatever the bridge's own load would have seen.
+    assert plan_from_config(cfg, auto_hint=False).source == "off"
+    assert "auto: no gpsd" in plan_from_config(cfg, auto_hint=False).reason
+
+
+def test_the_controller_hands_its_auto_verdict_to_the_bridge_process(tmp_path, monkeypatch):
+    """The bridge re-resolves `[gps]` in its own process; under `auto` the controller's
+    frozen verdict must cross that boundary (AUTO_ENV), or a gpsd stopping mid-start makes
+    the bridge exit EXIT_CONFIG and fail the stack. Only the bare verdict crosses — never a
+    host or port."""
+    from lhpc.core import gps as gps_mod
+    from lhpc.core.config import load_config
+    from lhpc.core.gps import AUTO_ENV
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: True)
+    cfg = load_config(Paths(runtime_root=tmp_path))
+
+    seen = {}
+
+    def spy_spawn(argv, log_path, cwd=None, env=None):
+        seen["env"] = env or {}
+        return None                                          # launch "fails" — env already captured
+
+    life = Lifecycle(Paths(runtime_root=tmp_path), (), cfg, FakeSystem().system, spawn=spy_spawn)
+    from lhpc.core.manifest import load_manifest
+    stack = next(s for s in load_manifest() if s.id == "meshtastic")
+    feed = next(c for c in stack.components if c.id == "meshtastic-gps")
+    life.start(stack, feed)
+    assert seen["env"].get(AUTO_ENV) == "gpsd"               # the frozen verdict, nothing more
+    assert "2947" not in seen["env"].get(AUTO_ENV, "")
+
+    # A non-feed component gets NO such variable — the channel exists for bridges only.
+    main = next(c for c in stack.components if c.id == "meshtastic")
+    seen.clear()
+    life.start(stack, main)
+    assert AUTO_ENV not in seen.get("env", {})

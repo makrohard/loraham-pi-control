@@ -1593,6 +1593,39 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             return plan.disabled_for_stack()
         return plan
 
+    def refresh_gps_auto(self) -> None:
+        """Request-boundary freshness for the `auto` GPS verdict.
+
+        The verdict is FROZEN into each loaded config (one operation = one decision), which a
+        long-lived console would otherwise hold forever — a gpsd installed later would never
+        be noticed until an unrelated save dropped the cache. Called per web request (like
+        `invalidate_snapshot`): re-probe, and if the verdict changed, drop the cached config
+        so THIS request loads a fresh one. Skips silently while any transition or save holds
+        the config lock — an applied start keeps its frozen verdict to the end.
+        """
+        cfg = self._config
+        g = getattr(cfg, "gps", None) if cfg is not None else None
+        if g is None or g.source != "auto":
+            return
+        from .gps import local_gpsd_listening
+        if bool(g.auto_listening) == local_gpsd_listening():
+            return
+        import fcntl
+
+        from . import runtime_fs
+        try:
+            fh = runtime_fs.open_lock(self._paths, self._paths.under("config", ".lock"))
+        except (OSError, PathContainmentError):
+            return
+        try:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return                  # a transition/save is running — its verdict stands
+            self._invalidate_config()
+        finally:
+            fh.close()
+
     def gps_enabled_for(self, target: str) -> bool:
         """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
 

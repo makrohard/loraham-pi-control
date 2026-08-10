@@ -167,57 +167,71 @@ def use_gps_default(stacks, stack_id: str) -> str:
 AUTO_GPSD_HOST = "127.0.0.1"
 AUTO_GPSD_PORT = 2947
 
-# (monotonic deadline, value) — plan resolution runs on hot paths (page renders call it
-# dozens of times), so the probe result is held briefly rather than re-read per call.
-_AUTO_CACHE: list = [0.0, False]
-_AUTO_TTL = 2.0
+# The controller hands its own auto verdict to the GPS-bridge process it launches (see
+# `Lifecycle.start`), so one applied start cannot resolve `auto` twice across the process
+# boundary. The value is a bare verdict ("gpsd"/"off"), never a host or port — the bridge
+# still derives every endpoint from code and `[gps]`, keeping its no-handed-in-values rule.
+AUTO_ENV = "LHPC_GPS_AUTO_RESOLVED"
+
+# /proc/net/tcp local_address values (hex, kernel byte order) that make the plan's
+# advertised endpoint — 127.0.0.1:2947 — actually reachable.
+_V4_LOOPBACK = "0100007F"
+_V4_ANY = "00000000"
+
+
+def _tcp4_shows_local_gpsd(text: str) -> bool:
+    """Does one /proc/net/tcp dump show a listener REACHABLE at 127.0.0.1:2947?
+
+    AUDIT-FOUND: matching only state+port also matched an ::1-only, a 192.168.x-bound, or a
+    non-gpsd 2947 listener — and the plan then told every consumer to dial 127.0.0.1:2947,
+    where nothing listened: the soft "no gpsd → run without position" promise turned into
+    GPS-feed start failures. Only 127.0.0.1 and the IPv4 wildcard are provably that
+    endpoint. IPv6-only listeners are deliberately NOT counted (v6-wildcard reachability
+    depends on bindv6only, which /proc does not show); missing one fails SOFT — no
+    position — never a wrong endpoint.
+    """
+    port_hex = f"{AUTO_GPSD_PORT:04X}"
+    for line in text.splitlines()[1:]:
+        parts = line.split()
+        # local_address is field 1 ("addr:port" hex), state is field 3 (0A = LISTEN)
+        if len(parts) > 3 and parts[3] == "0A":
+            addr, _, port = parts[1].rpartition(":")
+            if port == port_hex and addr in (_V4_LOOPBACK, _V4_ANY):
+                return True
+    return False
 
 
 def local_gpsd_listening() -> bool:
-    """Is anything LISTENING on localhost:2947 right now?
+    """Is a gpsd endpoint LISTENING at 127.0.0.1:2947 right now?
 
-    PASSIVE — parses /proc/net/tcp{,6}, never opens a connection (a probe connection per
-    page render would spam a real gpsd's log). "Answers but owns no receiver" deliberately
-    counts as listening: consumers wait for a fix natively, so a receiver plugged in later
-    starts working without a stack restart; the doctor diagnoses a receiver-less gpsd.
+    PASSIVE — parses /proc/net/tcp, never opens a connection (a probe connection per config
+    load would spam a real gpsd's log). "Answers but owns no receiver" deliberately counts
+    as listening: consumers wait for a fix natively, so a receiver plugged in later starts
+    working without a stack restart; the doctor diagnoses a receiver-less gpsd.
 
-    This is the ONE probe behind the `auto` source, memoized for a couple of seconds and
-    living here so every plan consumer — the service, the bridge process, lifecycle
-    post-steps — resolves `auto` identically. Tests monkeypatch THIS function.
+    Called ONCE per config load (`load_config` resolves `auto` into `GpsConfig`), so every
+    consumer of one loaded config shares one frozen verdict — there is deliberately no
+    time-based cache here. Tests monkeypatch THIS function.
     """
-    import time
-    now = time.monotonic()
-    if now < _AUTO_CACHE[0]:
-        return _AUTO_CACHE[1]
-    found = False
-    port_hex = f"{AUTO_GPSD_PORT:04X}"
-    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
-        try:
-            with open(path, encoding="ascii", errors="replace") as fh:
-                for line in fh.readlines()[1:]:
-                    parts = line.split()
-                    # local_address is field 1 ("ip:port" hex), state is field 3 (0A = LISTEN)
-                    if len(parts) > 3 and parts[3] == "0A" \
-                            and parts[1].rsplit(":", 1)[-1] == port_hex:
-                        found = True
-                        break
-        except OSError:
-            continue
-        if found:
-            break
-    _AUTO_CACHE[0], _AUTO_CACHE[1] = now + _AUTO_TTL, found
-    return found
+    try:
+        with open("/proc/net/tcp", encoding="ascii", errors="replace") as fh:
+            return _tcp4_shows_local_gpsd(fh.read())
+    except OSError:
+        return False
 
 
-def plan_from_config(cfg, *, resolve_device=True) -> GpsPlan:
+def plan_from_config(cfg, *, resolve_device=True, auto_hint: bool | None = None) -> GpsPlan:
     """Resolve `[gps]` into the effective plan. Pure with respect to the config: it reads
-    the filesystem only to resolve a device's identity (and, for `auto`, whether a local
-    gpsd is listening), and a failure there is reported, never guessed.
+    the filesystem only to resolve a device's identity, and a failure there is reported,
+    never guessed.
 
-    `auto` resolves HERE, in the one shared resolver, so the service, the bridge process
-    and lifecycle post-steps can never disagree about what it resolved to: a listening
-    localhost gpsd becomes an ordinary gpsd plan; nothing listening becomes "off" with a
-    reason that says so — soft, because a DEFAULT must never refuse a start.
+    `auto` resolves in the one shared resolver, from a verdict FROZEN at config-load time
+    (`GpsConfig.auto_listening`), so every consumer of one loaded config — run order,
+    claims, rendering, post-steps — sees the same answer even if gpsd starts or stops
+    mid-operation. `auto_hint` overrides it: the bridge process passes the CONTROLLER's
+    verdict through (see `AUTO_ENV`), so one applied start is one decision across the
+    process boundary too. A listening gpsd becomes an ordinary gpsd plan; nothing listening
+    becomes "off" with a reason — soft, because a DEFAULT must never refuse a start.
     """
     g = getattr(cfg, "gps", None)
     if g is None:
@@ -227,7 +241,12 @@ def plan_from_config(cfg, *, resolve_device=True) -> GpsPlan:
     if not g.enabled:
         return GpsPlan()
     if g.source == "auto":
-        if local_gpsd_listening():
+        listening = auto_hint
+        if listening is None:
+            listening = getattr(g, "auto_listening", None)
+        if listening is None:                      # a hand-built GpsConfig — probe once
+            listening = local_gpsd_listening()
+        if listening:
             return GpsPlan(source="gpsd", host=AUTO_GPSD_HOST, port=AUTO_GPSD_PORT)
         return GpsPlan(source="off", valid=True,
                        reason=f"auto: no gpsd on this box "

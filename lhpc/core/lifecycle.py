@@ -433,6 +433,15 @@ class Lifecycle:
         except (commands.CommandError, validators.ValidationError) as exc:
             return StartLaunch(False, str(log), f"invalid configuration: {exc}")
         env = {**os.environ, **(extra or {})}
+        # A GPS-bridge feed re-resolves `[gps]` in its OWN process. Under `auto` that re-probes
+        # live /proc state, so a gpsd stopping between OUR resolution (which admitted this feed)
+        # and the bridge's would make the bridge exit EXIT_CONFIG and fail the stack start — a
+        # refusal `auto` promises never to produce. Hand the bridge OUR frozen verdict instead
+        # (a bare "gpsd"/"off", never a host or port — the bridge still derives every endpoint
+        # from code and `[gps]` itself).
+        if "_gps-bridge" in comp.run_argv and getattr(self.config.gps, "source", "") == "auto":
+            from .gps import AUTO_ENV
+            env[AUTO_ENV] = "gpsd" if self.config.gps.auto_listening else "off"
         # Guarantee the standard system dirs on the run PATH. A non-login ssh env, or a systemd unit
         # without an explicit PATH, can omit /usr/sbin — where ldconfig/iw live — which breaks a run
         # script that legitimately probes them (live finding: meshcom's run.sh runs `ldconfig -p` to

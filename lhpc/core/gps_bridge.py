@@ -708,7 +708,13 @@ def run(consumer: str, paths, stop=None) -> int:
         _log(f"unknown consumer {consumer!r}")
         return EXIT_CONFIG
 
-    plan = plan_from_config(load_config(paths))
+    # Under `auto`, honor the CONTROLLER's frozen verdict (it admitted this feed from it) —
+    # re-probing here raced a gpsd stopping mid-start into an EXIT_CONFIG that failed the
+    # whole stack, a refusal `auto` promises never to produce. Only the bare verdict crosses
+    # the boundary; endpoints still come from code and `[gps]`.
+    from .gps import AUTO_ENV
+    hint = {"gpsd": True, "off": False}.get(os.environ.get(AUTO_ENV, ""))
+    plan = plan_from_config(load_config(paths), auto_hint=hint)
     if not plan.enabled:
         _log(f"GPS source is off ({plan.reason or 'not configured'}) — nothing to serve")
         return EXIT_CONFIG

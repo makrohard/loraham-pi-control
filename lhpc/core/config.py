@@ -23,7 +23,7 @@ import os
 import re
 import tomllib
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .assets import asset_path
@@ -211,6 +211,11 @@ class GpsConfig:
     fixed_alt: str = ""
     valid: bool = True
     reason: str = ""
+    # `auto` ONLY: the probe verdict, resolved ONCE per `load_config` and frozen into this
+    # object — so run order, claims, config rendering and post-steps computed from one loaded
+    # config can never see two different answers mid-operation. None = not resolved yet (a
+    # hand-built GpsConfig); the plan resolver then probes itself, once.
+    auto_listening: bool | None = None
 
     @property
     def enabled(self) -> bool:
@@ -850,6 +855,12 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
     firewall = _parse_firewall(merged, diagnostics)
     boot = _parse_boot(merged, diagnostics)
     gps = _parse_gps(merged, diagnostics)
+    if gps.source == "auto" and gps.auto_listening is None:
+        # Resolve `auto` HERE, once per load: every consumer of this Config object — the
+        # service (which caches it per operation), Lifecycle (handed the same object) — then
+        # shares ONE frozen verdict, instead of re-probing live /proc state mid-start.
+        from . import gps as _gps_mod
+        gps = replace(gps, auto_listening=_gps_mod.local_gpsd_listening())
     # FAIL CLOSED (plan §3, deliberate deviation from the fail-soft convention above): when the
     # LOCAL layer itself could not be read (malformed/unreadable/symlinked local.toml), the
     # operator's boot-restore switch is unknown — an autonomous process-starter must not fall
