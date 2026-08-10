@@ -24,7 +24,8 @@ def test_resource_keys_scoped_by_band_and_sorted(tmp_path):
     # taking spi0.lock), which is how `meshtastic + reticulum` is blocked while the
     # shipped `daemon + meshtastic` pair stays allowed.
     assert svc._operation_resource_keys("meshtastic") == ["loraham.radio.868",
-                                                          "spi.bus.0.unlocked"]
+                                                          "spi.bus.0.unlocked",
+                                                          "tcp.port.4403", "tcp.port.9443"]
     keys = svc._operation_resource_keys("meshcore")
     assert "loraham.radio.868" in keys and keys == sorted(keys)
 
