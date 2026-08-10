@@ -161,3 +161,24 @@ def test_gui_stacks_keep_their_state_out_of_a_read_only_home():
         assert var in env, f"{cid}: {var} missing — a read-only HOME would break startup"
         assert env[var].startswith("{runtime}/"), \
             f"{cid}: {var}={env[var]!r} must live under the runtime root, not HOME"
+
+
+def test_every_tcp_listener_endpoint_carries_its_port_claim():
+    """A TCP listener endpoint without a matching `tcp.port.<n>` claim is invisible to the
+    conflict machinery: another stack wanting that port would be admitted with nothing shown.
+    meshtastic's 4403/9443 were the only two such endpoints — this pins the rule for every
+    future one. External endpoints are exempt (observe-only, not ours to claim)."""
+    import re
+
+    from lhpc.core.manifest import load_manifest
+    for s in load_manifest():
+        for c in s.components:
+            claimed = {r.key for r in c.resources}
+            for e in c.endpoints:
+                if e.kind != "tcp" or getattr(e, "external", False) \
+                        or getattr(e, "role", "") != "listener":
+                    continue
+                m = re.search(r":(\d+)$", str(e.address))
+                assert m, (c.id, e.address)
+                assert f"tcp.port.{m.group(1)}" in claimed, (
+                    f"{s.id}/{c.id}: endpoint {e.address} has no tcp.port.{m.group(1)} claim")

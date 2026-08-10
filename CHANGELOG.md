@@ -6,6 +6,7 @@
 - Audit follow-ups: a running GPS-enabled graywolf now blocks a source change; `fixed` says plainly that graywolf gets no position from it; meshcore-cli's Python-3.12-only syntax now fails at build time, not first run
 - Audit closure: `auto` only counts a listener truly reachable at 127.0.0.1:2947; one start uses one frozen auto verdict end to end (bridge included); meshcore-cli repinned to the last Python-3.11-clean commit
 - Audit closure 2: under `auto`, a live GPS feed whose gpsd vanished or streams nothing no longer fails the stack start — it runs without position and reconnects; explicit gpsd stays fail-closed
+- meshtastic's 4403/9443 now carry `tcp.port` claims like every other TCP listener; a contract test enforces the pairing
 
 - Review follow-up on the fixes below — each had left the same hole in an adjacent path:
   - The GPS **consumer** set was a second hardcoded list (one function below the fixed one) still missing graywolf, so the GPS admission gate was skipped for it: with `use_gps` on and the source off, graywolf started silently position-blind where meshtastic was refused. Both sets are now manifest-derived; components that read a position declare `reads_position` (the `use_gps` param cannot say who reads — reticulum declares it on `rns`, Sideband is the reader). Both sets are also cached — they sit on hot paths and were rescanned per call

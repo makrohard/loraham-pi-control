@@ -1510,6 +1510,17 @@ main = "meshtastic"
     client = true
     scheme = "https"
 
+    # The ports behind the two endpoints above. Every other TCP listener pairs its endpoint
+    # with a claim; these were the only two without one, so a future stack wanting 4403/9443
+    # would have been admitted with no conflict shown.
+    [[stack.component.resource]]
+    key = "tcp.port.4403"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "tcp.port.9443"
+    kind = "tcp-port"
+    mode = "exclusive"
     [[stack.component.resource]]
     key = "loraham.radio.868"
     kind = "radio-band"
