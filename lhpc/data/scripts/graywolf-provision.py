@@ -14,7 +14,8 @@ What it ensures, in order:
   3. a tcp-client KISS interface dials the LoRaHAM KISS TNC and is bound to that
      channel, with TX enabled unless --rx-only;
   4. the station callsign is set;
-  5. the iGate is configured (and left disabled unless --igate).
+  5. the GPS source follows LHPC's ONE global position plan (gpsd / serial NMEA / none);
+  6. the iGate is configured (and left disabled unless --igate).
 
 Exits non-zero with a one-line reason on any failure, so a failed provisioning
 fails the stack start instead of leaving graywolf running unconfigured.
@@ -273,6 +274,34 @@ def apply_igate(api: Api, args, channel_id: int) -> None:
     api.call("PUT", "/api/igate/config", desired)
 
 
+def apply_gps(api: Api, args) -> str:
+    """Point graywolf's GPS at the position source LHPC resolved, or turn it off.
+
+    graywolf reads gpsd (host/port) and a serial NMEA device natively, so no bridge is needed —
+    the controller-resolved plan maps straight onto `/api/gps`. Applied in BOTH directions: a
+    global source turned off, or this stack opting out, must actively push `none`, or a station
+    enabled earlier keeps reporting a position from its old source.
+
+    The endpoint is a full replacement and its fields are all LHPC-owned here, so unlike the
+    iGate config there is nothing of the operator's to preserve. Returns a one-word summary.
+    """
+    if args.gps_source == "gpsd":
+        body = {"source": "gpsd", "serial_port": "", "baud_rate": 9600,
+                "gpsd_host": args.gps_host, "gpsd_port": args.gps_port}
+        summary = f"gpsd {args.gps_host}:{args.gps_port}"
+    elif args.gps_source == "serial":
+        body = {"source": "serial", "serial_port": args.gps_device,
+                "baud_rate": args.gps_baud, "gpsd_host": "localhost", "gpsd_port": 2947}
+        summary = f"serial {args.gps_device}@{args.gps_baud}"
+    else:
+        # graywolf's own "GPS disabled" payload — the same one its UI sends.
+        body = {"source": "none", "serial_port": "", "baud_rate": 9600,
+                "gpsd_host": "localhost", "gpsd_port": 2947}
+        summary = "off"
+    api.call("PUT", "/api/gps", body)
+    return summary
+
+
 def onoff(value: str) -> bool:
     return str(value).strip() in {"1", "true", "yes", "on"}
 
@@ -294,6 +323,13 @@ def main() -> int:
     ap.add_argument("--igate-filter", default="")
     ap.add_argument("--gate-rf-to-is", default="1")
     ap.add_argument("--gate-is-to-rf", default="0")
+    # Controller-resolved GPS plan (the {gps_args} token) — never an operator choice here: the
+    # position source is ONE global decision, and this stack only opts in or out of it.
+    ap.add_argument("--gps-source", default="none", choices=("none", "gpsd", "serial"))
+    ap.add_argument("--gps-host", default="localhost")
+    ap.add_argument("--gps-port", type=int, default=2947)
+    ap.add_argument("--gps-device", default="")
+    ap.add_argument("--gps-baud", type=int, default=9600)
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--ready-timeout", type=float, default=60.0)
     args = ap.parse_args()
@@ -311,6 +347,7 @@ def main() -> int:
         iface_id = ensure_kiss_interface(api, args.tnc_host, args.tnc_port,
                                         channel_id, not args.rx_only)
         apply_station(api, args.callsign)
+        gps = apply_gps(api, args)
         apply_igate(api, args, channel_id)
     except ProvisionError as exc:
         print(f"[graywolf] provisioning failed: {exc}", file=sys.stderr)
@@ -319,7 +356,7 @@ def main() -> int:
     print(f"[graywolf] provisioned: channel={channel_id} kiss_iface={iface_id} "
           f"tnc={args.tnc_host}:{args.tnc_port} callsign={args.callsign} "
           f"tx={'off' if args.rx_only else 'on'} "
-          f"igate={'on' if args.igate else 'off'}")
+          f"igate={'on' if args.igate else 'off'} gps={gps}")
     return 0
 
 

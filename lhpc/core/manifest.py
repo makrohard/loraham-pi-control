@@ -194,7 +194,7 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         # `gps_mode` / `gps_fixed_args` are controller-owned post-step values resolved from
         # the ONE global GPS plan (see core/gps.py) — a stack cannot choose its own source.
         elif inner not in ("band", "runtime", "source", "controller_python",
-                           "gps_mode", "gps_fixed_args"):
+                           "gps_mode", "gps_fixed_args", "gps_args"):
             raise ManifestError(f"{cid}: unknown placeholder {tok!r}")
         return
     stripped = (tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")

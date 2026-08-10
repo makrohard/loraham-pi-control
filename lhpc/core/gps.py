@@ -25,6 +25,7 @@ from dataclasses import dataclass
 # output shapes anyway (a PTY for meshtasticd, a UNIX socket for MeshCom's QEMU UART1).
 CONSUMER_MESHTASTIC = "meshtastic"
 CONSUMER_MESHCOM = "meshcom"
+CONSUMER_GRAYWOLF = "graywolf"
 
 # How the bridge hands NMEA to a consumer.
 OUT_PTY = "pty"
@@ -115,6 +116,32 @@ def meshtastic_post_step_values(plan: GpsPlan) -> dict:
         return {"gps_mode": "NOT_PRESENT", "gps_fixed_args": args}
     return {"gps_mode": "ENABLED" if plan.enabled else "NOT_PRESENT",
             "gps_fixed_args": ["--remove-position"]}
+
+
+def graywolf_post_step_values(plan: GpsPlan) -> dict:
+    """Controller-owned values for graywolf's GPS provisioning step.
+
+    graywolf needs NO bridge: it speaks gpsd natively (host/port) and reads a serial NMEA
+    device natively, so the plan maps straight onto its own `/api/gps` settings. That is why
+    there is no `graywolf-gps` component next to `meshtastic-gps`/`meshcom-gps`.
+
+    Applied in BOTH directions, for the same reason meshtastic's `gps_mode` is: turning the
+    global source off (or a stack opting out) must actively push `none`, or a station enabled
+    earlier keeps its old source and goes on reporting a position from it.
+
+    `fixed` maps to `none`, not to a synthesized stream: graywolf's GPS subsystem has no
+    fixed-position mode, and a station's fixed position belongs to its beacons, which are the
+    operator's to set — LHPC must not invent coordinates.
+    """
+    if plan.source == "gpsd" and plan.host and plan.port:
+        return {"gps_args": ["--gps-source", "gpsd",
+                             "--gps-host", str(plan.host), "--gps-port", str(plan.port)]}
+    if plan.source == "nmea" and plan.device:
+        args = ["--gps-source", "serial", "--gps-device", str(plan.device)]
+        if plan.nmea_baud:
+            args += ["--gps-baud", str(plan.nmea_baud)]
+        return {"gps_args": args}
+    return {"gps_args": ["--gps-source", "none"]}
 
 
 def plan_from_config(cfg, *, resolve_device=True) -> GpsPlan:

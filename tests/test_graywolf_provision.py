@@ -146,3 +146,39 @@ def test_channel_with_the_wrong_modem_type_is_repaired():
     assert mod.ensure_channel(api, "LoRaHAM KISS") == 7
     (sent,) = api.put_to("/api/channels/7")
     assert sent["modem_type"] == "kiss-only"
+
+
+class GpsArgs:
+    """Only the GPS fields apply_gps reads."""
+
+    def __init__(self, source, host="localhost", port=2947, device="", baud=9600):
+        self.gps_source, self.gps_host, self.gps_port = source, host, port
+        self.gps_device, self.gps_baud = device, baud
+
+
+def test_gps_is_pointed_at_the_controller_resolved_source():
+    """The position source is ONE global decision; this stack only opts in or out. gpsd and
+    serial map onto graywolf's native settings, and `none` is pushed actively so a station
+    enabled earlier stops reporting."""
+    mod = _load()
+
+    api = FakeApi({})
+    assert mod.apply_gps(api, GpsArgs("gpsd", host="192.168.0.10", port=2947)) == \
+        "gpsd 192.168.0.10:2947"
+    (sent,) = api.put_to("/api/gps")
+    assert sent == {"source": "gpsd", "serial_port": "", "baud_rate": 9600,
+                    "gpsd_host": "192.168.0.10", "gpsd_port": 2947}
+
+    api = FakeApi({})
+    assert mod.apply_gps(api, GpsArgs("serial", device="/dev/ttyACM0", baud=38400)) == \
+        "serial /dev/ttyACM0@38400"
+    (sent,) = api.put_to("/api/gps")
+    assert sent["source"] == "serial" and sent["serial_port"] == "/dev/ttyACM0"
+    assert sent["baud_rate"] == 38400
+
+    api = FakeApi({})
+    assert mod.apply_gps(api, GpsArgs("none")) == "off"
+    (sent,) = api.put_to("/api/gps")
+    # graywolf's own "GPS disabled" payload, so the source is actively cleared.
+    assert sent == {"source": "none", "serial_port": "", "baud_rate": 9600,
+                    "gpsd_host": "localhost", "gpsd_port": 2947}

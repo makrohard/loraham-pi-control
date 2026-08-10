@@ -975,6 +975,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
         "{param:igate}", "{param:igate_server}", "{param:igate_port}",
         "{param:igate_filter}",
         "{param:gate_rf_to_is}", "{param:gate_is_to_rf}",
+        "{gps_args}",
       ] },
   # Each value carries its OWN `arg` (below), never a literal flag token here: `emit_param`
   # emits ZERO tokens for an empty value, so a literal "--igate-filter" would be left dangling
@@ -1047,6 +1048,16 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     arg = "--callsign"
     default = "{callsign}"
     label = "Station callsign (e.g. N0CALL-10)"
+    # PERSISTED per-stack GPS switch, like meshtastic's and meshcom's. The GLOBAL source says
+    # WHERE position comes from (`lhpc gps`); this says whether THIS station uses it. graywolf
+    # needs no bridge component: it speaks gpsd natively and reads a serial NMEA device
+    # natively, so the resolved plan maps straight onto its own /api/gps settings.
+    [[stack.component.param]]
+    name = "use_gps"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "off"
+    label = "Use the global position source (set it with `lhpc gps`)"
     [[stack.component.param]]
     name = "igate"
     kind = "enum"

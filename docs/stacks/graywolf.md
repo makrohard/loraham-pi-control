@@ -69,6 +69,7 @@ interface dialling the TNC, the station callsign, and the iGate settings.
 |---|---|---|
 | `call` | operator callsign | Needs an APRS SSID, e.g. `N0CALL-10`. Graywolf derives the APRS-IS passcode from it — LHPC never stores a passcode. |
 | `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | Where `loraham-kiss-tnc` listens |
+| `use_gps` | `off` | Use the global position source. The source itself is one box-wide decision (`lhpc gps`); this only opts this station in or out |
 | `igate` | `0` | Enable APRS-IS gating |
 | `igate_server` / `igate_port` | `rotate.aprs2.net` / `14580` | |
 | `igate_filter` | *(empty)* | APRS-IS server filter, e.g. `r/48.4/9.9/100`. A **negation** filter (`-b/…`) cannot be a param — a value starting with `-` would be read as an option — so set those in graywolf's UI. |
@@ -84,7 +85,14 @@ persists in the config database.
 
 **The params above are LHPC-owned.** Because they are re-applied on every start, editing
 one of *those* fields in the web UI is overwritten at the next restart — change it with
-`lhpc config graywolf <param> <value>` instead. Everything LHPC does not provision
+`lhpc config graywolf <param> <value>` instead.
+
+The trap worth knowing, because it bites in exactly one place: switching the **iGate** on in
+graywolf's own UI lasts until the next start, when provisioning pushes `igate = 0` back. Use
+`lhpc config graywolf igate 1` to make it stick. And while the iGate is *disabled*, graywolf's
+iGate panel answers `igate not available`, so operator-owned iGate fields — `simulation_mode`,
+`is_tx_via` — cannot be reached in the UI at all. Enable the iGate to edit them (they are yours;
+LHPC never touches them). Everything LHPC does not provision
 (beacons, digipeater rules, simulation mode, `is_tx_via`, the software identity) is yours to
 set in the UI and survives restarts untouched: graywolf's config endpoints are full
 replacements, so provisioning reads the current object first and overlays only its own fields.
@@ -101,6 +109,28 @@ path, with the console's own TLS and allow-list) or over a tunnel:
 ```bash
 ssh -L 8080:127.0.0.1:8080 lhpc@<pi>
 ```
+
+## Position (GPS)
+
+graywolf reads **gpsd** (host/port) and a **serial NMEA** device natively, so it needs no bridge
+component — unlike `meshtastic-gps`/`meshcom-gps`, which exist because those apps can only read a
+local device or a local gpsd. The one global plan therefore maps straight onto graywolf's own GPS
+settings:
+
+| `lhpc gps --source` | pushed to graywolf |
+|---|---|
+| `gpsd` (local or remote) | `source=gpsd`, `gpsd_host`, `gpsd_port` |
+| `nmea` | `source=serial`, `serial_port`, `baud_rate` |
+| `fixed` | `source=none` — graywolf's GPS has no fixed mode; a fixed position belongs to its **beacons**, which are yours to set |
+| `off`, or `use_gps = off` | `source=none` |
+
+It is applied in **both** directions: turning the global source off, or setting `use_gps = off`,
+actively pushes `none`, so a station enabled earlier stops reporting a position rather than
+quietly keeping its old source.
+
+A beacon still decides *for itself* whether to use GPS (`use_gps` on the beacon) or its own fixed
+latitude/longitude — that is graywolf's own setting, not LHPC's. So a station with the plan wired
+and a fixed-position beacon will keep beaconing those coordinates: check the beacon too.
 
 ## Conflicts
 

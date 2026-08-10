@@ -332,6 +332,8 @@ def _expand_gps_tokens(tokens, gps: dict | None):
             out.append(str(g.get("gps_mode", "NOT_PRESENT")))
         elif tok == "{gps_fixed_args}":
             out.extend(str(a) for a in g.get("gps_fixed_args", ()))
+        elif tok == "{gps_args}":
+            out.extend(str(a) for a in g.get("gps_args", ()))
         else:
             out.append(tok)
     return out

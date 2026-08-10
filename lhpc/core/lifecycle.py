@@ -732,18 +732,25 @@ class Lifecycle:
         """
         try:
             from .config import load_config
-            from .gps import meshtastic_post_step_values, plan_from_config
+            from .gps import (
+                graywolf_post_step_values,
+                meshtastic_post_step_values,
+                plan_from_config,
+            )
             plan = plan_from_config(load_config(self.paths))
             # The stack's own switch decides whether THIS node reports a position. Pushing
             # ENABLED from the bare global plan set gps_mode on a node whose GPS was off.
             if stack_id and plan.enabled and not self._gps_enabled_for(stack_id):
                 plan = plan.disabled_for_stack()
-            return meshtastic_post_step_values(plan)
+            # Both consumers' token sets from the SAME plan (disjoint keys) — one resolver, so
+            # two stacks can never be rendered against different decisions.
+            return {**meshtastic_post_step_values(plan), **graywolf_post_step_values(plan)}
         except (OSError, ValueError, AttributeError):
             # A post-step that cannot resolve its GPS value must not silently become a no-op;
             # NOT_PRESENT is the safe direction (GPS off), and the step is `required`, so a
             # genuinely broken push still fails the start rather than reporting success.
-            return {"gps_mode": "NOT_PRESENT", "gps_fixed_args": ["--remove-position"]}
+            return {"gps_mode": "NOT_PRESENT", "gps_fixed_args": ["--remove-position"],
+                    "gps_args": ["--gps-source", "none"]}
 
     @staticmethod
     def required_result_leaf(binding: dict) -> str:

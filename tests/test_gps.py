@@ -2246,3 +2246,44 @@ def test_the_gps_fixture_is_not_an_operator_start_choice(tmp_path):
         "meshcom must offer no GPS start choices at all — use_gps is the opt-out"
     # ...but a genuine optional component is still offered (guard against over-filtering).
     assert "loraham-kiss-serial" in {o["id"] for o in svc.config_view("kiss")["optional"]}
+
+
+def test_graywolf_post_step_values_map_the_plan_to_its_native_gps():
+    """graywolf needs NO bridge — it speaks gpsd and serial NMEA natively — so the resolved plan
+    maps straight onto its own /api/gps settings. Applied in BOTH directions: `off` and `fixed`
+    must push `none`, or a station enabled earlier keeps reporting from its old source."""
+    from lhpc.core.gps import GpsPlan, graywolf_post_step_values
+
+    def argv(plan):
+        return graywolf_post_step_values(plan)["gps_args"]
+
+    assert argv(GpsPlan(source="gpsd", host="192.168.0.10", port=2947)) == [
+        "--gps-source", "gpsd", "--gps-host", "192.168.0.10", "--gps-port", "2947"]
+    assert argv(GpsPlan(source="nmea", device="/dev/ttyACM0", nmea_baud=38400)) == [
+        "--gps-source", "serial", "--gps-device", "/dev/ttyACM0", "--gps-baud", "38400"]
+
+    # fixed -> none: graywolf's GPS has no fixed mode, and a fixed position belongs to its
+    # beacons, which are the operator's. LHPC must not invent coordinates.
+    assert argv(GpsPlan(source="fixed", fixed_lat="48.4", fixed_lon="9.9")) == [
+        "--gps-source", "none"]
+    assert argv(GpsPlan()) == ["--gps-source", "none"]                       # off
+    # A stack that opted out reports nothing, whatever the global source is.
+    assert argv(GpsPlan(source="gpsd", host="h", port=1).disabled_for_stack()) == [
+        "--gps-source", "none"]
+    # An incomplete plan must not produce a half-configured source.
+    assert argv(GpsPlan(source="gpsd")) == ["--gps-source", "none"]
+    assert argv(GpsPlan(source="nmea")) == ["--gps-source", "none"]
+
+
+def test_graywolf_needs_no_gps_bridge_component():
+    """meshtastic-gps and meshcom-gps exist because those apps can only read a local device or
+    a local gpsd. graywolf can do neither-bridge: if a graywolf-gps component ever appears, this
+    reasoning changed and the manifest comment is stale."""
+    import pathlib
+
+    from lhpc.core.manifest import load_manifest
+
+    gw = next(s for s in load_manifest() if s.id == "graywolf")
+    assert [c.id for c in gw.components] == ["graywolf"]
+    assert any(p.name == "use_gps" for p in gw.components[0].run_params)
+    del pathlib
