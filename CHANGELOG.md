@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New `graywolf` stack: [graywolf](https://github.com/chrissnell/graywolf) as a full replacement for `igate` — same RF<->APRS-IS job through the KISS TNC, plus a web UI and a searchable packet log. The pinned upstream `.deb` is fetched and unpacked into `build/tools/graywolf` (sha256-verified, rootless, no system package and no new bootstrap dependency), and every start re-applies the stack params through graywolf's REST API. `igate` is now marked DEPRECATED — known bugs, unmaintained upstream — but keeps working unchanged
+- `loraham-kiss-tnc` repinned to `v0.5.1`: AX.25 bit 7 is position-dependent (the command/response bit on dst/src, has-been-repeated only on path), so a frame from a conforming APRS sender no longer goes on air with a bogus `*` on the destination; CR/LF in a payload become spaces instead of splitting the frame
 - `meshcore-cli` repinned to `v1.5.0-68-g3921259` (self-reported v1.6.0) — rxlog/msgs handlers and the aliases mechanism; the `meshcli` entrypoint and every flag this manifest renders (`-t -p -j -D`) are unchanged
 - MeshCom firmware repinned to icssw-org release `v4.35p.08.06` (adds the PL country preset; `lora_setchip` and `mheard` fixes) — the QEMU overlay patch is untouched by that range
 - LoRaHAM daemon, chat and iGate repinned to `v112-1-g10f4107` — relicensed to plain GPLv3 with the original author's permission, so the extra non-commercial and reporting conditions are gone and the repo now ships the licence text. Licence headers, READMEs and the iGate startup banner only; no functional change

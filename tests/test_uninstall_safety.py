@@ -67,6 +67,29 @@ def _own(tmp_path, rel, comps=("x",)):
 
 @pytest.mark.contract
 @pytest.mark.safety("P0.5")
+def test_uninstall_of_a_package_managed_stack_says_so_instead_of_unknown(tmp_path):
+    """graywolf's artifact is fetched, not cloned, so uninstall has no managed source to remove.
+    It used to answer "Unknown stack 'graywolf'" — and then list graywolf among the known stacks
+    in the same message. Say what is actually true, and point at the operation that does own the
+    artifact."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    (tmp_path / "config").mkdir(exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    res = svc.uninstall("graywolf", apply=True)
+    assert not res.ok
+    assert "no managed source" in res.summary
+    assert "Unknown stack" not in res.summary
+    assert any("build/tools/graywolf" in d for d in res.details)
+    assert res.next_commands == ["lhpc clean graywolf --purge"]
+
+    # A genuine typo must still read as unknown.
+    assert "Unknown stack" in svc.uninstall("nosuchstack", apply=True).summary
+
+
 def test_uninstall_keeps_source_shared_by_another_stack(tmp_path):
     # chat and iGate share src/LoRaHAM_Daemon. Uninstalling chat must KEEP it.
     _mksrc(tmp_path, "LoRaHAM_Daemon")

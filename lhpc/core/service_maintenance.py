@@ -1710,7 +1710,23 @@ class MaintenanceOpsMixin:
             return _r
         items = self._with_source(target)
         if not items:
-            return self._unknown_stack(target) if target else ActionResult(False, "No sources.")
+            if not target:
+                return ActionResult(False, "No sources.")
+            st = self.stack(target)
+            if st is not None:
+                # A PACKAGE-MANAGED stack (its artifact is fetched, not cloned) has no adopted
+                # source for uninstall to remove. Reporting "Unknown stack" was simply false —
+                # the same message then listed it among the known stacks. Uninstall stays
+                # source-scoped; the destructive purge is what owns the artifact.
+                arts = [c.build_root for c in st.components if c.build_root]
+                details = [f"  Its build artifact lives in {a} — removed by clean, not uninstall."
+                           for a in arts]
+                return ActionResult(
+                    False,
+                    f"Nothing to uninstall for '{target}': it has no managed source.",
+                    details=details,
+                    next_commands=([f"lhpc clean {target} --purge"] if arts else []))
+            return self._unknown_stack(target)
         target_ids = {c.id for _, c in items}
         # A binary install owns files the SOURCE machinery knows nothing about. It is retired
         # LATER — inside the locked region, after the authoritative running recheck — because
