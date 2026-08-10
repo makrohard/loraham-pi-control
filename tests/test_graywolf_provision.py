@@ -102,6 +102,27 @@ def test_channel_in_packet_mode_is_repaired_to_aprs():
     assert "id" not in sent and "backing" not in sent      # response-only
 
 
+def test_channel_repair_strips_response_only_fields():
+    """graywolf's PUT decoder uses DisallowUnknownFields, and its channel RESPONSE carries three
+    keys the request refuses: id, backing and ptt. `ptt` is omitempty, so it only appears once
+    the channel has a PTT row — echo it back and the repair 400s on exactly the boxes that have
+    one, while a fresh box looks fine."""
+    mod = _load()
+    api = FakeApi({"/api/channels": [
+        {"id": 7, "name": "LoRaHAM KISS", "mode": "packet", "modem_type": "kiss-only",
+         "backing": {"summary": "kiss-tnc"},
+         "ptt": {"channel": 7, "kind": "gpio", "pin": 17},
+         "bit_rate": 1200},
+    ]})
+
+    assert mod.ensure_channel(api, "LoRaHAM KISS") == 7
+    (sent,) = api.put_to("/api/channels/7")
+    for response_only in ("id", "backing", "ptt"):
+        assert response_only not in sent, f"{response_only} must not be echoed back"
+    assert sent["mode"] == "aprs"          # the repair still happened
+    assert sent["bit_rate"] == 1200        # ... and unrelated fields survived
+
+
 def test_channel_in_aprs_plus_packet_is_left_alone():
     """`aprs+packet` still carries APRS — it is a deliberate operator choice (connected-mode
     sessions), so forcing it back to plain aprs would undo their configuration for no gain."""

@@ -353,10 +353,17 @@ operator_box = false   # callsign lives in the app's own config file (CALL)
 # =====================================================================
 # Stack: igate — daemon-backed APRS iGate
 # =====================================================================
+# DEPRECATED. Three reasons, all of which the `graywolf` stack answers: `loraham_igate` has known
+# bugs, no visible upstream maintenance, and graywolf is a FULL substitute (same RF<->APRS-IS job,
+# through the KISS TNC, plus a web UI and a searchable packet log).
+#
+# Kept working on purpose: the `id` and every config key are unchanged, so an existing station
+# keeps running and nobody has to migrate in a hurry. Retire it once no deployment starts it —
+# that removal is a large test-side change, `igate` being the example stack in ~250 references.
 [[stack]]
 id = "igate"
-name = "LoRaHAM iGate"
-summary = "APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
+name = "igate DEPRECATED"
+summary = "DEPRECATED — known bugs, unmaintained upstream; the graywolf stack is a full substitute. APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
 main = "loraham-igate"
 operator_box = false   # callsign is the iGate's own -c param; position is lat/lon
 

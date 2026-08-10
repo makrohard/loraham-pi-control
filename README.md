@@ -22,7 +22,7 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 |---|---|---|---|
 | `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets | [daemon](docs/stacks/daemon.md) |
 | `chat` | 433 | APRS/chat TUI (local or over SSH) | [aprs](docs/stacks/aprs.md) |
-| `igate` | 433 | APRS iGate | [aprs](docs/stacks/aprs.md) |
+| `igate` | 433 | APRS iGate — **deprecated**, use `graywolf` | [aprs](docs/stacks/aprs.md) |
 | `voice` | 433 / 868 | LoRa voice GUI | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
 | `graywolf` | via `kiss` | Graywolf APRS station (web UI, digipeater, iGate) — substitutes `igate` | [graywolf](docs/stacks/graywolf.md) |
@@ -257,7 +257,7 @@ lhpc install daemon
 lhpc install chat
 lhpc build chat
 
-# igate — APRS iGate
+# igate — APRS iGate — DEPRECATED: known bugs, unmaintained; use graywolf instead
 lhpc install igate
 lhpc build igate
 

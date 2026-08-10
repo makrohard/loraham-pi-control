@@ -18,6 +18,13 @@ it does not spawn the TUI.
 
 ## igate — `loraham-igate`
 
+> **Deprecated — use [graywolf](graywolf.md) instead.** Three reasons: `loraham_igate` has
+> known bugs, there is no visible upstream maintenance, and graywolf is a full substitute — the
+> same RF↔APRS-IS job through the [KISS TNC](kiss.md), plus a web UI and a searchable packet log.
+>
+> Nothing breaks today: the stack id and every config key are unchanged, so an existing station
+> keeps running and there is no rush to migrate. It will be retired once no deployment starts it.
+
 APRS iGate. **Beacons RF on start** (433.900) — use a dummy load.
 
 | | |

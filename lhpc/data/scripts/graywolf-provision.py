@@ -172,9 +172,14 @@ def ensure_channel(api: Api, name: str) -> int:
         if "aprs" not in str(chan.get("mode", "")):
             broken["mode"] = "aprs"
         if broken:
+            # Copy the live channel so operator-set fields survive, then drop the keys the
+            # RESPONSE carries but the REQUEST refuses: graywolf's PUT decoder uses
+            # DisallowUnknownFields, so echoing `id`, `backing` or `ptt` back turns the repair
+            # into a 400. `ptt` is `omitempty`, so it only appears once that channel has a PTT
+            # row — i.e. the failure would show up on someone else's box, not a fresh one.
             desired = dict(chan)
-            desired.pop("id", None)
-            desired.pop("backing", None)          # response-only
+            for response_only in ("id", "backing", "ptt"):
+                desired.pop(response_only, None)
             desired.update(broken)
             api.call("PUT", f"/api/channels/{chan['id']}", desired)
             fixed = ", ".join(f"{k}={v}" for k, v in sorted(broken.items()))

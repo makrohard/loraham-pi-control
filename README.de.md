@@ -24,7 +24,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 |---|---|---|---|
 | `daemon` | 433 + 868 | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit | [daemon](docs/stacks/daemon.md) |
 | `chat` | 433 | APRS-/Chat-TUI (lokal oder über SSH) | [aprs](docs/stacks/aprs.md) |
-| `igate` | 433 | APRS-iGate | [aprs](docs/stacks/aprs.md) |
+| `igate` | 433 | APRS-iGate — **veraltet**, stattdessen `graywolf` | [aprs](docs/stacks/aprs.md) |
 | `voice` | 433 / 868 | LoRa-Sprache (GUI) | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS-TNC über TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
 | `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) — ersetzt `igate` | [graywolf](docs/stacks/graywolf.md) |
@@ -266,7 +266,7 @@ lhpc install daemon
 lhpc install chat
 lhpc build chat
 
-# igate — APRS-iGate
+# igate — APRS-iGate — VERALTET: bekannte Fehler, ungepflegt; stattdessen graywolf
 lhpc install igate
 lhpc build igate
 

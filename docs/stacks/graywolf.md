@@ -2,8 +2,9 @@
 
 [Graywolf](https://github.com/chrissnell/graywolf) (Chris Snell, NW5W) is a full APRS
 station: AX.25 decode, digipeater, iGate, SQLite packet log and a web UI. Here it is the
-modern substitute for [`igate`](aprs.md#igate--loraham-igate) — same job, far more of it,
-with an operator UI instead of CLI flags.
+modern substitute for [`igate`](aprs.md#igate--loraham-igate), which is deprecated (known bugs,
+no visible upstream maintenance) — same job, far more of it, with an operator UI instead of CLI
+flags.
 
 It never touches the radio. Graywolf speaks KISS over TCP and the
 [KISS TNC](kiss.md) owns the band and the daemon sockets:
