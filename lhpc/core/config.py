@@ -223,11 +223,14 @@ class GpsConfig:
 
     @property
     def local_gpsd(self) -> bool:
-        """gpsd on THIS box. Drives the soft dependency: a remote-gpsd operator must never be
-        told to install a local package (there is nothing to install here). `auto` counts —
-        it only ever uses a LOCAL gpsd, so the install hint is exactly what makes it work."""
+        """A gpsd on THIS box is actually part of the configured position source. Drives the
+        gpsd soft dependency: a remote-gpsd operator must never be told to install a local
+        package. `auto` counts ONLY when it resolved to a local gpsd (one is listening) —
+        "auto might use one" made the dep row appear on every gpsd-less box (CI-found: the
+        install gate grew a host-dependent advisory), while an auto that found nothing needs
+        no package to run: it IS the no-gpsd path."""
         if self.source == "auto":
-            return True
+            return bool(self.auto_listening)
         return self.source == "gpsd" and _is_loopback_host(self.host)
 
     @property
