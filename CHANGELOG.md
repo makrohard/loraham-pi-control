@@ -1,29 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.11
 
-- **GPS works out of the box**: the source defaults to `auto` (gpsd on localhost if one runs, else no position — never a refusal) and every stack's `use_gps` defaults to on. **Upgrade note:** an untouched box that runs a local gpsd starts reporting real position, on the air, after this update
-- Audit follow-ups: a running GPS-enabled graywolf now blocks a source change; `fixed` says plainly that graywolf gets no position from it; meshcore-cli's Python-3.12-only syntax now fails at build time, not first run
-- Audit closure: `auto` only counts a listener truly reachable at 127.0.0.1:2947; one start uses one frozen auto verdict end to end (bridge included); meshcore-cli repinned to the last Python-3.11-clean commit
-- Audit closure 2: under `auto`, a live GPS feed whose gpsd vanished or streams nothing no longer fails the stack start — it runs without position and reconnects; explicit gpsd stays fail-closed
-- meshtastic's 4403/9443 now carry `tcp.port` claims like every other TCP listener; a contract test enforces the pairing
-- The runtime root's empty `docs/` is now a link into the checkout's docs, plus a `README.md` link
-- The Stacks page no longer jumps when using the accordion: the clicked header stays put while other sections close, action returns land at the previous scroll position, and lazy bodies arrive without moving the row
-
-- Review follow-up on the fixes below — each had left the same hole in an adjacent path:
-  - The GPS **consumer** set was a second hardcoded list (one function below the fixed one) still missing graywolf, so the GPS admission gate was skipped for it: with `use_gps` on and the source off, graywolf started silently position-blind where meshtastic was refused. Both sets are now manifest-derived; components that read a position declare `reads_position` (the `use_gps` param cannot say who reads — reticulum declares it on `rns`, Sideband is the reader). Both sets are also cached — they sit on hot paths and were rescanned per call
-  - A stale saved auto-start tick for the **test fixture** was still honored by the run order (the stale-tick fix covered production feeds only), silently replaying a synthetic position on every MeshCom start with no UI left to show or clear it. Feeds and fixtures now share one predicate; the fixture runs only when named directly
-  - The cross-band dependency rule keyed on an *explicitly requested* band — but the CLI has no band flag, so a bandless start resolved to the declared primary and sailed past the rule into the exact state it refuses. It now judges the resolved band
-  - The same rule now also runs in **restart's preflight**: an applied restart used to stop the stack and only then have its start refused, degrading restart to stop-only and leaving the stack down
-  - The fixture's knobs (rate/loop) had resurfaced as editable inputs under "Daemon process options" on the MeshCom confirm page after being filtered from the parameters panel; they no longer render anywhere on a stack confirm (a direct fixture start keeps them)
-  - The Package **Uninstall/Clean** buttons were gated on "fully built", hiding them for an interrupted fetch or stale pin — exactly the states where removal is the fix. They now gate on anything removable being on disk
-  - The GPS card's consumer list and the band-rule's snapshot use are derived/shared rather than hand-written/per-dependency
-
-- Fix: a stack whose `use_gps` was on could not be started from the console at all. The GPS-capable set was a hardcoded list that did not name `graywolf`, so its saved switch read as off, the start form's echo of the saved value looked like a per-start change, and the start was refused as "use_gps cannot be changed for a single start". The set is now derived from the manifest — declaring the param IS being GPS-capable
-- Fix: **MeshCom would not start** once the GPS-feed checkbox on the Confirm:start page had ever been ticked. That saved `autostart_meshcom-gps = on`, which forced the feed into the run order while `use_gps` was off, and a feed the position plan does not want is refused — so one stale tick stopped the stack durably. A position feed is admitted from the resolved plan only, and is no longer offered as an auto-start choice (nor is the synthetic test fixture); the confirm page showed both beside the real switch as a second and third GPS control
-- `use_gps` is shown on the Confirm:start page as a saved setting with no input field, instead of an editable control whose only possible effect was a failed start
-- Fix: starting a stack on the other band while a stack it DEPENDS on holds one is refused. The "one band at a time" rule covered only the target's own stack, so graywolf — which owns no radio and pulls in the KISS TNC and the daemon — was admitted on 868 while that chain ran on 433, coming up on 868 talking to a 433 TNC
-- Fix: a stack whose artifact is fetched rather than cloned (`graywolf`) now has **Uninstall** and **Clean all** buttons. Both hung off having a source repo, so it could be installed from the console but only removed from a shell
+- **GPS works out of the box**: the global source defaults to `auto` (a gpsd on this box if one runs, else no position — never a refusal) and every stack's `use_gps` defaults to on. `auto` counts only a listener truly reachable at 127.0.0.1:2947, one start uses one frozen verdict end to end (GPS bridge included), and a gpsd that vanished or streams nothing does not fail the start. Explicit sources keep their fail-closed refusals. **Upgrade note:** an untouched box running a local gpsd begins reporting real position, on the air
+- Console start fixes: a stack with GPS on starts from the web again (the GPS-capable set is manifest-derived now, ending the hardcoded-list drift); a stale GPS-feed auto-start tick no longer blocks MeshCom durably; `use_gps` shows on the confirm page as the saved setting it is (change it under Apps → *stack* → Settings)
+- One radio, one band — enforced across the chain: starting (or restarting, preflighted before the stop) on the other band is refused while the stack itself or a dependency it pulls in runs on one
+- The Stacks page no longer jumps when using the accordion: the clicked header stays put, action returns keep the scroll position, lazy bodies arrive without moving the row
+- Fetched-binary stacks (graywolf) get **Uninstall**/**Clean all** buttons whenever their artifact is on disk; meshtastic's 4403/9443 now carry `tcp.port` claims like every other listener
+- Changing the global position source is blocked while any GPS-enabled consumer runs (graywolf included); `fixed` says plainly that graywolf gets no position from it
+- `meshcore-cli` repinned to `v1.5.0-63-g56b246b`, the last Python-3.11-clean commit, with a build-time byte-compile guard against a regressing future pin
+- The runtime root links `docs/` and `README.md` into the self-hosted checkout instead of shipping an empty docs directory
 
 ## 0.1.10
 
