@@ -2360,3 +2360,59 @@ def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
     svc._invalidate_config()
     assert svc.gps_plan("meshcom").enabled
     assert "meshcom-gps" in [c.id for _, c in svc._run_order("meshcom")]
+
+
+def test_gps_consumers_are_derived_from_the_manifest_and_gate_graywolf(tmp_path):
+    """REVIEW-FOUND: the first derivation fix covered `_gps_stacks()` but left the PARALLEL
+    hardcoded consumer set one function below it, still missing graywolf — so the whole GPS
+    admission gate (`gps_block`) returned early for graywolf and it started position-blind with
+    use_gps on and the source off, while meshtastic was refused. Both sets are manifest-derived
+    now (`reads_position` on the component that actually reads, because the `use_gps` param
+    cannot say who does: reticulum declares it on rns, sideband is the reader)."""
+    svc = _gsvc(tmp_path)
+
+    declared = {c.id for s in svc.stacks() for c in s.components if c.reads_position}
+    assert svc._gps_consumer_ids() == declared
+    assert {"graywolf", "meshtastic", "meshcom-qemu", "sideband"} <= declared
+    assert "rns" not in declared                      # declares use_gps, reads nothing
+    # Every GPS-capable stack must contain a reader — a use_gps switch with nobody
+    # reading is exactly the drift this test exists to catch.
+    for sid in svc._gps_stacks():
+        s = svc.stack(sid)
+        assert any(c.reads_position for c in s.components), sid
+
+    # The finding's exact repro: use_gps on, global source off -> graywolf refused LIKE
+    # meshtastic, with the same reason.
+    reasons = {}
+    for sid in ("meshtastic", "graywolf"):
+        svc.save_stack_config(sid, {"use_gps": "on"})
+    svc._invalidate_config()
+    for sid in ("meshtastic", "graywolf"):
+        reason, _cmds = svc.gps_block(sid)
+        reasons[sid] = reason
+        assert "global position source is off" in reason, (sid, reason)
+    assert reasons["meshtastic"] == reasons["graywolf"]
+
+    # Derived sets are cached: same frozen object every call (they sit on hot paths).
+    assert svc._gps_consumer_ids() is svc._gps_consumer_ids()
+    assert svc._gps_stacks() is svc._gps_stacks()
+
+
+def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
+    """REVIEW-FOUND: the stale-tick fix covered production FEEDS only, while the removed
+    confirm-page checkboxes covered feeds AND the fixture — so a pre-existing saved
+    `autostart_meshcom-gps-relay = on` still forced the fixture into every meshcom start,
+    silently replaying a synthetic position on air, with no UI left that could show or clear
+    the flag. Feeds and fixtures now share ONE predicate (`_never_operator_autostart`)."""
+    svc = _gsvc(tmp_path)
+    svc.save_stack_config("meshcom", {"autostart_meshcom-gps-relay": "on"})
+
+    order = [c.id for _, c in svc._run_order("meshcom")]
+    assert "meshcom-gps-relay" not in order
+    # The deliberate path is untouched: naming the fixture directly still runs it.
+    assert svc.run_action("start", "meshcom-gps-relay", apply=False).ok is True
+    # And the predicate is THE shared rule: everything it excludes is absent from both
+    # operator-facing lists, for every stack.
+    for s in svc.stacks():
+        excluded = {c.id for c in s.components if svc._never_operator_autostart(c)}
+        assert not ({o["id"] for o in svc.optional_start_components(s.id)} & excluded), s.id

@@ -782,9 +782,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # A fetched-binary stack has no clone, so the source-gated Uninstall/Clean line never
             # rendered for it — yet `lhpc uninstall graywolf` works and DOES remove the fetched
             # artifact. The console has to offer the removal the CLI already accepts, otherwise a
-            # stack can be installed from the console but only removed from a shell. Gated on the
-            # artifact actually existing, so it is not offered when there is nothing to remove.
-            removable = bool(buildable and not _unbuilt)
+            # stack can be installed from the console but only removed from a shell. Gated on
+            # anything removable being ON DISK — not on "fully built", which hid the buttons for
+            # an interrupted fetch or a stale pin, exactly the states where removal is the fix.
+            removable = bool(buildable and service.fetched_artifacts_present(stack.id))
             interactive = bool(main and main.interactive)
             member_ids = {c.id for c in stack.components}
             # Freshness, resolved per component against the head the verdict was computed from.
@@ -1197,9 +1198,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                               if op == "start" else None)
         # Run params covered by the savable 'Stack parameters' panel; the rest (e.g. the daemon's
         # ephemeral `debug` start flag) render as PLAIN inputs — start options, never persisted.
+        # Fixture-owned params are excluded HERE too: the panel filters them, so leaving them in
+        # the difference resurfaced the fixture's knobs as plain inputs — the confirm page must
+        # not offer settings for a component this start never runs.
         covered = {r["name"] for r in (stack_params or []) if r["field"].startswith("p_")}
+        _fixture = service.fixture_run_param_names(target) if op == "start" else set()
         plain_params = [p for p in run_params
-                        if p.name not in _HIDE_RUN and p.name not in covered] if op == "start" else []
+                        if p.name not in _HIDE_RUN and p.name not in covered
+                        and p.name not in _fixture] if op == "start" else []
         # Submitted-but-unsaved daemon-panel values (best-effort parse; a malformed field is ignored
         # for DISPLAY only) so a re-render after a failed Save/enforcement keeps the operator's edits.
         _dp_display, _ = (_parse_start_daemon_overrides(request.form) if op == "start" else (None, ""))

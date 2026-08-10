@@ -142,6 +142,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         self._system = system or RealSystem()
         self._paths = paths or resolve_paths()
         self._stacks: tuple[Stack, ...] | None = None
+        # Derived-from-manifest GPS sets, same lifetime as _stacks (which is never invalidated).
+        self._gps_stacks_cache: frozenset | None = None
+        self._gps_consumers_cache: frozenset | None = None
         self._controller = _UNSET       # controller spec (None = none declared); lazy
         self._config: Config | None = None
         # The config cache is shared by the (threaded) web app; guard it so a save on one
@@ -1625,11 +1628,18 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         False for a box whose saved value was "on" — the start form's honest echo of "on" then
         looked like a per-start change and EVERY start was refused. The manifest is the only
         place that knows, so it is the only place that decides.
+
+        Cached for the life of `self._stacks` (memoized, never invalidated): this sits under
+        `gps_enabled_for`/`gps_plan`, which run dozens of times per page render and several
+        times per start — a per-call manifest scan turned an O(1) membership test into the
+        hottest loop on a Pi Zero.
         """
-        return frozenset(
-            s.id for s in self.stacks()
-            for c in s.components
-            if any(p.name == self.GPS_PARAM for p in c.run_params))
+        if self._gps_stacks_cache is None:
+            self._gps_stacks_cache = frozenset(
+                s.id for s in self.stacks()
+                for c in s.components
+                if any(p.name == self.GPS_PARAM for p in c.run_params))
+        return self._gps_stacks_cache
 
     def gps_owner_stack(self, target: str) -> str:
         """The GPS-capable stack a target belongs to, or "".
@@ -1682,17 +1692,24 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         """Every production feed component id — what a direct start must be checked against."""
         return set(self._production_feeds().values())
 
-    def _gps_consumer_ids(self) -> set:
-        """Components that actually READ a position.
+    def _gps_consumer_ids(self) -> frozenset:
+        """Components that actually READ a position — `reads_position = true` in the manifest.
 
         A GPS stack contains plenty that does not: `meshcom-bridge` is a TCP relay to the
         daemon and `meshcom-firmware` is a build artifact. Treating "belongs to a GPS stack"
         as "consumes position" started a feed — and claimed the receiver — for components that
         never read one.
+
+        DERIVED, like `_gps_stacks()`, and for the same reason: this was a hardcoded set, and
+        it drifted the same way — graywolf became a consumer and the set did not name it, so
+        `gps_block()` returned early and graywolf started position-blind past the very gate
+        built to refuse that. The flag lives on the component because the `use_gps` param
+        cannot say who reads: reticulum declares it on `rns`, but `sideband` is the reader.
         """
-        # meshtasticd reads the serial device, the QEMU node reads its UART, Sideband reads the
-        # plugin. Everything else in those stacks is transport or build output.
-        return {"meshtastic", "meshcom-qemu", "sideband"}
+        if self._gps_consumers_cache is None:
+            self._gps_consumers_cache = frozenset(
+                c.id for s in self.stacks() for c in s.components if c.reads_position)
+        return self._gps_consumers_cache
 
     def _gps_run_order_uses_position(self, target: str) -> bool:
         """Does what this start would ACTUALLY bring up read a position, or feed one?
@@ -1714,16 +1731,31 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # production feed.
     _FIXTURE_FEEDS: ClassVar[dict] = {"meshcom": "meshcom-gps-relay"}
 
+    def _never_operator_autostart(self, c) -> bool:
+        """Components that are NOT an operator start/auto-start choice, whose saved
+        `autostart_<id>` flag is therefore ignored: production GPS feeds (the resolved position
+        plan is their only admitter) and `test_fixture` components (run deliberately, by name).
+
+        THE single predicate for that rule — it was encoded separately in the Settings optional
+        list, the confirm-page checkbox list and the run-order admission, and the copies drifted:
+        the run order ignored stale feed ticks but still honored a stale FIXTURE tick, silently
+        replaying a synthetic position on every start, after both UIs that could show or clear
+        the flag were removed.
+        """
+        return c.test_fixture or c.id in self._all_gps_feed_ids()
+
     def _gps_components_excluded(self, target: str) -> set:
         """Feed components that must not run under the current plan.
 
-        The fixture relay stays an ordinary opt-in optional component — an operator can still
-        auto-start it or run it directly, which is what makes it "explicit and test-only".
-        What it must never do is run BESIDE the production feed: both write the same UART
-        socket, so the node would receive a synthetic position interleaved with the real one
-        and there would be no way to tell which it beaconed.
+        The fixture relay runs only when named directly (`lhpc stack start meshcom-gps-relay`)
+        — that explicitness is what makes it "test-only"; it is never an auto-start choice
+        (see `_never_operator_autostart`). What it must never do is run BESIDE the production
+        feed: both write the same UART socket, so the node would receive a synthetic position
+        interleaved with the real one and there would be no way to tell which it beaconed.
 
-        When the global source is configured, production wins.
+        When the global source is configured, production wins. Kept as a belt even though the
+        fixture can no longer enter `allowed_optional` — the rule is about the UART socket,
+        not about how the fixture got into the order.
         """
         target = self.gps_owner_stack(target)                 # stack OR component id
         cid = self._FIXTURE_FEEDS.get(target)
@@ -1740,15 +1772,16 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # Optional components are soft: included only when the operator has
             # opted into auto-starting them (even via another component's depends_on).
             cfg = load_stack_config(self._paths, target)
-            # A PRODUCTION feed is excluded from the auto-start choice: it is not one. A saved
-            # `autostart_meshcom-gps = on` (the confirm page used to offer it as a checkbox) forced
-            # the feed into the order while `use_gps` was off, and starting a feed the plan does not
-            # want is refused — "the current position plan does not use it" — so the whole stack
-            # stopped starting, durably, from one stale tick. The plan below is the ONLY admitter.
-            _feeds = self._all_gps_feed_ids()
+            # Feeds and fixtures are excluded from the auto-start choice: they are not one. A
+            # saved `autostart_meshcom-gps = on` (the confirm page used to offer it as a checkbox)
+            # forced the feed into the order while `use_gps` was off, and starting a feed the plan
+            # does not want is refused — so the whole stack stopped starting, durably, from one
+            # stale tick. A stale FIXTURE tick was worse: with the checkboxes gone it silently
+            # replayed a synthetic position on every start, with no UI left to reveal or clear it.
+            # The plan below is the ONLY feed admitter; the fixture runs only when named directly.
             allowed_optional = {c.id for c in s.components
                                 if c.optional and cfg.get(f"autostart_{c.id}") == "on"
-                                and c.id not in _feeds}
+                                and not self._never_operator_autostart(c)}
             # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
             # resolved global GPS plan, computed HERE — before anything downstream acquires a
             # lock — so run order, claims and the rendered config all describe the same plan.

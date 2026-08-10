@@ -912,6 +912,8 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   readiness = "endpoint"
   name = "Graywolf APRS station"
   kind = "service"
+  # graywolf itself reads the position (gpsd or serial NMEA) when GPS is on.
+  reads_position = true
   # Band-agnostic BY CONSTRUCTION: graywolf only speaks KISS over TCP to the TNC, and the
   # TNC owns the band (and the daemon sockets). Nothing here touches SPI, a radio or a
   # daemon socket, so this component claims no radio/daemon resource at all.
@@ -1165,6 +1167,8 @@ main = "meshtastic"
   id = "meshtastic"
   name = "Meshtastic (meshtasticd)"
   kind = "service"
+  # meshtasticd reads the serial receiver/gpsd stream itself when GPS is on.
+  reads_position = true
   band = "868"
   bands = ["433", "868"]
   purpose = "meshtasticd driving the RF95 directly; lhpc starts/stops it rootless with a runtime config."
@@ -1790,6 +1794,8 @@ main = "meshcom-qemu"
   id = "meshcom-qemu"
   name = "MeshCom QEMU node"
   kind = "service"
+  # The QEMU node reads NMEA on its UART1 (fed by meshcom-gps) when GPS is on.
+  reads_position = true
   band = "433"
   purpose = "Runs MeshCom firmware headless under QEMU (web 18083, net-console 12323)."
   tx_capable = true
@@ -2731,6 +2737,9 @@ announce = "[install] LXMF into {source}/.venv — pip is quiet off-TTY"
 id = "sideband"
 name = "Sideband (GUI)"
 kind = "service"
+# Sideband reads the position through its gpsd plugin when GPS is on — rns (which declares
+# the stack's use_gps switch) reads none itself.
+reads_position = true
 optional = true
 purpose = "Sideband LXMF client with a desktop GUI, attached to the shared instance."
 tx_capable = true

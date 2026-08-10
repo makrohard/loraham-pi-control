@@ -28,8 +28,11 @@
        job and one form; a second collapsible layer would just be a click in the way. #}
     <div class="ws-sub-wrap">
       <section class="cfgsec">
-        <p class="muted">Where every stack gets its position. Meshtastic, MeshCom, Sideband and
-          Graywolf all follow this one setting; each stack then has its own <code>use_gps</code>
+        {# The consumer names are DERIVED from the manifest (stacks declaring `use_gps`) — a
+           hand-written list here drifted every time a stack gained the switch. #}
+        <p class="muted">Where every stack gets its position.
+          {{ gps_global.consumers|join(', ') if gps_global.consumers else 'Every GPS-capable stack' }}
+          all follow this one setting; each stack then has its own <code>use_gps</code>
           switch in its own Settings. lhpc never installs or configures gpsd itself.</p>
 
         {% if not gps_global.valid %}

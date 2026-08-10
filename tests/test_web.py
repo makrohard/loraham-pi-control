@@ -2463,8 +2463,10 @@ def test_fetched_binary_stack_offers_uninstall_in_the_console(tmp_path):
     body = app_for(tmp_path).get("/stacks?open=graywolf").get_data(as_text=True)
     assert "uninstall" not in body.split("graywolf-actions")[-1][:400].lower()
 
-    # BUILT: the fetched artifact exists -> Uninstall (and Clean) must be reachable.
-    root = tmp_path / "built"
+    # ARTIFACT ON DISK but NOT BUILT (interrupted fetch / stale pin): this is exactly the
+    # state where removal is the fix, so Uninstall/Clean must be reachable — REVIEW-FOUND:
+    # gating on fully-built hid the buttons here and sent the operator back to a shell.
+    root = tmp_path / "partial"
     (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
     svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=root))
     comp = svc.stack("graywolf").main_component
@@ -2472,10 +2474,38 @@ def test_fetched_binary_stack_offers_uninstall_in_the_console(tmp_path):
     art.parent.mkdir(parents=True, exist_ok=True)
     art.write_text("#!/bin/sh\n")
     art.chmod(0o755)
+    assert svc.unbuilt_components("graywolf") == ["graywolf"]   # NOT built (no marker) ...
+    assert svc.fetched_artifacts_present("graywolf") is True    # ... but on disk
+    body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'value="uninstall"' in body and "graywolf" in body
+
+    # FULLY BUILT: still reachable, of course.
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
     marker = svc._lifecycle().source_dir(comp) / comp.build_marker
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(comp))
-    assert svc.unbuilt_components("graywolf") == []          # precondition: it IS built
+    assert svc.unbuilt_components("graywolf") == []
     body = app_for(root).get("/stacks?open=graywolf").get_data(as_text=True)
-    assert 'value="uninstall"' in body and "graywolf" in body
+    assert 'value="uninstall"' in body
+
+
+def test_fixture_params_never_render_as_plain_start_inputs(tmp_path):
+    """REVIEW-FOUND: filtering the fixture out of the savable panel dropped its params from the
+    'covered' set, so `run_params_for(stack) - covered` re-surfaced the fixture's knobs (rate,
+    loop) as editable inputs under 'Daemon process options' — offering settings for a component
+    the start never runs. They must appear NOWHERE on a stack confirm; a DIRECT fixture start
+    still exposes them (that is the deliberate path)."""
+    from lhpc.core.services import ControllerService as _CS
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = _CS(system=FakeSystem(cmdlines_data={}).system, paths=Paths(runtime_root=tmp_path))
+    c = create_app(service_factory=lambda: svc).test_client()
+    tok = _csrf(c)
+
+    body = c.post("/action", data={"_csrf": tok, "op": "start",
+                                   "target": "meshcom"}).get_data(as_text=True)
+    assert 'name="p_rate"' not in body and 'name="p_loop"' not in body
+    assert "Fixture sentences/sec" not in body
+    # The direct fixture start keeps its own params — the filter is stack-scoped.
+    assert svc.fixture_run_param_names("meshcom") == {"rate", "loop"}
+    direct = svc.stack_start_param_groups("meshcom-gps-relay")
+    assert {r["name"] for g in direct for r in g["rows"]} == {"rate", "loop"}

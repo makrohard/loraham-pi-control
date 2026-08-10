@@ -421,8 +421,8 @@ class LifecycleOpsMixin:
         # A PRODUCTION FEED started on its own is only meaningful when the stack's plan actually
         # calls for it. Run outside that plan it publishes an endpoint and claims the receiver
         # for a consumer that is not coming — and, with the source off, delivers nothing while
-        # looking healthy. The fixture relay is deliberately NOT covered here: it stays an
-        # ordinary opt-in optional component (see `_gps_components_excluded`).
+        # looking healthy. The fixture relay is deliberately NOT covered here: it runs when
+        # named directly, which is its whole contract (see `_never_operator_autostart`).
         if (raw != target and raw in self._all_gps_feed_ids()
                 and raw not in self._gps_components_for(target)):
             return (f"'{raw}' is the GPS feed for '{target}', and the current position plan "
@@ -726,34 +726,14 @@ class LifecycleOpsMixin:
                          f"  Stop it first, then start it on {band} MHz."],
                 next_commands=[f"lhpc stack stop {_sid} --yes",
                                f"lhpc stack start {_sid} --yes"])
-        # The SAME rule, one stack removed: this run also starts the chain it depends on, and a
-        # chain member already up on the OTHER band is the identical "one band at a time" case.
-        # graywolf on 868 pulls in the KISS TNC and the daemon; with that chain live on 433 every
-        # member read already_healthy, so nothing was started, nothing was blocked, and graywolf
-        # came up on 868 talking to a 433 TNC — one radio, two bands claimed, no warning. Members
-        # are skipped as conflict holders precisely BECAUSE they are in this run order, so the
-        # band mismatch has to be caught here or not at all.
-        if band:
-            for _dep in dict.fromkeys(self.stack_of(c.id) for _, c in order):
-                if not _dep or _dep == _sid:
-                    continue
-                _dlive = self.running_band(_dep, "")
-                if _dlive and _dlive != band and self.stack_bands(_dep) \
-                        and self._band_owner_is_up(_dep):
-                    return ActionResult(
-                        False,
-                        f"Cannot start '{target}' on {band} MHz: it needs '{_dep}', which is "
-                        f"already running on {_dlive} MHz.",
-                        details=["  [blocked] the radio serves ONE band at a time, and this "
-                                 f"start would need '{_dep}' on {band} MHz",
-                                 f"  Stop '{_dep}' first, or start '{target}' on {_dlive} MHz "
-                                 "instead."],
-                        # `lhpc stack start` takes no --band (the band is chosen in the console),
-                        # so the remedy is the same shape as the own-stack refusal above: stop the
-                        # holder, then start. Naming a flag that does not exist would be worse
-                        # than naming none.
-                        next_commands=[f"lhpc stack stop {_dep} --yes",
-                                       f"lhpc stack start {target} --yes"])
+        # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
+        # different band. Checked on the band this start will ACTUALLY use (cfg_band), not only
+        # an explicitly requested one — the CLI has no band flag, so a bandless `lhpc stack
+        # start graywolf` resolves to the declared primary and used to sail past an `if band:`
+        # gate straight into the cross-band state the rule exists to refuse.
+        _dep_block = self._dep_band_block(target, order, band or cfg_band)
+        if _dep_block is not None:
+            return _dep_block
         life = self._lifecycle()
         radio, tx = self._daemon_needs(order, params, cfg_band)
         # The stack whose daemon params to apply once the daemon is up (a direct component target
@@ -2259,6 +2239,18 @@ class LifecycleOpsMixin:
             target, band, params, file_overrides, "restart")
         if _pf_err is not None:
             return _pf_err
+        # The dependency band rule must also refuse BEFORE the stop: the later start refuses it
+        # anyway (a chain member of another stack live on a different band), and by then the
+        # target is already down — restart degrades to stop-only, breaking this method's
+        # "never stopped only to be rejected by the later start" promise. `stop_owners` cannot
+        # clear the state either: owner-stop acts on resource-conflict HOLDERS, and chain
+        # members are exempt from that set precisely because they are in the run order.
+        _pre_order = self._run_order(target)
+        if _pre_order:
+            _bb = self._dep_band_block(target, _pre_order,
+                                       band or self._config_band(target, band))
+            if _bb is not None:
+                return _bb
         stopped = self.stop(target, apply=True, band=band)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
@@ -3185,6 +3177,43 @@ class LifecycleOpsMixin:
             params.extend(c.run_params)
         return params
 
+    def fetched_artifacts_present(self, target: str) -> bool:
+        """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary
+        (source-less) stack — the `build_root` workspace or the artifact itself?
+
+        This, not `is_built`, is what the console's removal buttons must gate on: an
+        interrupted fetch (binary landed, completion marker never written) or a bumped pin
+        (marker mismatches) reads NOT built, yet the stale artifact is exactly what the
+        operator needs to remove before retrying. Gating removal on fully-built hid the
+        buttons in precisely the states that need them.
+        """
+        s = self.stack(target)
+        for c in (s.components if s else ()):
+            if c.source:
+                continue
+            for rel in (c.build_root, c.bin):
+                if not rel:
+                    continue
+                try:
+                    if self._paths.under(*rel.split("/")).exists():
+                        return True
+                except (OSError, PathContainmentError):
+                    continue
+        return False
+
+    def fixture_run_param_names(self, target: str) -> set:
+        """Run-param names owned by `test_fixture` components of this STACK ("" set otherwise).
+
+        The confirm page renders `run_params_for(stack) - covered` as plain start inputs, and
+        `covered` comes from the fixture-filtered panel — so without this set the fixture's
+        knobs (rate/loop) fell through the difference and resurfaced as editable inputs under
+        "Daemon process options". Deliberately NOT baked into `run_params_for`: config reset
+        and validation still recognize these names, so a saved fixture value stays clearable.
+        """
+        s = self.stack(target)
+        return {p.name for c in (s.components if s else ())
+                if c.test_fixture for p in c.run_params}
+
     def _safe_unlink(self, path) -> bool:
         """Best-effort delete of a runtime-owned marker/leaf (contained, no symlink-
         follow). NON-THROWING: `Paths.safe_unlink` can raise ordinary FS errors
@@ -3310,10 +3339,59 @@ class LifecycleOpsMixin:
             return set(allowed)
         return {declared} if declared else set()
 
-    def _band_owner_is_up(self, stack_id: str) -> bool:
-        """Whether a band-carrying component of this stack is running right now."""
+    def _dep_band_block(self, target: str, order, band: str):
+        """ActionResult when a chain member of ANOTHER stack is live on a different band, else None.
+
+        graywolf on 868 pulls in the KISS TNC and the daemon; with that chain live on 433 every
+        member read already_healthy, so nothing was started, nothing was blocked, and graywolf
+        came up on 868 talking to a 433 TNC — one radio, two bands claimed, no warning. Members
+        are skipped as conflict holders precisely BECAUSE they are in this run order, so the
+        band mismatch has to be caught here or not at all.
+
+        `band` is the band this start will ACTUALLY use (explicit request or the resolved
+        config band); "" = nothing to judge. Called from the start path and from restart's
+        preflight — the refusal must fire BEFORE restart's stop, or restart degrades to
+        stop-only and leaves the stack down.
+
+        ONE fresh snapshot at most, shared across all candidate dependencies (each
+        `_band_owner_is_up` probe is a full system scan — expensive on a Pi Zero) and built
+        only when a marker actually mismatches.
+        """
+        if not band:
+            return None
+        _sid = self.stack_of(target) or target
+        snap = None
+        for _dep in dict.fromkeys(self.stack_of(c.id) for _, c in order):
+            if not _dep or _dep == _sid:
+                continue
+            _dlive = self.running_band(_dep, "")
+            if not (_dlive and _dlive != band and self.stack_bands(_dep)):
+                continue
+            if snap is None:
+                snap = self.build_snapshot(fresh=True)
+            if not self._band_owner_is_up(_dep, snap):
+                continue
+            return ActionResult(
+                False,
+                f"Cannot start '{target}' on {band} MHz: it needs '{_dep}', which is "
+                f"already running on {_dlive} MHz.",
+                details=["  [blocked] the radio serves ONE band at a time, and this "
+                         f"start would need '{_dep}' on {band} MHz",
+                         f"  Stop '{_dep}' first, or start '{target}' on {_dlive} MHz "
+                         "instead."],
+                # `lhpc stack start` takes no --band (the band is chosen in the console),
+                # so the remedy is the same shape as the own-stack refusal: stop the
+                # holder, then start. Naming a flag that does not exist would be worse
+                # than naming none.
+                next_commands=[f"lhpc stack stop {_dep} --yes",
+                               f"lhpc stack start {target} --yes"])
+        return None
+
+    def _band_owner_is_up(self, stack_id: str, snap=None) -> bool:
+        """Whether a band-carrying component of this stack is running right now.
+        `snap` reuses a caller-built snapshot; None probes fresh (a full system scan)."""
         up = (RunState.RUNNING, RunState.DEGRADED)
-        for ss in self.build_snapshot(fresh=True).stacks:
+        for ss in (snap or self.build_snapshot(fresh=True)).stacks:
             if ss.stack.id != stack_id:
                 continue
             for c in ss.stack.components:
@@ -4201,10 +4279,9 @@ class LifecycleOpsMixin:
         if s is None:
             return []
         cfg = load_stack_config(self._paths, target)
-        feeds = self._all_gps_feed_ids()
         return [{"id": c.id, "name": c.name,
                  "autostart": cfg.get(f"autostart_{c.id}") == "on"}
                 for c in s.components
                 if c.optional and c.kind == ComponentKind.SERVICE
                 and not getattr(c, "interactive", False)
-                and c.id not in feeds and not c.test_fixture]
+                and not self._never_operator_autostart(c)]

@@ -701,14 +701,12 @@ class ParamsConfigMixin:
         # refused ("the current position plan does not use it"). Offering a checkbox let the
         # operator contradict the position plan, and showed a second GPS entry next to the
         # fixture on the confirm page.
-        _gps_feeds = self._all_gps_feed_ids()
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
                      "autostart": stored.get(f"autostart_{c.id}") == "on",
                      "running": live.get(c.id) in up}
                     for c in members if c.optional
                     and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
-                    and c.id not in _gps_feeds
-                    and not c.test_fixture]
+                    and not self._never_operator_autostart(c)]
         main = s.main_component if s else None
         # Operator identity is only relevant to stacks that actually substitute
         # {callsign} into a run/pre command (e.g. iGate) — not the daemon.
@@ -1374,6 +1372,9 @@ class ParamsConfigMixin:
         v = self.gps_settings()
         v["sources"] = [(s, labels.get(s, s)) for s in GPS_SOURCES]
         v["bauds"] = list(GPS_BAUDS)
+        # Stack display names for the card prose, DERIVED like the set itself — a hand-written
+        # list in the template is the same drifting literal the derived set replaced.
+        v["consumers"] = [s.name for s in self.stacks() if s.id in self._gps_stacks()]
         # DISPLAY only — the memoized snapshot, never a forced recompute. A page render calls the
         # stack helpers ~15×, and making this one reassess turned every render into two full
         # assessments (re-scanning /proc and re-running git for every source). The authoritative,

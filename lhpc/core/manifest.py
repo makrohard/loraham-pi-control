@@ -632,6 +632,7 @@ def _parse_component(raw: dict) -> Component:
         ),
         optional=raw.get("optional", False),
         test_fixture=raw.get("test_fixture", False),
+        reads_position=raw.get("reads_position", False),
         run_params=tuple(_parse_param(p, raw.get("id", "?"))
                          for p in raw.get("param", [])),
         requires_daemon_tx=raw.get("requires_daemon_tx", ""),

@@ -447,6 +447,11 @@ class Component:
     # auto-installed. `optional` alone could not express this — it made the meshcom GPS relay
     # (which replays a synthetic NMEA file) sit on the confirm page beside the real feed.
     test_fixture: bool = False
+    # This component READS a position (device/gpsd/plugin) when GPS is on. Declared where the
+    # reading happens, because the `use_gps` param cannot say: reticulum declares `use_gps` on
+    # `rns` while `sideband` is the component that reads. The GPS gate, the receiver claim and
+    # feed admission all key off this — a hardcoded consumer list drifted twice.
+    reads_position: bool = False
     run_params: tuple[RunParam, ...] = ()    # user-choosable run parameters
     requires_daemon_tx: str = ""             # daemon TX mode this component needs (MANAGED/DIRECT)
     interactive: bool = False    # must be run by the operator in a terminal (e.g. a TUI);

@@ -41,10 +41,16 @@ def test_daemon_stack_uses_radio_param_override(tmp_path):
 def test_optional_component_soft_unless_autostart(tmp_path):
     from lhpc.core.config import save_stack_config
     svc = _svc(tmp_path)
+    ser = "loraham-kiss-serial"
+    assert ser not in [c.id for _, c in svc._run_order("kiss")]      # soft by default
+    save_stack_config(svc._paths, "kiss", {f"autostart_{ser}": "on"})
+    assert ser in [c.id for _, c in svc._run_order("kiss")]          # opted in
+    # A test FIXTURE is not an autostart choice (this used to assert the opposite, on the
+    # fixture relay): a stale tick silently replayed a synthetic position on every start once
+    # the checkboxes were removed. Naming it directly stays the one way to run it.
     gps = "meshcom-gps-relay"
-    assert gps not in [c.id for _, c in svc._run_order("meshcom")]   # soft by default
     save_stack_config(svc._paths, "meshcom", {f"autostart_{gps}": "on"})
-    assert gps in [c.id for _, c in svc._run_order("meshcom")]       # opted in
+    assert gps not in [c.id for _, c in svc._run_order("meshcom")]
     assert [c.id for _, c in svc._run_order(gps)] == [gps]           # explicit run allowed
 
 
@@ -811,8 +817,43 @@ def test_the_dependency_band_rule_does_not_block_the_matching_band(tmp_path):
     assert idle.run_action("start", "graywolf", band="868", apply=False).ok is True
 
 
-def test_a_bandless_stack_start_is_never_blocked_by_the_dependency_rule(tmp_path):
-    """No requested band = no mismatch to judge. The rule keys off an EXPLICIT band, so an
-    ordinary bandless start still inherits the chain's band instead of being refused."""
-    svc = _band_svc(tmp_path, _D433, _S433, {"kiss": "433"})
-    assert svc.run_action("start", "graywolf", apply=False).ok is True
+def test_a_bandless_start_is_judged_on_the_band_it_will_actually_use(tmp_path):
+    """REVIEW-FOUND: the rule was gated on an EXPLICIT band, but the CLI has no band flag — a
+    bandless `lhpc stack start graywolf` resolves to the declared primary (433) and sailed past
+    the gate straight into the cross-band state the rule refuses. (The first version of this
+    test masked the hole by putting kiss on 433, the one band that cannot mismatch the primary.)
+    The rule now judges the RESOLVED band: mismatch refused, match untouched."""
+    # kiss live on 868, graywolf's primary is 433 -> the resolved band mismatches -> DENIED.
+    _D868 = {100: ["loraham_daemon", "--radio", "868"],
+             200: ["/x/loraham-kiss-tnc", "--config", "c"]}
+    _S868 = {"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+    svc = _band_svc(tmp_path, _D868, _S868, {"kiss": "868"})
+    res = svc.run_action("start", "graywolf", apply=False)
+    assert res.ok is False
+    assert "kiss" in res.summary and "868" in res.summary
+    # kiss live on the band the bandless start resolves to -> nothing to refuse.
+    svc2 = _band_svc(tmp_path / "match", _D433, _S433, {"kiss": "433"})
+    assert svc2.run_action("start", "graywolf", apply=False).ok is True
+
+
+def test_restart_is_refused_by_the_dependency_band_rule_before_its_stop(tmp_path):
+    """REVIEW-FOUND: the dependency band refusal fired only inside the start path, and restart
+    preflighted only params/identity — so an applied restart STOPPED the stack and then had its
+    start refused, degrading restart to stop-only and leaving the stack down (the exact outcome
+    the _restart_impl docstring promises cannot happen). The rule now runs in restart's
+    preflight, before anything is stopped."""
+    from lhpc.core.config import save_operator_config
+    _D868 = {100: ["loraham_daemon", "--radio", "868"],
+             200: ["/x/loraham-kiss-tnc", "--config", "c"]}
+    _S868 = {"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
+    svc = _band_svc(tmp_path, _D868, _S868, {"kiss": "868", "graywolf": "433"})
+    save_operator_config(svc._paths, "DJ0CHE")
+    svc._invalidate_config()
+
+    res = svc.restart("graywolf", apply=True)
+    assert res.ok is False
+    assert "kiss" in res.summary and "868" in res.summary and "433" in res.summary
+    # Refused BEFORE the stop: no stop results attached, and the running-band marker —
+    # which a verified stop clears — is untouched.
+    assert not res.results
+    assert svc.running_band("graywolf", "") == "433"
