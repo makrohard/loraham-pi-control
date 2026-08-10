@@ -14,15 +14,14 @@
           dependenc{{ 'y' if overview.mandatory_missing == 1 else 'ies' }} missing{% if overview.restart_pending %}
           · {{ overview.restart_pending }} restart pending{% endif %}{% if overview.optional_missing %}
           · {{ overview.optional_missing }} optional{% endif %}{% if overview.gui_missing %}
-          · {{ overview.gui_missing }} GUI-only (opt-in){% endif %}{% if overview.external_missing %}
-          · {{ overview.external_missing }} upstream app(s) not installed{% endif %} — resolve the mandatory ones below.</div>
+          · {{ overview.gui_missing }} GUI-only (opt-in){% endif %} — resolve the mandatory ones below.</div>
       {% elif overview.restart_pending %}
         <div class="depnote depnote-warn">{{ overview.restart_pending }} dependency grant{{ '' if overview.restart_pending == 1 else 's' }}
           restart pending — apply the session restart shown below.</div>
-      {% elif overview.optional_missing or overview.gui_missing or overview.external_missing %}
+      {% elif overview.optional_missing or overview.gui_missing %}
         <div class="depnote depnote-ok">{% if overview.optional_missing %}{{ overview.optional_missing }} optional
           dependenc{{ 'y' if overview.optional_missing == 1 else 'ies' }} missing{% endif %}{% if overview.gui_missing %}{% if overview.optional_missing %} · {% endif %}{{ overview.gui_missing }} GUI-only
-          dependenc{{ 'y' if overview.gui_missing == 1 else 'ies' }} not installed (headless-safe default){% endif %}{% if overview.external_missing %}{% if overview.optional_missing or overview.gui_missing %} · {% endif %}{{ overview.external_missing }} upstream app{{ '' if overview.external_missing == 1 else 's' }} not installed (opt-in){% endif %} — nothing mandatory.</div>
+          dependenc{{ 'y' if overview.gui_missing == 1 else 'ies' }} not installed (headless-safe default){% endif %} — nothing mandatory.</div>
       {% else %}
         <div class="depnote depnote-ok">All dependencies satisfied ✓</div>
       {% endif %}

@@ -624,7 +624,6 @@ def _parse_component(raw: dict) -> Component:
                         provisioned=bool(r.get("provisioned", False)),
                         module=_require_module(r.get("module", ""), raw.get("id", "?")),
                         gui=bool(r.get("gui", False)),
-                        external=bool(r.get("external", False)),
                         gps=bool(r.get("gps", False)))
             for r in raw.get("require", [])
         ),

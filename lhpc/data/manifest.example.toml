@@ -921,15 +921,24 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   depends_on = ["loraham-kiss-tnc", "loraham-daemon"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
-  # EXTERNALLY INSTALLED upstream release (Go service + Rust modem), NOT built here: the
-  # source build needs Go + Rust + Node, which we refuse to put on a Pi. See the require
-  # block below for the one-time .deb install.
-  run_argv = ["graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
+  # PREBUILT UPSTREAM RELEASE, unpacked into the runtime root — never built here (the source
+  # needs Go + Rust + Node) and never a system package (graywolf is not in the Debian archive,
+  # and LHPC has no root). `dpkg-deb -x` unpacks a .deb as an ordinary user, so the pinned
+  # release lands under build/tools/graywolf like any other managed artifact. That keeps it in
+  # the normal install/build flow — `lhpc build graywolf`, the stack's Install tab and every
+  # auto-install run all fetch it — and adds NO system dependency (curl is already a bootstrap
+  # package, dpkg-deb ships with dpkg), so bootstrap-deps.sh stays untouched.
+  build_steps = [
+    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.12"], announce = "[fetch] graywolf 0.14.12 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
+  ]
+  bin = "build/tools/graywolf/usr/bin/graywolf"
+  build_timeout = 900.0
+  run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
   # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
-  # belongs on loopback. Reach it over an SSH tunnel; exposing it would need a real bind param.
-  bin = "graywolf"
-  note = "Needs the upstream graywolf .deb (see require). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time, and graywolf replaces loraham-igate rather than joining it. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
+  # belongs on loopback. Reach it through this stack's web proxy, or an SSH tunnel; exposing it
+  # directly would need a real bind param.
+  note = "Upstream .deb fetched + unpacked into build/tools/graywolf by the build step (rootless, sha256-pinned). Config lives in a SQLite DB, not a file, so every start re-applies the params below through graywolf's REST API (post-start `provision` step). The generated web-UI password is written to <runtime>/state/graywolf/graywolf-admin.txt (0600). Single KISS client: do NOT run loraham-kiss-serial at the same time, and graywolf replaces loraham-igate rather than joining it. RX-only is set on the kiss stack (`lhpc config kiss rx_only on`) — that gates the actual transmitter, not just graywolf's intent."
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/graywolf", mode = "700" } ]
   # No tcp_wait: its port must be a manifest literal, and the provisioning step below does
   # its own bounded readiness wait against the API it is about to write to.
@@ -952,16 +961,9 @@ operator_box = false   # the station callsign is this stack's own param (needs a
 
     # REQUIRED and unconditional: provisioning is what makes the station work, so a failed
     # push must fail the start instead of leaving graywolf up with an empty config.
-    # No `install` command ON PURPOSE. Every declared install string lands in
-    # `lhpc deps --script` (and so in the bootstrap), and graywolf is an optional upstream
-    # app pinned to a versioned .deb URL — not a core apt package. The operator installs it
-    # once; docs/stacks/graywolf.md carries the exact commands.
-    [[stack.component.require]]
-    cmd = "graywolf"
-    external = true
-    note = "graywolf binary — install the upstream arm64 .deb once (see docs/stacks/graywolf.md)"
-
     [stack.component.process]
+    # The unpacked artifact's basename — LHPC runs build/tools/graywolf/usr/bin/graywolf, never
+    # a /usr/bin/graywolf from a system package (there is deliberately no such package).
     exec_name = "graywolf"
 
     [[stack.component.endpoint]]

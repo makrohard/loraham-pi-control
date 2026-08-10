@@ -14,7 +14,8 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 
 | | |
 |---|---|
-| Component | `graywolf` (upstream release, **not** built here) |
+| Component | `graywolf` (upstream release, unpacked into the runtime root) |
+| Binary | `<runtime>/build/tools/graywolf/usr/bin/graywolf` |
 | Web UI | `127.0.0.1:8080` — password-authenticated, loopback only |
 | Config DB | `<runtime>/state/graywolf/graywolf.db` |
 | UI password | `<runtime>/state/graywolf/graywolf-admin.txt` (0600, generated on first start) |
@@ -23,22 +24,32 @@ APRS-IS <-> graywolf <-> KISS/TCP 8001 <-> loraham-kiss-tnc <-> framed DATA <-> 
 
 ## Install
 
-LHPC never installs system packages. Fetch the upstream `.deb` once — no Go/Rust/Node
-toolchain is needed on the Pi:
+Nothing manual, and **no root**:
 
 ```bash
-dpkg --print-architecture                     # expect: arm64
-V=0.14.12
-curl -fsSLO https://github.com/chrissnell/graywolf/releases/download/v$V/graywolf_${V}_arm64.deb
-sudo apt install -y ./graywolf_${V}_arm64.deb
-sudo systemctl disable --now graywolf         # LHPC owns the process, not the packaged unit
+lhpc build graywolf          # fetches + verifies + unpacks the pinned release
+lhpc stack start graywolf
 ```
 
-The package ships its own systemd unit and enables it. **Disable it** — LHPC starts
-graywolf itself with its own `-config` database, and two instances would fight over
-port 8080.
+`lhpc build` runs `lhpc/data/scripts/graywolf-fetch.sh`, which downloads the pinned upstream
+`.deb` for this box's architecture, checks it against a recorded sha256, and unpacks it with
+`dpkg-deb -x` into `build/tools/graywolf`. A `.deb` is an ar archive, so unpacking needs no
+privileges — the binaries end up runtime-owned like every other managed artifact. The stack's
+Install tab and every `lhpc auto-install` run do the same thing.
 
-Verified against **v0.14.12**.
+Consequences worth knowing:
+
+- **No system package is installed**, so there is no packaged `graywolf.service` to collide
+  with LHPC's process and nothing to `systemctl disable`. If you previously installed the
+  `.deb` by hand, remove it (`sudo apt remove graywolf`) so only the runtime copy is used.
+- **No new system dependency**: `curl` is already a bootstrap package and `dpkg-deb` ships
+  with dpkg, so `bootstrap-deps.sh` is untouched.
+- graywolf is **not** in the Debian archive, so it can never be a plain apt dependency.
+- Bumping the version means editing the version in the manifest's build step *and* adding the
+  new sha256 to the table in `graywolf-fetch.sh` — deliberately a reviewable two-line diff.
+
+Pinned at **v0.14.12** (GPL-2.0-or-later; each box fetches it from upstream, so LHPC
+redistributes nothing).
 
 ## Configuration
 
