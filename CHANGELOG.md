@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.10
 
 - New `graywolf` stack: [graywolf](https://github.com/chrissnell/graywolf) as a full replacement for `igate` — same RF<->APRS-IS job through the KISS TNC, plus a web UI and a searchable packet log. The pinned upstream `.deb` is fetched and unpacked into `build/tools/graywolf` (sha256-verified, rootless, no system package and no new bootstrap dependency), and every start re-applies the stack params through graywolf's REST API. `igate` is now marked DEPRECATED — known bugs, unmaintained upstream — but keeps working unchanged
 - `loraham-kiss-tnc` repinned to `v0.5.1`: AX.25 bit 7 is position-dependent (the command/response bit on dst/src, has-been-repeated only on path), so a frame from a conforming APRS sender no longer goes on air with a bogus `*` on the destination; CR/LF in a payload become spaces instead of splitting the frame
