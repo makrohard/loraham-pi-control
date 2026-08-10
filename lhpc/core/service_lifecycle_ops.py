@@ -3414,6 +3414,29 @@ class LifecycleOpsMixin:
             return True
         return self._paths.resolve_source(main.source.path).is_dir()
 
+    def _radio_competitors(self, entries: list[dict]) -> list[str]:
+        """Names of the stacks in `entries` that genuinely compete for one radio's tuning.
+
+        Sharing a band is not the same as competing for it. A stack whose RF path runs THROUGH
+        another stack in the same group is that stack's CLIENT — graywolf transmits by handing
+        frames to loraham-kiss-tnc, which owns the tuning — so listing both as a conflict is
+        simply wrong, and it is the kind of red banner an operator learns to ignore. Drop any
+        entry that depends (directly or transitively) on a component of another entry, and a
+        group that collapses to one claimant is no conflict at all.
+        """
+        if len(entries) < 2:
+            return []
+        stack_of = {c.id: st.id for st in self.stacks() for c in st.components}
+        ids = {e["id"] for e in entries}
+        competitors = []
+        for e in entries:
+            st = self.stack(e["id"])
+            upstream = {stack_of.get(c.id) for c in self._tx_chain_components(st)} if st else set()
+            if ids & (upstream - {e["id"]}):
+                continue                      # reaches the radio through another listed stack
+            competitors.append(e["name"])
+        return competitors if len(competitors) > 1 else []
+
     def unbuilt_components(self, target: str) -> list[str]:
         """Component ids in `target` that need a Build before they can run. Empty = all ready.
 
@@ -3982,11 +4005,11 @@ class LifecycleOpsMixin:
                 "startable": startable,
                 "interactive": interactive,
                 # Two+ stacks sharing one radio (e.g. a manually-started chat plus a
-                # running iGate) fight over the daemon's tuning — flag it red.
-                "conflict": ([s["name"] for s in running]
-                             + [s["name"] for s in interactive if s.get("running")])
-                            if len(running) + sum(1 for s in interactive if s.get("running")) > 1
-                            else [],
+                # running iGate) fight over the daemon's tuning — flag it red. Stacks that
+                # reach RF THROUGH another one are filtered out first: they are its client,
+                # not its rival (see _radio_competitors).
+                "conflict": self._radio_competitors(
+                    running + [e for e in interactive if e.get("running")]),
             })
         # Strays (§6): a daemon still live on a band the current mode EXCLUDES — the likely leftover
         # the day after a mode switch. Surface it so it stays visible + stoppable (lhpc never auto-

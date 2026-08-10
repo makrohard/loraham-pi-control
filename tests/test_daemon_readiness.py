@@ -87,6 +87,31 @@ def test_tx_test_refuses_when_radio_not_ready(tmp_path):
 
 # --- D: dashboard state is truthful (occupied vs usable) ----------------------
 
+def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path):
+    """Sharing a band is not competing for it.
+
+    graywolf transmits by handing frames to loraham-kiss-tnc, which owns the tuning — so the two
+    running together is the NORMAL configuration, not a conflict. Reporting it red on the
+    dashboard is both wrong and the kind of warning an operator learns to ignore. Two genuinely
+    independent stacks on one band (chat + igate) must still be flagged.
+    """
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    def names(entries):
+        return svc._radio_competitors(entries)
+
+    gw = {"id": "graywolf", "name": "Graywolf APRS"}
+    kiss = {"id": "kiss", "name": "LoRaHAM KISS TNC"}
+    chat = {"id": "chat", "name": "LoRaHAM Chat"}
+    igate = {"id": "igate", "name": "LoRaHAM iGate"}
+
+    assert names([kiss, gw]) == []                 # client + its provider: not a conflict
+    assert names([gw]) == [] and names([]) == []   # nothing to fight over
+    assert sorted(names([chat, igate])) == ["LoRaHAM Chat", "LoRaHAM iGate"]   # real rivals
+    # A client does not mask a genuine rival sharing the same radio.
+    assert "LoRaHAM Chat" in names([kiss, gw, chat])
+
+
 def test_radio_overview_occupied_vs_usable(tmp_path):
     def _daemon(status):
         sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": status}).system

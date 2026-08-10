@@ -1899,6 +1899,11 @@ class MaintenanceOpsMixin:
                     cfg_files.append(name)
         except PathContainmentError:
             pass
+        # A component with no `source` has no leaf for the source machinery to remove, so a
+        # build tree it owns outright (a fetched package under build/) would survive "Clean all".
+        # Named explicitly in the manifest (`build_root`) rather than guessed from `bin`.
+        build_roots = [c.build_root for c in stack.components
+                       if c.build_root and not c.source]
         log_prefixes = tuple({f"install-{sid}"} | {f"{op}-{cid}" for op in ("build", "test",
                              "start", "post") for cid in comp_ids})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
@@ -1911,6 +1916,7 @@ class MaintenanceOpsMixin:
                     for p, r in src_keep]
         details += [f"  [cleanup] orphaned ownership record for {p} (source already absent)"
                     for p in orphans]
+        details += [f"  [remove] {r} (managed build artifact)" for r in build_roots]
         details += [f"  [remove] config/stacks/{n}" for n in cfg_files]
         details += [f"  [remove] logs matching {', '.join(sorted(log_prefixes))}*",
                     "  [remove] state markers, known-working history, ownership records",
@@ -1920,7 +1926,8 @@ class MaintenanceOpsMixin:
                 True, f"CLEAN plan for '{sid}': DESTRUCTIVE — removes sources, config, logs "
                 "and history for this stack.", details=details,
                 next_commands=[f"lhpc clean {sid} --purge --yes"],
-                data={"changes": len(src_remove) + len(orphans) + len(cfg_files) + 1})
+                data={"changes": len(src_remove) + len(orphans) + len(cfg_files)
+                      + len(build_roots) + 1})
         if not purge:
             return ActionResult(False, f"Refusing to clean '{sid}': destructive purge "
                                 "requires the explicit purge confirmation.",
@@ -2006,6 +2013,18 @@ class MaintenanceOpsMixin:
                         ok = False
                 ok = self._retire_candidates_for_paths(removed_paths, out) and ok
                 ok = self._depart_kept_paths(src_keep, comp_ids, out) and ok
+                # Build trees a source-less component owns (a fetched package): `paths.under`
+                # keeps the removal inside the runtime root.
+                import shutil
+                for rel in build_roots:
+                    try:
+                        shutil.rmtree(self._paths.under(*rel.split("/")))
+                        out.append(f"  [removed] {rel}")
+                    except FileNotFoundError:
+                        out.append(f"  [removed] {rel} (already absent)")
+                    except (OSError, PathContainmentError) as exc:
+                        out.append(f"  [fail] {rel}: {exc}")
+                        ok = False
                 for path in orphans:
                     if source_registry.remove_record(self._paths, path):
                         out.append(f"  [cleaned] orphaned ownership record for {path}")

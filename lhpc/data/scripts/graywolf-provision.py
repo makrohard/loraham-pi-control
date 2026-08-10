@@ -154,14 +154,32 @@ def authenticate(api: Api, state_dir: str) -> None:
 
 
 def ensure_channel(api: Api, name: str) -> int:
-    """Return the id of the KISS-only channel called `name`, creating it if absent."""
+    """Return the id of the KISS-only channel called `name`, creating or repairing it.
+
+    Two things must hold or the station silently stops working:
+      * `modem_type` must be kiss-only — an audio-backed channel has no TNC behind it;
+      * the mode must still carry APRS. graywolf has three (`aprs`, `packet`, `aprs+packet`)
+        and logs "beacon skipped: channel mode is packet" for a pure packet channel. So a
+        packet-only mode is repaired back to `aprs`, while `aprs+packet` is LEFT ALONE: that is
+        a deliberate operator choice (connected-mode sessions) and APRS still works.
+    """
     for chan in api.call("GET", "/api/channels") or []:
-        if chan.get("name") == name:
-            if chan.get("modem_type") != CHANNEL_MODEM_TYPE:
-                api.call("PUT", f"/api/channels/{chan['id']}",
-                         {"name": name, "mode": "aprs",
-                          "modem_type": CHANNEL_MODEM_TYPE})
-            return int(chan["id"])
+        if chan.get("name") != name:
+            continue
+        broken = {}
+        if chan.get("modem_type") != CHANNEL_MODEM_TYPE:
+            broken["modem_type"] = CHANNEL_MODEM_TYPE
+        if "aprs" not in str(chan.get("mode", "")):
+            broken["mode"] = "aprs"
+        if broken:
+            desired = dict(chan)
+            desired.pop("id", None)
+            desired.pop("backing", None)          # response-only
+            desired.update(broken)
+            api.call("PUT", f"/api/channels/{chan['id']}", desired)
+            fixed = ", ".join(f"{k}={v}" for k, v in sorted(broken.items()))
+            print(f"[graywolf] repaired channel {name}: {fixed}")
+        return int(chan["id"])
 
     created = api.call("POST", "/api/channels",
                        {"name": name, "mode": "aprs",
@@ -221,9 +239,23 @@ def apply_station(api: Api, callsign: str) -> None:
 
 
 def apply_igate(api: Api, args, channel_id: int) -> None:
-    """Write the iGate config. graywolf derives the APRS-IS passcode from the
-    station callsign itself, so no passcode is ever handled here."""
-    api.call("PUT", "/api/igate/config", {
+    """Write the iGate config, preserving every field LHPC does not own.
+
+    The endpoint is a FULL REPLACEMENT: PUTting only the LHPC-owned keys resets the rest
+    (simulation_mode, is_tx_via, software_name/version) on every restart — the opposite of what
+    the stack docs promise. So read first, overlay what LHPC owns, and put the whole object
+    back. `id` is response-only and is dropped.
+
+    graywolf derives the APRS-IS passcode from the station callsign itself, so no passcode is
+    ever handled here.
+    """
+    current = api.call("GET", "/api/igate/config") or {}
+    if not isinstance(current, dict):
+        raise ProvisionError("GET /api/igate/config did not return an object")
+
+    desired = dict(current)
+    desired.pop("id", None)                       # response-only
+    desired.update({
         "enabled": args.igate,
         "server": args.igate_server,
         "port": args.igate_port,
@@ -233,6 +265,7 @@ def apply_igate(api: Api, args, channel_id: int) -> None:
         "rf_channel": channel_id,
         "tx_channel": channel_id,
     })
+    api.call("PUT", "/api/igate/config", desired)
 
 
 def onoff(value: str) -> bool:

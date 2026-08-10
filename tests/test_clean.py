@@ -85,6 +85,28 @@ def _seed_kiss(tmp_path):
     return paths
 
 
+def test_clean_removes_a_source_less_managed_build_artifact(tmp_path):
+    """graywolf has no git source, so the source machinery has no leaf to remove — its fetched
+    binaries live in build/tools/graywolf. Without naming that tree, an explicit "Clean all"
+    would leave them behind, which is not what "removes every LHPC-owned trace" means."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    (tmp_path / "config").mkdir(exist_ok=True)
+    art = tmp_path / "build" / "tools" / "graywolf" / "usr" / "bin"
+    art.mkdir(parents=True)
+    (art / "graywolf").write_text("binary")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+
+    plan = svc.clean("graywolf", apply=False)
+    assert any("build/tools/graywolf" in d for d in plan.details), plan.details
+
+    res = svc.clean("graywolf", apply=True, purge=True)
+    assert res.ok, res.details
+    assert not (tmp_path / "build" / "tools" / "graywolf").exists()
+
+
 def test_clean_dry_run_names_removals_without_mutation(tmp_path):
     _seed_kiss(tmp_path)
     svc = _svc(tmp_path)

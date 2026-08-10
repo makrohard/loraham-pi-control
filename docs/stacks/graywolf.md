@@ -44,6 +44,8 @@ Consequences worth knowing:
   `.deb` by hand, remove it (`sudo apt remove graywolf`) so only the runtime copy is used.
 - **No new system dependency**: `curl` is already a bootstrap package and `dpkg-deb` ships
   with dpkg, so `bootstrap-deps.sh` is untouched.
+- A rebuild is a no-op once the pinned version is unpacked, so it needs no network — only a
+  version bump re-downloads. `lhpc clean graywolf --purge` removes `build/tools/graywolf`.
 - graywolf is **not** in the Debian archive, so it can never be a plain apt dependency.
 - Bumping the version means editing the version in the manifest's build step *and* adding the
   new sha256 to the table in `graywolf-fetch.sh` — deliberately a reviewable two-line diff.
@@ -82,8 +84,14 @@ persists in the config database.
 **The params above are LHPC-owned.** Because they are re-applied on every start, editing
 one of *those* fields in the web UI is overwritten at the next restart — change it with
 `lhpc config graywolf <param> <value>` instead. Everything LHPC does not provision
-(beacons, digipeater rules, filters beyond the server filter) is yours to set in the UI and
-survives restarts untouched.
+(beacons, digipeater rules, simulation mode, `is_tx_via`, the software identity) is yours to
+set in the UI and survives restarts untouched: graywolf's config endpoints are full
+replacements, so provisioning reads the current object first and overlays only its own fields.
+
+Two things about the LHPC-owned channel are repaired rather than left broken, because both
+silently stop the station: an audio `modem_type` (no TNC behind it), and a **pure `packet`**
+mode, which makes graywolf log `beacon skipped: channel mode is packet`. `aprs+packet` is left
+alone — APRS still works there and connected-mode sessions are a deliberate choice.
 
 The listener is deliberately loopback-only and has no bind param. Reach it either through
 this stack's **web proxy** in the console (Stacks → Graywolf → Web server — the sanctioned

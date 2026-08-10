@@ -397,6 +397,10 @@ class Component:
     # A web UI whose password LHPC does not choose but DOES store (an app that generates its own
     # credential on first start). Declaring the file here lets the console tell the operator how to
     # read it, without LHPC ever putting the secret itself into a page or a log.
+    # A runtime-root-relative directory this component's BUILD owns outright, for a component
+    # that has no `source` to be cleaned through (a fetched package). `clean` removes it; without
+    # it a "Clean all" would leave the artifact behind.
+    build_root: str = ""
     ui_user: str = ""             # the account name to log in with (e.g. "admin")
     ui_password_file: str = ""    # runtime-root-relative path holding the password, one line
     log_paths: tuple[str, ...] = ()

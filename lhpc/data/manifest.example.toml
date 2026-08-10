@@ -812,13 +812,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
-    pin_tag = "v0.5.0"
-    # NOT yet repinned to the AX.25 bit-7 fix (loraham-kiss-tnc afaafc5, branch graywolf-poc):
-    # test_pin_consistency requires every pin to be an ancestor of that repo's origin/main, and
-    # a shipped manifest must not depend on a feature branch surviving. Merge graywolf-poc into
-    # main, tag it, then bump these two lines — until then graywolf transmits via the pre-fix
-    # TNC, which renders a bogus '*' on the destination.
+    pin_commit = "3c4461e4fff10ccab9b83fc7a7951542c68d43aa"
+    pin_tag = "v0.5.1"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -865,13 +860,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
-    pin_tag = "v0.5.0"
-    # NOT yet repinned to the AX.25 bit-7 fix (loraham-kiss-tnc afaafc5, branch graywolf-poc):
-    # test_pin_consistency requires every pin to be an ancestor of that repo's origin/main, and
-    # a shipped manifest must not depend on a feature branch surviving. Merge graywolf-poc into
-    # main, tag it, then bump these two lines — until then graywolf transmits via the pre-fix
-    # TNC, which renders a bogus '*' on the destination.
+    pin_commit = "3c4461e4fff10ccab9b83fc7a7951542c68d43aa"
+    pin_tag = "v0.5.1"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -950,6 +940,9 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # stamp: LHPC deletes the marker before every build, which would defeat the script's
   # already-at-this-version short-circuit (the one thing that lets a rebuild work offline).
   build_marker = "build/tools/graywolf/.lhpc-built-0.14.12"
+  # The tree the build OWNS. There is no `source` for `clean` to remove here, so name the
+  # artifact directory explicitly or "Clean all" would leave the graywolf binaries behind.
+  build_root = "build/tools/graywolf"
   build_timeout = 900.0
   # graywolf generates its own web-UI password on first start; the provisioning step stores it
   # under state/. The console shows the operator WHERE it is and the command to read it — never
