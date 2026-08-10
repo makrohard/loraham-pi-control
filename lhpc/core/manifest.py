@@ -601,6 +601,8 @@ def _parse_component(raw: dict) -> Component:
         run_cmd=raw.get("run", ""),
         test_cmd=raw.get("test", ""),
         pre_cmd=raw.get("pre", ""),
+        ui_user=raw.get("ui_user", ""),
+        ui_password_file=raw.get("ui_password_file", ""),
         post_start=raw.get("post_start", ""),
         run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
         run_cwd=raw.get("run_cwd", ""),

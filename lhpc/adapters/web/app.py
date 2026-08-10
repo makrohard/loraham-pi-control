@@ -768,6 +768,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             cross = [index[d] for d in cross_ids]
             main_status = index.get(main.id, (None, None))[1] if main else None
             has_source = bool(main and main.source)
+            # A main component can have a build step WITHOUT a source: a package-managed stack
+            # whose artifact is fetched rather than compiled (graywolf). Its Build affordance
+            # must not hang off `installed`, which requires a source — otherwise the console
+            # offers Run, the start gate refuses "not built", and no button can fix it.
+            # SOURCE-LESS ONLY: a sourced stack must be installed (cloned) before Build makes
+            # sense, and offering it earlier would just fail.
+            buildable = bool(main and not main.source
+                             and (main.build_steps or main.build_cmd))
             installed = bool(has_source and main_status and main_status.source_state.value
                              in ("match", "dirty", "differs", "unknown", "not-a-repo"))
             interactive = bool(main and main.interactive)
@@ -804,8 +812,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
                 # {} for a stack with no web UI -> the Webserver sub-section is not rendered.
                 "stack_web": service.stack_web_view(stack.id),
+                # {} unless a component declares where its self-generated UI password lives.
+                "ui_creds": service.ui_credentials(stack.id),
                 "installed": installed,
                 "has_source": has_source,
+                "buildable": buildable,
                 "deps": own + cross,
                 "state": rollup[stack.id],
                 "running": rollup[stack.id] in _RUNNING,

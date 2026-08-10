@@ -314,6 +314,25 @@ class WebserverOpsMixin:
             return "absent"
         return _ws.listener_scope(self._system, swc.port, listeners)
 
+    def ui_credentials(self, stack_id: str) -> dict:
+        """Where a stack's SELF-GENERATED web-UI password lives, and how to read it.
+
+        Some apps mint their own credential on first start (graywolf does). LHPC stores the
+        file but must never surface the value: a rendered page is copied into chats and
+        screenshots, and a log is world-readable for longer than anyone expects. So this
+        returns the account name and a copyable command the operator runs ON THE BOX — the
+        secret stays on the box. `{}` when no component declares one.
+        """
+        st = self.stack(stack_id)
+        for c in (st.components if st else ()):
+            if not c.ui_password_file:
+                continue
+            path = self._paths.runtime_root / c.ui_password_file
+            return {"user": c.ui_user or "admin",
+                    "path": str(path),
+                    "command": f"cat {path}"}
+        return {}
+
     def stack_web_view(self, stack_id: str, listeners=None, fw_status=None,
                        applied=None) -> dict:
         """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is

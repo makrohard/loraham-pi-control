@@ -3415,12 +3415,25 @@ class LifecycleOpsMixin:
         return self._paths.resolve_source(main.source.path).is_dir()
 
     def unbuilt_components(self, target: str) -> list[str]:
-        """Component ids in `target` whose source is installed but whose compiled
-        binary is missing (need a Build before they can run). Empty = all ready."""
+        """Component ids in `target` that need a Build before they can run. Empty = all ready.
+
+        Two shapes qualify. A SOURCED component counts once its checkout exists and its artifact
+        does not. A SOURCE-LESS component with build steps counts whenever its artifact is
+        missing — that is a package-managed stack whose binary is fetched rather than compiled
+        (graywolf), and it has no checkout to wait for. Without the second case the console
+        showed no "build needed" state at all for such a stack, while the start gate still
+        refused it as not built.
+        """
         life = self._lifecycle()
         s = self.stack(target)
-        return [c.id for c in (s.components if s else ())
-                if c.source and life.source_dir(c).exists() and not self.is_built(c)]
+        out = []
+        for c in (s.components if s else ()):
+            if c.source:
+                if life.source_dir(c).exists() and not self.is_built(c):
+                    out.append(c.id)
+            elif (c.build_steps or c.build_cmd) and not self.is_built(c):
+                out.append(c.id)
+        return out
 
     def unbuilt_build_deps(self, target: str) -> list[str]:
         """The subset of `unbuilt_components` that are BUILD DEPENDENCIES — a `build_requires` provider

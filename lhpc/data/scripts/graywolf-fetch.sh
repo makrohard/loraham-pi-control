@@ -46,11 +46,36 @@ EXPECTED="$(sums "${VERSION}/${ARCH}" || true)"
 
 DEB="graywolf_${VERSION}_${ARCH}.deb"
 URL="${BASE_URL}/v${VERSION}/${DEB}"
+DEST="${DEST%/}"
+STAMP="${DEST}/.lhpc-graywolf-version"
+
+# ALREADY AT THIS VERSION -> do nothing. A rebuild must not need the network when the pinned
+# binary is already unpacked: an offline box (or a GitHub outage) would otherwise lose a
+# working install to a failed download.
+if [ -x "${DEST}/usr/bin/graywolf" ] && [ -x "${DEST}/usr/bin/graywolf-modem" ] \
+   && [ "$(cat "$STAMP" 2>/dev/null || true)" = "${VERSION} ${ARCH}" ]; then
+    echo "[graywolf-fetch] already at ${VERSION} (${ARCH}) — nothing to do"
+    exit 0
+fi
+
+# The parent must exist BEFORE mktemp places the work dir beside DEST: on a box that has never
+# built another build/tools component, {runtime}/build/tools does not exist yet and mktemp
+# would fail with nothing but a template error.
+mkdir -p "$(dirname "$DEST")"
 
 # Work in a sibling temp dir so a failed or half-finished fetch can never be mistaken for a
 # complete install, and so the swap into place is a rename rather than a partial overwrite.
-WORK="$(mktemp -d "${DEST%/}.fetch.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d "${DEST}.fetch.XXXXXX")"
+OLD=""
+# Restore a moved-aside install on ANY exit path — an interrupted or failed swap must never
+# leave the box with no graywolf at all.
+cleanup() {
+    if [ -n "$OLD" ] && [ -d "$OLD" ] && [ ! -e "$DEST" ]; then
+        mv -T "$OLD" "$DEST" 2>/dev/null || true
+    fi
+    rm -rf "$WORK" "${OLD:-/nonexistent-nothing}"
+}
+trap cleanup EXIT
 
 echo "[graywolf-fetch] ${DEB} (${ARCH}) <- ${URL}"
 curl -fsSL --retry 3 --retry-delay 2 -o "${WORK}/${DEB}" "$URL" \
@@ -66,17 +91,18 @@ for b in graywolf graywolf-modem; do
     [ -x "${WORK}/root/usr/bin/${b}" ] || die "unpacked package has no executable usr/bin/${b}"
 done
 
-# Replace atomically: move the old tree aside, swing the new one in, then delete the old.
-mkdir -p "$(dirname "${DEST%/}")"
-OLD=""
-if [ -e "$DEST" ]; then
-    OLD="${DEST%/}.old.$$"
-    mv "$DEST" "$OLD"
-fi
-if ! mv "${WORK}/root" "$DEST"; then
-    [ -n "$OLD" ] && mv "$OLD" "$DEST"
-    die "could not move the unpacked tree into ${DEST}"
-fi
-[ -n "$OLD" ] && rm -rf "$OLD"
+# Record the version INSIDE the tree that is about to be swung in, so the stamp can never
+# describe a different tree than the one on disk.
+printf '%s %s\n' "$VERSION" "$ARCH" > "${WORK}/root/.lhpc-graywolf-version"
 
-echo "[graywolf-fetch] ready: ${DEST%/}/usr/bin/graywolf ($(dpkg-deb -f "${WORK}/${DEB}" Version 2>/dev/null || echo "$VERSION"))"
+# Replace atomically. `mv -T` throughout: a plain `mv` onto an existing directory would nest
+# the new tree INSIDE it and leave bin/run_argv pointing at nothing.
+if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    OLD="${DEST}.old.$$"
+    mv -T "$DEST" "$OLD" || die "could not move the existing ${DEST} aside"
+fi
+if ! mv -T "${WORK}/root" "$DEST"; then
+    die "could not move the unpacked tree into ${DEST}"   # the EXIT trap restores $OLD
+fi
+
+echo "[graywolf-fetch] ready: ${DEST}/usr/bin/graywolf (${VERSION} ${ARCH})"

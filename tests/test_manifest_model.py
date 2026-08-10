@@ -43,6 +43,40 @@ def test_every_stack_has_a_main_component():
     assert stacks["graywolf"].main == "graywolf"
 
 
+def test_graywolf_is_package_managed_not_operator_installed():
+    """graywolf's delivery contract, pinned.
+
+    It is a PREBUILT upstream release unpacked into the runtime root: no git source, no system
+    package, and therefore no `require` an operator has to satisfy by hand. The pieces have to
+    agree or the stack is either uninstallable or silently stale:
+      * a build step that runs the fetch script, carrying the pinned version;
+      * `bin` under build/tools so `is_built` has an artifact to check;
+      * a VERSION-BEARING build_marker, so bumping the pin reads as not-built and re-fetches;
+      * process identity narrowed by an argv token, so a leftover system graywolf is not claimed.
+    """
+    comps = _index(load_manifest())
+    gw = comps["graywolf"]
+
+    assert gw.source is None                       # nothing is cloned
+    assert gw.requires == ()                       # nothing for the operator to install
+    assert gw.build_steps, "the artifact must be produced by a build step"
+
+    argv = list(gw.build_steps[0]["argv"])
+    assert any("graywolf-fetch.sh" in tok for tok in argv)
+    version = argv[-1]
+    assert version.count(".") == 2, f"expected a pinned version as the last argv token, got {version!r}"
+
+    assert gw.bin == "build/tools/graywolf/usr/bin/graywolf"
+    # A bump must invalidate "built": the marker name carries the same version the step fetches.
+    assert gw.build_marker and version in gw.build_marker
+    # ... and it must NOT be the fetch script's own stamp, which LHPC would delete before each
+    # build and so defeat the script's offline short-circuit.
+    assert not gw.build_marker.endswith(".lhpc-graywolf-version")
+
+    assert gw.process is not None and gw.process.exec_name == "graywolf"
+    assert gw.process.all_args, "exec_name alone would claim a leftover system graywolf"
+
+
 def test_provider_consumer_socket_roles():
     comps = _index(load_manifest())
     # daemon provides 433 socket; bridge consumes it.

@@ -84,7 +84,7 @@
 {% endmacro %}
 
 {# Grouped lifecycle actions for a stack — one group per line. #}
-{% macro stack_actions(stack_id, installed, has_source) %}
+{% macro stack_actions(stack_id, installed, has_source, buildable=False) %}
 {% if has_source %}
   <div class="actline">
     <span class="grouplabel">Source</span>
@@ -95,7 +95,9 @@
     {% if installed %}{{ source_check_btn(stack_id) }}{% endif %}
   </div>
 {% endif %}
-{% if installed %}
+{# Setup is offered for an installed source stack AND for a source-less one whose artifact is
+   produced by a build step (a fetched package) — the Build button must exist in both cases. #}
+{% if installed or buildable %}
   <div class="actline">
     <span class="grouplabel">Setup</span>
     <span class="act"><a href="{{ url_for('stacks_overview', cfg=stack_id) ~ '#stack-settings-' ~ stack_id }}"><button type="button">Configure</button></a></span>

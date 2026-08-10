@@ -566,6 +566,32 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
 
 
+def test_password_section_names_the_account_and_never_the_secret(tmp_path):
+    """A stack whose app mints its own web-UI password gets a Password sub-section: the account
+    name, where the file is, and a copyable command to read it ON THE BOX. The value itself must
+    never be rendered — a password on a page ends up in screenshots and chat history."""
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+
+    creds = svc.ui_credentials("graywolf")
+    assert creds["user"] == "admin"
+    assert creds["path"].endswith("state/graywolf/graywolf-admin.txt")
+    assert creds["command"] == f"cat {creds['path']}"
+    assert svc.ui_credentials("kiss") == {}          # only declared where it applies
+
+    # A real secret in the file must not leak into the page.
+    pw_file = tmp_path / "state" / "graywolf" / "graywolf-admin.txt"
+    pw_file.parent.mkdir(parents=True, exist_ok=True)
+    pw_file.write_text("s3cret-do-not-render\n")
+
+    body = create_app(lambda: svc).test_client().get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'id="stack-password-graywolf"' in body
+    assert "<summary>Password</summary>" in body
+    assert 'data-copy="uipw-graywolf"' in body
+    assert creds["command"] in body
+    assert "s3cret-do-not-render" not in body
+
+
 def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
     # Positional defaults are only stable while the eligible SET is stable: adding a stack whose
     # id sorts earlier shifts everyone after it, and on an upgraded box that shift can land on a

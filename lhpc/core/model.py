@@ -394,6 +394,11 @@ class Component:
                                           # build consumes (e.g. daemon -> radiolib); enforced
                                           # for update inclusion + uninstall refcounting
     source: SourceSpec | None = None
+    # A web UI whose password LHPC does not choose but DOES store (an app that generates its own
+    # credential on first start). Declaring the file here lets the console tell the operator how to
+    # read it, without LHPC ever putting the secret itself into a page or a log.
+    ui_user: str = ""             # the account name to log in with (e.g. "admin")
+    ui_password_file: str = ""    # runtime-root-relative path holding the password, one line
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None
     note: str = ""

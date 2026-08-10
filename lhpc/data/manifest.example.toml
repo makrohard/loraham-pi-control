@@ -812,10 +812,15 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "afaafc564a249c297cd64e0c20c746876efaed14"
-    pin_tag = "v0.5.0-2-gafaafc5"
+    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
+    pin_tag = "v0.5.0"
+    # NOT yet repinned to the AX.25 bit-7 fix (loraham-kiss-tnc afaafc5, branch graywolf-poc):
+    # test_pin_consistency requires every pin to be an ancestor of that repo's origin/main, and
+    # a shipped manifest must not depend on a feature branch surviving. Merge graywolf-poc into
+    # main, tag it, then bump these two lines — until then graywolf transmits via the pre-fix
+    # TNC, which renders a bogus '*' on the destination.
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
-    branch = "graywolf-poc"
+    branch = "main"
 
     [stack.component.process]
     # Must match the ACTUAL binary basename (run_argv[0]/bin = "loraham-kiss-tnc", hyphens) — the
@@ -860,10 +865,15 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "afaafc564a249c297cd64e0c20c746876efaed14"
-    pin_tag = "v0.5.0-2-gafaafc5"
+    pin_commit = "3a56c1c5137ca4e773037c727f0932419b96b516"
+    pin_tag = "v0.5.0"
+    # NOT yet repinned to the AX.25 bit-7 fix (loraham-kiss-tnc afaafc5, branch graywolf-poc):
+    # test_pin_consistency requires every pin to be an ancestor of that repo's origin/main, and
+    # a shipped manifest must not depend on a feature branch surviving. Merge graywolf-poc into
+    # main, tag it, then bump these two lines — until then graywolf transmits via the pre-fix
+    # TNC, which renders a bogus '*' on the destination.
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
-    branch = "graywolf-poc"
+    branch = "main"
 
     [stack.component.process]
     exec_name = "socat"
@@ -932,7 +942,20 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.12"], announce = "[fetch] graywolf 0.14.12 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
   ]
   bin = "build/tools/graywolf/usr/bin/graywolf"
+  # The marker FILENAME carries the version on purpose: with only `bin`, `is_built` is satisfied
+  # by the mere existence of a binary, so bumping the pin would leave every already-built box
+  # reporting "built" while running the OLD graywolf. A version-bearing name makes a bump read
+  # as not-built, so the build step runs and re-fetches. Keep it in step with the version in the
+  # build step above. It is deliberately NOT the fetch script's own `.lhpc-graywolf-version`
+  # stamp: LHPC deletes the marker before every build, which would defeat the script's
+  # already-at-this-version short-circuit (the one thing that lets a rebuild work offline).
+  build_marker = "build/tools/graywolf/.lhpc-built-0.14.12"
   build_timeout = 900.0
+  # graywolf generates its own web-UI password on first start; the provisioning step stores it
+  # under state/. The console shows the operator WHERE it is and the command to read it — never
+  # the value, which must not travel through a rendered page, a log or a screenshot.
+  ui_user = "admin"
+  ui_password_file = "state/graywolf/graywolf-admin.txt"
   run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
   # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
@@ -963,8 +986,14 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     # push must fail the start instead of leaving graywolf up with an empty config.
     [stack.component.process]
     # The unpacked artifact's basename — LHPC runs build/tools/graywolf/usr/bin/graywolf, never
-    # a /usr/bin/graywolf from a system package (there is deliberately no such package).
+    # a /usr/bin/graywolf from a system package (there is deliberately no such package). The
+    # basename ALONE is not enough: an operator who once installed the .deb by hand still has a
+    # root graywolf.service whose argv[0] matches, and it would be claimed as this component —
+    # status would read RUNNING, start would record already-healthy and never launch the runtime
+    # copy (so LHPC's provisioning never applies), and stop would target a process LHPC does not
+    # own. The config path is ours and appears in the real argv, exactly as kiss-serial does.
     exec_name = "graywolf"
+    all_args = ["state/graywolf/graywolf.db"]
 
     [[stack.component.endpoint]]
     kind = "tcp"
