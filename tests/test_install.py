@@ -172,3 +172,33 @@ def test_install_sh_preflight_covers_all_four_units():
     for v in ("WEB_UNIT", "HELPER_UNIT", "PATH_UNIT", "NGINX_UNIT"):
         assert f'"${v}"' in loop, f"{v} missing from the unit preflight loop"
     assert "already exists" in text and '"${_u}.d"' in text     # refuses unit + its drop-in dir
+
+
+def test_bootstrap_links_docs_and_readme_into_the_checkout(tmp_path):
+    """The runtime root's `docs/` was created as an EMPTY directory (nothing ever wrote into
+    it) — the place an operator naturally looks held nothing while the real docs live in the
+    self-hosted checkout. Bootstrap now points there with RELATIVE symlinks (docs/ and
+    README.md), replaces the legacy empty dir, corrects a wrong-target link, and leaves any
+    operator content untouched."""
+    import os
+    rt = tmp_path / "rt"
+    inst = _installer(rt, (), tmp_path / "rt")
+    inst.apply_bootstrap()
+    assert os.readlink(rt / "docs") == "src/loraham-pi-control/docs"
+    assert os.readlink(rt / "README.md") == "src/loraham-pi-control/README.md"
+    # Idempotent: the second run reports them as existing, changes nothing.
+    plan = inst.plan_bootstrap()
+    assert all(a.status == "exists" for a in plan.actions if a.kind == "doclink")
+
+    # The legacy EMPTY docs dir (pre-link boxes) is replaced by the link...
+    (rt / "docs").unlink()
+    (rt / "docs").mkdir()
+    inst.apply_bootstrap()
+    assert os.readlink(rt / "docs") == "src/loraham-pi-control/docs"
+    # ...but a docs dir holding operator files is left exactly as it is.
+    (rt / "docs").unlink()
+    (rt / "docs").mkdir()
+    (rt / "docs" / "mynotes.txt").write_text("mine")
+    plan = inst.apply_bootstrap()
+    assert (rt / "docs" / "mynotes.txt").read_text() == "mine"
+    assert any(a.kind == "doclink" and a.status == "skipped" for a in plan.actions)

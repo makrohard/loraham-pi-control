@@ -30,8 +30,18 @@ from .probes import System
 from .probes.source import probe_source
 
 RUNTIME_SUBDIRS = (
-    "bin", "src", "build", "config", "profiles", "systemd", "state", "logs", "docs",
+    "bin", "src", "build", "config", "profiles", "systemd", "state", "logs",
     "config/secrets",
+)
+
+# Operator-facing pointers at the runtime root, as RELATIVE symlinks into the self-hosted
+# checkout. `docs/` used to be created as an EMPTY directory here (nothing ever wrote into
+# it), so the place an operator naturally looks for documentation held none — the real docs
+# live in the checkout. A dangling link on a non-self-hosted root is deliberate: it still
+# names where the documentation lives.
+DOC_LINKS = (
+    ("docs", "src/loraham-pi-control/docs"),
+    ("README.md", "src/loraham-pi-control/README.md"),
 )
 
 # Heavy, regenerable directories we skip when adopting a local checkout — and that never
@@ -146,6 +156,15 @@ class Installer:
             plan.actions.append(PlanAction(
                 "mkdir", str(d), f"create {name}/",
                 status="exists" if d.is_dir() else "planned"))
+        for name, rel in DOC_LINKS:
+            d = self.subdir(name)
+            try:
+                current = os.readlink(d) if d.is_symlink() else None
+            except OSError:
+                current = None
+            plan.actions.append(PlanAction(
+                "doclink", str(d), f"link {name} -> {rel}",
+                status="exists" if current == rel else "planned"))
         # HARDEN the runtime root (and src/, the controller-checkout parent) to 0700 AFTER
         # the dirs exist — the documented security boundary behind the controller-identity
         # proof. Default umask makes fresh dirs group-writable (0775), which surfaces as
@@ -226,6 +245,30 @@ class Installer:
                 runtime_fs.atomic_write(self.paths, dest, asset_text("secrets.example.toml"), 0o600)
             action.status = "done"
             action.detail = "mode 0600"
+        elif action.kind == "doclink":
+            dest = Path(action.target)
+            rel = dict(DOC_LINKS)[dest.name]
+            if dest.is_symlink():
+                # Wrong-target links are corrected (they are OURS — nothing else writes
+                # here); a non-empty real directory or a regular file is the operator's and
+                # is left alone.
+                if os.readlink(dest) != rel:
+                    dest.unlink()
+                    os.symlink(rel, dest)
+                action.status = "done"
+            elif dest.is_dir():
+                try:
+                    dest.rmdir()                       # only succeeds on an EMPTY dir
+                except OSError:
+                    action.status, action.detail = "skipped", "directory not empty — left as is"
+                    return
+                os.symlink(rel, dest)
+                action.status = "done"
+            elif dest.exists():
+                action.status, action.detail = "skipped", "exists and is not a symlink"
+            else:
+                os.symlink(rel, dest)
+                action.status = "done"
         elif action.kind == "prune-wrapper":
             runtime_fs.unlink(self.paths, Path(action.target))
             action.status = "done"
