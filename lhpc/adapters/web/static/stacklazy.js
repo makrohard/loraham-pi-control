@@ -22,6 +22,19 @@
     ph.appendChild(p);
   }
 
+  // Keep `el`'s summary at the same viewport Y across `mutate()` — a body arriving after the
+  // click grows the row and could shift the header the user is looking at. Local twin of the
+  // helper in stacks_state.js (the two files are deliberately independent; this one must work
+  // even when stacks_state.js did not run). Measured AFTER the synchronous relayout, so only
+  // the residual the browser's native scroll anchoring left is corrected.
+  function pinDuring(el, mutate) {
+    var s = el.querySelector(":scope > summary") || el;
+    var before = s.getBoundingClientRect().top;
+    mutate();
+    var delta = s.getBoundingClientRect().top - before;
+    if (delta) { window.scrollBy(0, delta); }
+  }
+
   function loadBody(details) {
     var ph = details.querySelector(":scope > .lazy-body");
     if (!ph || ph.getAttribute("data-loading") || ph.getAttribute("data-loaded")) return;
@@ -37,8 +50,10 @@
         var tmp = document.createElement("div");
         tmp.innerHTML = html;
         var parent = ph.parentNode;
-        while (tmp.firstChild) parent.insertBefore(tmp.firstChild, ph);
-        parent.removeChild(ph);
+        pinDuring(details, function () {
+          while (tmp.firstChild) parent.insertBefore(tmp.firstChild, ph);
+          parent.removeChild(ph);
+        });
         // Tell the per-body enhancers (copy/bandfilter/dparams/daemoncfg/stackparams) to wire the
         // freshly-injected subtree. `details` is the root that now holds the new body.
         document.dispatchEvent(new CustomEvent("lhpc:bodyloaded", { detail: { root: details } }));

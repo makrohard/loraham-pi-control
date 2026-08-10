@@ -77,6 +77,21 @@
     return (el.tagName === "DETAILS") ? el : el.closest("details");
   }
 
+  // Keep `el`'s summary at the same viewport Y across `mutate()`. The single-open model
+  // collapses sections ABOVE the click, which shrinks everything above the cursor while
+  // scrollY stays put — the clicked header then leaps away (sometimes out of the viewport).
+  // Measured AFTER the synchronous <details> relayout, so this corrects only the residual
+  // the browser's native scroll anchoring did not already fix — it can never double-
+  // compensate. One read, batched mutations, one read, one scrollBy: no layout thrash.
+  // (stacklazy.js carries a local twin of this helper — the two files stay independent.)
+  function pinDuring(el, mutate) {
+    var s = el.querySelector(":scope > summary") || el;
+    var before = s.getBoundingClientRect().top;
+    mutate();
+    var delta = s.getBoundingClientRect().top - before;
+    if (delta) { window.scrollBy(0, delta); }
+  }
+
   // Programmatic opens (load restore, hashchange) also fire the native <details> `toggle` event, which
   // would trip the accordion below and undo them. `openTarget` marks such opens so the accordion ignores
   // them; the load path is additionally protected by deferred binding (see setTimeout(attachAccordion)).
@@ -98,12 +113,15 @@
       row.addEventListener("toggle", function () {
         if (!row.open) { return; }                 // react to USER OPEN only; close-toggles ignored
         if (programmaticOpen) { return; }           // a scripted open (restore/hashchange) — leave it be
-        document.querySelectorAll(".stacklist .stackrow").forEach(function (o) {
-          if (o === row) { return; }
-          if (o.open) { o.open = false; }
-          o.querySelectorAll("details").forEach(function (s) { s.open = false; });   // + their sub-panels
+        // Pinned: closing rows ABOVE this one must not move its header away from the cursor.
+        pinDuring(row, function () {
+          document.querySelectorAll(".stacklist .stackrow").forEach(function (o) {
+            if (o === row) { return; }
+            if (o.open) { o.open = false; }
+            o.querySelectorAll("details").forEach(function (s) { s.open = false; });   // + their sub-panels
+          });
+          row.querySelectorAll("details").forEach(function (s) { s.open = false; });   // own subs start closed
         });
-        row.querySelectorAll("details").forEach(function (s) { s.open = false; });   // own subs start closed
       });
     });
   }
@@ -125,10 +143,14 @@
         // an ANCESTOR of it (those must stay open to keep it visible) nor INSIDE it.
         var body = sub.closest(".stackrow-body");
         if (!body) { return; }
-        body.querySelectorAll("details.advcfg").forEach(function (o) {
-          if (o === sub || !o.open) { return; }
-          if (o.contains(sub) || sub.contains(o)) { return; }
-          o.open = false;
+        // Pinned, like the main accordion: a sibling panel closing ABOVE this one must not
+        // move the clicked panel's header.
+        pinDuring(sub, function () {
+          body.querySelectorAll("details.advcfg").forEach(function (o) {
+            if (o === sub || !o.open) { return; }
+            if (o.contains(sub) || sub.contains(o)) { return; }
+            o.open = false;
+          });
         });
       });
     });
@@ -196,7 +218,15 @@
   // --- scroll (after the open relayout changes page height) --------------------------------------
   requestAnimationFrame(function () {
     if (flash) { window.scrollTo(0, 0); }             // message on top -> stay on top (section already open)
-    else if (target) { target.scrollIntoView(); }     // no message -> jump to the opened section
+    else if (target === actEl && actionReturn && act && typeof act.y === "number") {
+      // ACTION RETURN: land where the operator WAS (the stored submit-time scroll), not with
+      // the section yanked to the viewport top. `block: "nearest"` is a no-op when the acted
+      // section is already visible there and scrolls minimally when it is not (e.g. the
+      // re-render changed heights above it).
+      window.scrollTo(0, act.y);
+      target.scrollIntoView({ block: "nearest" });
+    }
+    else if (target) { target.scrollIntoView(); }     // a LINK/hash -> jump to the section (the point of a link)
 
     // Bind the accordions ONLY now, deferred one task past this frame. The <details> `toggle` event is
     // async, so the load-path's programmatic opens above queue toggles that would otherwise hit the

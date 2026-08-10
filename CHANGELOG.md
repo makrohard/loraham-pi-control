@@ -8,6 +8,7 @@
 - Audit closure 2: under `auto`, a live GPS feed whose gpsd vanished or streams nothing no longer fails the stack start — it runs without position and reconnects; explicit gpsd stays fail-closed
 - meshtastic's 4403/9443 now carry `tcp.port` claims like every other TCP listener; a contract test enforces the pairing
 - The runtime root's empty `docs/` is now a link into the checkout's docs, plus a `README.md` link
+- The Stacks page no longer jumps when using the accordion: the clicked header stays put while other sections close, action returns land at the previous scroll position, and lazy bodies arrive without moving the row
 
 - Review follow-up on the fixes below — each had left the same hole in an adjacent path:
   - The GPS **consumer** set was a second hardcoded list (one function below the fixed one) still missing graywolf, so the GPS admission gate was skipped for it: with `use_gps` on and the source off, graywolf started silently position-blind where meshtastic was refused. Both sets are now manifest-derived; components that read a position declare `reads_position` (the `use_gps` param cannot say who reads — reticulum declares it on `rns`, Sideband is the reader). Both sets are also cached — they sit on hot paths and were rescanned per call

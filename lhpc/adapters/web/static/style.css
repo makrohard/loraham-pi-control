@@ -381,6 +381,9 @@ input.wide { width: 100%; min-width: 16rem; }
 .cfgsec { margin: .5rem 0 1rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 .cfgsec h3 { margin: .3rem 0 .5rem; font-size: 1rem; }
 .advcfg { margin: .4rem 0; }
+/* The lazy stack-body placeholder reserves a little height, so the fetched body expanding
+   from nothing is a smaller shift (stacklazy.js pins the header across the injection). */
+.lazy-body { min-height: 1.5rem; }
 /* Box every sub-panel on /stacks — including nested ones — for a clear box-in-box hierarchy. Each
    nested box is inset by its parent's padding + the .advcfg margin. */
 .stacklist .advcfg { border: 1px solid var(--line); border-radius: 8px; padding: .35rem .7rem; }
