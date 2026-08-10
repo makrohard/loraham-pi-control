@@ -435,14 +435,12 @@ class LifecycleOpsMixin:
         if g is not None and not getattr(g, "valid", True):
             return (f"the global position source is invalid ({g.reason}) and has been disabled — "
                     "fix it or set it to off", ["lhpc gps"])
-        # A stack that has ASKED for GPS but has no source to use it must not start pretending
-        # to report position — that is the silent-blind case, and it is the operator's own two
-        # settings contradicting each other, so name both.
-        if self.gps_enabled_for(target) and not (g is not None and g.enabled):
-            return ("this stack has GPS enabled (use_gps) but the global position source is "
-                    "off — set a source, or turn the stack's GPS off",
-                    ["lhpc gps --source <gpsd|nmea|fixed>",
-                     f"lhpc config {target} use_gps off"])
+        # `use_gps = on` with the source `off` (or `auto` finding nothing) is NOT a refusal
+        # any more: with the switch defaulting to ON, "on" no longer proves the operator asked
+        # for position, so refusing would break every stack on a box with no gpsd — the stack
+        # starts WITHOUT position instead, and the GPS card/`lhpc gps` say why. Fail-closed
+        # protection now lives with EXPLICIT intent: a named source that cannot be used
+        # (malformed section above, unresolvable plan below) still refuses.
         plan = self.gps_plan(target)
         # VALIDITY FIRST. An unresolvable plan (a `nmea` device that does not exist, or is not a
         # character device) is REPRESENTED as `source = off`, so testing `enabled` first returned

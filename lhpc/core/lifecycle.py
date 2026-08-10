@@ -721,7 +721,12 @@ class Lifecycle:
             cfg = load_stack_config(self.paths, stack_id)
         except (OSError, ValueError, KeyError, AttributeError):
             return False                                   # advisory read; never blocks a start
-        return str(cfg.get("use_gps", "")).strip().lower() == "on"
+        raw = str(cfg.get("use_gps", "")).strip().lower()
+        if raw in ("on", "off"):
+            return raw == "on"
+        # Unset = the MANIFEST default (shared helper, so this cannot drift from the service).
+        from .gps import use_gps_default
+        return use_gps_default(self.stacks, stack_id) == "on"
 
     def _gps_post_values(self, stack_id: str = "") -> dict:
         """Controller-owned GPS values for post-start steps, from the ONE resolver.

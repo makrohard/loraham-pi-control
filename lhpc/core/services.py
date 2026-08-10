@@ -1594,7 +1594,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         return plan
 
     def gps_enabled_for(self, target: str) -> bool:
-        """The stack's PERSISTED `use_gps` switch (default off).
+        """The stack's PERSISTED `use_gps` switch (default = the manifest's, which is "on").
 
         Stored and read BANDLESSLY. "Does this box report its position" is a property of the
         stack, not of the frequency it happens to be on. Reading it per band made the switch
@@ -1614,7 +1614,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             cfg = load_stack_config(self._paths, stack_id)          # bandless
         except (OSError, ValueError, KeyError, ConfigError):
             return False
-        return str(cfg.get("use_gps", "")).strip().lower() == "on"
+        raw = str(cfg.get("use_gps", "")).strip().lower()
+        if raw in ("on", "off"):
+            return raw == "on"
+        # Unset = the MANIFEST default, not a hardcoded "off": the switch defaults to "on"
+        # (position via `auto` when a gpsd exists), and the Settings/confirm pages already
+        # render that default — reading unset as off here would make the pages show "on"
+        # while every start behaved as off.
+        from .gps import use_gps_default
+        return use_gps_default(self.stacks(), stack_id) == "on"
 
     # The GPS switch param. A stack is GPS-capable IFF one of its components declares it —
     # see _gps_stacks(); there is deliberately no second list to keep in sync.

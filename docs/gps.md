@@ -19,8 +19,14 @@ Coordinates are never echoed back — not by the CLI, the console, or any log.
 
 Position takes **both**:
 
-1. the **global source** above — where position comes from, for the whole box;
-2. a **per-stack switch** — whether that stack uses it. Default **off**.
+1. the **global source** above — where position comes from, for the whole box. Default
+   **`auto`**: use a gpsd if one is listening on this box (localhost:2947), otherwise run
+   without position;
+2. a **per-stack switch** — whether that stack uses it. Default **on**.
+
+So the out-of-the-box behavior is: plug in a receiver, run gpsd, and every stack reports
+position — no configuration at all. No gpsd? Everything still starts, just without position,
+and the Position (GPS) card says so.
 
 ```
 lhpc config meshtastic use_gps on      # Meshtastic reports position
@@ -34,9 +40,13 @@ Settings carries its own `use_gps`. Everything on the card is available from the
 `--source --host --port --device --baud --lat --lon --alt` — and both surfaces call the same
 code, so validation and refusals are identical.
 
-Why two: setting a source must not silently start every stack beaconing a position. And a
-stack with `use_gps = on` while the source is `off` **refuses to start**, naming both
-settings, rather than coming up silently blind.
+Why two: a single stack can still opt out of position without touching the box-wide source.
+Fail-closed protection follows **explicit intent**: a source you *named* that cannot be used
+(a malformed `[gps]` section, an `nmea` device that cannot be resolved) refuses the start
+rather than coming up silently blind. The soft cases — `auto` finding no gpsd, or an explicit
+`off` — start the stack **without position**: with the switch defaulting to on, "on" no longer
+proves anyone asked for position, so refusing there would block every stack on a box that
+simply has no receiver.
 
 The switch is stored **once per stack, band-lessly** (like autostart), so moving 868 ↔ 433 does
 not quietly revert it. It cannot be set for a single start — a launch that differed from the
@@ -59,10 +69,14 @@ relay claims nothing at all.
 
 | Source | Use when | Notes |
 |---|---|---|
+| `auto` | default | gpsd on localhost:2947 if one is listening, otherwise no position — never refuses a start |
 | `gpsd` | almost always | USB receiver, HAT, or a GPS server on the network — they all look the same through gpsd |
 | `nmea` | no gpsd, one consumer | opens the device directly, so gpsd must **not** also own it |
-| `fixed` | the station does not move | no receiver needed |
-| `off` | no position | default |
+| `fixed` | the station does not move | no receiver needed; graywolf has no fixed GPS mode — it runs with GPS off, its beacons carry the coordinates |
+| `off` | no position | explicit — stacks run without position |
+
+`auto` looks at localhost only: a remote gpsd or a serial device is an explicit decision,
+never auto-discovered. Setting an explicit source always wins over `auto`.
 
 **gpsd is usually the right answer.** How gpsd gets its data is gpsd's business: a USB
 receiver, a serial HAT, or a hardware GPS server elsewhere on the network all reach lhpc the

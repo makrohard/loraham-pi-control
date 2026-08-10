@@ -1125,8 +1125,10 @@ def test_use_gps_is_shown_saved_only_and_never_blocks_a_start(tmp_path):
                    for r in g["rows"] if r["name"] == "use_gps")
         assert row["locked"] is True
         assert row["value"] == "on"                       # visible, and truthful
-        # The hint names the STACK, not the component that happens to declare the param.
-        assert f"lhpc config {sid} use_gps on|off" in row["locked_hint"]
+        # The hint names the STACK (not the component that declares the param) and points at
+        # the WEB path — the reader is already in the console, so a CLI command is a detour.
+        assert "Apps" in row["locked_hint"] and "Settings" in row["locked_hint"]
+        assert svc.stack(sid).name in row["locked_hint"]
 
         # The echo the web form falls back to is accepted -> the start is not refused.
         clean, err = svc._normalize_run_params(sid, {"use_gps": "on"})

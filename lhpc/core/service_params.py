@@ -1017,14 +1017,20 @@ class ParamsConfigMixin:
             # because every reader compares against the literal "on".
             _gps_now = True
             _want = "on" if str(to_set.pop(_k)).strip().lower() == "on" else "off"
+        # The switch's default comes from the MANIFEST ("on" since the source gained `auto`) —
+        # hardcoding "off" here was a fourth copy of the drifted literal: submitting the default
+        # value landed in `to_remove`, was read back as "off", looked like a CHANGE, and the
+        # running-stack refusal fired on a save that changed nothing.
+        from .gps import use_gps_default
+        _gps_default = use_gps_default(self.stacks(), sid) if sid else "off"
         for _k in [k for k in to_remove if k == _GPS_SW or k.endswith(f"__{_GPS_SW}")]:
             to_remove.discard(_k)
-            _gps_now, _want = True, "off"
+            _gps_now, _want = True, _gps_default          # removing the key = back to default
         if _gps_now:
-            # Store the CANONICAL value: "on" is an override, anything else is the default and
-            # is cleared, so the file never holds a third state nobody reads as either.
-            if _want == "on":
-                auto_set[_GPS_SW] = "on"
+            # Store the CANONICAL value: only a deviation FROM THE DEFAULT is an override;
+            # the default itself is cleared, so the file never holds a third state.
+            if _want != _gps_default:
+                auto_set[_GPS_SW] = _want
                 auto_remove.discard(_GPS_SW)
             else:
                 auto_remove.add(_GPS_SW)
@@ -1062,7 +1068,7 @@ class ParamsConfigMixin:
             try:
                 _cur = str(_load_runtime_toml(
                     self._paths, _stack_config_path(self._paths, sid, "")
-                ).get(_GPS_SW, "")).strip().lower() or "off"
+                ).get(_GPS_SW, "")).strip().lower() or _gps_default
             except (OSError, ValueError, KeyError, ConfigError) as exc:
                 raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc
             if _cur == _want:
@@ -1337,10 +1343,15 @@ class ParamsConfigMixin:
         that the new plan no longer describes — its claims and its rendered config were both
         derived from the OLD plan. Refusing is simpler and safer than re-planning a running
         stack, and it is what the operator would have to do by hand anyway.
+
+        DERIVED from the manifest (audit-found): this was the third hardcoded GPS stack list,
+        and it drifted like the other two — graywolf was missing, so `lhpc gps --source ...`
+        went through while a GPS-enabled graywolf ran, leaving its live process on the old
+        source while the saved plan (and, with direct NMEA, the receiver claim) described the
+        new one.
         """
-        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC
         return self.gps_liveness_blockers(
-            (CONSUMER_MESHTASTIC, CONSUMER_MESHCOM, "reticulum"), snap=snap,
+            tuple(sorted(self._gps_stacks())), snap=snap,
             require_enabled=True)
 
     def gps_settings(self) -> dict:
@@ -1355,6 +1366,10 @@ class ParamsConfigMixin:
                 "fixed_alt": g.fixed_alt, "valid": g.valid, "reason": g.reason,
                 "local_gpsd": g.local_gpsd, "claims_serial": g.claims_local_serial,
                 "device_key": plan.device_key, "plan_reason": plan.reason,
+                # What `auto` actually became right now ("gpsd" or "off"); == source otherwise.
+                # This is the honest display line — the saved setting alone cannot say whether
+                # a box with `auto` is currently reporting position.
+                "resolved_source": plan.source,
                 # The SECTION can parse cleanly and still not resolve — a `nmea` device that is
                 # missing or is not a character device. That plan is represented as `off`, so
                 # without this the surfaces reported a healthy "source: nmea" for a source no
@@ -1366,6 +1381,7 @@ class ParamsConfigMixin:
         card and `lhpc gps` can never disagree about what is configured."""
         from .config import GPS_BAUDS, GPS_SOURCES
         labels = {"off": "Off — no position",
+                  "auto": "Auto — use gpsd if one runs on this box (default)",
                   "gpsd": "gpsd (USB / HAT / network GPS server)",
                   "nmea": "Direct NMEA device (not shared with gpsd)",
                   "fixed": "Fixed position (station does not move)"}
@@ -1394,6 +1410,10 @@ class ParamsConfigMixin:
         if not fields:
             v = self.gps_settings()
             det = [f"  source:  {v['source']}"]
+            if v["source"] == "auto":
+                det.append("  auto:    using gpsd on localhost:2947  (found running)"
+                           if v["resolved_source"] == "gpsd" else
+                           "  auto:    no gpsd on this box — running without position")
             if v["source"] == "gpsd":
                 det.append(f"  gpsd:    {v['host']}:{v['port']}"
                            + ("  (local)" if v["local_gpsd"] else "  (remote)"))
@@ -1401,6 +1421,14 @@ class ParamsConfigMixin:
                 det.append(f"  device:  {v['device']} @ {v['nmea_baud']} baud")
             if v["source"] == "fixed":
                 det.append("  fixed position configured")     # never echo coordinates
+                if "graywolf" in self._gps_stacks():
+                    # AUDIT-FOUND honesty gap: graywolf has no fixed GPS mode (its API takes
+                    # serial/gpsd/none only), so `fixed` reaches it as GPS OFF while its
+                    # use_gps switch reads on. Not a refusal — a fixed box would then never
+                    # start graywolf with the default switch — but it must be SAID.
+                    det.append("  note: graywolf has no fixed GPS mode — it runs with GPS off "
+                               "under this source; a fixed station's coordinates belong to "
+                               "its beacons (set them in graywolf's web UI)")
             if not v["valid"]:
                 det.append(f"  INVALID: {v['reason']} — position is DISABLED (fail closed)")
             elif not v.get("plan_valid", True):
@@ -1716,10 +1744,12 @@ class ParamsConfigMixin:
                              and idf["kind"] == kind)
                 locked = kind == "run" and p.name == self.GPS_PARAM
                 # The switch is stored per STACK (bandless), so the hint must name the stack even
-                # when the param is declared on a component (`meshcom-qemu` -> `meshcom`).
-                hint = (f"saved setting — change it with `lhpc config "
-                        f"{self.gps_owner_stack(target) or target} {p.name} on|off`"
-                        ) if locked else ""
+                # when the param is declared on a component (`meshcom-qemu` -> `meshcom`). It
+                # points at the WEB path — the operator reading it is already in the web console.
+                _owner = self.gps_owner_stack(target) or target
+                _owner_name = (self.stack(_owner).name if self.stack(_owner) else _owner)
+                hint = (f"saved setting — change it under Apps → {_owner_name} → "
+                        "Settings") if locked else ""
                 rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
                                             c.name, key, c.id, locked, hint))
         return rows

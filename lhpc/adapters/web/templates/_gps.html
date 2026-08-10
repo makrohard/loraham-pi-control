@@ -41,6 +41,19 @@
         {% elif not gps_global.plan_valid %}
           <p class="depnote depnote-warn"><strong>Source unusable</strong> — {{ gps_global.plan_reason }}.
             The setting is saved, but no stack can start with GPS on until it resolves.</p>
+        {% elif gps_global.source == 'fixed' %}
+          <p class="depnote">Fixed position: Meshtastic uses it natively. <strong>Graywolf has no
+            fixed GPS mode</strong> — it runs with GPS off under this source; set a fixed station's
+            coordinates on its beacons, in graywolf's own web UI.</p>
+        {% elif gps_global.source == 'auto' %}
+          {% if gps_global.resolved_source == 'gpsd' %}
+            <p class="depnote">Auto: a gpsd is running on this box — stacks with
+              <code>use_gps</code> on get their position from it (localhost:2947).</p>
+          {% else %}
+            <p class="depnote">Auto: no gpsd on this box — stacks run <strong>without position</strong>.
+              Install and run gpsd (with a receiver) and it is picked up automatically,
+              or choose an explicit source below.</p>
+          {% endif %}
         {% endif %}
         {% if gps_global.running %}
           <p class="depnote depnote-warn">In use by {{ gps_global.running|join(', ') }} — stop it before

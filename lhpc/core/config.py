@@ -167,7 +167,11 @@ def _parse_boot(merged: dict, diagnostics: list) -> BootConfig:
     return BootConfig(restore=val)
 
 
-GPS_SOURCES = ("off", "gpsd", "nmea", "fixed")
+# `auto` (the default) is best-effort: it resolves to gpsd when one is listening on
+# localhost:2947 and to "no position" otherwise — it never refuses a start. The EXPLICIT
+# sources keep fail-closed semantics: an operator who named a source gets a refusal, not a
+# silently position-blind stack, when it cannot be used.
+GPS_SOURCES = ("off", "auto", "gpsd", "nmea", "fixed")
 
 # Baud rates a POSIX termios port can actually be set to (`termios.B<rate>`). The direct-NMEA
 # reader configures the port itself, so an unsupported rate is a CONFIG error, not a runtime one.
@@ -189,9 +193,15 @@ class GpsConfig:
     source="off" with a reason, because a half-parsed position source is worse than none
     (a stack would silently beacon a wrong or stale position). `valid` reports whether the
     section parsed cleanly; `source` is already forced to "off" when it did not.
+
+    The DEFAULT (section absent, or `source` unset) is `auto`: use a gpsd if one is
+    listening on localhost:2947, otherwise run without position. A default must never
+    refuse a start — nobody expressed intent — so `auto` is soft where the explicit
+    sources stay fail-closed. Malformed input still yields `off`, never `auto`: broken
+    config must not quietly become best-effort.
     """
 
-    source: str = "off"
+    source: str = "auto"
     host: str = "127.0.0.1"
     port: int = GPS_DEFAULT_PORT
     device: str = ""
@@ -209,7 +219,10 @@ class GpsConfig:
     @property
     def local_gpsd(self) -> bool:
         """gpsd on THIS box. Drives the soft dependency: a remote-gpsd operator must never be
-        told to install a local package (there is nothing to install here)."""
+        told to install a local package (there is nothing to install here). `auto` counts —
+        it only ever uses a LOCAL gpsd, so the install hint is exactly what makes it work."""
+        if self.source == "auto":
+            return True
         return self.source == "gpsd" and _is_loopback_host(self.host)
 
     @property
@@ -242,12 +255,17 @@ def _parse_gps(merged: dict, diagnostics: list) -> GpsConfig:
     if not isinstance(raw, dict):
         return _gps_off(diagnostics, f"section is not a table ({type(raw).__name__})")
 
-    source = raw.get("source", "off")
+    source = raw.get("source", "auto")
     if not isinstance(source, str) or source.strip().lower() not in GPS_SOURCES:
         return _gps_off(diagnostics, f"unknown source {source!r} (allowed: {', '.join(GPS_SOURCES)})")
     source = source.strip().lower()
     if source == "off":
-        return GpsConfig()
+        # EXPLICIT off — must not fall back to the auto default the bare constructor carries.
+        return GpsConfig(source="off")
+    if source == "auto":
+        # auto probes localhost:2947 only; host/port/device in the section are ignored, not
+        # errors — a remote or device source is an explicit decision, never auto-discovered.
+        return GpsConfig(source="auto")
 
     host = raw.get("host", "127.0.0.1")
     if not isinstance(host, str) or not host.strip():

@@ -1058,8 +1058,8 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     name = "use_gps"
     kind = "enum"
     choices = ["on", "off"]
-    default = "off"
-    label = "Use the global position source (set it with `lhpc gps`)"
+    default = "on"
+    label = "Use the global position source (Position (GPS) card on the Stacks page)"
     [[stack.component.param]]
     name = "igate"
     kind = "enum"
@@ -1270,8 +1270,8 @@ main = "meshtastic"
     name = "use_gps"
     kind = "enum"
     choices = ["on", "off"]
-    default = "off"
-    label = "Use the global position source (set it with `lhpc gps`)"
+    default = "on"
+    label = "Use the global position source (Position (GPS) card on the Stacks page)"
     [[stack.component.param]]
     name = "region"
     kind = "enum"
@@ -1918,8 +1918,8 @@ main = "meshcom-qemu"
     name = "use_gps"
     kind = "enum"
     choices = ["on", "off"]
-    default = "off"
-    label = "Use the global position source (set it with `lhpc gps`)"
+    default = "on"
+    label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [[stack.component.require]]
     check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
@@ -2307,6 +2307,12 @@ main = "meshcore-pi"
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
     { argv = [".venv/bin/pip", "install", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    # AUDIT-FOUND: the pinned upstream uses Python 3.12+ f-string syntax (PEP 701 nested
+    # quotes), and LHPC itself supports >=3.11 — so on a 3.11 box meshcli imported fine at
+    # install and died with a SyntaxError at FIRST RUN. Byte-compiling at build time moves
+    # that failure here, with the exact file and line, while keeping the pin (repinning
+    # backward would drop the rxlog/msgs handlers and aliases taken deliberately in 0.1.10).
+    { argv = [".venv/bin/python", "-m", "compileall", "-q", "src"], announce = "[check] byte-compile meshcore-cli (upstream needs Python >= 3.12; an older interpreter fails here, not at first run)" },
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"
@@ -2405,8 +2411,8 @@ PYTHONUNBUFFERED = "1"
 name = "use_gps"
 kind = "enum"
 choices = ["on", "off"]
-default = "off"
-label = "Use the global position source (set it with `lhpc gps`)"
+default = "on"
+label = "Use the global position source (Position (GPS) card on the Stacks page)"
 [[stack.component.param]]
 name = "rns_allow"
 kind = "str"

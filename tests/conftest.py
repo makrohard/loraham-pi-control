@@ -323,3 +323,14 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ANN001
             tr.write_line(f"\nFAIL: {len(_THREAD_EXCEPTIONS)} unhandled thread exception(s):\n"
                           + "\n---\n".join(_THREAD_EXCEPTIONS))
         session.exitstatus = 1
+
+
+@pytest.fixture(autouse=True)
+def _no_host_gpsd(monkeypatch):
+    """HERMETIC: the `auto` GPS source probes the HOST's /proc/net/tcp for a localhost gpsd.
+    On a dev box that happens to run one, every default-config test would resolve auto->gpsd
+    and admit feeds/claims the test never asked for. Pin the probe to the fresh-machine
+    answer; tests exercising auto resolution monkeypatch `lhpc.core.gps.local_gpsd_listening`
+    themselves (the memo lives inside the real function, so patching here bypasses it too)."""
+    from lhpc.core import gps as gps_mod
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: False)

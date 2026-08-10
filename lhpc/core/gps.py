@@ -144,10 +144,81 @@ def graywolf_post_step_values(plan: GpsPlan) -> dict:
     return {"gps_args": ["--gps-source", "none"]}
 
 
+USE_GPS_PARAM = "use_gps"
+
+
+def use_gps_default(stacks, stack_id: str) -> str:
+    """The manifest-declared default of a stack's `use_gps` switch ("on"/"off"; "off" for a
+    stack without the param). Saved config knows only what was SAVED — an untouched box must
+    follow the manifest default, which is "on" now that the global source defaults to `auto`.
+    Shared by the service and Lifecycle so their answers cannot diverge."""
+    for s in stacks:
+        if s.id != stack_id:
+            continue
+        for c in s.components:
+            for p in c.run_params:
+                if p.name == USE_GPS_PARAM:
+                    return str(p.default or "off").strip().lower()
+    return "off"
+
+
+# Where `auto` looks, and nowhere else: a remote gpsd or a serial device is an explicit
+# operator decision, never auto-discovered.
+AUTO_GPSD_HOST = "127.0.0.1"
+AUTO_GPSD_PORT = 2947
+
+# (monotonic deadline, value) — plan resolution runs on hot paths (page renders call it
+# dozens of times), so the probe result is held briefly rather than re-read per call.
+_AUTO_CACHE: list = [0.0, False]
+_AUTO_TTL = 2.0
+
+
+def local_gpsd_listening() -> bool:
+    """Is anything LISTENING on localhost:2947 right now?
+
+    PASSIVE — parses /proc/net/tcp{,6}, never opens a connection (a probe connection per
+    page render would spam a real gpsd's log). "Answers but owns no receiver" deliberately
+    counts as listening: consumers wait for a fix natively, so a receiver plugged in later
+    starts working without a stack restart; the doctor diagnoses a receiver-less gpsd.
+
+    This is the ONE probe behind the `auto` source, memoized for a couple of seconds and
+    living here so every plan consumer — the service, the bridge process, lifecycle
+    post-steps — resolves `auto` identically. Tests monkeypatch THIS function.
+    """
+    import time
+    now = time.monotonic()
+    if now < _AUTO_CACHE[0]:
+        return _AUTO_CACHE[1]
+    found = False
+    port_hex = f"{AUTO_GPSD_PORT:04X}"
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(path, encoding="ascii", errors="replace") as fh:
+                for line in fh.readlines()[1:]:
+                    parts = line.split()
+                    # local_address is field 1 ("ip:port" hex), state is field 3 (0A = LISTEN)
+                    if len(parts) > 3 and parts[3] == "0A" \
+                            and parts[1].rsplit(":", 1)[-1] == port_hex:
+                        found = True
+                        break
+        except OSError:
+            continue
+        if found:
+            break
+    _AUTO_CACHE[0], _AUTO_CACHE[1] = now + _AUTO_TTL, found
+    return found
+
+
 def plan_from_config(cfg, *, resolve_device=True) -> GpsPlan:
     """Resolve `[gps]` into the effective plan. Pure with respect to the config: it reads
-    the filesystem only to resolve a device's identity, and a failure there is reported,
-    never guessed."""
+    the filesystem only to resolve a device's identity (and, for `auto`, whether a local
+    gpsd is listening), and a failure there is reported, never guessed.
+
+    `auto` resolves HERE, in the one shared resolver, so the service, the bridge process
+    and lifecycle post-steps can never disagree about what it resolved to: a listening
+    localhost gpsd becomes an ordinary gpsd plan; nothing listening becomes "off" with a
+    reason that says so — soft, because a DEFAULT must never refuse a start.
+    """
     g = getattr(cfg, "gps", None)
     if g is None:
         return GpsPlan()
@@ -155,6 +226,12 @@ def plan_from_config(cfg, *, resolve_device=True) -> GpsPlan:
         return GpsPlan(source="off", valid=False, reason=g.reason)
     if not g.enabled:
         return GpsPlan()
+    if g.source == "auto":
+        if local_gpsd_listening():
+            return GpsPlan(source="gpsd", host=AUTO_GPSD_HOST, port=AUTO_GPSD_PORT)
+        return GpsPlan(source="off", valid=True,
+                       reason=f"auto: no gpsd on this box "
+                              f"({AUTO_GPSD_HOST}:{AUTO_GPSD_PORT}) — running without position")
 
     device = g.device if g.claims_local_serial else ""
     key, reason = ("", "")

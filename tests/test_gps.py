@@ -97,8 +97,8 @@ def test_save_gps_rejects_incomplete_combinations_before_writing(tmp_path):
                {"source": "nowhere"}):
         with pytest.raises(ConfigError):
             save_gps(paths, **kw)
-    # Nothing partial was persisted by the rejected calls.
-    assert load_config(paths).gps.source == "off"
+    # Nothing partial was persisted by the rejected calls -> the default (auto) still applies.
+    assert load_config(paths).gps.source == "auto"
 
 
 def test_save_gps_patches_only_the_named_fields(tmp_path):
@@ -625,12 +625,12 @@ def test_the_gps_switch_cannot_be_set_for_a_single_start(tmp_path):
     and claims, generated config and the post-start push all come from the saved state, so the
     launch and what the box actually holds would disagree."""
     svc = _svc(tmp_path)
-    # A CHANGE is refused...
-    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "on"})
+    # A CHANGE is refused... (the default is on now, so "off" is the change)
+    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "off"})
     assert clean == {} and "cannot be changed for a single start" in err
     # ...but an echo of the CURRENT value is not an override. The console's start form posts
     # every parameter it renders, so rejecting the value outright blocked every web start.
-    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "off"})
+    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "on"})
     assert err == "" and "use_gps" not in (clean or {})
 
 
@@ -1354,7 +1354,9 @@ def test_the_gps_switch_survives_a_band_change(tmp_path):
     svc._invalidate_config()
     assert svc._config_band("meshtastic", "") == "868", "the stack must be band-scoped here"
 
-    res = svc.save_config_bundle("meshtastic", values={"use_gps": "on"})
+    # "off" is the stored deviation now — the default flipped to on when the source
+    # gained `auto`; the CONTRACT under test (band-less storage) is unchanged.
+    res = svc.save_config_bundle("meshtastic", values={"use_gps": "off"})
     assert res.ok, res
 
     stacks = tmp_path / "config" / "stacks"
@@ -1362,12 +1364,12 @@ def test_the_gps_switch_survives_a_band_change(tmp_path):
     banded = stacks / "meshtastic@868.toml"
     assert "use_gps" not in (banded.read_text() if banded.exists() else ""), \
         "storing it per band is what made it revert on a band change"
-    assert svc.gps_enabled_for("meshtastic") is True, "and the read must see it"
+    assert svc.gps_enabled_for("meshtastic") is False, "and the read must see it"
 
     # The other band must agree — that is the whole point of storing it band-lessly.
     _cfg.save_hardware_setup(svc._paths, "uputronics-433")
     svc._invalidate_config()
-    assert svc.gps_enabled_for("meshtastic") is True, "the switch must survive a band change"
+    assert svc.gps_enabled_for("meshtastic") is False, "the switch must survive a band change"
 
 
 def test_the_gps_switch_write_keeps_the_rest_of_the_bandless_file(tmp_path):
@@ -1383,7 +1385,7 @@ def test_the_gps_switch_write_keeps_the_rest_of_the_bandless_file(tmp_path):
     stacks.mkdir(parents=True, exist_ok=True)
     (stacks / "meshtastic.toml").write_text('autostart_meshtastic-gps = "on"\n')
 
-    assert svc.save_config_bundle("meshtastic", values={"use_gps": "on"}).ok
+    assert svc.save_config_bundle("meshtastic", values={"use_gps": "off"}).ok
     after = (stacks / "meshtastic.toml").read_text()
     assert "autostart_meshtastic-gps" in after, \
         "the GPS write must MERGE into the band-less file, not replace it"
@@ -1398,7 +1400,7 @@ def test_the_gps_switch_cannot_be_flipped_under_a_running_stack_from_any_surface
     svc = _svc(tmp_path)
     _cfg.save_hardware_setup(svc._paths, "uputronics-868")
     svc._invalidate_config()
-    assert svc.save_config_bundle("meshtastic", values={"use_gps": "on"}).ok
+    assert svc.gps_enabled_for("meshtastic") is True     # the manifest default
 
     from lhpc.core.model import RunState
     _snap_with(svc, {"meshtastic": RunState.RUNNING})          # the stack is up
@@ -1407,7 +1409,9 @@ def test_the_gps_switch_cannot_be_flipped_under_a_running_stack_from_any_surface
     assert "use_gps" in res.summary and "running" in res.summary
     assert svc.gps_enabled_for("meshtastic") is True, "and nothing may have been written"
 
-    # Re-submitting the SAME value is not a change and must not be refused.
+    # Re-submitting the SAME value — here the DEFAULT, which the form always posts — is
+    # not a change and must not be refused. (Hardcoding "off" as the unset reading made
+    # exactly this save look like a change and blocked every Settings save while running.)
     assert svc.save_config_bundle("meshtastic", values={"use_gps": "on"}).ok
 
 
@@ -1440,8 +1444,11 @@ def test_every_gps_hint_is_a_runnable_command(tmp_path):
     (live-found on the Zero). A hint that does not run is worse than no hint."""
     import re
     svc = _svc(tmp_path)
-    _enable(svc, "meshtastic")                       # GPS on, global source still off
-    reason, cmds = svc.gps_block("meshtastic")
+    # The refusal that carries use_gps hints today: a production feed started ALONE while the
+    # plan does not use it. (The old sample — use_gps on + source off — is no longer a refusal:
+    # with the switch defaulting on, that combination starts without position instead.)
+    svc.save_stack_config("meshcom", {"use_gps": "off"})
+    reason, cmds = svc.gps_block("meshcom-gps")
     assert reason, "this is the refusal that carries the hint"
     for c in cmds:
         if "use_gps" in c:
@@ -1463,16 +1470,18 @@ def test_a_component_target_saves_the_owner_stacks_switch(tmp_path):
     _cfg.save_hardware_setup(svc._paths, "uputronics-868")
     svc._invalidate_config()
 
-    assert svc.save_config_bundle("meshcom-qemu", values={"use_gps": "on"}).ok
-    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
-    assert 'use_gps = "on"' in body, f"not stored flat/band-less: {body!r}"
-    assert "__use_gps" not in body, "a component-scoped key is invisible to every GPS reader"
-    assert svc.gps_enabled_for("meshcom") is True
-    assert svc.gps_enabled_for("meshcom-qemu") is True, "the component must see it too"
-    assert svc._resolved_param_value("meshcom-qemu", "run", "meshcom-qemu", "use_gps", "") == "on"
-
+    # "off" is the stored deviation (the default flipped to on); the CONTRACT — flat,
+    # band-less, owner-stack storage from a component target — is unchanged.
     assert svc.save_config_bundle("meshcom-qemu", values={"use_gps": "off"}).ok
-    assert svc.gps_enabled_for("meshcom") is False, "and turning it off from the component works"
+    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
+    assert 'use_gps = "off"' in body, f"not stored flat/band-less: {body!r}"
+    assert "__use_gps" not in body, "a component-scoped key is invisible to every GPS reader"
+    assert svc.gps_enabled_for("meshcom") is False
+    assert svc.gps_enabled_for("meshcom-qemu") is False, "the component must see it too"
+    assert svc._resolved_param_value("meshcom-qemu", "run", "meshcom-qemu", "use_gps", "") == "off"
+
+    assert svc.save_config_bundle("meshcom-qemu", values={"use_gps": "on"}).ok
+    assert svc.gps_enabled_for("meshcom") is True, "and turning it back on from the component works"
 
 
 def test_a_direct_consumer_start_brings_its_gps_feed(tmp_path):
@@ -1563,10 +1572,10 @@ def test_a_running_probe_that_cannot_answer_refuses_the_switch(tmp_path):
         raise RuntimeError("probe exploded")
 
     svc.build_snapshot = boom
-    res = svc.save_config_bundle("meshtastic", values={"use_gps": "on"})
+    res = svc.save_config_bundle("meshtastic", values={"use_gps": "off"})   # a real change
     assert not res.ok and "meshtastic" in res.summary, res.summary
     assert "running" in res.summary or "unknown" in res.summary, res.summary
-    assert svc.gps_enabled_for("meshtastic") is False, "nothing may have been written"
+    assert svc.gps_enabled_for("meshtastic") is True, "nothing may have been written"
 
 
 @pytest.mark.parametrize("pid, why", [
@@ -1714,10 +1723,14 @@ def test_the_switch_is_stored_canonically(tmp_path):
     svc = _svc(tmp_path)
     _cfg.save_hardware_setup(svc._paths, "uputronics-868")
     svc._invalidate_config()
-    assert svc.save_config_bundle("meshcom", values={"use_gps": "on"}).ok
+    assert svc.save_config_bundle("meshcom", values={"use_gps": "on"}).ok   # default -> cleared
+    body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
+    assert "use_gps" not in body, f"the default must clear the key, not store it: {body!r}"
     assert svc.save_config_bundle("meshcom", values={"use_gps": ""}).ok      # stack stopped
     body = (tmp_path / "config" / "stacks" / "meshcom.toml").read_text()
-    assert "use_gps" not in body, f"an empty value must clear the key, not store it: {body!r}"
+    # An empty value canonicalizes to "off" — a real deviation now, stored in canonical form
+    # (never the raw empty string, which no reader treats as either state).
+    assert 'use_gps = "off"' in body, body
     assert svc.gps_enabled_for("meshcom") is False
 
 
@@ -1737,7 +1750,7 @@ def test_an_unreadable_running_state_blocks_a_global_source_change(tmp_path):
 
     res = svc.set_gps(source="nmea", device="/dev/tty", nmea_baud="9600")
     assert not res.ok and "in use by" in res.summary, res.summary
-    assert svc.gps_settings()["source"] == "off", "nothing may have been written"
+    assert svc.gps_settings()["source"] == "auto", "nothing may have been written"
 
 
 def test_a_feed_running_on_its_own_blocks_a_global_source_change(tmp_path):
@@ -1854,7 +1867,7 @@ def test_a_consumer_in_any_live_state_blocks_a_global_source_change(tmp_path, st
                                            else "meshcom-qemu (state unknown)"]
     res = svc.set_gps(source="gpsd")
     assert not res.ok and "in use by" in res.summary, res.summary
-    assert svc.gps_settings()["source"] == "off", "nothing may have been written"
+    assert svc.gps_settings()["source"] == "auto", "nothing may have been written"
 
 
 def test_a_gps_disabled_stack_does_not_block_a_source_change(tmp_path):
@@ -1862,7 +1875,9 @@ def test_a_gps_disabled_stack_does_not_block_a_source_change(tmp_path):
     Blocking on it would make the source unchangeable whenever MeshCom happened to be up."""
     from lhpc.core.model import RunState
     svc = _svc(tmp_path)
-    _snap_with(svc, {"meshcom-qemu": RunState.RUNNING})          # running, use_gps still off
+    # off is a DELIBERATE choice now (the default is on) — saved before the stack is up.
+    assert svc.save_config_bundle("meshcom", values={"use_gps": "off"}).ok
+    _snap_with(svc, {"meshcom-qemu": RunState.RUNNING})          # running, use_gps off
     assert svc.gps_consumers_running() == []
     assert svc.set_gps(source="gpsd").ok
 
@@ -1892,7 +1907,9 @@ def test_a_start_that_reads_no_position_is_not_gated_on_gps(tmp_path, cid):
     work that never consults either setting."""
     svc = _svc(tmp_path)
     _enable(svc, "meshcom")
-    save_gps(svc._paths, source="off")           # the combination that refuses a real consumer
+    # A combination that refuses a real consumer TODAY: an explicit source whose plan cannot
+    # be resolved. (The old sample — on + source off — starts without position now.)
+    save_gps(svc._paths, source="nmea", device="/dev/lhpc-test-missing-receiver")
     svc._invalidate_config()
 
     assert svc.gps_block(cid) == ("", []), f"{cid} reads no position and must not be gated"
@@ -2122,13 +2139,14 @@ def test_an_unresolvable_device_refuses_the_start_instead_of_running_blind(tmp_p
 
 
 def test_a_genuinely_off_source_is_not_reported_as_unresolvable(tmp_path):
-    """The refusal above must not swallow the ordinary `off` case, which has its own message."""
+    """The unresolvable-plan refusal must not swallow the ordinary `off` case — which is not a
+    refusal AT ALL any more: with the switch defaulting on, `off` + `use_gps on` starts the
+    stack without position instead of blocking it."""
     svc = _svc(tmp_path)
     _enable(svc, "meshtastic")
     save_gps(svc._paths, source="off")
     svc._invalidate_config()
-    reason, _ = svc.gps_block("meshtastic")
-    assert "use_gps" in reason and "could not be resolved" not in reason, reason
+    assert svc.gps_block("meshtastic") == ("", [])
     assert svc.gps_settings()["plan_valid"] is True
 
 
@@ -2349,7 +2367,8 @@ def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
         assert not ({o["id"] for o in svc.optional_start_components(sid)} & feeds), sid
 
     # The exact broken state from the box: feed ticked, GPS off -> feed stays OUT.
-    svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on"})
+    # (off is explicit now — the switch defaults on since the source gained `auto`.)
+    svc.save_stack_config("meshcom", {"autostart_meshcom-gps": "on", "use_gps": "off"})
     assert svc.gps_enabled_for("meshcom") is False
     assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
 
@@ -2381,16 +2400,17 @@ def test_gps_consumers_are_derived_from_the_manifest_and_gate_graywolf(tmp_path)
         s = svc.stack(sid)
         assert any(c.reads_position for c in s.components), sid
 
-    # The finding's exact repro: use_gps on, global source off -> graywolf refused LIKE
-    # meshtastic, with the same reason.
-    reasons = {}
-    for sid in ("meshtastic", "graywolf"):
-        svc.save_stack_config(sid, {"use_gps": "on"})
+    # graywolf must pass the SAME consumer gate as meshtastic. The on+source-off refusal is
+    # gone (defaults are on+auto; that combination now starts without position), so parity is
+    # proven on a refusal that survives: a malformed [gps] section, which stays fail-closed.
+    (svc._paths.runtime_root / "config" / "local.toml").write_text(
+        '[gps]\nsource = "banana"\n')
     svc._invalidate_config()
+    reasons = {}
     for sid in ("meshtastic", "graywolf"):
         reason, _cmds = svc.gps_block(sid)
         reasons[sid] = reason
-        assert "global position source is off" in reason, (sid, reason)
+        assert "invalid" in reason, (sid, reason)
     assert reasons["meshtastic"] == reasons["graywolf"]
 
     # Derived sets are cached: same frozen object every call (they sit on hot paths).
@@ -2416,3 +2436,93 @@ def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
     for s in svc.stacks():
         excluded = {c.id for c in s.components if svc._never_operator_autostart(c)}
         assert not ({o["id"] for o in svc.optional_start_components(s.id)} & excluded), s.id
+
+
+def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_path,
+                                                                            monkeypatch):
+    """The DEFAULTS are now `auto` + per-stack `use_gps = on`. A default must never refuse a
+    start (nobody expressed intent), so `auto` is soft: a listening localhost gpsd becomes an
+    ordinary gpsd plan; nothing listening becomes "off, running without position" — starts
+    proceed. Fail-closed protection moves to EXPLICIT intent: a malformed section still
+    refuses, and explicit `off` simply runs without position."""
+    from lhpc.core import gps as gps_mod
+    svc = _gsvc(tmp_path)
+
+    # Untouched box: source auto, every GPS-capable stack's switch defaults ON.
+    assert svc.gps_settings()["source"] == "auto"
+    for sid in svc._gps_stacks():
+        assert svc.gps_enabled_for(sid) is True, sid
+
+    # No gpsd (the conftest default): resolved off, nothing refused, nothing admitted.
+    assert svc.gps_settings()["resolved_source"] == "off"
+    plan = svc.gps_plan("graywolf")
+    assert not plan.enabled and "no gpsd on this box" in plan.reason
+    for sid in svc._gps_stacks():
+        assert svc.gps_block(sid) == ("", []), sid
+    assert "meshcom-gps" not in [c.id for _, c in svc._run_order("meshcom")]
+
+    # A gpsd appears: auto resolves to a normal localhost gpsd plan everywhere.
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: True)
+    assert svc.gps_settings()["resolved_source"] == "gpsd"
+    plan = svc.gps_plan("graywolf")
+    assert plan.source == "gpsd" and (plan.host, plan.port) == ("127.0.0.1", 2947)
+    assert "meshcom-gps" in [c.id for _, c in svc._run_order("meshcom")]
+    assert gps_mod.graywolf_post_step_values(plan)["gps_args"][:2] == ["--gps-source", "gpsd"]
+
+    # Explicit off: not auto, and not a refusal either — the stack runs without position.
+    monkeypatch.setattr(gps_mod, "local_gpsd_listening", lambda: False)
+    svc.set_gps(source="off")
+    svc._invalidate_config()
+    assert svc.gps_settings()["source"] == "off"
+    assert svc.gps_block("meshtastic") == ("", [])
+
+    # Malformed section: still fail-closed — broken config must not become best-effort.
+    (tmp_path / "config" / "local.toml").write_text('[gps]\nsource = "banana"\n')
+    svc._invalidate_config()
+    reason, _ = svc.gps_block("meshtastic")
+    assert "invalid" in reason
+    assert svc.gps_block("meshtastic") == svc.gps_block("graywolf")   # consumer-gate parity
+
+
+def test_changing_the_source_is_blocked_by_a_running_graywolf(tmp_path):
+    """AUDIT-FOUND: `gps_consumers_running` was the THIRD hardcoded GPS stack list, and it
+    drifted like the other two — graywolf missing, so `lhpc gps --source ...` went through
+    under a running GPS-enabled graywolf, leaving its live process on the old source while
+    the saved plan described the new one. The list is the derived set now."""
+    svc = _gsvc(tmp_path)
+    watched = set()
+    svc.gps_liveness_blockers = lambda ids, snap=None, require_enabled=False: (
+        watched.update(ids) or [])
+    svc.gps_consumers_running()
+    assert watched == set(svc._gps_stacks())
+    assert "graywolf" in watched
+
+
+def test_fixed_source_says_that_graywolf_gets_no_position(tmp_path):
+    """AUDIT-FOUND honesty gap: graywolf has no fixed GPS mode (its API takes serial, gpsd
+    or none), so a `fixed` box runs it with GPS off while `use_gps` reads on. Deliberately
+    NOT a refusal — with the switch defaulting on, a fixed box could otherwise never start
+    graywolf — but `lhpc gps` must say it, where the operator chose the source."""
+    svc = _gsvc(tmp_path)
+    svc.set_gps(source="fixed", fixed_lat="48.4", fixed_lon="11.6")
+    svc._invalidate_config()
+    from lhpc.core.gps import graywolf_post_step_values
+    assert graywolf_post_step_values(svc.gps_plan("graywolf"))["gps_args"] == \
+        ["--gps-source", "none"]
+    assert svc.gps_block("graywolf") == ("", [])              # starts, deliberately
+    report = svc.set_gps()
+    assert any("graywolf has no fixed GPS mode" in d for d in report.details)
+
+
+def test_meshcore_cli_build_byte_compiles_the_pinned_source():
+    """AUDIT-FOUND: the pinned meshcore-cli uses Python 3.12+ f-string syntax while LHPC
+    supports >=3.11, so on a 3.11 box meshcli installed fine and died with a SyntaxError at
+    FIRST RUN. The build now byte-compiles the source, moving that failure to build time
+    with the exact file and line. This test pins the CONTRACT so the step cannot be dropped
+    silently; repinning backward was rejected — it would lose the rxlog/msgs handlers."""
+    from lhpc.core.manifest import load_manifest
+    mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
+    compile_steps = [st for st in mc.build_steps
+                     if "compileall" in " ".join(st.get("argv", []))]
+    assert len(compile_steps) == 1
+    assert compile_steps[0]["argv"][0] == ".venv/bin/python"  # the venv the code will run in
