@@ -195,7 +195,14 @@ for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRE
 
 # Per-stream in-memory capture cap: keep only the last N bytes (the useful TAIL) of a
 # command's stdout/stderr, so a runaway build/test can never exhaust controller memory.
-_MAX_CAPTURE_BYTES = 128 * 1024
+#
+# It must also be big enough for the commands whose output is DATA, not a log — the largest is
+# `git show <ref>:lhpc/data/manifest.example.toml`, which the self-update config migration parses
+# to learn a parameter's OLD default. Keeping the tail silently beheads such a file: at 128 KiB
+# the manifest outgrew the cap, TOML parsing failed at line 1, `_prove_candidate` swallowed it as
+# "unprovable", and every config-default migration stopped completing while self-update deferred.
+# 1 MiB leaves ~7x headroom over today's manifest and is still a hard bound.
+_MAX_CAPTURE_BYTES = 1024 * 1024
 
 
 def _bounded_drain(stream, sink: bytearray) -> None:

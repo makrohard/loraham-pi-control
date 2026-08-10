@@ -79,6 +79,44 @@ def env(tmp_path, monkeypatch):
 
 # --- local state + upstream check --------------------------------------------------------------
 
+def test_historical_manifest_survives_the_runner_capture_cap():
+    """`git show <ref>:manifest` must come back WHOLE through the real runner.
+
+    The runner keeps only the last _MAX_CAPTURE_BYTES of a stream — right for a build log, fatal
+    for output that is DATA. The self-update config migration parses the pre-update manifest to
+    learn a parameter's OLD default; once the manifest outgrew the cap, git show returned a
+    beheaded file, TOML parsing failed at line 1, `_prove_candidate` swallowed it as "unprovable",
+    and config-default migrations silently stopped completing while self-update deferred.
+
+    This asserts the real thing end to end, so the next time the manifest grows past the cap a
+    test says so instead of a Pi quietly failing to migrate.
+    """
+    import pathlib
+    import tomllib
+
+    from lhpc.core import manifest as manifest_mod
+    from lhpc.core.probes import RealSystem
+    from lhpc.core.probes.backends import _MAX_CAPTURE_BYTES
+
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    rel = "lhpc/data/manifest.example.toml"
+    size = (repo / rel).stat().st_size
+    assert size < _MAX_CAPTURE_BYTES, (
+        f"{rel} is {size} bytes, at/over the {_MAX_CAPTURE_BYTES}-byte runner capture cap — "
+        f"`git show` would return it beheaded and every config-default migration would stop "
+        f"completing. Raise _MAX_CAPTURE_BYTES.")
+
+    r = RealSystem().runner.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"], timeout=20.0)
+    assert r.returncode == 0, r.stderr[:200]
+    # Truncation keeps the TAIL, so the tell is a missing HEAD: compare the first line, not a
+    # length (len() counts characters after UTF-8 decode, and this file is full of em dashes).
+    first_line = (repo / rel).read_text(encoding="utf-8").split("\n", 1)[0]
+    assert r.stdout.startswith(first_line), (
+        f"output was beheaded by the capture cap — starts {r.stdout[:40]!r}")
+    stacks = manifest_mod.parse_manifest(tomllib.loads(r.stdout))      # the step that used to fail
+    assert {s.id for s in stacks} >= {"daemon", "kiss", "graywolf"}
+
+
 def test_local_state_reads_head_branch_clean(env):
     st = selfupdate.local_state(env["sys"])
     assert st["is_git"] and st["branch"] == "main" and st["dirty"] is False
