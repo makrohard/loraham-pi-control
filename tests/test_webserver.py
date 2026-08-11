@@ -2373,6 +2373,9 @@ def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
         tpl.index("Issue client cert", ca_at) < p12_at
     # Both use the shared cmdbox macro (copy button semantics come with it).
     assert tpl.count("cmdbox('ws-fetch-") == 2
+    # And a cert WITHOUT a stored export explains itself instead of rendering nothing
+    # (live-found: indistinguishable from a broken feature).
+    assert "No stored" in tpl and "reissue" in tpl
 
 
 def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):

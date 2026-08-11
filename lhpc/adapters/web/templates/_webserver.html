@@ -154,6 +154,13 @@
         <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
           only from a loopback session. You may still manage existing certificates.</p>
       {% endif %}
+      {% if ws_fetch and not ws_fetch.p12 and certs %}
+        {# LIVE-FOUND UX gap: an issued cert with no STORED export rendered nothing here, and
+           "nothing" reads as broken. Say why, and what creates a fetchable bundle. #}
+        <p class="muted">No stored <code>.p12</code> export to fetch — a bundle exists only until
+          it is downloaded/discarded. <em>Issue</em> a new certificate (or <em>reissue</em> an
+          existing one — that rotates its key) to get a fetch command here.</p>
+      {% endif %}
       {% if ws_fetch and ws_fetch.p12 %}
         {# Fetch an issued USER CERT (.p12) to a Linux PC over ssh — the sanctioned remote path
            (the browser download above stays loopback-only). Import asks for the one-time
