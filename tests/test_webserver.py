@@ -2351,6 +2351,11 @@ def test_ws_fetch_commands_build_real_paste_ready_scp_lines(tmp_path, monkeypatc
     assert out["ca"] == (f"scp {user}@10.42.0.1:{tmp_path}/config/tls/server-ca/ca.crt "
                          "lhpc-server-ca.crt")
     assert list(out["p12"]) == ["handy"]
+
+    # LIVE-FOUND: with active_labels set, a REVOKED cert's lingering export is NOT offered a
+    # fetch command (matching the browser Download link, which hides for non-active certs).
+    gated = web_app._ws_fetch_commands("10.42.0.1", str(tmp_path), active_labels=["other"])
+    assert gated["p12"] == {}          # handy is on disk but not in the active set
     assert out["p12"]["handy"] == f"scp {user}@10.42.0.1:{tmp_path}/config/tls/exports/handy.p12 ."
 
     # Host allow-list: anything shell-hostile -> no commands at all.
@@ -2395,11 +2400,17 @@ def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
 
     # Patch the ONE source the gate must derive from — the real monitor then computes
     # `applied_access_mode` from it, so the whole real path is under test.
+    from lhpc.core import pki as pkimod
     from lhpc.core import webserver as wsmod
     monkeypatch.setattr(wsmod, "read_applied", lambda paths: (
         {"console": {"access_mode": applied["mode"], "port": 8443,
                      "bind": "127.0.0.1", "scheme": "https", "allowed_cidrs": [],
                      "public": False}, "proxies": []} if applied["mode"] else {}))
+    # handy has a real stored export; give it a matching ACTIVE cert so the .p12 gate
+    # (active-labels) admits it — the point under test here is the applied-policy gate.
+    monkeypatch.setattr(pkimod, "list_client_certs",
+                        lambda paths: [{"label": "handy", "state": "active",
+                                        "serial": "ab", "not_after": "2099-01-01T00:00:00+00:00"}])
     c = create_app(lambda: svc).test_client()
 
     def page(remote):

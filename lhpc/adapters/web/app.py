@@ -108,12 +108,17 @@ def _url_host(raw: str) -> str:
 _HOST_ECHO_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
 
 
-def _ws_fetch_commands(host: str, root: str) -> dict:
+def _ws_fetch_commands(host: str, root: str, active_labels=None) -> dict:
     """Copy-paste `scp` commands (Linux PC as host, this box as guest) for the trust material:
     {"ca": <cmd>, "p12": {label: cmd}}. Built server-side so user, runtime root and the
     viewer-reached host are all REAL — the operator pastes, never edits. Only characters the
     host allow-list admits are echoed; a weird Host header yields no commands rather than a
-    shell-hostile string."""
+    shell-hostile string.
+
+    `active_labels` gates the .p12 commands to CURRENTLY-ACTIVE certificates, matching the
+    browser Download link (LIVE-FOUND: a revoked cert's lingering export was still offered a
+    fetch command — a bundle that cannot authenticate). None = no gating (kept for the direct
+    unit tests of command construction)."""
     import getpass
     from pathlib import Path as _Path
 
@@ -133,7 +138,10 @@ def _ws_fetch_commands(host: str, root: str) -> dict:
                          for p in _Path(root, "config", "tls", "exports").glob("*.p12"))
     except OSError:
         exports = []
+    allow = None if active_labels is None else set(active_labels)
     for label in exports:
+        if allow is not None and label not in allow:
+            continue                           # revoked/absent cert -> no fetch for its export
         try:
             # The same filename-safety the issuing path enforces — an on-disk name that fails
             # it is not ours and gets no shell-bound echo.
@@ -948,7 +956,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # REVIEW-FOUND gate: rendered only to a TRUSTED session — loopback, or a config
             # whose APPLIED remote policy requires a client certificate.
             "ws_fetch": (_ws_fetch_commands(str((_ws or {}).get("local_ip") or "")
-                                            or _url_host(request.host or ""), _runtime_root())
+                                            or _url_host(request.host or ""), _runtime_root(),
+                                            active_labels=[c["label"] for c in
+                                                           ((_ws or {}).get("pki", {})
+                                                            .get("clients", []))
+                                                           if c.get("state") == "active"])
                          if (peer_is_loopback()
                              or ((_ws or {}).get("applied_access_mode")
                                  or service.webserver_applied_access_mode())
