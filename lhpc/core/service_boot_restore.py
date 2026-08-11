@@ -92,6 +92,62 @@ class BootRestoreOpsMixin:
                           last_start_state=ls_state, last_start_band=ls_band,
                           last_start_at=ls_at)
 
+    # ---- operator stop intent -------------------------------------------------------------
+    #
+    # LIVE-FOUND (voice resurrecting on every reboot): an operator stop whose cessation could
+    # not be verified RETAINS the ownership records — correct for the running system (never
+    # assume a process died), but after a reboot those leftovers are indistinguishable from
+    # "was running at shutdown", so boot-restore resurrected a stack the operator had
+    # explicitly stopped. And once restored, each run leaves fresh shutdown evidence — one
+    # missed cleanup made the stack immortal. The intent tombstone is the missing bit of
+    # truth: an applied STACK stop writes it, an applied STACK start clears it, and restore
+    # skips (and prunes) any evidence for a stack whose tombstone exists. EXISTENCE is the
+    # signal, never timestamps — an RTC-less Pi's clock restarts from the image build date
+    # every boot, so cross-boot time comparisons would point backwards.
+
+    def _stop_intent_path(self, stack_id: str):
+        from . import validators
+        safe = validators.path_component(stack_id, field="stop-intent stack")
+        return self._paths.under("state", "stop-intent", f"{safe}.json")
+
+    def _write_stop_intent(self, stack_ids) -> None:
+        """Best-effort, never raises: intent must not turn a completed stop into an error."""
+        import json as _json
+        import time as _time
+
+        from . import runtime_fs, validators
+        from .lifecycle import current_boot_id as _boot_id
+        from .paths import PathContainmentError
+        for sid in stack_ids:
+            try:
+                runtime_fs.mkdir(self._paths, "state", "stop-intent")
+                runtime_fs.atomic_write(
+                    self._paths, self._stop_intent_path(sid),
+                    _json.dumps({"stack": sid, "at": _time.time(),
+                                 "boot_id": _boot_id()}) + "\n", 0o644)
+            except (OSError, PathContainmentError, validators.ValidationError):
+                pass
+
+    def _clear_stop_intent(self, stack_id: str) -> None:
+        """Best-effort: an operator start supersedes any previous stop intent."""
+        from . import runtime_fs, validators
+        from .paths import PathContainmentError
+        try:
+            runtime_fs.unlink(self._paths, self._stop_intent_path(stack_id))
+        except (OSError, PathContainmentError, validators.ValidationError):
+            pass
+
+    def _stop_intent_stacks(self) -> set:
+        """Stacks with a standing operator stop intent. Unreadable/malformed files count as
+        INTENT PRESENT — the file's existence is the signal; failing toward restore would
+        resurrect a stack the operator stopped, which is the exact bug this exists to end."""
+        try:
+            d = self._paths.under("state", "stop-intent")
+            return {p.name[:-5] for p in d.iterdir()
+                    if p.name.endswith(".json")} if d.is_dir() else set()
+        except OSError:
+            return set()
+
     def _classify_boot_evidence(self, cur_boot: str):
         """(evidence, skipped, integrity_issues, dir_state). Same-boot stamped records are NEVER
         evidence; legacy (v0) records must be provably stale AND scope-proven via a matching
@@ -132,6 +188,25 @@ class BootRestoreOpsMixin:
                 component=rec.get("component", ""), band=rec.get("band", ""),
                 launched_at=float(rec.get("launched_at", 0)),
                 start_scope=scope, requested_target=req))
+        # OPERATOR STOP INTENT beats leftover evidence: an unverified stop retains ownership
+        # records (correct for the live system), which after a reboot read exactly like
+        # "was running at shutdown" — restoring them resurrects a stack the operator
+        # explicitly stopped, and each restored run re-seeds the evidence forever. The
+        # skipped records are pruned by the caller (they are dead prior-boot leftovers), and
+        # the standing intent is cleared only by an applied operator start.
+        intents = self._stop_intent_stacks()
+        if intents:
+            kept = []
+            for ev in evidence:
+                if ev.stack in intents:
+                    skipped.append({"stack": ev.stack,
+                                    "reason": "operator stop intent stands — stopped after "
+                                              "the recorded launch, not restored",
+                                    "evidence_ids": [ev.launch_id],
+                                    "prune": self._boot_prune_evidence([ev.launch_id])})
+                else:
+                    kept.append(ev)
+            evidence = kept
         return evidence, skipped, issues, dir_state
 
     def _boot_stack_metas(self) -> dict:

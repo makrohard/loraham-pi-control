@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Boot-restore honors an explicit operator stop: a stack stopped before reboot never resurrects from leftover unverified-stop records (live-found with Voice restarting on every boot)
+
 ## 0.1.11
 
 - **GPS works out of the box**: the global source defaults to `auto` (a gpsd on this box if one runs, else no position — never a refusal) and every stack's `use_gps` defaults to on. `auto` counts only a listener truly reachable at 127.0.0.1:2947, one start uses one frozen verdict end to end (GPS bridge included), and a gpsd that vanished or streams nothing does not fail the start. Explicit sources keep their fail-closed refusals. **Upgrade note:** an untouched box running a local gpsd begins reporting real position, on the air

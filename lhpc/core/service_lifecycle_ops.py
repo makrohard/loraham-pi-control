@@ -626,10 +626,17 @@ class LifecycleOpsMixin:
                         # restore attempt mutates NOTHING.
                         for _b in sorted(self._operation_bands(target, band, _radio, "start")):
                             self.clear_daemon_feed(_b)
-                        return self._start_impl(target, apply=True, params=params,
+                        _res = self._start_impl(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
                                                 daemon_overrides=daemon_overrides,
                                                 file_overrides=file_overrides)
+                        # An applied STACK start supersedes any standing stop intent — the
+                        # operator wants it running again, so boot-restore may restore it.
+                        # Component-scoped starts deliberately do not clear (they also never
+                        # produce stack-scoped restore evidence).
+                        if self.stack(target) is not None:
+                            self._clear_stop_intent(target)
+                        return _res
                 except SourceTxnBlocked as blocked:
                     return ActionResult(False, f"Cannot start '{target}': {blocked}",
                                         next_commands=[f"lhpc status {target}"])
@@ -1942,8 +1949,19 @@ class LifecycleOpsMixin:
                                    release_daemon=release_daemon)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
-                return self._stop_impl(target, apply=True, cascade=cascade, band=band,
-                                       release_daemon=release_daemon)
+                res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
+                                      release_daemon=release_daemon)
+                # Durable OPERATOR INTENT, written for every stack this stop touched (cascade
+                # included) — verified or not. An UNVERIFIED stop retains ownership records,
+                # and after a reboot those read as "was running at shutdown": boot-restore then
+                # resurrected an explicitly stopped stack, forever (each restored run re-seeds
+                # the evidence). The tombstone is cleared by an applied stack start.
+                _stopped = {self.stack_of(r.component) or r.stack for r in (res.results or ())
+                            if r.action == "stop"
+                            and r.outcome in (Outcome.STOPPED, Outcome.UNVERIFIED)}
+                _stopped |= {self.stack_of(target) or target} if res.ok else set()
+                self._write_stop_intent({s for s in _stopped if s and self.stack(s)})
+                return res
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
                                 next_commands=[f"lhpc status {target}"])

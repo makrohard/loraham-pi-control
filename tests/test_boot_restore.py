@@ -1373,3 +1373,72 @@ def test_cli_autostart_shows_blocked_reason(tmp_path, monkeypatch, capsys):
     assert main(["autostart"]) == 0
     out = capsys.readouterr().out
     assert "restore BLOCKED" in out and "boot identity unavailable" in out
+
+
+# --- operator stop intent: an explicitly stopped stack is never resurrected ---------------------
+
+def test_operator_stop_intent_blocks_restore_and_prunes(tmp_path, monkeypatch):
+    """LIVE-FOUND (voice restarting on every reboot): an UNVERIFIED stop retains the ownership
+    records — correct for the live system — but after a reboot they read exactly like "was
+    running at shutdown", so restore resurrected a stack the operator had stopped; each restored
+    run then re-seeded the evidence, forever. A standing stop intent skips the evidence AND
+    prunes the dead records, and its absence restores exactly as before."""
+    svc = _drv(tmp_path, monkeypatch)
+    rec = _v1()
+    _write_record(tmp_path, rec)
+    svc._write_stop_intent(["kiss"])
+
+    evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
+    assert not evidence
+    hit = next(s for s in skipped if s["stack"] == "kiss")
+    assert "operator stop intent" in hit["reason"]
+    assert hit["prune"]["ok"] is True
+    assert not (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists(), \
+        "the dead leftover must be pruned, or it re-classifies forever"
+
+    # Intent cleared (the operator started the stack again) -> same record restores again.
+    _write_record(tmp_path, rec)
+    svc._clear_stop_intent("kiss")
+    evidence, _sk, _is, _st = svc._classify_boot_evidence("CURBOOT")
+    assert [e.stack for e in evidence] == ["kiss"]
+
+    # A malformed intent file still counts as intent — existence is the signal; failing toward
+    # restore would resurrect the stack the operator stopped.
+    (tmp_path / "state" / "stop-intent" / "kiss.json").write_text("not json{")
+    evidence, skipped, _is, _st = svc._classify_boot_evidence("CURBOOT")
+    assert not evidence
+
+
+def test_stop_writes_intent_and_start_clears_it(tmp_path, monkeypatch):
+    """The lifecycle hooks: an applied stack stop leaves the tombstone (even when nothing was
+    running — the operator's word stands against any stale leftovers), an applied stack start
+    removes it. Component starts deliberately do not clear."""
+    svc = _svc(tmp_path)
+    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+
+    assert svc.stop("kiss", apply=True).ok
+    assert intent.exists(), "an applied stack stop must record operator intent"
+    body = json.loads(intent.read_text())
+    assert body["stack"] == "kiss" and body["at"] > 0
+
+    # The applied start path clears it (impl stubbed: only the wrapper hook is under test).
+    monkeypatch.setattr(ControllerService, "_start_impl",
+                        lambda self, target, **kw: ActionResult(True, "stubbed"))
+    assert svc.start("kiss", apply=True).ok
+    assert not intent.exists(), "an applied stack start must supersede the stop intent"
+
+
+def test_boot_restore_run_honors_stop_intent_end_to_end(tmp_path, monkeypatch):
+    """The full run: with a standing intent the journal records the skip, nothing is started,
+    and the evidence is gone from disk."""
+    svc = _drv(tmp_path, monkeypatch)
+    _write_record(tmp_path, _v1())
+    svc._write_stop_intent(["kiss"])
+    calls = []
+    monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
+
+    assert svc.boot_restore_run().ok
+    assert not calls, "an intent-stopped stack must not be started"
+    j = _journal_on_disk(tmp_path)
+    assert any("operator stop intent" in s["reason"] for s in j["skipped"])
+    assert not list((tmp_path / "state" / "owned").glob("*.json"))
