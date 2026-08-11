@@ -937,15 +937,17 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "dep_summary": (_dep := service.dependency_overview()),
             "dep_note_dismissed": service.dep_note_dismissed(_dep),
             "req_host": _url_host(request.host or ""),
-            # Copy-paste fetch commands for the trust material, built from the EXACT host the
-            # viewer reached the console at (10.42.0.1 in AP mode, the LAN IP otherwise) — never
-            # a guessed local_ip(). Linux-PC-host assumption by design; the .p12 command is the
-            # sanctioned REMOTE path (the browser download stays loopback-only). REVIEW-FOUND
-            # gate: rendered only to a TRUSTED session — loopback, or a config whose remote
-            # access requires a client certificate (nginx enforces it before the app sees the
-            # request). Under no-auth remote exposure any AP/LAN client could otherwise read
-            # the SSH username, runtime paths and the cert-label inventory.
-            "ws_fetch": (_ws_fetch_commands(_url_host(request.host or ""), _runtime_root())
+            # Copy-paste fetch commands for the trust material, addressed at the BOX'S OWN
+            # current network address (the monitor's local_ip — 10.42.0.1 in AP mode, the LAN
+            # IP otherwise), per operator instruction; the viewer-reached host is only the
+            # fallback when the box cannot name its address (e.g. a browser reaching it by
+            # hostname would otherwise put that hostname into an scp command that only works
+            # where the name resolves). Linux-PC-host assumption by design; the .p12 command
+            # is the sanctioned REMOTE path (the browser download stays loopback-only).
+            # REVIEW-FOUND gate: rendered only to a TRUSTED session — loopback, or a config
+            # whose APPLIED remote policy requires a client certificate.
+            "ws_fetch": (_ws_fetch_commands(str((_ws or {}).get("local_ip") or "")
+                                            or _url_host(request.host or ""), _runtime_root())
                          if (peer_is_loopback()
                              or ((_ws or {}).get("applied_access_mode")
                                  or service.webserver_applied_access_mode())
