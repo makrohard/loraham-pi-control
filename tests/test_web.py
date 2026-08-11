@@ -2527,16 +2527,26 @@ def test_fetched_stack_shows_its_version_and_an_update_when_the_pin_moves(tmp_pa
 
     # Nothing installed yet -> no version, no update flag.
     assert svc.fetched_version_state("graywolf") == {"installed": "", "pinned": pinned,
-                                                     "update": False}
+                                                     "has_update": False}
     # Installed at the pin -> version shown, no update.
     (marker_dir / f".lhpc-built-{pinned}").write_text("")
     st = svc.fetched_version_state("graywolf")
-    assert st == {"installed": pinned, "pinned": pinned, "update": False}
+    assert st == {"installed": pinned, "pinned": pinned, "has_update": False}
+    # LIVE-FOUND: the RENDERED page must NOT show the update pill or an Update button when
+    # installed==pinned (Jinja `dict.update` is a truthy method, so a `.update` key check
+    # showed both unconditionally). Assert the negative in the actual HTML.
+    body_ok = create_app(lambda: svc).test_client().get(
+        "/stacks?open=graywolf").get_data(as_text=True)
+    assert f"deb {pinned}" in body_ok
+    assert "update →" not in body_ok, "no update pill when installed==pinned"
+    _row = body_ok[body_ok.index('id="stackrow-graywolf"'):]
+    _pkg = _row[_row.index("Package"):_row.index("Package") + 400]
+    assert ">Update<" not in _pkg, "no Update button when installed==pinned"
     # The pin moves on (an older install stays on disk) -> update, NAMING the new pin.
     (marker_dir / f".lhpc-built-{pinned}").unlink()
     (marker_dir / ".lhpc-built-0.0.1").write_text("")
     st = svc.fetched_version_state("graywolf")
-    assert st == {"installed": "0.0.1", "pinned": pinned, "update": True}
+    assert st == {"installed": "0.0.1", "pinned": pinned, "has_update": True}
 
     # And the row renders it: version pill + yellow update pill naming the pin + Update button.
     c = create_app(lambda: svc).test_client()

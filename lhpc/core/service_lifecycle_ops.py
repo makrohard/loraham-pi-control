@@ -3281,8 +3281,11 @@ class LifecycleOpsMixin:
                     break
         except (OSError, PathContainmentError):
             pass
+        # KEY is `has_update`, never `update`: Jinja `dict.update` resolves to the built-in
+        # METHOD (always truthy), so a template `.update` would show the pill unconditionally
+        # (LIVE-FOUND). `installed`/`pinned` do not collide with any dict attribute.
         return {"installed": installed, "pinned": pinned,
-                "update": bool(installed and installed != pinned)}
+                "has_update": bool(installed and installed != pinned)}
 
     def fetched_artifacts_present(self, target: str) -> bool:
         """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary
