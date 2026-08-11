@@ -29,6 +29,10 @@ from .service_base import ActionResult, AdmissionRefused
 
 class BootRestoreOpsMixin:
     DAEMON_STACK_ID = "daemon"
+    # ONE string, three uses (written at classification, matched by both prune paths) — the
+    # round-3 review found the match duplicated inline, one edit away from a silent split.
+    INTENT_SKIP_REASON = ("operator stop intent stands — stopped after the recorded launch, "
+                          "not restored")
 
     # ---- gates ----------------------------------------------------------------------------------
 
@@ -204,8 +208,7 @@ class BootRestoreOpsMixin:
                     # deleting inside classification destroyed evidence even when the run was
                     # subsequently disabled, outside the journalled prune pattern).
                     skipped.append({"stack": ev.stack,
-                                    "reason": "operator stop intent stands — stopped after "
-                                              "the recorded launch, not restored",
+                                    "reason": self.INTENT_SKIP_REASON,
                                     "evidence_ids": [ev.launch_id]})
                 else:
                     kept.append(ev)
@@ -411,7 +414,7 @@ class BootRestoreOpsMixin:
         re-classify them on every boot."""
         touched = False
         for _sk in journal.get("skipped", ()):
-            if _sk.get("reason", "").startswith("operator stop intent") and "prune" not in _sk:
+            if _sk.get("reason") == self.INTENT_SKIP_REASON and "prune" not in _sk:
                 _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
                 touched = True
         if touched:
@@ -448,9 +451,7 @@ class BootRestoreOpsMixin:
             return ActionResult(False, "Boot restore: journal unwritable.")
         for it in items:
             it["prune"] = self._boot_prune_evidence(it["evidence_ids"])
-        for _sk in journal["skipped"]:
-            if _sk.get("reason", "").startswith("operator stop intent"):
-                _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
+        self._prune_intent_skips(journal)          # same helper, same match, both paths
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.")
         retired = sum(len(i["evidence_ids"]) for i in items)

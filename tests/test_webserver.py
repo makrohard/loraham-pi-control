@@ -2373,3 +2373,48 @@ def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
         tpl.index("Issue client cert", ca_at) < p12_at
     # Both use the shared cmdbox macro (copy button semantics come with it).
     assert tpl.count("cmdbox('ws-fetch-") == 2
+
+
+def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
+    """ROUND-3 REVIEW: the headline security gate had no test. A remote viewer sees the fetch
+    commands ONLY when the APPLIED policy already enforces client certs — never in the
+    saved-but-not-applied window, and never when the applied policy is unknown."""
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "tls" / "exports").mkdir(parents=True)
+    (tmp_path / "config" / "tls" / "exports" / "handy.p12").write_bytes(b"x")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    applied = {"mode": ""}
+
+    # Patch the ONE source the gate must derive from — the real monitor then computes
+    # `applied_access_mode` from it, so the whole real path is under test.
+    from lhpc.core import webserver as wsmod
+    monkeypatch.setattr(wsmod, "read_applied", lambda paths: (
+        {"console": {"access_mode": applied["mode"], "port": 8443,
+                     "bind": "127.0.0.1", "scheme": "https", "allowed_cidrs": [],
+                     "public": False}, "proxies": []} if applied["mode"] else {}))
+    c = create_app(lambda: svc).test_client()
+
+    def page(remote):
+        # remote-vs-loopback is decided by the nginx-set X-LHPC-Peer header, not the
+        # socket address (see peer_is_loopback) — absent header = bare loopback mode.
+        hdrs = {"X-LHPC-Peer": "remote"} if remote else {}
+        return c.get("/stacks", headers=hdrs).get_data(as_text=True)
+
+    # (probe: the per-cert .p12 box — the CA box is additionally gated on a PKI being
+    # present, which this bare runtime does not have)
+    # Remote + applied UNKNOWN (the saved-but-not-applied window; desired IS auth): withheld.
+    assert "ws-fetch-p12-handy" not in page(remote=True)
+    # Remote + applied open: withheld.
+    applied["mode"] = "no-auth"
+    assert "ws-fetch-p12-handy" not in page(remote=True)
+    # Remote + applied cert-enforcing: shown (nginx already authenticated this viewer).
+    applied["mode"] = "local-open-remote-auth"
+    assert "ws-fetch-p12-handy" in page(remote=True)
+    # Loopback: always shown, whatever is applied.
+    applied["mode"] = ""
+    assert "ws-fetch-p12-handy" in page(remote=False)

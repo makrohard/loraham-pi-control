@@ -63,6 +63,10 @@ class WebserverOpsMixin:
                                 served_via_nginx=served_via_nginx,
                                 firewall_contained=contained,
                                 applied_console=ac, live_port=live_port)
+        # The APPLIED console access mode, for gates that must not trust the saved-but-not-
+        # applied window (ws_fetch) — surfaced here so a render needs ONE applied-snapshot
+        # read, not a second one per gate. "" = unknown -> fail closed downstream.
+        view["applied_access_mode"] = str(ac.get("access_mode") or "")
         # The per-stack web-UI proxies are part of the config nginx loads — show them here too, with
         # the standing warning for any upstream that answers around this proxy.
         proxies = []

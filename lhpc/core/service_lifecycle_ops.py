@@ -638,11 +638,17 @@ class LifecycleOpsMixin:
                         # tombstone would skip-and-prune it at the next boot; and an INTERNAL
                         # start (auto-install's daemon ensure, _operator=False) must not
                         # clear an operator's tombstone its paired internal stop never rewrites.
+                        # ...and, like the stop side, only rows of the TARGET stack count
+                        # (REVIEW-FOUND round 3: the daemon's always-appended VERIFIED ensure
+                        # row cleared the target's tombstone when nothing of the target
+                        # launched at all).
                         if (_operator and self.stack(target) is not None
                                 and (_res.ok
                                      or any(r.action == "start" and r.outcome in
                                             (Outcome.STARTED, Outcome.VERIFIED,
                                              Outcome.ALREADY_HEALTHY)
+                                            and (self.stack_of(r.component) or r.stack)
+                                            == target
                                             for r in (_res.results or ())))):
                             self._clear_stop_intent(target)
                         return _res
@@ -2069,8 +2075,11 @@ class LifecycleOpsMixin:
                     # operator's word too — dropping its tombstone reintroduced resurrect-after-
                     # reboot for exactly the unverified-dependent case. Internal cascades
                     # (restart, uninstall, auto-install) still pass False from the outer stop.
+                    # Only a WHOLE-STACK operator stop passes its operator-ness down: a
+                    # band-scoped daemon stop (band switch) names no dependent for good —
+                    # tombstoning them dropped stacks from restore the operator never stopped.
                     dep_res = self.stop(dep, apply=True, release_daemon=False,
-                                        _operator=_operator)
+                                        _operator=_operator and not band)
                     results.append(CompResult(component=dep, stack=dep, action="stop",
                         outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
                         summary=dep_res.summary))
