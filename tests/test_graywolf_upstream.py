@@ -190,3 +190,94 @@ def test_update_reports_a_failed_restart_as_not_ok(tmp_path, monkeypatch):
     res = svc.graywolf_upstream_update("graywolf", apply=True)
     assert res.ok is False, "a failed restart must surface as not-ok"
     assert "restart FAILED" in res.summary
+
+
+def test_upstream_update_holds_task_admission(tmp_path, monkeypatch):
+    """AUDIT-FOUND (High): the update replaces the installed tree, so it must take the same
+    task admission as build/clean/uninstall/self-update — otherwise a concurrent op races the
+    fetch. It runs under _admission_guard and re-validates state inside the lock."""
+    svc = _svc(tmp_path, installed="0.14.12")
+    _cache(svc, "0.15.0")
+    guarded = {}
+    from contextlib import contextmanager
+
+    @contextmanager
+    def spy_guard(self, op, target=""):
+        guarded["op"] = op
+        yield
+    monkeypatch.setattr(ControllerService, "_admission_guard", spy_guard)
+
+    class R:
+        returncode = 0; stdout = ""; stderr = ""
+    def fake_run(argv, timeout=None):
+        if "graywolf-fetch.sh" in " ".join(argv):
+            (tmp_path / "build" / "tools" / "graywolf" / ".lhpc-graywolf-version").write_text("0.15.0 arm64\n")
+            (svc._lifecycle().source_dir(svc.stack("graywolf").main_component)
+             / svc.stack("graywolf").main_component.build_marker).unlink()
+        return R()
+    monkeypatch.setattr(svc._system.runner, "run", fake_run)
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, t: False)
+
+    assert svc.graywolf_upstream_update("graywolf", apply=True).ok
+    assert guarded.get("op") == "graywolf-upstream-update", "the update must run under admission"
+
+
+def test_admission_refused_aborts_the_update(tmp_path, monkeypatch):
+    """A blocked admission (a concurrent self-update/build) refuses the upstream update cleanly,
+    never touching the tree."""
+    from contextlib import contextmanager
+
+    from lhpc.core.service_base import AdmissionRefused
+    svc = _svc(tmp_path, installed="0.14.12")
+    _cache(svc, "0.15.0")
+
+    @contextmanager
+    def blocked(self, op, target=""):
+        raise AdmissionRefused("a self-update is in progress")
+        yield
+    monkeypatch.setattr(ControllerService, "_admission_guard", blocked)
+    ran = []
+    monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: ran.append(a))
+
+    res = svc.graywolf_upstream_update("graywolf", apply=True)
+    assert res.ok is False and "self-update" in res.summary
+    assert not ran, "a refused admission must not run the fetch"
+
+
+def test_check_surfaces_a_cache_write_failure(tmp_path, monkeypatch):
+    """AUDIT-FOUND (Medium): a failed cache write must NOT report the observed update as a
+    green 'up to date' success — it decides from the observed tag and returns not-ok."""
+    svc = _svc(tmp_path, installed="0.14.12")
+
+    class R:
+        returncode = 0; stdout = '{"tag_name":"v0.15.0"}'; stderr = ""
+    monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: R())
+    from lhpc.core import runtime_fs
+
+    def boom(*a, **k):
+        raise OSError("read-only filesystem")
+    monkeypatch.setattr(runtime_fs, "atomic_write", boom)
+
+    res = svc.graywolf_upstream_check("graywolf")
+    assert res.ok is False, "a failed persist must not be a success"
+    assert "0.15.0" in res.summary and "update available" in res.summary and "could NOT record" in res.summary
+
+
+def test_credential_file_never_followed_through_a_symlink(tmp_path):
+    """AUDIT-FOUND (Low): the graywolf password file must not be read/written THROUGH a
+    credential-path symlink — reading would leak the target, writing would overwrite it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "gp", "lhpc/data/scripts/graywolf-provision.py")
+    gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+
+    state = tmp_path / "state"; state.mkdir()
+    victim = tmp_path / "victim"; victim.write_text("OTHER-SECRET")
+    import os
+    os.symlink(str(victim), state / gp.CRED_FILE)
+
+    assert gp.read_password(str(state)) is None            # not read THROUGH the link
+    gp.write_password(str(state), "ourpw")                 # replaces the link, spares the target
+    assert victim.read_text() == "OTHER-SECRET"
+    assert not (state / gp.CRED_FILE).is_symlink()
+    assert gp.read_password(str(state)) == "ourpw"

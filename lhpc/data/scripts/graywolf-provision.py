@@ -95,8 +95,11 @@ def wait_ready(api: Api, deadline: float) -> None:
 
 
 def read_password(state_dir: str) -> str | None:
+    # O_NOFOLLOW: a credential-path symlink must never be read THROUGH (it would leak
+    # whatever it points at as the password). A symlink leaf raises ELOOP -> None.
     try:
-        with open(os.path.join(state_dir, CRED_FILE), encoding="utf-8") as fh:
+        fd = os.open(os.path.join(state_dir, CRED_FILE), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, encoding="utf-8") as fh:
             value = fh.read().strip()
     except OSError:
         return None
@@ -110,10 +113,19 @@ def write_password(state_dir: str, password: str) -> None:
     path = os.path.join(state_dir, CRED_FILE)
     try:
         os.makedirs(state_dir, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # O_NOFOLLOW so a pre-placed credential-path symlink cannot redirect the write
+        # (O_TRUNC through a symlink would overwrite its target and 0600 it). A symlink
+        # leaf raises ELOOP; write atomically via a temp file + rename so a crash mid-write
+        # never leaves a truncated password.
+        tmp = path + ".new"
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(password + "\n")
-        os.chmod(path, 0o600)
+        os.replace(tmp, path)
     except OSError as exc:
         raise ProvisionError(f"cannot write {path}: {exc}") from exc
 

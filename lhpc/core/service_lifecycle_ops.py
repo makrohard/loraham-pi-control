@@ -3375,15 +3375,16 @@ class LifecycleOpsMixin:
             except (OSError, ValueError, PathContainmentError):
                 return ""
 
-        def _write(latest: str, error: str):
+        def _write(latest: str, error: str) -> bool:
             from . import runtime_fs
             try:
                 runtime_fs.atomic_write(self._paths, self._upstream_cache_path(target),
                                         _json.dumps({"latest": latest, "error": error,
                                                      "checked_at": int(_time.time())}) + "\n",
                                         0o644)
+                return True
             except (OSError, PathContainmentError):
-                pass
+                return False                        # caller decides — never a silent success
 
         url = f"https://api.github.com/repos/{repo}/releases/latest"
         r = self._system.runner.run(
@@ -3403,18 +3404,25 @@ class LifecycleOpsMixin:
             _write(_prev_latest(), "no tag_name in the API response (rate-limited?)")
             return ActionResult(False, f"upstream check for '{target}': no release tag found "
                                        "(GitHub may be rate-limiting unauthenticated requests)")
-        _write(tag, "")
-        st = self.graywolf_upstream_state(target)
-        msg = (f"upstream latest is {tag}; installed {st['installed']}"
-               + (" — update available" if st["ahead"] else " — up to date"))
-        return ActionResult(True, msg, next_commands=[f"lhpc status {target}"])
+        # AUDIT-FOUND: decide availability from the OBSERVED tag, never from a re-read of the
+        # cache we just tried to write — a failed write would otherwise report a stale/empty
+        # cache as "up to date" AND return ok. Surface the persistence failure explicitly.
+        installed = (self.fetched_version_state(target) or {}).get("installed", "")
+        ahead = bool(tag and installed
+                     and self._ver_tuple(tag) > self._ver_tuple(installed))
+        avail = " — update available" if ahead else " — up to date"
+        if not _write(tag, ""):
+            return ActionResult(False, f"observed upstream {tag} (installed {installed}"
+                                       f"{avail}) but could NOT record it — the pill may not "
+                                       "persist across a reload",
+                                next_commands=[f"lhpc status {target}"])
+        return ActionResult(True, f"upstream latest is {tag}; installed {installed}{avail}",
+                            next_commands=[f"lhpc status {target}"])
 
     def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
         """One-click update to the latest upstream release, verified against that release's own
         checksums.txt (see graywolf-fetch.sh --from-upstream). Fetches, re-marks built, and
         restarts the stack if it was running. Refuses when not actually behind upstream."""
-        from .assets import asset_path
-        from .lifecycle import BUILD_MARKER_TEXT
         st = self.graywolf_upstream_state(target)
         if not st:
             return ActionResult(False, f"'{target}' is not an upstream-tracking package")
@@ -3431,6 +3439,25 @@ class LifecycleOpsMixin:
             return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
                                       "(verified against its checksums.txt) and restart.",
                                 next_commands=[f"lhpc update {target} --upstream --yes"])
+        # AUDIT-FOUND: this mutates and replaces the installed tree, so it MUST hold the same
+        # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
+        # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
+        # another op may have moved the version or the running state while we waited.
+        try:
+            with self._admission_guard("graywolf-upstream-update", target):
+                return self._graywolf_upstream_update_locked(target, main)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+
+    def _graywolf_upstream_update_locked(self, target: str, main) -> ActionResult:
+        from . import runtime_fs
+        from .assets import asset_path
+        from .lifecycle import BUILD_MARKER_TEXT
+        st = self.graywolf_upstream_state(target)               # re-read under the lock
+        if not st.get("ahead"):
+            return ActionResult(True, f"'{target}' is already at the latest upstream "
+                                      f"release ({st.get('installed')}).")
+        version = st["latest"]
         was_running = self.stack_running(target)
         # Fetch into the component's OWN build_root (not a hardcoded path) so the tree the
         # start gate and run_argv point at is the tree we replace.
@@ -3447,7 +3474,6 @@ class LifecycleOpsMixin:
         # manifest build marker (graywolf has no build_requires, so its content is the static
         # text) — otherwise the start gate would read "not built" for the freshly fetched tree.
         try:
-            from . import runtime_fs
             marker = self._lifecycle().source_dir(main) / main.build_marker
             runtime_fs.atomic_write(self._paths, marker,
                                     BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
