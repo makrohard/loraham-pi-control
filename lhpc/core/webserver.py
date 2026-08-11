@@ -1087,7 +1087,12 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
     # while you view the raw dev server. When unsupplied (non-request callers), fall back to the console
     # port being live (nginx owns it; lhpc-web has no TCP console listener).
     via_nginx = served_via_nginx if served_via_nginx is not None else scope not in (None, "absent")
+    # The APPLIED console access mode, verbatim in the view: gates that must not trust the
+    # saved-but-not-applied window (the /stacks fetch commands) read it here — one snapshot
+    # read, one shape, whoever builds the view. "" = unknown -> fail closed downstream.
+    applied_access_mode = str(applied_console.get("access_mode") or "")
     return {
+        "applied_access_mode": applied_access_mode,
         "local_ip": local_ip(),
         "desired": {
             "bind": cfg.bind, "port": cfg.port, "access_mode": cfg.access_mode,

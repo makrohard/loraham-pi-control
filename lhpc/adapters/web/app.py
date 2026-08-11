@@ -947,7 +947,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # the SSH username, runtime paths and the cert-label inventory.
             "ws_fetch": (_ws_fetch_commands(_url_host(request.host or ""), _runtime_root())
                          if (peer_is_loopback()
-                             or (_ws or {}).get("applied_access_mode", "")
+                             or ((_ws or {}).get("applied_access_mode")
+                                 or service.webserver_applied_access_mode())
                              in ("local-open-remote-auth", "auth-everywhere")) else {}),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
             "tasks": service.running_tasks(),

@@ -63,10 +63,7 @@ class WebserverOpsMixin:
                                 served_via_nginx=served_via_nginx,
                                 firewall_contained=contained,
                                 applied_console=ac, live_port=live_port)
-        # The APPLIED console access mode, for gates that must not trust the saved-but-not-
-        # applied window (ws_fetch) — surfaced here so a render needs ONE applied-snapshot
-        # read, not a second one per gate. "" = unknown -> fail closed downstream.
-        view["applied_access_mode"] = str(ac.get("access_mode") or "")
+
         # The per-stack web-UI proxies are part of the config nginx loads — show them here too, with
         # the standing warning for any upstream that answers around this proxy.
         proxies = []
@@ -1034,10 +1031,11 @@ class WebserverOpsMixin:
         return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
 
     def webserver_applied_access_mode(self) -> str:
-        """The console access mode nginx last ACTIVATED — '' when unknown. The fail-closed
-        input for anything that must not trust the saved-but-not-applied window (REVIEW-FOUND:
-        gating on `desired` treated an unauthenticated remote client as trusted the moment the
-        operator SAVED a cert policy, before Apply enforced it)."""
+        """The console access mode nginx last ACTIVATED — '' when unknown. The FALLBACK for
+        the /stacks fetch-command gate when the monitor itself failed for unrelated reasons
+        (the primary source is `applied_access_mode` in the monitor view); fail-closed either
+        way. REVIEW-FOUND origin: gating on `desired` treated an unauthenticated remote client
+        as trusted the moment the operator SAVED a cert policy, before Apply enforced it."""
         from . import webserver as _ws
         try:
             return str((_ws.read_applied(self._paths).get("console") or {})

@@ -406,7 +406,7 @@ class BootRestoreOpsMixin:
         ident = procident.proc_identity(os.getpid()) or {}
         return ident.get("starttime", 0)
 
-    def _prune_intent_skips(self, journal) -> None:
+    def _prune_intent_skips(self, journal, write: bool = True) -> None:
         """Prune intent-skipped leftovers and persist the results — AFTER the journal is
         durable (REVIEW-FOUND: pruning first left destruction unrecorded on a crash or an
         unwritable journal; the disabled path documents the same journal-first order). They
@@ -417,7 +417,7 @@ class BootRestoreOpsMixin:
             if _sk.get("reason") == self.INTENT_SKIP_REASON and "prune" not in _sk:
                 _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
                 touched = True
-        if touched:
+        if touched and write:
             boot_restore.write_journal(self._paths, journal)   # best-effort refresh
 
     def _boot_finish_disabled(self, cur_boot: str, evidence, reason: str,
@@ -451,7 +451,9 @@ class BootRestoreOpsMixin:
             return ActionResult(False, "Boot restore: journal unwritable.")
         for it in items:
             it["prune"] = self._boot_prune_evidence(it["evidence_ids"])
-        self._prune_intent_skips(journal)          # same helper, same match, both paths
+        # write=False: the checked write on the next line is the durable one — the helper
+        # writing too was a back-to-back double serialization on SD-card boxes.
+        self._prune_intent_skips(journal, write=False)
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.")
         retired = sum(len(i["evidence_ids"]) for i in items)
