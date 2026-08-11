@@ -58,7 +58,12 @@ if [ -z "$EXPECTED" ] && [ -n "$FROM_UPSTREAM" ]; then
     echo "[graywolf-fetch] upstream mode: reading ${CK_URL}"
     CK="$(curl -fsSL --retry 3 --retry-delay 2 "$CK_URL" || true)"
     [ -n "$CK" ] || die "could not fetch upstream checksums.txt for graywolf ${VERSION}"
-    EXPECTED="$(printf '%s\n' "$CK" | awk -v f="$DEB" '$2==f || $2=="*"f || $2=="./"f {print $1; exit}')"
+    # Strip a trailing CR (CRLF-published checksums.txt) before matching the exact .deb name,
+    # so a legitimate update is not aborted by line endings; a rename still cannot smuggle a
+    # different hash in (the name must match exactly), and sha256sum -c re-verifies below.
+    EXPECTED="$(printf '%s\n' "$CK" | awk -v f="$DEB" '
+        { sub(/\r$/, "", $2) }
+        $2==f || $2=="*"f || $2=="./"f {print $1; exit}')"
     [ -n "$EXPECTED" ] || die "upstream checksums.txt has no entry for ${DEB}"
     echo "[graywolf-fetch] upstream sha256 for ${DEB}: ${EXPECTED}"
 fi

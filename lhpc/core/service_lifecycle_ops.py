@@ -3305,20 +3305,30 @@ class LifecycleOpsMixin:
 
     @staticmethod
     def _ver_tuple(v: str):
-        """A version string as an int tuple for ordering ('0.15.0' -> (0,15,0)); non-numeric
-        parts sort as -1 so a clean release always beats a pre-release suffix."""
-        out = []
-        for part in str(v).strip().lstrip("v").split("."):
-            num = "".join(ch for ch in part if ch.isdigit())
-            out.append(int(num) if num else -1)
-        return tuple(out)
+        """An orderable key for a release version. Returns (release_ints, is_release):
+        each dotted segment's LEADING digits become an int (so '0-rc1' -> 0, never '01' -> 1),
+        and a pre-release/build suffix ('-rc1', '+meta') drops `is_release` to 0 so a clean
+        release sorts ABOVE its own pre-releases. Different lengths compare naturally as
+        tuples ('0.14' < '0.14.12')."""
+        raw = str(v).strip().lstrip("v")
+        release = raw.split("-", 1)[0].split("+", 1)[0]
+        nums = []
+        for part in release.split("."):
+            digits = ""
+            for ch in part:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break                       # leading digits only — stop at the first non-digit
+            nums.append(int(digits) if digits else 0)
+        return (tuple(nums), 1 if raw == release else 0)   # suffix present -> pre-release, lower
 
     def _upstream_cache_path(self, stack_id: str):
         from . import validators
         safe = validators.path_component(stack_id, field="upstream cache stack")
         return self._paths.under("state", f"{safe}-upstream.json")
 
-    def graywolf_upstream_state(self, target: str) -> dict:
+    def graywolf_upstream_state(self, target: str, _installed: str | None = None) -> dict:
         """Cached upstream-release state for a fetched package that declares `release_repo`:
         {latest, installed, ahead, checked_at, error} — or {} when there is no upstream to
         track. NETWORK-FREE (reads the cache the explicit check wrote); the row can render it
@@ -3328,7 +3338,10 @@ class LifecycleOpsMixin:
         main = s.main_component if s else None
         if main is None or not getattr(main, "release_repo", ""):
             return {}
-        installed = (self.fetched_version_state(target) or {}).get("installed", "")
+        # Accept a caller-computed installed to avoid a second fetched_version_state read on
+        # the /stacks render (the ctx already has it).
+        installed = _installed if _installed is not None else \
+            (self.fetched_version_state(target) or {}).get("installed", "")
         cached = {}
         try:
             from . import runtime_fs
@@ -3353,6 +3366,15 @@ class LifecycleOpsMixin:
         if not repo:
             return ActionResult(False, f"'{target}' has no upstream release repo to check")
 
+        def _prev_latest() -> str:
+            from . import runtime_fs
+            try:
+                return str(_json.loads(runtime_fs.read_text_regular(
+                    self._paths, self._upstream_cache_path(target), max_bytes=4096) or "{}")
+                    .get("latest") or "")
+            except (OSError, ValueError, PathContainmentError):
+                return ""
+
         def _write(latest: str, error: str):
             from . import runtime_fs
             try:
@@ -3368,7 +3390,9 @@ class LifecycleOpsMixin:
             ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
              url], 15.0)
         if getattr(r, "returncode", 1) != 0:
-            _write("", "could not reach the GitHub releases API")
+            # REVIEW-FOUND: a transient failure must NOT wipe a previously found version — keep
+            # the last known `latest` so the pill/Update button survive a flaky/rate-limited check.
+            _write(_prev_latest(), "could not reach the GitHub releases API")
             return ActionResult(False, f"upstream check failed for '{target}': network/API error",
                                 next_commands=[f"lhpc status {target}"])
         try:
@@ -3376,7 +3400,7 @@ class LifecycleOpsMixin:
         except ValueError:
             tag = ""
         if not tag:
-            _write("", "no tag_name in the API response (rate-limited?)")
+            _write(_prev_latest(), "no tag_name in the API response (rate-limited?)")
             return ActionResult(False, f"upstream check for '{target}': no release tag found "
                                        "(GitHub may be rate-limiting unauthenticated requests)")
         _write(tag, "")
@@ -3408,7 +3432,9 @@ class LifecycleOpsMixin:
                                       "(verified against its checksums.txt) and restart.",
                                 next_commands=[f"lhpc update {target} --upstream --yes"])
         was_running = self.stack_running(target)
-        dest = str(self._paths.under("build", "tools", "graywolf"))
+        # Fetch into the component's OWN build_root (not a hardcoded path) so the tree the
+        # start gate and run_argv point at is the tree we replace.
+        dest = str(self._paths.under(*(main.build_root or "build/tools/graywolf").split("/")))
         script = str(asset_path("scripts/graywolf-fetch.sh"))
         r = self._system.runner.run(["bash", script, dest, version, "--from-upstream"],
                                     getattr(main, "build_timeout", 900.0) or 900.0)
@@ -3428,11 +3454,18 @@ class LifecycleOpsMixin:
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
+        restart_ok = True
         if was_running:
             res = self.restart(target, apply=True)
+            restart_ok = res.ok
             notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
-        return ActionResult(True, f"'{target}' updated to {version}.", details=notes,
-                            next_commands=[f"lhpc status {target}"])
+        # REVIEW-FOUND: a failed restart leaves the station OFFLINE — report it as NOT ok so
+        # the CLI exits non-zero and the console flashes a warning, not a green success.
+        return ActionResult(
+            restart_ok,
+            (f"'{target}' updated to {version}." if restart_ok
+             else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
+            details=notes, next_commands=[f"lhpc status {target}"])
 
     def fetched_artifacts_present(self, target: str) -> bool:
         """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary

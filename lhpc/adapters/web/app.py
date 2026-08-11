@@ -873,8 +873,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "has_source": has_source,
                 "buildable": buildable,
                 "removable": removable,
-                "fetched_ver": (service.fetched_version_state(stack.id) if buildable else {}),
-                "upstream": (service.graywolf_upstream_state(stack.id) if buildable else {}),
+                "fetched_ver": (_fv := (service.fetched_version_state(stack.id)
+                                        if buildable else {})),
+                # Reuse _fv's installed instead of a second fetched_version_state read.
+                "upstream": (service.graywolf_upstream_state(
+                    stack.id, _installed=_fv.get("installed", "")) if buildable else {}),
                 "deps": own + cross,
                 "state": rollup[stack.id],
                 "running": rollup[stack.id] in _RUNNING,
@@ -958,7 +961,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # whose APPLIED remote policy requires a client certificate.
             "ws_fetch": (_ws_fetch_commands(str((_ws or {}).get("local_ip") or "")
                                             or _url_host(request.host or ""), _runtime_root(),
-                                            active_labels=[c["label"] for c in
+                                            active_labels=[c.get("label", "") for c in
                                                            ((_ws or {}).get("pki", {})
                                                             .get("clients", []))
                                                            if c.get("state") == "active"])
