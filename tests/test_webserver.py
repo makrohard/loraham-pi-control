@@ -2328,3 +2328,48 @@ def test_a_live_loopback_console_is_still_local(tmp_path):
     cfgmod.save_webserver_config(svc._paths, access_mode="no-auth")   # saved, not applied
     svc._invalidate_config()
     assert _sec(svc) == "ok"                     # loopback: still local, still green
+
+
+# ===== copy-paste fetch commands for the trust material (Linux PC host) =========================
+
+def test_ws_fetch_commands_build_real_paste_ready_scp_lines(tmp_path, monkeypatch):
+    """The Certificates section offers scp commands for the server trust and each issued .p12,
+    built from the viewer-reached host and the REAL runtime root/user — paste, don't edit. A
+    shell-hostile Host header yields NO commands, and an on-disk export whose name fails the
+    label rule is never echoed into a shell-bound string."""
+    import getpass
+
+    from lhpc.adapters.web import app as web_app
+    user = getpass.getuser()
+
+    d = tmp_path / "config" / "tls" / "exports"
+    d.mkdir(parents=True)
+    (d / "handy.p12").write_bytes(b"x")
+    (d / "bad name!.p12").write_bytes(b"x")            # fails the label rule -> excluded
+
+    out = web_app._ws_fetch_commands("10.42.0.1", str(tmp_path))
+    assert out["ca"] == (f"scp {user}@10.42.0.1:{tmp_path}/config/tls/server-ca/ca.crt "
+                         "lhpc-server-ca.crt")
+    assert list(out["p12"]) == ["handy"]
+    assert out["p12"]["handy"] == f"scp {user}@10.42.0.1:{tmp_path}/config/tls/exports/handy.p12 ."
+
+    # Host allow-list: anything shell-hostile -> no commands at all.
+    for bad in ("evil;rm -rf", "a b", "$(x)", ""):
+        assert web_app._ws_fetch_commands(bad, str(tmp_path)) == {}
+    # IPv6 literals are fine (bracketed by _url_host upstream).
+    assert "ca" in web_app._ws_fetch_commands("[::1]", str(tmp_path))
+
+
+def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
+    """Placement contract: the server-trust box sits below the PKI forms, the per-cert boxes
+    below the Issue form — each below where the thing is created."""
+    import pathlib
+
+    tpl = pathlib.Path("lhpc/adapters/web/templates/_webserver.html").read_text()
+    certs_at = tpl.index("===== Certificates")
+    ca_at = tpl.index("ws-fetch-ca")
+    p12_at = tpl.index("ws-fetch-p12-")
+    assert certs_at < tpl.index("Renew server certificate") < ca_at < \
+        tpl.index("Issue client cert", ca_at) < p12_at
+    # Both use the shared cmdbox macro (copy button semantics come with it).
+    assert tpl.count("cmdbox('ws-fetch-") == 2

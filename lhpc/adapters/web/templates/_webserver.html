@@ -135,6 +135,13 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <button type="submit">Renew server certificate</button>
       </form>
+      {% if ws_fetch and ws_fetch.ca and mon.pki.server_ca.present %}
+        {# Fetch the SERVER TRUST to a Linux PC — the address is the one THIS session reached
+           the console at (10.42.0.1 in AP mode), so the command works as pasted. #}
+        <p class="muted">Fetch the server trust (CA) to your PC, then import it as a trusted
+          certificate:</p>
+        {{ cmdbox('ws-fetch-ca', ws_fetch.ca) }}
+      {% endif %}
       <form method="post" action="{{ url_for('webserver_cert') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="op" value="issue">
@@ -146,6 +153,16 @@
       {% if not loopback %}
         <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
           only from a loopback session. You may still manage existing certificates.</p>
+      {% endif %}
+      {% if ws_fetch and ws_fetch.p12 %}
+        {# Fetch an issued USER CERT (.p12) to a Linux PC over ssh — the sanctioned remote path
+           (the browser download above stays loopback-only). Import asks for the one-time
+           passphrase printed when the certificate was issued. #}
+        <p class="muted">Fetch an issued client certificate (.p12) to your PC — the import asks
+          for the one-time passphrase from the issue step:</p>
+        {% for label, cmd in ws_fetch.p12 | dictsort %}
+          {{ cmdbox('ws-fetch-p12-' ~ label, cmd) }}
+        {% endfor %}
       {% endif %}
       <table class="certs">
         <tr><th>Label</th><th>State</th><th>Serial</th><th>Expires</th><th>Actions</th></tr>

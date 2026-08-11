@@ -108,6 +108,40 @@ def _url_host(raw: str) -> str:
 _HOST_ECHO_OK = set("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
 
 
+def _ws_fetch_commands(host: str, root: str) -> dict:
+    """Copy-paste `scp` commands (Linux PC as host, this box as guest) for the trust material:
+    {"ca": <cmd>, "p12": {label: cmd}}. Built server-side so user, runtime root and the
+    viewer-reached host are all REAL — the operator pastes, never edits. Only characters the
+    host allow-list admits are echoed; a weird Host header yields no commands rather than a
+    shell-hostile string."""
+    import getpass
+    from pathlib import Path as _Path
+
+    from lhpc.core import validators as _validators
+    if not host or not set(host.lower()) <= (_HOST_ECHO_OK | {"[", "]"}):
+        return {}
+    try:
+        user = getpass.getuser()
+    except OSError:
+        return {}
+    out = {"ca": f"scp {user}@{host}:{root}/config/tls/server-ca/ca.crt lhpc-server-ca.crt",
+           "p12": {}}
+    try:
+        exports = sorted(p.name[:-4]
+                         for p in _Path(root, "config", "tls", "exports").glob("*.p12"))
+    except OSError:
+        exports = []
+    for label in exports:
+        try:
+            # The same filename-safety the issuing path enforces — an on-disk name that fails
+            # it is not ours and gets no shell-bound echo.
+            _validators.path_component(label, field="cert label")
+        except _validators.ValidationError:
+            continue
+        out["p12"][label] = f"scp {user}@{host}:{root}/config/tls/exports/{label}.p12 ."
+    return out
+
+
 def _host_echo(host: str) -> str:
     """The rejected host, reduced to characters a hostname/IP can legally contain, for echoing in the
     400 body. The response is text/plain — so this is belt AND braces: even inert, a reflected
@@ -901,6 +935,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "dep_summary": (_dep := service.dependency_overview()),
             "dep_note_dismissed": service.dep_note_dismissed(_dep),
             "req_host": _url_host(request.host or ""),
+            # Copy-paste fetch commands for the trust material, built from the EXACT host the
+            # viewer reached the console at (10.42.0.1 in AP mode, the LAN IP otherwise) — never
+            # a guessed local_ip(). Linux-PC-host assumption by design; the .p12 command is the
+            # sanctioned REMOTE path (the browser download stays loopback-only).
+            "ws_fetch": _ws_fetch_commands(_url_host(request.host or ""), _runtime_root()),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
             "tasks": service.running_tasks(),
             "restored_open": restored_open,
