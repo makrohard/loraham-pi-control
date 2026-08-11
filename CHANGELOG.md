@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.12
 
-- Review pass on the tombstone/cert work: intent scoped to the named operator stack stop only, kept on a refused start, removed by clean; fetch commands shown to trusted sessions only and 3.11-safe
-- The Certificates panel offers paste-ready `scp` commands (Linux PC) for the server trust and each issued client `.p12`, addressed at the host the session reached the console on
-- Boot-restore honors an explicit operator stop: a stack stopped before reboot never resurrects from leftover unverified-stop records (live-found with Voice restarting on every boot)
+- **Boot-restore honors an explicit operator stop**: a stack stopped before a reboot stays stopped, even when the stop could not verify the process gone (live-found with Voice restarting on every boot); the next `stack start` makes it restorable again. Scoped precisely to a direct whole-stack stop — internal cascades, band switches and component stops never tombstone
+- **Certificates panel** gains fetch helpers under where each is created: paste-ready `scp` commands (Linux PC) addressed at the box's own current IP, plus a plain **Download ca.crt** link for browsers and phones (public certificate, no key). Shown only to a trusted session; offered only for active certificates
+- Fetched-package stacks (`graywolf`) show their installed version in the row and offer **Uninstall / Clean all**, plus **Update** — naming the new version — when the manifest pin moves
 
 ## 0.1.11
 
