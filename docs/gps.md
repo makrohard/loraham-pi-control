@@ -1,12 +1,13 @@
 # GPS — one position source for every stack
 
-Position is a **global** setting, like the radio hardware. Meshtastic, MeshCom and Sideband
-all take it from the same place, so they can never disagree about where the box thinks it
-is. Per-stack settings only turn GPS **on or off**.
+Position is a **global** setting, like the radio hardware. Meshtastic, MeshCom, Sideband and
+Graywolf all take it from the same place, so they can never disagree about where the box
+thinks it is. Per-stack settings only turn GPS **on or off**.
 
 ```
-lhpc gps                                        # show
-lhpc gps --source off                           # default
+lhpc gps                                        # show (incl. what `auto` resolved to)
+lhpc gps --source auto                          # gpsd on this box if one runs, else no position (default)
+lhpc gps --source off                           # no position, explicitly
 lhpc gps --source gpsd                          # gpsd on this box
 lhpc gps --source gpsd --host 192.168.1.5       # gpsd on another box
 lhpc gps --source nmea --device /dev/ttyACM0    # a receiver directly, no gpsd

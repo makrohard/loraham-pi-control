@@ -279,6 +279,11 @@ Two imports are needed on the remote machine, and LHPC automates neither:
   the device credential mTLS asks for (you'll be prompted for the one-time passphrase from
   `cert issue`).
 
+The console writes the fetch for you: **Webserver → Certificates** shows paste-ready `scp`
+commands for the server CA (below the PKI forms) and for each issued `.p12` (below *Issue
+client cert*), addressed at the host your session reached the console on — `10.42.0.1` when
+you are on the box's AP.
+
 Sanity-check the CA before you copy it — it is a PEM certificate of a few hundred bytes:
 
 ```bash
