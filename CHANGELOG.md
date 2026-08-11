@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.13
 
 - graywolf gains an **upstream check**: a network probe of its GitHub releases and a one-click **Update** to the latest — the new `.deb` verified against that release's own `checksums.txt`. The default image/auto-install fetch stays on the reviewed, pinned checksum
 
