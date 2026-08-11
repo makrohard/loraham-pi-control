@@ -1453,14 +1453,17 @@ def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, mo
     svc = _svc(tmp_path)
     intents = tmp_path / "state" / "stop-intent"
 
+    def tombstones():
+        return sorted(p.name for p in intents.glob("*.json")) if intents.exists() else []
+
     assert svc.stop("loraham-kiss-serial", apply=True).ok       # component target
-    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert tombstones() == []
     assert svc.stop("kiss", apply=True, band="433").ok          # band-scoped
-    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert tombstones() == []
     assert svc.stop("kiss", apply=True, _operator=False).ok     # internal route
-    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert tombstones() == []
     assert svc.stop("kiss", apply=True).ok                      # the real thing
-    assert (intents / "kiss.json").exists()
+    assert tombstones() == ["kiss.json"]
 
 
 def test_a_refused_start_keeps_the_tombstone(tmp_path, monkeypatch):
@@ -1492,3 +1495,56 @@ def test_clean_purge_removes_the_tombstone(tmp_path):
     res = svc.clean("kiss", apply=True, purge=True)
     assert res.ok, res.summary
     assert not intent.exists(), "clean --purge must remove the stop tombstone"
+
+
+def test_round2_scoping_regressions(tmp_path, monkeypatch):
+    """Round-2 review closures, each its own micro-case:
+    (a) a BLOCKED daemon stop whose DEPENDENT went unverified must not tombstone the daemon;
+    (b) an OPERATOR cascade tombstones its dependents (an internal one does not);
+    (c) an internal start never clears an operator tombstone;
+    (d) a PARTIAL start (components launched, ok=False) does clear it."""
+    from lhpc.core.outcomes import CompResult, Outcome
+    svc = _svc(tmp_path)
+    intents = tmp_path / "state" / "stop-intent"
+
+    # (a) target-scoped UNVERIFIED: fake a stop whose only unverified row belongs to a DEPENDENT.
+    def impl_blocked(self, target, **kw):
+        return ActionResult(False, "daemon left up", results=(
+            CompResult(component="loraham-kiss-tnc", stack="kiss", action="stop",
+                       outcome=Outcome.UNVERIFIED, summary="dependent leak"),))
+    monkeypatch.setattr(ControllerService, "_stop_impl", impl_blocked)
+    assert svc.stop("daemon", apply=True).ok is False
+    assert not intents.exists() or not list(intents.glob("*.json")), \
+        "a dependent's unverified row must not tombstone the still-running daemon"
+
+    # (b) operator cascade: the nested dependent stop runs with the OUTER operator flag.
+    seen = {}
+    orig_stop = ControllerService.stop
+    def impl_cascade(self, target, _operator=False, **kw):
+        if target == "daemon" and "nested" not in seen:
+            seen["nested"] = True
+            # what _stop_impl does for a cascade dependent, with the threaded flag:
+            orig_stop(self, "kiss", apply=True, release_daemon=False, _operator=_operator)
+        return ActionResult(True, "ok", results=())
+    monkeypatch.setattr(ControllerService, "_stop_impl", impl_cascade)
+    assert svc.stop("daemon", apply=True).ok
+    assert (intents / "kiss.json").exists(), "operator cascade must tombstone the dependent"
+    (intents / "kiss.json").unlink(); (intents / "daemon.json").unlink()
+    monkeypatch.undo()
+
+    # (c)+(d): tombstone kiss, then an INTERNAL start must not clear; a PARTIAL start must.
+    assert svc.stop("kiss", apply=True).ok
+    assert (intents / "kiss.json").exists()
+    monkeypatch.setattr(ControllerService, "_start_impl",
+                        lambda self, target, **kw: ActionResult(True, "up"))
+    assert svc.start("kiss", apply=True, _operator=False).ok
+    assert (intents / "kiss.json").exists(), "an internal start must not clear operator intent"
+    from lhpc.core.outcomes import CompResult as _CR
+    monkeypatch.setattr(ControllerService, "_start_impl",
+                        lambda self, target, **kw: ActionResult(False, "manual required",
+                            results=(_CR(component="loraham-kiss-tnc", stack="kiss",
+                                         action="start", outcome=Outcome.STARTED,
+                                         summary="launched"),)))
+    assert svc.start("kiss", apply=True).ok is False
+    assert not (intents / "kiss.json").exists(), \
+        "a PARTIAL start left the stack running — the tombstone must go"

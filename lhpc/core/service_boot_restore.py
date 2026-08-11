@@ -332,19 +332,13 @@ class BootRestoreOpsMixin:
         web_ok, web_reason = self._web_integration_proven()
         if not enabled or not web_ok:
             reason = en_reason if not enabled else f"web console integration not proven: {web_reason}"
-            return self._boot_finish_disabled(cur_boot, evidence, reason)
+            return self._boot_finish_disabled(cur_boot, evidence, reason, skipped=skipped)
 
         metas = self._boot_stack_metas()
         markers = {sid: self._boot_marker_view(sid) for sid in
                    {e.stack for e in evidence} | set()}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
-        # Prune intent-skipped leftovers HERE — past every gate, journalled like all other
-        # prunes. They are dead prior-boot records of a stack the operator stopped; leaving
-        # them would re-classify (and re-report) them on every boot.
-        for _sk in plan.skipped:
-            if _sk.get("reason", "").startswith("operator stop intent"):
-                _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),
@@ -356,12 +350,14 @@ class BootRestoreOpsMixin:
             journal["finished_at"] = time.time()
             if not boot_restore.write_journal(self._paths, journal):
                 return ActionResult(False, "Boot restore: journal unwritable.")
+            self._prune_intent_skips(journal)
             n = len(plan.skipped)
             return ActionResult(True, "Boot restore: nothing to restore"
                                       + (f" ({n} skipped — see the log)." if n else "."),
                                 data={"driver_completed": True})
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.")
+        self._prune_intent_skips(journal)
 
         integrity_failure = ""
         for item in journal["items"]:
@@ -407,7 +403,22 @@ class BootRestoreOpsMixin:
         ident = procident.proc_identity(os.getpid()) or {}
         return ident.get("starttime", 0)
 
-    def _boot_finish_disabled(self, cur_boot: str, evidence, reason: str) -> ActionResult:
+    def _prune_intent_skips(self, journal) -> None:
+        """Prune intent-skipped leftovers and persist the results — AFTER the journal is
+        durable (REVIEW-FOUND: pruning first left destruction unrecorded on a crash or an
+        unwritable journal; the disabled path documents the same journal-first order). They
+        are dead prior-boot records of a stack the operator stopped; leaving them would
+        re-classify them on every boot."""
+        touched = False
+        for _sk in journal.get("skipped", ()):
+            if _sk.get("reason", "").startswith("operator stop intent") and "prune" not in _sk:
+                _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
+                touched = True
+        if touched:
+            boot_restore.write_journal(self._paths, journal)   # best-effort refresh
+
+    def _boot_finish_disabled(self, cur_boot: str, evidence, reason: str,
+                              skipped=()) -> ActionResult:
         """Gate off: start NOTHING, retire the foreign evidence, terminal `disabled` result —
         a later re-enable must not resurrect stacks from an older boot."""
         items = []
@@ -423,6 +434,10 @@ class BootRestoreOpsMixin:
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),
                                            items=items)
+        # REVIEW-FOUND: intent-skipped records must be retired here too — every OTHER
+        # foreign record is, and "a later re-enable must not resurrect stacks from an older
+        # boot" applies doubly to a stack the operator explicitly stopped.
+        journal["skipped"] = list(skipped)
         journal["state"] = "disabled"
         journal["reason"] = reason
         journal["finished_at"] = time.time()
@@ -433,6 +448,9 @@ class BootRestoreOpsMixin:
             return ActionResult(False, "Boot restore: journal unwritable.")
         for it in items:
             it["prune"] = self._boot_prune_evidence(it["evidence_ids"])
+        for _sk in journal["skipped"]:
+            if _sk.get("reason", "").startswith("operator stop intent"):
+                _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
         if not boot_restore.write_journal(self._paths, journal):
             return ActionResult(False, "Boot restore: journal unwritable.")
         retired = sum(len(i["evidence_ids"]) for i in items)

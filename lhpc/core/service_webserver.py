@@ -1029,6 +1029,18 @@ class WebserverOpsMixin:
         removed = _pki.discard_export(self._paths, label)
         return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
 
+    def webserver_applied_access_mode(self) -> str:
+        """The console access mode nginx last ACTIVATED — '' when unknown. The fail-closed
+        input for anything that must not trust the saved-but-not-applied window (REVIEW-FOUND:
+        gating on `desired` treated an unauthenticated remote client as trusted the moment the
+        operator SAVED a cert policy, before Apply enforced it)."""
+        from . import webserver as _ws
+        try:
+            return str((_ws.read_applied(self._paths).get("console") or {})
+                       .get("access_mode") or "")
+        except (OSError, PathContainmentError):
+            return ""
+
     def webserver_cert_export_bytes(self, label) -> bytes | None:
         """Raw `.p12` bytes for a label (or None). The WEB route must gate this on a
         loopback-origin session; the CLI locates the file directly."""

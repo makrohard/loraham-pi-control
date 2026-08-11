@@ -282,7 +282,9 @@ Two imports are needed on the remote machine, and LHPC automates neither:
 The console writes the fetch for you: **Webserver → Certificates** shows paste-ready `scp`
 commands for the server CA (below the PKI forms) and for each issued `.p12` (below *Issue
 client cert*), addressed at the host your session reached the console on — `10.42.0.1` when
-you are on the box's AP.
+you are on the box's AP. Shown only to a **trusted session**: loopback, or a remote session
+whose *applied* policy already requires a client certificate — under no-auth remote exposure
+the commands (username, paths, cert labels) are withheld.
 
 Sanity-check the CA before you copy it — it is a PEM certificate of a few hundred bytes:
 

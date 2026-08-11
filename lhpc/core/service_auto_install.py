@@ -1627,7 +1627,7 @@ class AutoInstallOpsMixin:
         started = False
         stop_failed = ""
         try:
-            rs = self.start("daemon", apply=True, auto_install_ctx=ctx)
+            rs = self.start("daemon", apply=True, auto_install_ctx=ctx, _operator=False)
             emit(rs.summary)
             if not rs.ok:
                 fail_tx(f"temporary daemon start failed: {rs.summary}", ran=False)

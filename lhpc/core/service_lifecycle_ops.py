@@ -556,7 +556,7 @@ class LifecycleOpsMixin:
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
               file_overrides: dict | None = None, auto_install_ctx=None, *,
-              _before_start_locked=None) -> ActionResult:
+              _before_start_locked=None, _operator: bool = True) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
@@ -630,13 +630,20 @@ class LifecycleOpsMixin:
                                                 stop_owners=stop_owners, band=band,
                                                 daemon_overrides=daemon_overrides,
                                                 file_overrides=file_overrides)
-                        # A SUCCESSFUL applied stack start supersedes any standing stop
-                        # intent — the operator wants it running again, so boot-restore may
-                        # restore it. REVIEW-FOUND: clearing on a REFUSED start deleted the
-                        # tombstone while the stack stayed down, reintroducing the
-                        # resurrect-after-reboot bug. Component-scoped starts deliberately do
-                        # not clear (they also never produce stack-scoped restore evidence).
-                        if _res.ok and self.stack(target) is not None:
+                        # An OPERATOR stack start that actually brought something up
+                        # supersedes any standing stop intent. Three review-found refinements:
+                        # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
+                        # (e.g. manual_required on an interactive component, ok=False but
+                        # components launched) MUST clear — the stack is running, a stale
+                        # tombstone would skip-and-prune it at the next boot; and an INTERNAL
+                        # start (auto-install's daemon ensure, _operator=False) must not
+                        # clear an operator's tombstone its paired internal stop never rewrites.
+                        if (_operator and self.stack(target) is not None
+                                and (_res.ok
+                                     or any(r.action == "start" and r.outcome in
+                                            (Outcome.STARTED, Outcome.VERIFIED,
+                                             Outcome.ALREADY_HEALTHY)
+                                            for r in (_res.results or ())))):
                             self._clear_stop_intent(target)
                         return _res
                 except SourceTxnBlocked as blocked:
@@ -1953,7 +1960,7 @@ class LifecycleOpsMixin:
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
-                                      release_daemon=release_daemon)
+                                      release_daemon=release_daemon, _operator=_operator)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
                 # `_operator` is False on every internal route (cascade dependents, the daemon
                 # band release, owner stops for a start, restart's stop leg, uninstall/clean,
@@ -1964,9 +1971,13 @@ class LifecycleOpsMixin:
                 # UNVERIFIED — the key case) or there was nothing to stop; a REFUSED stop that
                 # left the stack running writes nothing, so a still-running stack is never
                 # silently dropped from restore.
+                # The UNVERIFIED escape hatch counts ONLY the target stack's OWN components
+                # (REVIEW-FOUND: a dependent's UNVERIFIED row satisfied it while the daemon's
+                # own stop was BLOCKED and the daemon kept running — tombstoning a live stack).
                 if (_operator and not band and self.stack(target) is not None
                         and (res.ok
                              or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
+                                    and (self.stack_of(r.component) or r.stack) == target
                                     for r in (res.results or ())))):
                     self._write_stop_intent([target])
                 return res
@@ -1975,7 +1986,8 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
 
     def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
-                   band: str = "", release_daemon: bool = True) -> ActionResult:
+                   band: str = "", release_daemon: bool = True,
+                   _operator: bool = False) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -2053,7 +2065,12 @@ class LifecycleOpsMixin:
                 for dep in dependents:
                     # release_daemon=False: the OUTER daemon stop owns teardown — a dependent must
                     # not recursively stop the daemon (it just clears its own marker on cessation).
-                    dep_res = self.stop(dep, apply=True, release_daemon=False, _operator=False)
+                    # REVIEW-FOUND: a dependent stopped by an OPERATOR cascade (stop daemon) was the
+                    # operator's word too — dropping its tombstone reintroduced resurrect-after-
+                    # reboot for exactly the unverified-dependent case. Internal cascades
+                    # (restart, uninstall, auto-install) still pass False from the outer stop.
+                    dep_res = self.stop(dep, apply=True, release_daemon=False,
+                                        _operator=_operator)
                     results.append(CompResult(component=dep, stack=dep, action="stop",
                         outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
                         summary=dep_res.summary))
