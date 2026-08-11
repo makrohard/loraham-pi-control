@@ -865,6 +865,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "has_source": has_source,
                 "buildable": buildable,
                 "removable": removable,
+                "fetched_ver": (service.fetched_version_state(stack.id) if buildable else {}),
                 "deps": own + cross,
                 "state": rollup[stack.id],
                 "running": rollup[stack.id] in _RUNNING,

@@ -2509,3 +2509,40 @@ def test_fixture_params_never_render_as_plain_start_inputs(tmp_path):
     assert svc.fixture_run_param_names("meshcom") == {"rate", "loop"}
     direct = svc.stack_start_param_groups("meshcom-gps-relay")
     assert {r["name"] for g in direct for r in g["rows"]} == {"rate", "loop"}
+
+
+def test_fetched_stack_shows_its_version_and_an_update_when_the_pin_moves(tmp_path):
+    """A fetched (.deb) stack has no git head, so its row showed no version at all. The build
+    marker carries it: the on-disk marker is the INSTALLED version, the manifest's marker the
+    PINNED one — mismatch shows 'update → <new pin>' and an Update button (the build op, which
+    re-fetches). LIVE-REQUESTED on the graywolf row."""
+    from lhpc.core.services import ControllerService as _CS
+
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    comp = svc.stack("graywolf").main_component
+    marker_dir = tmp_path / "/".join(comp.build_marker.split("/")[:-1])
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    pinned = comp.build_marker.rsplit("/", 1)[-1][len(".lhpc-built-"):]
+
+    # Nothing installed yet -> no version, no update flag.
+    assert svc.fetched_version_state("graywolf") == {"installed": "", "pinned": pinned,
+                                                     "update": False}
+    # Installed at the pin -> version shown, no update.
+    (marker_dir / f".lhpc-built-{pinned}").write_text("")
+    st = svc.fetched_version_state("graywolf")
+    assert st == {"installed": pinned, "pinned": pinned, "update": False}
+    # The pin moves on (an older install stays on disk) -> update, NAMING the new pin.
+    (marker_dir / f".lhpc-built-{pinned}").unlink()
+    (marker_dir / ".lhpc-built-0.0.1").write_text("")
+    st = svc.fetched_version_state("graywolf")
+    assert st == {"installed": "0.0.1", "pinned": pinned, "update": True}
+
+    # And the row renders it: version pill + yellow update pill naming the pin + Update button.
+    c = create_app(lambda: svc).test_client()
+    body = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "deb 0.0.1" in body
+    assert f"update → {pinned}" in body
+    i = body.index('id="stackrow-graywolf"')
+    row = body[i:]
+    assert ">Update<" in row, "the Package line must offer Update on a pin mismatch"

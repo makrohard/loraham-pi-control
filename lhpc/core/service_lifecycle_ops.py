@@ -3253,6 +3253,37 @@ class LifecycleOpsMixin:
             params.extend(c.run_params)
         return params
 
+    def fetched_version_state(self, target: str) -> dict:
+        """{"installed", "pinned", "update"} for a source-less FETCHED main component (else {}).
+
+        The version travels in the build marker name (`.lhpc-built-<version>`): the manifest's
+        marker is the PINNED version, the marker actually on disk is the INSTALLED one — a
+        fetched stack has no git head to compare, and its row showed no version at all. When
+        the pin moves (an LHPC update), the two differ and the console can say so, naming the
+        NEW version; Build/Update then re-fetches (the fetch script replaces the whole tree,
+        old marker included).
+        """
+        s = self.stack(target)
+        main = s.main_component if s else None
+        if main is None or main.source or not main.build_marker:
+            return {}
+        prefix = ".lhpc-built-"
+        marker_name = main.build_marker.rsplit("/", 1)[-1]
+        if not marker_name.startswith(prefix):
+            return {}
+        pinned = marker_name[len(prefix):]
+        installed = ""
+        try:
+            d = self._paths.under(*main.build_marker.split("/")[:-1])
+            if d.is_dir():
+                for pth in sorted(d.glob(prefix + "*")):
+                    installed = pth.name[len(prefix):]
+                    break
+        except (OSError, PathContainmentError):
+            pass
+        return {"installed": installed, "pinned": pinned,
+                "update": bool(installed and installed != pinned)}
+
     def fetched_artifacts_present(self, target: str) -> bool:
         """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary
         (source-less) stack — the `build_root` workspace or the artifact itself?
