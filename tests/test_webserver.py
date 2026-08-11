@@ -2383,10 +2383,12 @@ def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch):
     assert "No stored" in tpl and "reissue" in tpl
 
 
-def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
-    """ROUND-3 REVIEW: the headline security gate had no test. A remote viewer sees the fetch
-    commands ONLY when the APPLIED policy already enforces client certs — never in the
-    saved-but-not-applied window, and never when the applied policy is unknown."""
+def test_fetch_commands_render_in_every_serving_mode(tmp_path, monkeypatch):
+    """The fetch copyboxes are operator conveniences (SSH user + paths for a box the operator
+    already owns), NOT secret material — the scp still needs the operator's own SSH credentials
+    to run. So they render in every serving mode, remote or loopback, regardless of the applied
+    access policy. The one gate that stays is the .p12 box's active-cert requirement (a revoked
+    or absent cert is never offered), covered by test_ws_fetch_commands_* above."""
     from lhpc.adapters.web.app import create_app
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
@@ -2398,16 +2400,14 @@ def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     applied = {"mode": ""}
 
-    # Patch the ONE source the gate must derive from — the real monitor then computes
-    # `applied_access_mode` from it, so the whole real path is under test.
     from lhpc.core import pki as pkimod
     from lhpc.core import webserver as wsmod
     monkeypatch.setattr(wsmod, "read_applied", lambda paths: (
         {"console": {"access_mode": applied["mode"], "port": 8443,
                      "bind": "127.0.0.1", "scheme": "https", "allowed_cidrs": [],
                      "public": False}, "proxies": []} if applied["mode"] else {}))
-    # handy has a real stored export; give it a matching ACTIVE cert so the .p12 gate
-    # (active-labels) admits it — the point under test here is the applied-policy gate.
+    # handy has a real stored export; give it a matching ACTIVE cert so the .p12 box's
+    # active-labels gate admits it.
     monkeypatch.setattr(pkimod, "list_client_certs",
                         lambda paths: [{"label": "handy", "state": "active",
                                         "serial": "ab", "not_after": "2099-01-01T00:00:00+00:00"}])
@@ -2419,19 +2419,13 @@ def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
         hdrs = {"X-LHPC-Peer": "remote"} if remote else {}
         return c.get("/stacks", headers=hdrs).get_data(as_text=True)
 
-    # (probe: the per-cert .p12 box — the CA box is additionally gated on a PKI being
-    # present, which this bare runtime does not have)
-    # Remote + applied UNKNOWN (the saved-but-not-applied window; desired IS auth): withheld.
-    assert "ws-fetch-p12-handy" not in page(remote=True)
-    # Remote + applied open: withheld.
-    applied["mode"] = "no-auth"
-    assert "ws-fetch-p12-handy" not in page(remote=True)
-    # Remote + applied cert-enforcing: shown (nginx already authenticated this viewer).
-    applied["mode"] = "local-open-remote-auth"
-    assert "ws-fetch-p12-handy" in page(remote=True)
-    # Loopback: always shown, whatever is applied.
-    applied["mode"] = ""
-    assert "ws-fetch-p12-handy" in page(remote=False)
+    # The per-cert .p12 box shows for a remote viewer in EVERY applied policy — including the
+    # saved-but-not-applied window (mode unknown) and a plain no-auth box (the common field
+    # setup case: the operator needs these commands precisely to bootstrap cert auth).
+    for mode in ("", "no-auth", "local-open-remote-auth", "auth-everywhere"):
+        applied["mode"] = mode
+        assert "ws-fetch-p12-handy" in page(remote=True), f"remote/{mode or 'unknown'}"
+        assert "ws-fetch-p12-handy" in page(remote=False), f"loopback/{mode or 'unknown'}"
 
 
 def test_server_ca_download_is_public_and_keyless(tmp_path):

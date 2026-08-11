@@ -956,19 +956,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # fallback when the box cannot name its address (e.g. a browser reaching it by
             # hostname would otherwise put that hostname into an scp command that only works
             # where the name resolves). Linux-PC-host assumption by design; the .p12 command
-            # is the sanctioned REMOTE path (the browser download stays loopback-only).
-            # REVIEW-FOUND gate: rendered only to a TRUSTED session — loopback, or a config
-            # whose APPLIED remote policy requires a client certificate.
-            "ws_fetch": (_ws_fetch_commands(str((_ws or {}).get("local_ip") or "")
-                                            or _url_host(request.host or ""), _runtime_root(),
-                                            active_labels=[c.get("label", "") for c in
-                                                           ((_ws or {}).get("pki", {})
-                                                            .get("clients", []))
-                                                           if c.get("state") == "active"])
-                         if (peer_is_loopback()
-                             or ((_ws or {}).get("applied_access_mode")
-                                 or service.webserver_applied_access_mode())
-                             in ("local-open-remote-auth", "auth-everywhere")) else {}),
+            # is the sanctioned REMOTE path (the browser download stays loopback-only). These
+            # are operator conveniences (SSH user + paths for a box the operator already owns),
+            # not secret material, so they render in every serving mode — the scp still needs
+            # the operator's own SSH credentials to run, and only ACTIVE certs are listed.
+            "ws_fetch": _ws_fetch_commands(str((_ws or {}).get("local_ip") or "")
+                                           or _url_host(request.host or ""), _runtime_root(),
+                                           active_labels=[c.get("label", "") for c in
+                                                          ((_ws or {}).get("pki", {})
+                                                           .get("clients", []))
+                                                          if c.get("state") == "active"]),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
             "tasks": service.running_tasks(),
             "restored_open": restored_open,

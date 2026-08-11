@@ -58,7 +58,7 @@ manifest pins. meshcom firmware isn't bit-reproducible (new sha each build — e
 SHA-pinned and the container digest-pinned. Builder internals: [lhpc-binaries README](https://github.com/makrohard/lhpc-binaries#updating-a-binary).
 
 ## Per-release
-- [ ] Version bump (`pyproject.toml` **and** `lhpc/version.py`, now `0.1.13`) + `CHANGELOG.md` + tag
+- [ ] Version bump (`pyproject.toml` **and** `lhpc/version.py`, now `0.1.14`) + `CHANGELOG.md` + tag
 - [ ] Refresh known-working pins to the run-proven set
 - [ ] **From-zero acceptance** on fresh hardware — `bootstrap-deps → install.sh → auto-install` on a
       freshly flashed Pi Zero 2W (~4 h) and Pi 5 (~44 min). This is the real net for the install path
