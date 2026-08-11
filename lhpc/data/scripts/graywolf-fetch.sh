@@ -7,19 +7,24 @@
 # ordinary user, so the binaries can live in the runtime root like every other managed
 # artifact — no root, no system package, no vendored rebuild.
 #
-#   usage: graywolf-fetch.sh <dest-dir> <version>
+#   usage: graywolf-fetch.sh <dest-dir> <version> [--from-upstream]
 #
 # The dest dir ends up containing the package's own layout, so the binaries are at
 # <dest-dir>/usr/bin/{graywolf,graywolf-modem}.
 #
-# Fail-closed by construction: the version must be known to the checksum table below, the
-# architecture must be one upstream publishes, and the download must match the recorded
-# sha256 before anything is unpacked. A new version means a new table entry — that is the
-# point, because it makes the pin reviewable in the diff.
+# Two sha256 sources, both verified before anything is unpacked:
+#   default        the version is in the checksum table below — the reproducible pin the image
+#                  build and every auto-install use, so shipped installs are a known hash.
+#   --from-upstream  the hash comes from that release's OWN `checksums.txt` (same GitHub
+#                  release, same HTTPS origin) — how a one-click "update to a newer graywolf"
+#                  verifies a version not yet in the table. Same integrity against the network
+#                  as apt/pip trusting a registry's published hashes.
 set -euo pipefail
 
-DEST="${1:?usage: graywolf-fetch.sh <dest-dir> <version>}"
-VERSION="${2:?usage: graywolf-fetch.sh <dest-dir> <version>}"
+DEST="${1:?usage: graywolf-fetch.sh <dest-dir> <version> [--from-upstream]}"
+VERSION="${2:?usage: graywolf-fetch.sh <dest-dir> <version> [--from-upstream]}"
+FROM_UPSTREAM=""
+[ "${3:-}" = "--from-upstream" ] && FROM_UPSTREAM=1
 
 BASE_URL="https://github.com/chrissnell/graywolf/releases/download"
 
@@ -41,11 +46,23 @@ command -v curl     >/dev/null || die "curl not found"
 command -v sha256sum >/dev/null || die "sha256sum not found"
 
 ARCH="$(dpkg --print-architecture)"
-EXPECTED="$(sums "${VERSION}/${ARCH}" || true)"
-[ -n "$EXPECTED" ] || die "no recorded sha256 for graywolf ${VERSION} on ${ARCH} — add it to this script's table (upstream publishes arm64/armhf/amd64)"
-
 DEB="graywolf_${VERSION}_${ARCH}.deb"
 URL="${BASE_URL}/v${VERSION}/${DEB}"
+
+EXPECTED="$(sums "${VERSION}/${ARCH}" || true)"
+if [ -z "$EXPECTED" ] && [ -n "$FROM_UPSTREAM" ]; then
+    # Operator-opted upstream install: derive the sha256 from the release's own checksums.txt
+    # (same release, same HTTPS origin as the .deb). A line is "<sha256>  <filename>"; match
+    # the exact .deb name so a rename or a partial file cannot smuggle a different hash in.
+    CK_URL="${BASE_URL}/v${VERSION}/checksums.txt"
+    echo "[graywolf-fetch] upstream mode: reading ${CK_URL}"
+    CK="$(curl -fsSL --retry 3 --retry-delay 2 "$CK_URL" || true)"
+    [ -n "$CK" ] || die "could not fetch upstream checksums.txt for graywolf ${VERSION}"
+    EXPECTED="$(printf '%s\n' "$CK" | awk -v f="$DEB" '$2==f || $2=="*"f || $2=="./"f {print $1; exit}')"
+    [ -n "$EXPECTED" ] || die "upstream checksums.txt has no entry for ${DEB}"
+    echo "[graywolf-fetch] upstream sha256 for ${DEB}: ${EXPECTED}"
+fi
+[ -n "$EXPECTED" ] || die "no recorded sha256 for graywolf ${VERSION} on ${ARCH} — add it to this script's table (upstream publishes arm64/armhf/amd64), or pass --from-upstream to trust the release's own checksums.txt"
 DEST="${DEST%/}"
 STAMP="${DEST}/.lhpc-graywolf-version"
 

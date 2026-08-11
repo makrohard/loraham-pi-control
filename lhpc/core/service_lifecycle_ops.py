@@ -3272,20 +3272,167 @@ class LifecycleOpsMixin:
         if not marker_name.startswith(prefix):
             return {}
         pinned = marker_name[len(prefix):]
+        build_dir = main.build_marker.split("/")[:-1]
+        # INSTALLED = the version the fetch script recorded IN the tree (`.lhpc-graywolf-
+        # version`, "<version> <arch>") — the true version, which an upstream update moves
+        # while the manifest marker name stays the pinned baseline. Fall back to the marker
+        # glob for a tree fetched before that file existed.
         installed = ""
         try:
-            d = self._paths.under(*main.build_marker.split("/")[:-1])
-            if d.is_dir():
-                for pth in sorted(d.glob(prefix + "*")):
-                    installed = pth.name[len(prefix):]
-                    break
-        except (OSError, PathContainmentError):
-            pass
+            from . import runtime_fs
+            stamp = self._paths.under(*build_dir, ".lhpc-graywolf-version")
+            installed = (runtime_fs.read_text_regular(self._paths, stamp, max_bytes=128)
+                         or "").split()[0] if stamp.exists() else ""
+        except (OSError, ValueError, IndexError, PathContainmentError):
+            installed = ""
+        if not installed:
+            try:
+                d = self._paths.under(*build_dir)
+                if d.is_dir():
+                    for pth in sorted(d.glob(prefix + "*")):
+                        installed = pth.name[len(prefix):]
+                        break
+            except (OSError, PathContainmentError):
+                pass
         # KEY is `has_update`, never `update`: Jinja `dict.update` resolves to the built-in
         # METHOD (always truthy), so a template `.update` would show the pill unconditionally
         # (LIVE-FOUND). `installed`/`pinned` do not collide with any dict attribute.
+        # FORWARD-only: only a pin AHEAD of installed is an update — an operator who ran the
+        # upstream update sits ahead of the pin and must NOT be shown a downgrade prompt.
         return {"installed": installed, "pinned": pinned,
-                "has_update": bool(installed and installed != pinned)}
+                "has_update": bool(installed and self._ver_tuple(pinned)
+                                   > self._ver_tuple(installed))}
+
+    @staticmethod
+    def _ver_tuple(v: str):
+        """A version string as an int tuple for ordering ('0.15.0' -> (0,15,0)); non-numeric
+        parts sort as -1 so a clean release always beats a pre-release suffix."""
+        out = []
+        for part in str(v).strip().lstrip("v").split("."):
+            num = "".join(ch for ch in part if ch.isdigit())
+            out.append(int(num) if num else -1)
+        return tuple(out)
+
+    def _upstream_cache_path(self, stack_id: str):
+        from . import validators
+        safe = validators.path_component(stack_id, field="upstream cache stack")
+        return self._paths.under("state", f"{safe}-upstream.json")
+
+    def graywolf_upstream_state(self, target: str) -> dict:
+        """Cached upstream-release state for a fetched package that declares `release_repo`:
+        {latest, installed, ahead, checked_at, error} — or {} when there is no upstream to
+        track. NETWORK-FREE (reads the cache the explicit check wrote); the row can render it
+        on every GET without a probe."""
+        import json as _json
+        s = self.stack(target)
+        main = s.main_component if s else None
+        if main is None or not getattr(main, "release_repo", ""):
+            return {}
+        installed = (self.fetched_version_state(target) or {}).get("installed", "")
+        cached = {}
+        try:
+            from . import runtime_fs
+            cached = _json.loads(runtime_fs.read_text_regular(
+                self._paths, self._upstream_cache_path(target), max_bytes=4096) or "{}")
+        except (OSError, ValueError, PathContainmentError):
+            cached = {}
+        latest = str(cached.get("latest") or "")
+        return {"latest": latest, "installed": installed,
+                "ahead": bool(latest and installed
+                              and self._ver_tuple(latest) > self._ver_tuple(installed)),
+                "checked_at": cached.get("checked_at"), "error": cached.get("error", "")}
+
+    def graywolf_upstream_check(self, target: str) -> ActionResult:
+        """NETWORK (explicit POST): query the GitHub releases API for the latest tag of the
+        fetched package's `release_repo` and cache it. Never reached from a GET route."""
+        import json as _json
+        import time as _time
+        s = self.stack(target)
+        main = s.main_component if s else None
+        repo = getattr(main, "release_repo", "") if main else ""
+        if not repo:
+            return ActionResult(False, f"'{target}' has no upstream release repo to check")
+
+        def _write(latest: str, error: str):
+            from . import runtime_fs
+            try:
+                runtime_fs.atomic_write(self._paths, self._upstream_cache_path(target),
+                                        _json.dumps({"latest": latest, "error": error,
+                                                     "checked_at": int(_time.time())}) + "\n",
+                                        0o644)
+            except (OSError, PathContainmentError):
+                pass
+
+        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        r = self._system.runner.run(
+            ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
+             url], 15.0)
+        if getattr(r, "returncode", 1) != 0:
+            _write("", "could not reach the GitHub releases API")
+            return ActionResult(False, f"upstream check failed for '{target}': network/API error",
+                                next_commands=[f"lhpc status {target}"])
+        try:
+            tag = str(_json.loads(r.stdout or "{}").get("tag_name") or "").strip().lstrip("v")
+        except ValueError:
+            tag = ""
+        if not tag:
+            _write("", "no tag_name in the API response (rate-limited?)")
+            return ActionResult(False, f"upstream check for '{target}': no release tag found "
+                                       "(GitHub may be rate-limiting unauthenticated requests)")
+        _write(tag, "")
+        st = self.graywolf_upstream_state(target)
+        msg = (f"upstream latest is {tag}; installed {st['installed']}"
+               + (" — update available" if st["ahead"] else " — up to date"))
+        return ActionResult(True, msg, next_commands=[f"lhpc status {target}"])
+
+    def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
+        """One-click update to the latest upstream release, verified against that release's own
+        checksums.txt (see graywolf-fetch.sh --from-upstream). Fetches, re-marks built, and
+        restarts the stack if it was running. Refuses when not actually behind upstream."""
+        from .assets import asset_path
+        from .lifecycle import BUILD_MARKER_TEXT
+        st = self.graywolf_upstream_state(target)
+        if not st:
+            return ActionResult(False, f"'{target}' is not an upstream-tracking package")
+        if not st.get("latest"):
+            return ActionResult(False, "run the upstream check first",
+                                next_commands=[f"lhpc status {target}"])
+        if not st.get("ahead"):
+            return ActionResult(True, f"'{target}' is already at the latest upstream "
+                                      f"release ({st['installed']}).")
+        version = st["latest"]
+        s = self.stack(target)
+        main = s.main_component
+        if not apply:
+            return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
+                                      "(verified against its checksums.txt) and restart.",
+                                next_commands=[f"lhpc update {target} --upstream --yes"])
+        was_running = self.stack_running(target)
+        dest = str(self._paths.under("build", "tools", "graywolf"))
+        script = str(asset_path("scripts/graywolf-fetch.sh"))
+        r = self._system.runner.run(["bash", script, dest, version, "--from-upstream"],
+                                    getattr(main, "build_timeout", 900.0) or 900.0)
+        if getattr(r, "returncode", 1) != 0:
+            return ActionResult(False, f"upstream fetch failed for '{target}' ({version}) — "
+                                       "the install was left unchanged",
+                                details=[(r.stderr or "").strip()[-300:]],
+                                next_commands=[f"lhpc status {target}"])
+        # Re-mark built: the fetch swapped the whole tree (marker included), so re-write the
+        # manifest build marker (graywolf has no build_requires, so its content is the static
+        # text) — otherwise the start gate would read "not built" for the freshly fetched tree.
+        try:
+            from . import runtime_fs
+            marker = self._lifecycle().source_dir(main) / main.build_marker
+            runtime_fs.atomic_write(self._paths, marker,
+                                    BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
+        notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
+        if was_running:
+            res = self.restart(target, apply=True)
+            notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
+        return ActionResult(True, f"'{target}' updated to {version}.", details=notes,
+                            next_commands=[f"lhpc status {target}"])
 
     def fetched_artifacts_present(self, target: str) -> bool:
         """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary

@@ -401,6 +401,9 @@ class Component:
     # that has no `source` to be cleaned through (a fetched package). `clean` removes it; without
     # it a "Clean all" would leave the artifact behind.
     build_root: str = ""
+    # GitHub "owner/repo" whose RELEASES this fetched-package component tracks, for the
+    # upstream-version check (and the opt-in upstream install). "" = no upstream check.
+    release_repo: str = ""
     ui_user: str = ""             # the account name to log in with (e.g. "admin")
     ui_password_file: str = ""    # runtime-root-relative path holding the password, one line
     log_paths: tuple[str, ...] = ()

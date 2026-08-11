@@ -526,6 +526,9 @@ def build_parser() -> argparse.ArgumentParser:
                             default="",
                             help="Version to fetch: prebuilt binary / latest dev / latest "
                                  "stable / pinned (default: keep the stack's current channel)")
+            sp.add_argument("--upstream", action="store_true",
+                            help="For a fetched package (graywolf): update to the latest "
+                                 "upstream release, verified against its own checksums.txt")
 
     p_clean = sub.add_parser("clean", help="DESTRUCTIVE: purge a stack (sources, config, "
                              "logs, history)")
@@ -1057,6 +1060,9 @@ def _run(argv: list[str] | None = None) -> int:
             return 0
         return _render_daemon(svc.daemon_view(args.band))
     if args.command == "update":
+        if getattr(args, "upstream", False):
+            return _apply_flow(lambda a: svc.graywolf_upstream_update(args.target, apply=a),
+                               yes=args.yes)
         # An unspecified selector KEEPS the stack on its current channel: a binary-installed
         # stack updates binary→binary, everything else keeps the historical "dev" default.
         _usrc = args.source or ("binary" if (args.target

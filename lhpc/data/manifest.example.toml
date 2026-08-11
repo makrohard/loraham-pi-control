@@ -952,6 +952,10 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # The tree the build OWNS. There is no `source` for `clean` to remove here, so name the
   # artifact directory explicitly or "Clean all" would leave the graywolf binaries behind.
   build_root = "build/tools/graywolf"
+  # Upstream releases to check against the installed version. "Check upstream" (a network POST)
+  # compares the latest tag here to the fetched version; an operator can then opt in to installing
+  # it, verified against that release's own checksums.txt (see graywolf-fetch.sh --from-upstream).
+  release_repo = "chrissnell/graywolf"
   build_timeout = 900.0
   # graywolf generates its own web-UI password on first start; the provisioning step stores it
   # under state/. The console shows the operator WHERE it is and the command to read it — never

@@ -83,7 +83,7 @@
         </div>
       {% endif %}
 
-      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update) }}
+      {{ stack_actions(g.stack.id, g.installed, g.has_source, g.buildable, g.removable, g.fetched_ver and g.fetched_ver.has_update, g.upstream) }}
 
       {# MeshCom HMAC password (only for stacks that carry the bridge password param). #}
       {% if g.hmac_enabled is not none %}

@@ -874,6 +874,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "buildable": buildable,
                 "removable": removable,
                 "fetched_ver": (service.fetched_version_state(stack.id) if buildable else {}),
+                "upstream": (service.graywolf_upstream_state(stack.id) if buildable else {}),
                 "deps": own + cross,
                 "state": rollup[stack.id],
                 "running": rollup[stack.id] in _RUNNING,
@@ -1044,6 +1045,34 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         res = service.source_check(target)         # NETWORK (explicit): git ls-remote, refresh cache
         flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
         return _install_back(sid)                  # land on the stack's Install section
+
+    @app.post("/graywolf/upstream-check/<target>")
+    def graywolf_upstream_check(target: str):
+        # Fetched-package upstream check (GitHub releases API) — like source-check: non-mutating,
+        # network, POST-only, its own route (never a GET, never the lifecycle dispatch).
+        if not _csrf_ok():
+            abort(400)
+        sid = service.stack_of(target)
+        if sid is None or not (service.graywolf_upstream_state(sid)):
+            abort(404)
+        res = service.graywolf_upstream_check(sid)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return _install_back(sid)
+
+    @app.post("/graywolf/upstream-update/<target>")
+    def graywolf_upstream_update(target: str):
+        # One-click update to the latest upstream release (checksums.txt verified). MUTATING,
+        # so CSRF-protected; a normal POST applies (no separate confirm — the operator clicked
+        # the Update button that only appears when upstream is genuinely ahead).
+        if not _csrf_ok():
+            abort(400)
+        sid = service.stack_of(target)
+        if sid is None or not (service.graywolf_upstream_state(sid)):
+            abort(404)
+        res = service.graywolf_upstream_update(sid, apply=True)
+        flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
+              "ok" if res.ok else "warn")
+        return _install_back(sid)
 
     @app.route("/self-update/apply", methods=["GET", "POST"])
     def self_update_apply():
