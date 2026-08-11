@@ -448,7 +448,7 @@ def test_daemon_stop_blocked_by_failed_dependent(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
     orig = ControllerService.stop
-    def fake(self, target, apply=False, cascade=False, band="", release_daemon=True):
+    def fake(self, target, apply=False, cascade=False, band="", release_daemon=True, **kw):
         if target == "kiss":
             return ActionResult(False, "kiss stop NOT verified")
         return orig(self, target, apply=apply, cascade=cascade, band=band)
@@ -489,7 +489,7 @@ def test_daemon_release_failure_makes_client_stop_nonsuccess(tmp_path, monkeypat
         unix_replies={"/tmp/loraconf433.sock": _RDY6}).system, paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "433")
     orig = ControllerService.stop
-    def fake(self, target, apply=False, cascade=False, band="", release_daemon=True):
+    def fake(self, target, apply=False, cascade=False, band="", release_daemon=True, **kw):
         if target == "daemon":
             return ActionResult(False, "daemon release NOT verified")
         return orig(self, target, apply=apply, cascade=cascade, band=band)
@@ -653,9 +653,10 @@ def test_whole_daemon_stop_locks_process_served_band_socket_down(tmp_path):
 def _spy_stop(monkeypatch):
     calls = []
     orig = ControllerService.stop
-    def spy(self, target, apply=False, cascade=False, band="", release_daemon=True):
+    def spy(self, target, apply=False, cascade=False, band="", release_daemon=True, **kw):
         calls.append((target, band, release_daemon))
-        return orig(self, target, apply=apply, cascade=cascade, band=band, release_daemon=release_daemon)
+        return orig(self, target, apply=apply, cascade=cascade, band=band,
+                    release_daemon=release_daemon, **kw)
     monkeypatch.setattr(ControllerService, "stop", spy)
     return calls
 
