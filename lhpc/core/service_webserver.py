@@ -1043,6 +1043,16 @@ class WebserverOpsMixin:
         except (OSError, PathContainmentError):
             return ""
 
+    def webserver_server_ca_bytes(self) -> bytes | None:
+        """The server TLS CA certificate, or None. PUBLIC material (no key) — the browser
+        download that phones can actually use; the scp copybox stays for PCs."""
+        from . import runtime_fs
+        try:
+            return runtime_fs.read_bytes(
+                self._paths, self._paths.under("config", "tls", "server-ca", "ca.crt"))
+        except (OSError, PathContainmentError):
+            return None
+
     def webserver_cert_export_bytes(self, label) -> bytes | None:
         """Raw `.p12` bytes for a label (or None). The WEB route must gate this on a
         loopback-origin session; the CLI locates the file directly."""

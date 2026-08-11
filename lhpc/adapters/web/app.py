@@ -1954,6 +1954,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             flash("unknown certificate action", "err")
         return _ws_back()
 
+    @app.route("/webserver/ca.crt")
+    def webserver_ca_download():
+        # The server CA CERTIFICATE is public material (no key), so no loopback gate — the
+        # risk profile is trust-on-first-use, same as the scp path. This is also the import
+        # path a phone can use. The .p12 below stays loopback-only: that one holds a key.
+        blob = service.webserver_server_ca_bytes()
+        if not blob:
+            abort(404)
+        from flask import Response
+        return Response(blob, mimetype="application/x-x509-ca-cert",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="lhpc-server-ca.crt"'})
+
     @app.route("/webserver/cert/<label>/download")
     def webserver_cert_download(label):
         # LOOPBACK-ONLY: a remotely-authenticated browser must never pull a new private key.

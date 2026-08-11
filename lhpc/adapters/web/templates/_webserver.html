@@ -142,6 +142,11 @@
           certificate:</p>
         {{ cmdbox('ws-fetch-ca', ws_fetch.ca) }}
       {% endif %}
+      {% if mon.pki.server_ca.present %}
+        {# Public material, so a plain download is safe — and it is the path a PHONE can use. #}
+        <p class="muted"><a href="{{ url_for('webserver_ca_download') }}" download>Download
+          ca.crt</a> — for browsers and phones (public certificate, contains no key).</p>
+      {% endif %}
       <form method="post" action="{{ url_for('webserver_cert') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="op" value="issue">

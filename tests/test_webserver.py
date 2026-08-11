@@ -2421,3 +2421,29 @@ def test_fetch_commands_gate_on_the_applied_policy(tmp_path, monkeypatch):
     # Loopback: always shown, whatever is applied.
     applied["mode"] = ""
     assert "ws-fetch-p12-handy" in page(remote=False)
+
+
+def test_server_ca_download_is_public_and_keyless(tmp_path):
+    """The CA certificate download: public material, so no loopback gate (unlike the .p12,
+    which holds a private key and stays loopback-only); 404 when no PKI exists; the served
+    bytes are exactly the PEM on disk and carry a download disposition."""
+    from lhpc.adapters.web.app import create_app
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    c = create_app(lambda: svc).test_client()
+
+    assert c.get("/webserver/ca.crt").status_code == 404          # no PKI yet
+
+    d = tmp_path / "config" / "tls" / "server-ca"
+    d.mkdir(parents=True)
+    pem = b"-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+    (d / "ca.crt").write_bytes(pem)
+
+    # A REMOTE session may download it too — it is a public certificate, no key inside.
+    r = c.get("/webserver/ca.crt", headers={"X-LHPC-Peer": "remote"})
+    assert r.status_code == 200 and r.data == pem
+    assert 'filename="lhpc-server-ca.crt"' in r.headers["Content-Disposition"]
