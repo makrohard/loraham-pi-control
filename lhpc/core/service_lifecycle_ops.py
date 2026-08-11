@@ -630,11 +630,13 @@ class LifecycleOpsMixin:
                                                 stop_owners=stop_owners, band=band,
                                                 daemon_overrides=daemon_overrides,
                                                 file_overrides=file_overrides)
-                        # An applied STACK start supersedes any standing stop intent — the
-                        # operator wants it running again, so boot-restore may restore it.
-                        # Component-scoped starts deliberately do not clear (they also never
-                        # produce stack-scoped restore evidence).
-                        if self.stack(target) is not None:
+                        # A SUCCESSFUL applied stack start supersedes any standing stop
+                        # intent — the operator wants it running again, so boot-restore may
+                        # restore it. REVIEW-FOUND: clearing on a REFUSED start deleted the
+                        # tombstone while the stack stayed down, reintroducing the
+                        # resurrect-after-reboot bug. Component-scoped starts deliberately do
+                        # not clear (they also never produce stack-scoped restore evidence).
+                        if _res.ok and self.stack(target) is not None:
                             self._clear_stop_intent(target)
                         return _res
                 except SourceTxnBlocked as blocked:
@@ -885,7 +887,7 @@ class LifecycleOpsMixin:
             prelude = []
             unstopped = []
             for o in owners:
-                ores = self.stop(o, apply=True)
+                ores = self.stop(o, apply=True, _operator=False)
                 if ores.ok:
                     prelude.append(f"  [stopped] conflicting stack '{o}'")
                 else:
@@ -1925,7 +1927,8 @@ class LifecycleOpsMixin:
 
     @invalidates_snapshot
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
-             band: str = "", release_daemon: bool = True, auto_install_ctx=None) -> ActionResult:
+             band: str = "", release_daemon: bool = True, auto_install_ctx=None,
+             *, _operator: bool = True) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on
         cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
@@ -1951,16 +1954,21 @@ class LifecycleOpsMixin:
             with self._lifecycle_guard("stop", target, band, cascade=cascade):
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
                                       release_daemon=release_daemon)
-                # Durable OPERATOR INTENT, written for every stack this stop touched (cascade
-                # included) — verified or not. An UNVERIFIED stop retains ownership records,
-                # and after a reboot those read as "was running at shutdown": boot-restore then
-                # resurrected an explicitly stopped stack, forever (each restored run re-seeds
-                # the evidence). The tombstone is cleared by an applied stack start.
-                _stopped = {self.stack_of(r.component) or r.stack for r in (res.results or ())
-                            if r.action == "stop"
-                            and r.outcome in (Outcome.STOPPED, Outcome.UNVERIFIED)}
-                _stopped |= {self.stack_of(target) or target} if res.ok else set()
-                self._write_stop_intent({s for s in _stopped if s and self.stack(s)})
+                # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop.
+                # `_operator` is False on every internal route (cascade dependents, the daemon
+                # band release, owner stops for a start, restart's stop leg, uninstall/clean,
+                # auto-install): REVIEW-FOUND, those tombstoned the shared daemon and whole
+                # stacks the operator never named, and boot-restore then pruned evidence for
+                # things legitimately running at shutdown. Band- and component-scoped stops
+                # never tombstone. Written when the stop stopped something (verified or
+                # UNVERIFIED — the key case) or there was nothing to stop; a REFUSED stop that
+                # left the stack running writes nothing, so a still-running stack is never
+                # silently dropped from restore.
+                if (_operator and not band and self.stack(target) is not None
+                        and (res.ok
+                             or any(r.action == "stop" and r.outcome == Outcome.UNVERIFIED
+                                    for r in (res.results or ())))):
+                    self._write_stop_intent([target])
                 return res
         except reslock.ResourceBusy as busy:
             return ActionResult(False, f"Cannot stop '{target}': {busy}",
@@ -2045,7 +2053,7 @@ class LifecycleOpsMixin:
                 for dep in dependents:
                     # release_daemon=False: the OUTER daemon stop owns teardown — a dependent must
                     # not recursively stop the daemon (it just clears its own marker on cessation).
-                    dep_res = self.stop(dep, apply=True, release_daemon=False)
+                    dep_res = self.stop(dep, apply=True, release_daemon=False, _operator=False)
                     results.append(CompResult(component=dep, stack=dep, action="stop",
                         outcome=Outcome.STOPPED if dep_res.ok else Outcome.UNVERIFIED,
                         summary=dep_res.summary))
@@ -2121,7 +2129,7 @@ class LifecycleOpsMixin:
         if own_ok and not target_is_daemon and release_daemon:
             daemon_sid, release = self._daemon_bands_to_release(_stk, sid, active_bands)
             for b in release:
-                dres = self.stop(daemon_sid, apply=True, band=b)
+                dres = self.stop(daemon_sid, apply=True, band=b, _operator=False)
                 results.append(CompResult(component=self.DAEMON_ID, stack=daemon_sid, action="stop",
                     outcome=Outcome.STOPPED if dres.ok else Outcome.UNVERIFIED,
                     summary=(f"released {daemon_sid} {b} (no other stack needs it)" if dres.ok
@@ -2293,7 +2301,7 @@ class LifecycleOpsMixin:
                                        band or self._config_band(target, band))
             if _bb is not None:
                 return _bb
-        stopped = self.stop(target, apply=True, band=band)
+        stopped = self.stop(target, apply=True, band=band, _operator=False)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
             # the failed-stop typed results as the restart evidence.

@@ -199,11 +199,14 @@ class BootRestoreOpsMixin:
             kept = []
             for ev in evidence:
                 if ev.stack in intents:
+                    # NOT pruned here: like every other skip reason, the CALLER prunes —
+                    # after the admission gates and with the journal in place (REVIEW-FOUND:
+                    # deleting inside classification destroyed evidence even when the run was
+                    # subsequently disabled, outside the journalled prune pattern).
                     skipped.append({"stack": ev.stack,
                                     "reason": "operator stop intent stands — stopped after "
                                               "the recorded launch, not restored",
-                                    "evidence_ids": [ev.launch_id],
-                                    "prune": self._boot_prune_evidence([ev.launch_id])})
+                                    "evidence_ids": [ev.launch_id]})
                 else:
                     kept.append(ev)
             evidence = kept
@@ -336,6 +339,12 @@ class BootRestoreOpsMixin:
                    {e.stack for e in evidence} | set()}
         plan = boot_restore.derive_plan(evidence, metas, markers, self.DAEMON_STACK_ID)
         plan.skipped.extend(skipped)
+        # Prune intent-skipped leftovers HERE — past every gate, journalled like all other
+        # prunes. They are dead prior-boot records of a stack the operator stopped; leaving
+        # them would re-classify (and re-report) them on every boot.
+        for _sk in plan.skipped:
+            if _sk.get("reason", "").startswith("operator stop intent"):
+                _sk["prune"] = self._boot_prune_evidence(_sk.get("evidence_ids", []))
 
         journal = boot_restore.new_journal(boot_id=cur_boot, pid=os.getpid(),
                                            process_start_time=self._own_start_time(),

@@ -1652,7 +1652,7 @@ class AutoInstallOpsMixin:
                 daemon_row["tx"] = {"ran": True, "ok": True, "detail": "passed"}
         finally:
             if started:
-                rstop = self.stop("daemon", apply=True, auto_install_ctx=ctx)
+                rstop = self.stop("daemon", apply=True, auto_install_ctx=ctx, _operator=False)
                 emit(rstop.summary)
                 if not rstop.ok:
                     prior = marker["tx_phase"].get("detail", "")

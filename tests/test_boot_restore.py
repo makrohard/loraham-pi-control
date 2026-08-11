@@ -1392,12 +1392,12 @@ def test_operator_stop_intent_blocks_restore_and_prunes(tmp_path, monkeypatch):
     assert not evidence
     hit = next(s for s in skipped if s["stack"] == "kiss")
     assert "operator stop intent" in hit["reason"]
-    assert hit["prune"]["ok"] is True
-    assert not (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists(), \
-        "the dead leftover must be pruned, or it re-classifies forever"
+    # The CLASSIFIER does not prune — the caller does, past the gates, journalled (the
+    # run-level test asserts the record leaves the disk). The record is still here:
+    assert "prune" not in hit
+    assert (tmp_path / "state" / "owned" / f"{rec['launch_id']}.json").exists()
 
     # Intent cleared (the operator started the stack again) -> same record restores again.
-    _write_record(tmp_path, rec)
     svc._clear_stop_intent("kiss")
     evidence, _sk, _is, _st = svc._classify_boot_evidence("CURBOOT")
     assert [e.stack for e in evidence] == ["kiss"]
@@ -1442,3 +1442,53 @@ def test_boot_restore_run_honors_stop_intent_end_to_end(tmp_path, monkeypatch):
     j = _journal_on_disk(tmp_path)
     assert any("operator stop intent" in s["reason"] for s in j["skipped"])
     assert not list((tmp_path / "state" / "owned").glob("*.json"))
+
+
+def test_stop_intent_scope_is_exactly_the_named_operator_stack_stop(tmp_path, monkeypatch):
+    """REVIEW-FOUND rescoping: only a DIRECT, WHOLE-STACK operator stop tombstones. A
+    component-scoped stop, a band-scoped stop, and every internal route (`_operator=False`:
+    daemon band release, cascades, owner stops, restart's stop leg, uninstall/clean,
+    auto-install) must write nothing — they tombstoned the shared daemon and whole stacks the
+    operator never named, and restore then pruned evidence of things legitimately running."""
+    svc = _svc(tmp_path)
+    intents = tmp_path / "state" / "stop-intent"
+
+    assert svc.stop("loraham-kiss-serial", apply=True).ok       # component target
+    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert svc.stop("kiss", apply=True, band="433").ok          # band-scoped
+    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert svc.stop("kiss", apply=True, _operator=False).ok     # internal route
+    assert not intents.exists() or not list(intents.glob("*.json"))
+    assert svc.stop("kiss", apply=True).ok                      # the real thing
+    assert (intents / "kiss.json").exists()
+
+
+def test_a_refused_start_keeps_the_tombstone(tmp_path, monkeypatch):
+    """REVIEW-FOUND: clearing on a FAILED start deleted the tombstone while the stack stayed
+    down — the resurrect-after-reboot bug came straight back for unverified-stop leftovers."""
+    svc = _svc(tmp_path)
+    assert svc.stop("kiss", apply=True).ok
+    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+    assert intent.exists()
+
+    monkeypatch.setattr(ControllerService, "_start_impl",
+                        lambda self, target, **kw: ActionResult(False, "refused by a gate"))
+    assert svc.start("kiss", apply=True).ok is False
+    assert intent.exists(), "a refused start must not clear operator intent"
+
+    monkeypatch.setattr(ControllerService, "_start_impl",
+                        lambda self, target, **kw: ActionResult(True, "started"))
+    assert svc.start("kiss", apply=True).ok
+    assert not intent.exists(), "a successful start supersedes the intent"
+
+
+def test_clean_purge_removes_the_tombstone(tmp_path):
+    """REVIEW-FOUND: a clean that promises a fresh slate must not leave stale intent for the
+    reinstall to inherit — every reboot would skip the stack as 'operator stopped'."""
+    svc = _svc(tmp_path)
+    assert svc.stop("kiss", apply=True).ok
+    intent = tmp_path / "state" / "stop-intent" / "kiss.json"
+    assert intent.exists()
+    res = svc.clean("kiss", apply=True, purge=True)
+    assert res.ok, res.summary
+    assert not intent.exists(), "clean --purge must remove the stop tombstone"

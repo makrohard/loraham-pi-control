@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Review pass on the tombstone/cert work: intent scoped to the named operator stack stop only, kept on a refused start, removed by clean; fetch commands shown to trusted sessions only and 3.11-safe
 - The Certificates panel offers paste-ready `scp` commands (Linux PC) for the server trust and each issued client `.p12`, addressed at the host the session reached the console on
 - Boot-restore honors an explicit operator stop: a stack stopped before reboot never resurrects from leftover unverified-stop records (live-found with Voice restarting on every boot)
 

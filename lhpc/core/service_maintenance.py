@@ -1589,14 +1589,14 @@ class MaintenanceOpsMixin:
         daemons = [ss.stack.id for ss in snap.stacks if ss.stack.main == self.DAEMON_ID
                    and any(cs.run_state in LIVE for cs in ss.components.values())]
         for sid in clients:
-            res = self.stop(sid, apply=True)
+            res = self.stop(sid, apply=True, _operator=False)
             details.append(f"  stop {sid}: {res.summary}")
             if not res.ok:
                 return ActionResult(False, f"Client stack '{sid}' did not stop cleanly — NOT stopping "
                                     "the shared daemon, and refusing to remove controller state.",
                                     details=tuple(details), data={"prep_blocked": "client_stop_failed"})
         for sid in daemons:
-            res = self.stop(sid, apply=True)
+            res = self.stop(sid, apply=True, _operator=False)
             details.append(f"  stop {sid}: {res.summary}")
             if not res.ok:
                 return ActionResult(False, f"Daemon stack '{sid}' did not stop cleanly — refusing to "
@@ -1925,7 +1925,10 @@ class MaintenanceOpsMixin:
         markers = [self._interactive_marker(sid), self._band_marker(sid),
                    known_working.candidate_path(self._paths, sid),
                    self._restart_marker_path(sid),
-                   known_working.store_path(self._paths, sid)]
+                   known_working.store_path(self._paths, sid),
+                   # REVIEW-FOUND: a clean that promises a fresh slate must not leave a stale
+                   # operator stop intent behind for the reinstall to inherit.
+                   self._stop_intent_path(sid)]
 
         details = [f"  [remove] src/{p.split('/')[-1]}" for p, _ in src_remove]
         details += [f"  [keep — shared] src/{p.split('/')[-1]} (used by {', '.join(r)})"

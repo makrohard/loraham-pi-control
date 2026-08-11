@@ -122,7 +122,9 @@ def _ws_fetch_commands(host: str, root: str) -> dict:
         return {}
     try:
         user = getpass.getuser()
-    except OSError:
+    except (OSError, KeyError):
+        # Python <=3.12 raises KeyError when no login env var is set and the uid has no
+        # passwd entry; 3.13 turned that into OSError. Either way: no commands, no 500.
         return {}
     out = {"ca": f"scp {user}@{host}:{root}/config/tls/server-ca/ca.crt lhpc-server-ca.crt",
            "p12": {}}
@@ -938,8 +940,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # Copy-paste fetch commands for the trust material, built from the EXACT host the
             # viewer reached the console at (10.42.0.1 in AP mode, the LAN IP otherwise) — never
             # a guessed local_ip(). Linux-PC-host assumption by design; the .p12 command is the
-            # sanctioned REMOTE path (the browser download stays loopback-only).
-            "ws_fetch": _ws_fetch_commands(_url_host(request.host or ""), _runtime_root()),
+            # sanctioned REMOTE path (the browser download stays loopback-only). REVIEW-FOUND
+            # gate: rendered only to a TRUSTED session — loopback, or a config whose remote
+            # access requires a client certificate (nginx enforces it before the app sees the
+            # request). Under no-auth remote exposure any AP/LAN client could otherwise read
+            # the SSH username, runtime paths and the cert-label inventory.
+            "ws_fetch": (_ws_fetch_commands(_url_host(request.host or ""), _runtime_root())
+                         if (peer_is_loopback()
+                             or (_ws or {}).get("desired", {}).get("access_mode")
+                             in ("local-open-remote-auth", "auth-everywhere")) else {}),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
             "tasks": service.running_tasks(),
             "restored_open": restored_open,
