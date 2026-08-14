@@ -563,16 +563,34 @@ class MaintenanceOpsMixin:
             return ("the power-pending marker could not be checked — refusing new work",
                     "power-pending")
         try:
+            import math as _math
             rec = _json.loads(runtime_fs.read_text_regular(self._paths, p, max_bytes=4096)
                               or "")
-            kind = str(rec["kind"])
-            bid = str(rec["boot_id"])
-            up0 = float(rec["requested_uptime"])
+            kind = rec["kind"]
+            bid = rec["boot_id"]
+            up0 = rec["requested_uptime"]
+            # AUDIT-FOUND: validate TYPES before use — `str()`/`float()` coercion laundered a
+            # null boot_id ("None") and a NaN uptime (every comparison False) straight into the
+            # fail-open prune path. Closed-set kind, nonempty string boot id, finite
+            # nonnegative numeric uptime — anything else is MALFORMED and refuses below.
+            if (kind not in self._POWER_KINDS
+                    or not isinstance(bid, str) or not bid
+                    or isinstance(up0, bool) or not isinstance(up0, (int, float))
+                    or not _math.isfinite(up0) or up0 < 0):
+                raise ValueError("malformed power-pending marker")
+            up0 = float(up0)
         except Exception:
             return (f"a power-request marker is unreadable ({p}) — refusing new work; inspect "
                     "it and delete it if it is stale", "power-pending")
         from .lifecycle import current_boot_id
-        if not bid or bid != current_boot_id():
+        cur = current_boot_id()
+        if not cur:
+            # AUDIT-FOUND: an UNREADABLE current boot id must not read as "different boot" —
+            # the marker may belong to THIS boot with the delayed action still live. Refuse
+            # and RETAIN (fail closed); admission reopens when the boot id reads again.
+            return (f"a {kind} may be pending and this boot's identity cannot be read — "
+                    "refusing new work", "power-pending")
+        if bid != cur:
             self._safe_unlink(p)              # other boot: the action happened (or never fired)
             return None
         try:

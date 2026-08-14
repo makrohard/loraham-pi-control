@@ -277,6 +277,50 @@ def test_gate_malformed_marker_refuses_and_is_kept(tmp_path, monkeypatch):
     assert svc._power_pending_path().exists()                  # NEVER auto-pruned
 
 
+@pytest.mark.parametrize("field,value", [
+    ("boot_id", None),                  # AUDIT: str(None) laundered to "None" -> pruned
+    ("boot_id", ""),
+    ("boot_id", 7),
+    ("requested_uptime", float("nan")),  # AUDIT: NaN comparisons all False -> pruned
+    ("requested_uptime", float("inf")),
+    ("requested_uptime", -5.0),
+    ("requested_uptime", True),
+    ("requested_uptime", "100"),
+    ("kind", "halt"),                   # outside the closed set
+])
+def test_gate_parseable_but_invalid_marker_refuses_and_is_kept(tmp_path, monkeypatch,
+                                                               field, value):
+    """AUDIT (fail-open): parseable-but-invalid markers must refuse like unreadable ones —
+    type-coerced null/NaN used to slip into the prune path and admit new work while the
+    delayed reboot was still live."""
+    svc = _svc(tmp_path)
+    (svc._paths.runtime_root / "state").mkdir(exist_ok=True)
+    rec = {"kind": "poweroff", "boot_id": "boot-1", "requested_uptime": 100.0, field: value}
+    svc._power_pending_path().write_text(json.dumps(rec))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    blocked = svc._power_pending_blocked()
+    assert blocked is not None and "unreadable" in blocked[0]
+    assert svc._power_pending_path().exists()                  # retained, never pruned
+
+
+def test_gate_unreadable_current_boot_id_fails_closed(tmp_path, monkeypatch):
+    """AUDIT (fail-open): an EMPTY current_boot_id() used to read as 'different boot' —
+    deleting a possibly-live marker and admitting work the delayed reboot would kill.
+    It must refuse and RETAIN; admission reopens once the boot id reads again."""
+    svc = _svc(tmp_path)
+    _arm(svc, monkeypatch)
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "")
+    blocked = svc._power_pending_blocked()
+    assert blocked is not None and "cannot be read" in blocked[0]
+    assert svc._power_pending_path().exists()                  # retained
+    with pytest.raises(AdmissionRefused), \
+            svc._admission_guard("build", "x"):                # and admission genuinely refused
+        pass
+    # boot id readable again, same boot -> still pending (fresh marker) -> still refused
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+    assert svc._power_pending_blocked() is not None
+
+
 def test_second_power_click_is_refused_while_pending(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _arm(svc, monkeypatch, kind="reboot")
