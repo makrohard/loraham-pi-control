@@ -1938,6 +1938,36 @@ class LifecycleOpsMixin:
                 release.append(b)
         return daemon_sid, release
 
+    def _dep_stacks_to_release(self, stk, sid) -> list[str]:
+        """Non-daemon dependency STACKS a stopping client no longer needs — stacks a component
+        of `stk` depends on that are running with NO other running dependent (the stopping
+        client itself excluded). The daemon is deliberately NOT in this set: its teardown
+        stays band-scoped via `_daemon_bands_to_release`. Live-found: stopping graywolf left
+        the KISS TNC (and through it the daemon) running — the chain its start pulled up must
+        come down with the stack that needed it. Each released stack re-enters stop() with
+        release_daemon=True, so KISS in turn releases the daemon band it alone was using."""
+        if stk is None:
+            return []
+        daemon_sid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
+        dep_sids: list[str] = []
+        for c in stk.components:
+            for d in (c.depends_on or ()):
+                dsid = self.stack_of(d)
+                if (dsid and dsid not in dep_sids and dsid != sid and dsid != daemon_sid
+                        and self.stack(dsid) is not None):
+                    dep_sids.append(dsid)
+        up = (RunState.RUNNING, RunState.DEGRADED)
+        out = []
+        for dsid in dep_sids:
+            ss = next((s for s in self.build_snapshot().stacks if s.stack.id == dsid), None)
+            if ss is None or not any(ss.components[c.id].run_state in up
+                                     for c in ss.stack.components):
+                continue                               # dependency not running -> nothing to do
+            if [d for d in self.stop_dependents(dsid) if d != sid]:
+                continue                               # another running stack still needs it
+            out.append(dsid)
+        return out
+
     @invalidates_snapshot
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "", release_daemon: bool = True, auto_install_ctx=None,
@@ -2148,6 +2178,24 @@ class LifecycleOpsMixin:
             if self._band_owners_stopped(sid, own_results):
                 self._safe_unlink(self._band_marker(sid))
             self.dismiss_interactive(sid)
+        # A CLIENT stop also takes down the non-daemon dependency stacks it ALONE was using
+        # (the KISS TNC under graywolf) — the chain its start pulled up comes down with it.
+        # Internal (_operator=False), so released stacks are never tombstoned; each release
+        # re-enters stop() with release_daemon=True and thereby releases the daemon band it
+        # used, after which the daemon-release below no-ops via its reachable guard. A failed
+        # release feeds the aggregate success like every other typed result.
+        if own_ok and not target_is_daemon and release_daemon:
+            for dep_sid in self._dep_stacks_to_release(_stk, sid):
+                dep_stk = self.stack(dep_sid)
+                rres = self.stop(dep_sid, apply=True, _operator=False)
+                results.append(CompResult(
+                    component=(dep_stk.main if dep_stk else dep_sid), stack=dep_sid,
+                    action="stop",
+                    outcome=Outcome.STOPPED if rres.ok else Outcome.UNVERIFIED,
+                    summary=(f"released {dep_sid} (no other stack needs it)" if rres.ok
+                             else f"{dep_sid} release NOT verified — {rres.summary}")))
+                details.append(f"  [{'stopped' if rres.ok else 'unverified'} dependency] "
+                               f"{dep_sid}: no other stack needs it")
         # A CLIENT stop also releases the daemon band it used — only where no other running
         # dependent needs it. Its typed result feeds the aggregate success (a failed release makes
         # the whole client stop non-success). The just-stopped client is excluded from that check,

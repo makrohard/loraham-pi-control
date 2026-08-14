@@ -385,6 +385,65 @@ def test_client_stop_releases_daemon_only_when_unused(tmp_path, monkeypatch):
     assert svc._daemon_bands_to_release(svc.stack("daemon"), "daemon", {"433"})[1] == []
 
 
+def test_dep_stacks_to_release_selection(tmp_path, monkeypatch):
+    """Stopping a client also selects the non-daemon dependency stacks it ALONE was using
+    (kiss under graywolf) — running, no other dependent; the daemon is never in the set
+    (its release stays band-scoped in _daemon_bands_to_release)."""
+    import types
+
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path)
+    gw, kiss = svc.stack("graywolf"), svc.stack("kiss")
+
+    def _snap(running):
+        comps = {c.id: types.SimpleNamespace(
+            run_state=RunState.RUNNING if running else RunState.STOPPED)
+            for c in kiss.components}
+        return types.SimpleNamespace(stacks=[types.SimpleNamespace(stack=kiss,
+                                                                   components=comps)])
+    monkeypatch.setattr(ControllerService, "build_snapshot",
+                        lambda self, fresh=False: _snap(True))
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
+    assert svc._dep_stacks_to_release(gw, "graywolf") == ["kiss"]
+    # another running stack still needs kiss -> kept
+    monkeypatch.setattr(ControllerService, "stop_dependents",
+                        lambda self, t, bands=None: ["someone-else"])
+    assert svc._dep_stacks_to_release(gw, "graywolf") == []
+    # the stopping client itself never blocks its own release
+    monkeypatch.setattr(ControllerService, "stop_dependents",
+                        lambda self, t, bands=None: ["graywolf"])
+    assert svc._dep_stacks_to_release(gw, "graywolf") == ["kiss"]
+    # kiss not running -> nothing to release
+    monkeypatch.setattr(ControllerService, "build_snapshot",
+                        lambda self, fresh=False: _snap(False))
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
+    assert svc._dep_stacks_to_release(gw, "graywolf") == []
+    # kiss itself depends only on the daemon -> selects nothing (no recursion fuel)
+    monkeypatch.setattr(ControllerService, "build_snapshot",
+                        lambda self, fresh=False: _snap(True))
+    assert svc._dep_stacks_to_release(kiss, "kiss") == []
+
+
+def test_client_stop_tears_down_unused_dependency_stack(tmp_path, monkeypatch):
+    """Operator stop of graywolf stops the kiss it alone used — internally (_operator=False),
+    so the released stack is never tombstoned; only graywolf carries the stop intent."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "_dep_stacks_to_release",
+                        lambda self, stk, sid: ["kiss"] if sid == "graywolf" else [])
+    calls = []
+    orig = ControllerService.stop
+
+    def spy(self, target, apply=False, **kw):
+        calls.append((target, kw.get("_operator", True)))
+        return orig(self, target, apply=apply, **kw)
+    monkeypatch.setattr(ControllerService, "stop", spy)
+    res = svc.stop("graywolf", apply=True)
+    assert ("kiss", False) in calls                              # internal release
+    assert any("dependency] kiss" in d for d in res.details)
+    intents = svc._stop_intent_stacks()
+    assert "graywolf" in intents and "kiss" not in intents and "daemon" not in intents
+
+
 # --- M6: band-aware radio conflicts + non-disruptive daemon (re)start -----------------------
 
 _RDY6 = b"STATUS RADIO=READY TXMODE=MANAGED\n"
