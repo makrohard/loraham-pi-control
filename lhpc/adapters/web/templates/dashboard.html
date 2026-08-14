@@ -409,6 +409,21 @@
             <td class="sys-gauge" colspan="2"><span class="sys-gaugewrap"><span class="pill" id="sys-time-pill">…</span><span class="sys-time-val"><span class="sys-time-line" id="sys-time-val"></span><span class="sys-time-line sys-time-utc" id="sys-time-utc"></span><span class="sys-time-hint" id="sys-time-hint" hidden></span><span class="sys-time-cmd" id="sys-time-cmd" hidden></span></span></span></td></tr>
         </table>
         <p class="muted sys-info" id="sys-info">Expand to load system information.</p>
+        {% if power_ok %}
+          {# Rendered ONLY when the polkit-rule dependency is satisfied (power_supported) — an
+             unauthorized box shows nothing here; the System-dependencies panel offers the
+             install copybox. Each POST lands on the dedicated confirm page first. #}
+          <div class="actrow sys-power-actions">
+            <form method="post" action="{{ url_for('power', kind='reboot') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button type="submit" class="act">Reboot…</button>
+            </form>
+            <form method="post" action="{{ url_for('power', kind='poweroff') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button type="submit" class="act">Shut down…</button>
+            </form>
+          </div>
+        {% endif %}
       </div>
     </details>
   </div>

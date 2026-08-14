@@ -492,6 +492,13 @@ class MaintenanceOpsMixin:
 
         for grp in self.controller_system_deps():
             for d in grp["deps"]:
+                # `bootstrap: False` = surfaced on the panel/doctor ONLY, never folded into the
+                # generated bootstrap script (the power-rule copybox embeds THIS box's username
+                # and has its own dedicated, opt-out scaffold — folding it here would duplicate
+                # the install, defeat --no-power-controls, and bake the generator machine's
+                # username into the committed snapshot).
+                if d.get("bootstrap", True) is False:
+                    continue
                 _add(d.get("install", ""), False)
         for s in self.stacks():
             for c in s.components:
@@ -516,6 +523,161 @@ class MaintenanceOpsMixin:
         core = [c for c in core + gui if not gui_only[c]]
         gui = [c for c in gui if gui_only[c]]
         return core, gui, gps
+
+    # --- power controls (dashboard Reboot / Shut down) ---------------------------------------
+    # kind -> the logind CanX query proving the operator is authorized WITHOUT interaction.
+    _POWER_KINDS: ClassVar[dict] = {"reboot": "CanReboot", "poweroff": "CanPowerOff"}
+    # The pending marker refuses new task admissions for this long (boot-relative seconds).
+    # The detached trigger is bounded to sleep 1.5s + `timeout -k 5s 90s`, strictly inside it —
+    # past the TTL the trigger provably cannot fire, so admissions may safely reopen.
+    POWER_PENDING_TTL_S: ClassVar[float] = 120.0
+
+    def power_supported(self) -> bool:
+        """GET-safe presence probe gating the dashboard's power buttons: the polkit rule +
+        polkitd + the two tools the apply path actually executes (busctl, systemctl).
+        Presence only — whether polkitd honors the rule is proven at APPLY time, as a typed
+        refusal carrying the install copybox (so a stale rule heals itself there)."""
+        from . import deps as deps_mod
+        fs = self._system.fs
+        return (fs.exists(deps_mod.POWER_RULE_PATH)
+                and any(fs.exists(p) for p in ("/usr/lib/polkit-1/polkitd",
+                                               "/usr/libexec/polkitd", "/usr/bin/pkcheck"))
+                and any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
+                and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl")))
+
+    def _power_pending_path(self):
+        return self._paths.under("state", "power-pending.json")
+
+    def _power_pending_blocked(self) -> tuple[str, str] | None:
+        """(reason, tag) while a power action is pending THIS boot and younger than the TTL —
+        consulted by `_acquire_key` on EVERY fresh admission acquire, so no task can start and
+        then be killed by the delayed shutdown. Boot-relative uptime, immune to the Pi's
+        post-boot NTP wall-clock jumps. VALID stale/other-boot markers are pruned; a MALFORMED
+        marker refuses conservatively and is left for the operator (never auto-pruned)."""
+        import json as _json
+        p = self._power_pending_path()
+        try:
+            if not p.exists():
+                return None
+        except OSError:
+            return ("the power-pending marker could not be checked — refusing new work",
+                    "power-pending")
+        try:
+            rec = _json.loads(runtime_fs.read_text_regular(self._paths, p, max_bytes=4096)
+                              or "")
+            kind = str(rec["kind"])
+            bid = str(rec["boot_id"])
+            up0 = float(rec["requested_uptime"])
+        except Exception:
+            return (f"a power-request marker is unreadable ({p}) — refusing new work; inspect "
+                    "it and delete it if it is stale", "power-pending")
+        from .lifecycle import current_boot_id
+        if not bid or bid != current_boot_id():
+            self._safe_unlink(p)              # other boot: the action happened (or never fired)
+            return None
+        try:
+            now_up = float((self._system.fs.read_text("/proc/uptime", 128) or "").split()[0])
+        except (OSError, ValueError, IndexError):
+            return (f"a {kind} of this box is pending and its age cannot be determined — "
+                    "refusing new work", "power-pending")
+        if now_up - up0 < self.POWER_PENDING_TTL_S:
+            return (f"a {kind} of this box is pending (requested {max(0, int(now_up - up0))}s "
+                    "ago) — not starting work the shutdown would kill", "power-pending")
+        self._safe_unlink(p)                  # same boot, expired: the bounded trigger is dead
+        return None
+
+    def power_action(self, kind: str, apply: bool = False) -> ActionResult:
+        """The dashboard's Reboot / Shut down, through logind (`systemctl <kind>`), gracefully.
+        Dry-run renders the confirm-page plan; apply runs a SYNCHRONOUS CanReboot/CanPowerOff
+        authorization handshake under task admission, records a pending marker (which refuses
+        new admissions until the trigger fires or its bounded life expires), then triggers
+        respond-first via a detached bounded spawn. Contract: failures BEFORE the handshake
+        verdict are typed; failures after it land only in the trigger log."""
+        if kind not in self._POWER_KINDS:
+            return ActionResult(False, f"unknown power action {kind!r} (reboot | poweroff)")
+        running = sorted(s.id for s in self.stacks() if self.stack_running(s.id))
+        verb = "Reboot" if kind == "reboot" else "Shut down"
+        if not apply:
+            details = [f"  [running] {sid}" for sid in running] or ["  (no stacks running)"]
+            details.append("  [note] running stacks come back via boot-restore after power-on"
+                           if kind == "reboot" else
+                           "  [note] you need PHYSICAL access to power the box back on — safe "
+                           "to unplug once shutdown completes; running stacks come back via "
+                           "boot-restore on the next power-on")
+            return ActionResult(True, f"{verb} this box?", details=details)
+        from . import reslock
+        try:
+            with self._admission_guard("power", kind):
+                return self._power_apply_locked(kind, verb, running)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy as busy:
+            return ActionResult(False, f"Cannot {kind}: {busy}")
+
+    def _power_apply_locked(self, kind: str, verb: str, running: list) -> ActionResult:
+        import getpass as _getpass
+        import json as _json
+        import re as _re
+
+        from . import deps as deps_mod
+        from .lifecycle import current_boot_id
+        boot_id = current_boot_id()
+        if not boot_id:
+            return ActionResult(False, f"Cannot {kind}: the boot id is unavailable — the "
+                                       "pending-action guard cannot be scoped to this boot")
+        # SYNCHRONOUS authorization handshake: logind answers yes/no/challenge/na without
+        # side effects. Structured parse — exactly `s "<verdict>"` — never substring.
+        r = self._system.runner.run(
+            ["busctl", "--timeout=5", "call", "org.freedesktop.login1",
+             "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+             self._POWER_KINDS[kind]], 8.0)
+        verdict = ""
+        if getattr(r, "returncode", 1) == 0:
+            m = _re.fullmatch(r'\s*s\s+"([a-z]+)"\s*', (getattr(r, "stdout", "") or ""))
+            verdict = m.group(1) if m else ""
+        if verdict != "yes":
+            why = (f"logind answered {verdict!r}" if verdict
+                   else "the logind authorization check failed")
+            fix = deps_mod.power_rule_install_cmd(_getpass.getuser())
+            return ActionResult(
+                False,
+                f"Cannot {kind}: {why} — this box does not authorize the operator for it.",
+                details=["  re-install the authorization, then retry:",
+                         *(f"    {ln}" for ln in fix.splitlines())])
+        # Pending marker BEFORE the trigger: from here until the trigger fires (or its bounded
+        # life ends) no new task admission is granted. Write failure -> typed, nothing spawned.
+        marker = self._power_pending_path()
+        try:
+            up0 = float((self._system.fs.read_text("/proc/uptime", 128) or "").split()[0])
+        except (OSError, ValueError, IndexError):
+            return ActionResult(False, f"Cannot {kind}: /proc/uptime is unreadable — the "
+                                       "pending-action guard cannot be timed")
+        try:
+            runtime_fs.atomic_write(self._paths, marker, _json.dumps(
+                {"kind": kind, "boot_id": boot_id, "requested_uptime": up0}), 0o600)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"Cannot {kind}: could not record the pending action "
+                                       f"({exc}) — nothing was triggered")
+        # Respond-first detached trigger, bounded strictly under POWER_PENDING_TTL_S:
+        # --no-block returns after enqueuing with logind; timeout SIGKILL-backstops the client.
+        log_path = self._paths.under("logs", f"power-{kind}.log")
+        argv = ["sh", "-c", f"sleep 1.5; exec timeout -k 5s 90s systemctl --no-block {kind}"]
+        try:
+            pid = self._lifecycle()._spawn(argv, log_path)
+        except (OSError, PathContainmentError) as exc:
+            self._safe_unlink(marker)
+            return ActionResult(False, f"Cannot {kind}: the trigger could not be spawned "
+                                       f"({exc}) — the pending guard was cleared")
+        if pid is None:
+            self._safe_unlink(marker)
+            return ActionResult(False, f"Cannot {kind}: the trigger could not be spawned — "
+                                       "the pending guard was cleared")
+        notes = [f"  [running] {sid}" for sid in running]
+        notes.append(f"  [log] failures after authorization land ONLY in {log_path}")
+        if kind == "reboot":
+            notes.append("  [note] running stacks come back via boot-restore")
+        return ActionResult(True, f"{verb} requested — the console will go dark shortly.",
+                            details=notes)
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -1531,6 +1693,10 @@ class MaintenanceOpsMixin:
             except reslock.ResourceBusy:
                 return ActionResult(False, "A task is starting right now (admission lock contended) — "
                                     "retry the uninstall.", data={"prep_blocked": "busy"})
+            except AdmissionRefused as _adm:
+                # The power-pending gate lives INSIDE _acquire_key (one choke point): a
+                # reboot/shutdown in flight must not admit an uninstall it would kill.
+                return ActionResult(False, _adm.reason, data={"prep_blocked": _adm.tag})
             return self._uninstall_prep_locked()
 
     def _uninstall_prep_locked(self) -> ActionResult:

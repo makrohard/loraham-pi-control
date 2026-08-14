@@ -12,6 +12,7 @@ Operational rules for `lhpc`. See `architecture.md` for internals.
 - [Secrets](#secrets)
 - [Backup & restore](#backup--restore)
 - [Web console](#web-console)
+- [Reboot / Shut down](#reboot--shut-down)
 - [Daemon radio parameters](#daemon-radio-parameters)
 - [Safety](#safety)
 
@@ -157,6 +158,21 @@ a dry-run plan first (TX-capable ones add an RF/dummy-load warning); daemon live
 settings apply only a whitelisted non-RF tuning (TX mode, CAD/LBT). Security
 headers (incl. `Content-Security-Policy: default-src 'self'`) on every response. Exposing the
 console to your LAN is opt-in and gated: [webserver](webserver.md), [firewall](firewall.md).
+
+## Reboot / Shut down
+
+The dashboard's system card ends with **Reboot…** / **Shut down…** buttons (each behind a
+confirm page). They act through logind (`systemctl reboot|poweroff`) — a graceful teardown, so
+the SD card is safe and running stacks come back via boot-restore on the next power-on. The
+buttons render **only** when the authorization dependency is satisfied: `polkitd` plus the rule
+file `/etc/polkit-1/rules.d/49-lhpc-power.rules` naming the operator user. Fresh installs get
+both from `bootstrap-deps.sh` (opt out with `--no-power-controls`); on an existing box the
+System-dependencies panel (and `lhpc doctor`) shows a paste-ready install command. lhpc never
+installs the rule itself — it never runs privileged commands. Apply performs a synchronous
+logind authorization check (a refusal is typed and repeats the install command), records a
+short-lived pending marker that refuses new builds/updates until the trigger fires, then
+requests the action detached so the HTTP response reaches the browser first; failures after
+that authorization land only in `logs/power-<kind>.log`.
 
 ## Daemon radio parameters
 

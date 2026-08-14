@@ -2195,6 +2195,17 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         while True:
             try:
                 stack.enter_context(reslock.operation_lock(self._paths, k, op, target))
+                # ONE CHOKE POINT for the power-pending gate: EVERY fresh interprocess
+                # admission acquisition passes through here (_admit, _admit_raw, the
+                # self-update trigger's and uninstall-prep's direct acquires, and any
+                # future one), and the check runs AFTER the flock is held so it can never
+                # race the marker write (power_action writes it under this same lock).
+                # Raising unwinds the ExitStack, releasing the just-taken flock. Reentrant
+                # nested acquires never reach here (counts short-circuit in the callers).
+                if k == self.ADMISSION_KEY:
+                    _pb = self._power_pending_blocked()
+                    if _pb is not None:
+                        raise AdmissionRefused(_pb[0], _pb[1])
                 return                      # the lock became available -> normal acquisition
             except reslock.ResourceBusy as busy:
                 holder = busy.holder if isinstance(busy.holder, dict) else {}

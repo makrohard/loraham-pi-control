@@ -429,6 +429,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
+            # Power buttons render ONLY when the polkit-rule dependency is satisfied (presence
+            # probe) — an unauthorized box shows nothing, and the dep panel offers the copybox.
+            power_ok=service.power_supported(),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -1045,6 +1048,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         res = service.source_check(target)         # NETWORK (explicit): git ls-remote, refresh cache
         flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
         return _install_back(sid)                  # land on the stack's Install section
+
+    @app.post("/power/<kind>")
+    def power(kind: str):
+        # Dashboard Reboot / Shut down. POST-only + CSRF; 404 for an unknown kind AND while the
+        # polkit-rule dependency is unsatisfied (the hidden feature stays hidden — the buttons
+        # only render when `power_supported()`). Stage 1 renders the dedicated confirm page
+        # ("do you really want to…"); stage 2 applies via the service (handshake + pending
+        # marker + bounded respond-first trigger) and redirects with the typed result.
+        if not _csrf_ok():
+            abort(400)
+        if kind not in ("reboot", "poweroff") or not service.power_supported():
+            abort(404)
+        if request.form.get("confirmed") != "yes":
+            plan = service.power_action(kind, apply=False)
+            return render_template("power_confirm.html", kind=kind,
+                                   question=plan.summary, details=plan.details)
+        res = service.power_action(kind, apply=True)
+        flash(res.summary + ((" " + "; ".join(d.strip() for d in res.details))
+                            if res.details else ""),
+              "ok" if res.ok else "warn")
+        return redirect(url_for("dashboard"))
 
     @app.post("/graywolf/upstream-check/<target>")
     def graywolf_upstream_check(target: str):

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Reboot' if kind == 'reboot' else 'Shut down' }} — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# Dedicated power confirm — NOT confirm.html (that page is hard-wired to the /action stack-op
+     pipeline). One question, the dry-run plan, one warn-styled confirm button, one way back. #}
+  <div class="card">
+    <header><h2>{{ 'Reboot this box?' if kind == 'reboot' else 'Shut down this box?' }}</h2></header>
+    <div class="body">
+      <p>{{ question }}</p>
+      {% if details %}
+        <pre class="next">{% for d in details %}{{ d }}
+{% endfor %}</pre>
+      {% endif %}
+      {% if kind == 'poweroff' %}
+        <p class="depnote depnote-warn"><strong>You need physical access to power it back on.</strong>
+          It is safe to unplug once shutdown completes.</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('power', kind=kind) }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="confirmed" value="yes">
+        <button type="submit" class="warnbtn">{{ 'Yes, reboot now' if kind == 'reboot' else 'Yes, shut down now' }}</button>
+        <a class="btnlink" href="{{ url_for('dashboard') }}">Cancel</a>
+      </form>
+    </div>
+  </div>
+{% endblock %}

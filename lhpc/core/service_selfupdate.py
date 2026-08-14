@@ -75,10 +75,12 @@ class SelfUpdateOpsMixin:
         controller System-dependencies panel (/stacks) and `lhpc doctor`, so the two never drift.
         GET-SAFE: presence probes only — `shutil.which` / `System.fs.exists` / `importlib.util.find_spec`
         — never a subprocess (git/nginx/systemctl are NOT executed)."""
+        import getpass as _getpass
         import importlib.util
         import shutil
         import sys
 
+        from . import deps as _deps_mod
         from . import webserver as _ws
         # Python venv deps must be (re)installed into the SAME interpreter that runs LHPC — never a bare
         # `pip install` (wrong env / PEP-668). Version floors mirror pyproject.toml.
@@ -154,6 +156,22 @@ class SelfUpdateOpsMixin:
                  "purpose": "production WSGI server (no dev-server fallback)"},
                 {"what": "cryptography", "required": True, "satisfied": have_mod("cryptography"),
                  "install": f"{_pipi} 'cryptography>=42'", "purpose": "all PKI (CA / cert / PKCS#12 / CRL)"},
+            ]},
+            {"title": "Power controls", "deps": [
+                # `bootstrap: False` — this copybox embeds THIS box's username and has its own
+                # dedicated (opt-out) scaffold in bootstrap-deps.sh, so `_declared_dep_scopes`
+                # must never fold it into the generated script. Presence-only probe (GET-safe):
+                # the rule file + polkitd; whether polkitd actually honors the rule is proven at
+                # apply time with a typed refusal that repeats this install command.
+                {"what": "reboot/shutdown authorization (polkitd + polkit rule)",
+                 "required": False, "bootstrap": False,
+                 "satisfied": (fs.exists(_deps_mod.POWER_RULE_PATH)
+                               and (fs.exists("/usr/lib/polkit-1/polkitd")
+                                    or fs.exists("/usr/libexec/polkitd")
+                                    or fs.exists("/usr/bin/pkcheck"))),
+                 "install": _deps_mod.power_rule_install_cmd(_getpass.getuser()),
+                 "purpose": "the dashboard's Reboot / Shut down buttons (logind authorization; "
+                            "buttons stay hidden until this is installed)"},
             ]},
         ]
 
@@ -681,6 +699,7 @@ class SelfUpdateOpsMixin:
         import contextlib
 
         from . import reslock
+        from .service_base import AdmissionRefused
         # Hold task admission through the EXCLUSIVE request-marker creation (lock order #1): a new task
         # cannot start while we create it. Recheck the uninstall guard + request state AND run the
         # complete strict blocker scan UNDER the lock, so nothing slips in between the checks and the
@@ -691,6 +710,10 @@ class SelfUpdateOpsMixin:
             except reslock.ResourceBusy:
                 return ActionResult(False, "A task is starting right now (admission contended) — retry "
                                     "the update.", data={"contended": True})
+            except AdmissionRefused as _adm:
+                # The power-pending gate lives INSIDE _acquire_key (one choke point): a
+                # reboot/shutdown in flight must not admit a self-update it would kill.
+                return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
             if self.uninstall_guard_blocks():
                 return ActionResult(False, "A controller uninstall is in progress — cannot self-update.",
                                     data={"uninstalling": True})

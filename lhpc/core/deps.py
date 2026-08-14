@@ -222,6 +222,45 @@ def _is_spi_block(low: str) -> bool:
     return "config.txt" in low or "dtparam=spi" in low or "dtoverlay=spi" in low
 
 
+# --- Power controls (Reboot / Shut down from the console) -----------------------------------
+# The console's power buttons act through logind (`systemctl reboot|poweroff`), which needs a
+# polkit authorization for the unprivileged operator user. lhpc NEVER installs this itself
+# (it never runs privileged commands): the rule arrives via bootstrap-deps on a fresh install
+# (opt-out: --no-power-controls) or via the dependency-panel copybox on an existing box.
+# ONE source of truth: the bootstrap scaffold and the copybox both render from these helpers.
+POWER_RULE_PATH = "/etc/polkit-1/rules.d/49-lhpc-power.rules"
+
+
+def power_rule_text(user: str) -> str:
+    """The polkit rule granting `user` the four logind power action ids. `user` may be a
+    literal account name (copybox) or a shell variable reference like `$OP` (bootstrap
+    scaffold — expanded at script runtime by an unquoted heredoc)."""
+    return (
+        "// Installed by LoRaHAM Pi Control — lets the operator user reboot/shut down via logind.\n"
+        "polkit.addRule(function(action, subject) {\n"
+        f'    if (subject.user == "{user}" &&\n'
+        '        (action.id == "org.freedesktop.login1.reboot" ||\n'
+        '         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||\n'
+        '         action.id == "org.freedesktop.login1.power-off" ||\n'
+        '         action.id == "org.freedesktop.login1.power-off-multiple-sessions")) {\n'
+        "        return polkit.Result.YES;\n"
+        "    }\n"
+        "});\n"
+    )
+
+
+def power_rule_install_cmd(user: str) -> str:
+    """Paste-ready command(s) to authorize `user` for the console power buttons on THIS box:
+    polkitd (systemd only Suggests it on Trixie) + the rule file. `install -D -m 0644`, never
+    bare `tee` — the mode must be guaranteed even when the file (or rules.d) already exists."""
+    return (
+        "sudo apt install -y polkitd\n"
+        f"sudo install -D -m 0644 /dev/stdin {POWER_RULE_PATH} <<'POWERRULE'\n"
+        + power_rule_text(user)
+        + "POWERRULE"
+    )
+
+
 def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=()) -> str:
     """Render every declared dependency-remediation command into ONE hardened, executable bootstrap
     script. Standalone `sudo apt install` commands merge into a single deduplicated `apt-get install`
@@ -343,7 +382,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
         " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps]"
-        " [--keep-wifi-powersave]",
+        " [--keep-wifi-powersave] [--no-power-controls]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics:"
@@ -354,6 +393,9 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#     skip         no boot-config change (SPI already configured)",
         "#     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)",
         "#     --swap-size <MB>   swapfile size when provisioned (default 768)",
+        "#     --no-power-controls  do NOT install polkitd + the polkit rule that lets the operator",
+        "#                        use the console's Reboot/Shut down buttons (installed by default;",
+        "#                        the rule file is " + POWER_RULE_PATH + ")",
         "# Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·",
         "#             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·",
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
@@ -393,7 +435,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
 
     out("usage() {",
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
-        ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]" >&2',
+        ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]'
+        ' [--no-power-controls]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -401,6 +444,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     out('SPI_MODE=""',
         'OPERATOR_USER=""',
         'NO_SWAPFILE=""',
+        'NO_POWER=""',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
         'WITH_GPS=""',
@@ -411,6 +455,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t--spi-mode) SPI_MODE="${2:?--spi-mode needs a value}"; shift 2 ;;',
         '\t\t--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;',
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
+        '\t\t--no-power-controls) NO_POWER=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
         '\t\t--with-gps) WITH_GPS=1; shift ;;',
         '\t\t--keep-wifi-powersave) KEEP_WIFI=1; shift ;;',
@@ -420,6 +465,12 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t*) echo "ERROR: unknown argument: $1" >&2; usage; exit 2 ;;',
         "\tesac",
         "done",
+        "",
+        "# polkitd (console Reboot/Shut down authorization daemon — systemd only Suggests it) joins",
+        "# the ONE merged apt transaction below AND its --dry-run simulation, unless opted out —",
+        "# never a separate side transaction outside the simulated closure.",
+        'POWER_PKG="polkitd"',
+        '[ -n "$NO_POWER" ] && POWER_PKG=""',
         "")
 
     # The denylist scan as ONE shell line, composed here so the nested awk/grep quoting stays
@@ -442,7 +493,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             '		echo "ERROR: dry-run: apt-get is not available — cannot simulate the transaction." >&2',
             "		exit 5",
             "	fi",
-            f'	DRY_PKGS="{pkgs_line}"',
+            f'	DRY_PKGS="{pkgs_line} $POWER_PKG"',
             "	# Simulate EXACTLY what the install below runs (same flags, same package set).",
             "\t# -o Dir::State::status=/dev/null resolves against an EMPTY installed-package",
             "\t# database, so the verdict is the FULL closure a fresh image would get, not the delta",
@@ -551,23 +602,33 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "fi",
             "")
 
+    # $OP is needed by the hardware-group grants AND by the power-controls rule. With groups
+    # declared it must ALWAYS resolve (grants are unconditional); with none, it resolves only
+    # when power controls are enabled — a box run with --no-power-controls and no grants is
+    # never refused for an operator it does not need.
+    _op_lines = (
+        "# Operator for the group grants / power controls: explicit --operator-user, else SUDO_USER",
+        "# when run under sudo, else the invoking user. NEVER grant to root; require a real account.",
+        'OP="$OPERATOR_USER"',
+        'if [ -z "$OP" ]; then',
+        '\tif [ -n "${SUDO_USER:-}" ]; then OP="$SUDO_USER"; else OP="$(id -un)"; fi',
+        "fi",
+        'if [ -z "$OP" ] || [ "$OP" = "root" ]; then',
+        '\techo "ERROR: no non-root operator for group grants / power controls — re-run as the operator with sudo, or pass --operator-user <name>." >&2; exit 2',
+        "fi",
+        'if ! id -u "$OP" >/dev/null 2>&1; then',
+        '\techo "ERROR: --operator-user \\"$OP\\" is not a real account." >&2; exit 2',
+        "fi",
+        'if [ "$(id -u "$OP")" -eq 0 ]; then',
+        '\techo "ERROR: refusing to grant hardware groups or power controls to a uid-0 account (\\"$OP\\")." >&2; exit 2',
+        "fi",
+    )
     if groups_csv:
-        out("# Operator for the group grants: explicit --operator-user, else SUDO_USER when run under",
-            "# sudo, else the invoking user. NEVER grant hardware groups to root; require a real account.",
-            'OP="$OPERATOR_USER"',
-            'if [ -z "$OP" ]; then',
-            '\tif [ -n "${SUDO_USER:-}" ]; then OP="$SUDO_USER"; else OP="$(id -un)"; fi',
-            "fi",
-            'if [ -z "$OP" ] || [ "$OP" = "root" ]; then',
-            '\techo "ERROR: no non-root operator for group grants — re-run as the operator with sudo, or pass --operator-user <name>." >&2; exit 2',
-            "fi",
-            'if ! id -u "$OP" >/dev/null 2>&1; then',
-            '\techo "ERROR: --operator-user \\"$OP\\" is not a real account." >&2; exit 2',
-            "fi",
-            'if [ "$(id -u "$OP")" -eq 0 ]; then',
-            '\techo "ERROR: refusing to grant hardware groups to a uid-0 account (\\"$OP\\")." >&2; exit 2',
-            "fi",
-            "")
+        out(*_op_lines, "")
+    else:
+        out('if [ -z "$NO_POWER" ]; then')
+        out(*("\t" + ln for ln in _op_lines))
+        out("fi", "")
 
 
     # TRI-STATE, FAIL-CLOSED unit-file presence. Two hazards are handled here:
@@ -599,8 +660,11 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "sudo apt-get update",
             "sudo apt-get install -y --no-install-recommends \\")
         pk = sorted(apt_pkgs)
-        for i, p in enumerate(pk):
-            out(f"    {p}" + (" \\" if i < len(pk) - 1 else ""))
+        for p in pk:
+            out(f"    {p} \\")
+        # $POWER_PKG (polkitd, or empty under --no-power-controls) rides the SAME merged
+        # transaction the dry-run simulates — an empty unquoted expansion adds no argument.
+        out("    $POWER_PKG")
         out("")
 
         if any(pkg == "nginx" or pkg.startswith("nginx-") for pkg in pk):
@@ -1030,6 +1094,24 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "\t_GROUPS_FAILED=1",
             "fi",
             "")
+
+    # Power controls: the polkit rule that authorizes $OP for the console's Reboot / Shut down
+    # buttons (logind action ids). polkitd itself rides the merged apt transaction above via
+    # $POWER_PKG. The rule text is the SAME source the dependency-panel copybox renders
+    # (power_rule_text) — the unquoted heredoc expands $OP at script runtime. install -D
+    # creates rules.d if needed and guarantees mode 0644 even over an existing file.
+    out("# --- power controls: polkit rule for the console's Reboot/Shut down (opt-out) ------------",
+        'if [ -n "$NO_POWER" ]; then',
+        '\techo "[bootstrap-deps] power controls: skipped (--no-power-controls)."',
+        "else",
+        f"\tinstall -D -m 0644 /dev/stdin {POWER_RULE_PATH} <<POWERRULE")
+    for ln in power_rule_text("$OP").rstrip("\n").split("\n"):
+        out(ln)
+    out("POWERRULE",
+        '\techo "[bootstrap-deps] power controls: reboot/shutdown polkit rule installed for $OP'
+        f' ({POWER_RULE_PATH})."',
+        "fi",
+        "")
 
     for b in disable_blocks:
         out("# --- disable an OS-packaged service (lhpc manages its own) --------------------------------")

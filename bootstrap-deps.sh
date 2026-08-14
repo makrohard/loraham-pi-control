@@ -11,13 +11,16 @@
 # unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted
 # BEFORE the script is ever granted root. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls]
 #   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing
 #     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs — the kernel must NOT claim CE0/CE1)
 #     hardware-cs  kernel-driven CE0+CE1, no overlay: dtparam=spi=on only  (only for boards that really use kernel chip-selects; NOT for Uputronics — CE0/CE1=GPIO7/8 would collide with the daemon's GPIO chip-selects)
 #     skip         no boot-config change (SPI already configured)
 #     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)
 #     --swap-size <MB>   swapfile size when provisioned (default 768)
+#     --no-power-controls  do NOT install polkitd + the polkit rule that lets the operator
+#                        use the console's Reboot/Shut down buttons (installed by default;
+#                        the rule file is /etc/polkit-1/rules.d/49-lhpc-power.rules)
 # Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·
 #             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·
 #             7 hardware group grant failed · 8 system nginx.service could not be confirmed stopped ·
@@ -42,13 +45,14 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls]" >&2
 	echo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2
 }
 
 SPI_MODE=""
 OPERATOR_USER=""
 NO_SWAPFILE=""
+NO_POWER=""
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
 		--spi-mode) SPI_MODE="${2:?--spi-mode needs a value}"; shift 2 ;;
 		--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;
 		--no-swapfile) NO_SWAPFILE=1; shift ;;
+		--no-power-controls) NO_POWER=1; shift ;;
 		--with-gui) WITH_GUI=1; shift ;;
 		--with-gps) WITH_GPS=1; shift ;;
 		--keep-wifi-powersave) KEEP_WIFI=1; shift ;;
@@ -68,6 +73,12 @@ while [ $# -gt 0 ]; do
 		*) echo "ERROR: unknown argument: $1" >&2; usage; exit 2 ;;
 	esac
 done
+
+# polkitd (console Reboot/Shut down authorization daemon — systemd only Suggests it) joins
+# the ONE merged apt transaction below AND its --dry-run simulation, unless opted out —
+# never a separate side transaction outside the simulated closure.
+POWER_PKG="polkitd"
+[ -n "$NO_POWER" ] && POWER_PKG=""
 
 # --- --dry-run: simulate the DEFAULT apt transaction, change NOTHING -----------------------
 # The blocker this guards against: the real package closure used to be discovered only while
@@ -80,7 +91,7 @@ if [ -n "$DRY_RUN" ]; then
 		echo "ERROR: dry-run: apt-get is not available — cannot simulate the transaction." >&2
 		exit 5
 	fi
-	DRY_PKGS="build-essential ca-certificates cmake curl git libbluetooth-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd"
+	DRY_PKGS="build-essential ca-certificates cmake curl git libbluetooth-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd $POWER_PKG"
 	# Simulate EXACTLY what the install below runs (same flags, same package set).
 	# -o Dir::State::status=/dev/null resolves against an EMPTY installed-package
 	# database, so the verdict is the FULL closure a fresh image would get, not the delta
@@ -165,20 +176,20 @@ if ! systemctl list-unit-files --no-legend >/dev/null 2>&1; then
 	exit 8
 fi
 
-# Operator for the group grants: explicit --operator-user, else SUDO_USER when run under
-# sudo, else the invoking user. NEVER grant hardware groups to root; require a real account.
+# Operator for the group grants / power controls: explicit --operator-user, else SUDO_USER
+# when run under sudo, else the invoking user. NEVER grant to root; require a real account.
 OP="$OPERATOR_USER"
 if [ -z "$OP" ]; then
 	if [ -n "${SUDO_USER:-}" ]; then OP="$SUDO_USER"; else OP="$(id -un)"; fi
 fi
 if [ -z "$OP" ] || [ "$OP" = "root" ]; then
-	echo "ERROR: no non-root operator for group grants — re-run as the operator with sudo, or pass --operator-user <name>." >&2; exit 2
+	echo "ERROR: no non-root operator for group grants / power controls — re-run as the operator with sudo, or pass --operator-user <name>." >&2; exit 2
 fi
 if ! id -u "$OP" >/dev/null 2>&1; then
 	echo "ERROR: --operator-user \"$OP\" is not a real account." >&2; exit 2
 fi
 if [ "$(id -u "$OP")" -eq 0 ]; then
-	echo "ERROR: refusing to grant hardware groups to a uid-0 account (\"$OP\")." >&2; exit 2
+	echo "ERROR: refusing to grant hardware groups or power controls to a uid-0 account (\"$OP\")." >&2; exit 2
 fi
 
 unit_present() {
@@ -224,7 +235,8 @@ sudo apt-get install -y --no-install-recommends \
     python3-venv \
     socat \
     zlib1g-dev \
-    zstd
+    zstd \
+    $POWER_PKG
 
 # --- system nginx: keep the package, disable the ROOT service ----------------------------
 nginx_rc=0; unit_present nginx.service || nginx_rc=$?
@@ -564,6 +576,25 @@ if sudo usermod -aG spi,gpio "$OP"; then
 else
 	echo "ERROR: could not grant spi,gpio to $OP — do those groups exist on this system? Rootless SPI/GPIO access will NOT work until this is resolved." >&2
 	_GROUPS_FAILED=1
+fi
+
+# --- power controls: polkit rule for the console's Reboot/Shut down (opt-out) ------------
+if [ -n "$NO_POWER" ]; then
+	echo "[bootstrap-deps] power controls: skipped (--no-power-controls)."
+else
+	install -D -m 0644 /dev/stdin /etc/polkit-1/rules.d/49-lhpc-power.rules <<POWERRULE
+// Installed by LoRaHAM Pi Control — lets the operator user reboot/shut down via logind.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "$OP" &&
+        (action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions")) {
+        return polkit.Result.YES;
+    }
+});
+POWERRULE
+	echo "[bootstrap-deps] power controls: reboot/shutdown polkit rule installed for $OP (/etc/polkit-1/rules.d/49-lhpc-power.rules)."
 fi
 
 # --- disable an OS-packaged service (lhpc manages its own) --------------------------------
