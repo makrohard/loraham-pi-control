@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.15
 
 - graywolf's 433 TX default is now **433.775** (single-channel, same as stock ESP32 trackers — they never listened on the old 433.900 split, live-found); the RX/TX split stays available by config
 
