@@ -1412,11 +1412,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     flash(f"Cannot save daemon parameters: {_derr}", "warn")
                     return _render_confirm(op, target, band, params, file_over, source, frm)
             stack_ok = True
+            _saved_parts: list = []
+            _failed_parts: list = []
             stack_values = _stack_save_values(target, band, params, file_over)
             if save_mode in ("stack", "all") and stack_values:
                 res = service.save_config_bundle(target, values=stack_values, band=band)
                 flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
                       "ok" if res.ok else "warn")
+                (_saved_parts if res.ok else _failed_parts).append(f"'{target}' config")
                 stack_ok = res.ok
             # Dependency rows persist into the DEPENDENCY's own stack config (band-aware) —
             # part of the same fail-closed Save: any failed dependency save blocks the start.
@@ -1426,12 +1429,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     flash(f"{_dsid}: " + _dres.summary
                           + (" " + "; ".join(_dres.details) if _dres.details else ""),
                           "ok" if _dres.ok else "warn")
+                    (_saved_parts if _dres.ok else _failed_parts).append(
+                        f"'{_dsid}' config (dependency)")
                     stack_ok = stack_ok and _dres.ok
             # Save & start SHORT-CIRCUIT: a failed stack save must NOT trigger the daemon save and
             # must NOT start — re-render immediately with the submitted values. (`_save_daemon_confirm`
-            # / `save_daemon_params` are never reached.)
+            # / `save_daemon_params` are never reached.) AUDIT-FOUND: earlier writes may have
+            # PERSISTED (the target's config saves before a dependency's) — report saved vs
+            # NOT-saved precisely, mirroring the daemon partial-save path, never a blanket
+            # "could not be saved".
             if then_start and not stack_ok:
-                flash("Not started — the stack configuration could not be saved.", "warn")
+                _p = []
+                if _saved_parts:
+                    _p.append("saved: " + ", ".join(_saved_parts))
+                if _failed_parts:
+                    _p.append("NOT saved: " + ", ".join(_failed_parts))
+                flash("Not started — a configuration save failed"
+                      + (f" ({'; '.join(_p)})" if _p else "") + ". Fix it and try again.", "warn")
                 return _render_confirm(op, target, band, params, file_over, source, frm)
             daemon_res = {"parse_error": None, "bands": {}, "ok": True}
             if save_mode in ("daemon", "all"):

@@ -244,6 +244,75 @@ def test_admission_refused_aborts_the_update(tmp_path, monkeypatch):
     assert not ran, "a refused admission must not run the fetch"
 
 
+def test_admission_contention_returns_typed_refusal(tmp_path, monkeypatch):
+    """AUDIT: admission held by ANOTHER process raises reslock.ResourceBusy, not
+    AdmissionRefused — it must come back as the same typed refusal, never a traceback."""
+    from contextlib import contextmanager
+
+    from lhpc.core import reslock
+    svc = _svc(tmp_path, installed="0.14.12")
+    _cache(svc, "0.15.0")
+
+    @contextmanager
+    def busy(self, op, target=""):
+        raise reslock.ResourceBusy("controller-task-admission",
+                                   {"operation": "build", "pid": 4242})
+        yield
+    monkeypatch.setattr(ControllerService, "_admission_guard", busy)
+    ran = []
+    monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: ran.append(a))
+
+    res = svc.graywolf_upstream_update("graywolf", apply=True)
+    assert res.ok is False and "Cannot update 'graywolf'" in res.summary
+    assert not ran, "a contended admission must not run the fetch"
+
+
+def test_update_skips_restart_when_stopped_during_fetch(tmp_path, monkeypatch):
+    """AUDIT: `was_running` was sampled before a minutes-long fetch — an operator stop during
+    the fetch must be preserved, not overridden by the restart."""
+    svc = _svc(tmp_path, installed="0.14.12")
+    _cache(svc, "0.15.0")
+
+    class R:
+        returncode = 0; stdout = ""; stderr = ""
+
+    def fake_run(argv, timeout=None):
+        if "graywolf-fetch.sh" in " ".join(argv):
+            (tmp_path / "build" / "tools" / "graywolf"
+             / ".lhpc-graywolf-version").write_text("0.15.0 arm64\n")
+        return R()
+    monkeypatch.setattr(svc._system.runner, "run", fake_run)
+    # running when the update starts; STOPPED (by the operator) by the time the fetch ends
+    seq = iter([True, False])
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, t: next(seq))
+    restarted = []
+    monkeypatch.setattr(ControllerService, "restart",
+                        lambda self, t, apply=False, **kw: restarted.append(t))
+
+    res = svc.graywolf_upstream_update("graywolf", apply=True)
+    assert res.ok, res.summary
+    assert not restarted, "the operator's stop must be preserved"
+    assert any("skipped" in d and "stopped during the fetch" in d for d in res.details)
+
+
+def test_check_with_absent_stamp_never_claims_up_to_date(tmp_path, monkeypatch):
+    """AUDIT: with no installed-version stamp on disk the check must not claim
+    'up to date' — it says the installed version is unknown."""
+    svc = _svc(tmp_path, installed="0.14.12")
+    main = svc.stack("graywolf").main_component
+    (tmp_path / "/".join(main.build_marker.split("/")[:-1])
+     / ".lhpc-graywolf-version").unlink()                       # no stamp...
+    (svc._lifecycle().source_dir(main) / main.build_marker).unlink()   # ...and no marker
+
+    class R:
+        returncode = 0; stdout = '{"tag_name":"v0.15.0"}'; stderr = ""
+    monkeypatch.setattr(svc._system.runner, "run", lambda a, timeout=None: R())
+
+    res = svc.graywolf_upstream_check("graywolf")
+    assert res.ok
+    assert "unknown" in res.summary and "up to date" not in res.summary
+
+
 def test_check_surfaces_a_cache_write_failure(tmp_path, monkeypatch):
     """AUDIT-FOUND (Medium): a failed cache write must NOT report the observed update as a
     green 'up to date' success — it decides from the observed tag and returns not-ok."""
@@ -281,3 +350,19 @@ def test_credential_file_never_followed_through_a_symlink(tmp_path):
     assert victim.read_text() == "OTHER-SECRET"
     assert not (state / gp.CRED_FILE).is_symlink()
     assert gp.read_password(str(state)) == "ourpw"
+
+
+def test_credential_fifo_reads_as_absent_instead_of_hanging(tmp_path):
+    """AUDIT: a planted FIFO at the credential path used to BLOCK the open forever and wedge
+    the whole chain start — anything that is not a regular file reads as absent."""
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location(
+        "gp2", "lhpc/data/scripts/graywolf-provision.py")
+    gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
+
+    state = tmp_path / "state"; state.mkdir()
+    os.mkfifo(state / gp.CRED_FILE)
+    assert gp.read_password(str(state)) is None            # returns, never blocks
+    gp.write_password(str(state), "newpw")                 # replaces the FIFO atomically
+    assert gp.read_password(str(state)) == "newpw"

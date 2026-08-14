@@ -988,6 +988,24 @@ class LifecycleOpsMixin:
                            "a process is running but its readiness evidence is absent "
                            "(foreign or half-started) — stop it (verified) and re-run")
                     continue
+                # AUDIT-FOUND (warn-and-start, operator ruling): an override submitted for a
+                # DEPENDENCY component that is already running is NOT applied by this start —
+                # say so loudly instead of reporting silent success. The start still proceeds
+                # (an already-healthy component keeps its no-side-effects invariant).
+                if _target_is_stack and stack.id != start_sid:
+                    _diff = {
+                        _k: _v
+                        for _kind, _ov in (
+                            ("run", self._overrides_for_comp(target, "run", params, comp.id)),
+                            ("file", self._overrides_for_comp(target, "file", file_over,
+                                                              comp.id) or {}))
+                        for _k, _v in _ov.items()
+                        if str(self._resolved_param_value(stack.id, _kind, comp.id,
+                                                          _k, band)) != str(_v)}
+                    if _diff:
+                        _vals = ", ".join(f"{k}={v}" for k, v in sorted(_diff.items()))
+                        out.append(f"  [warn] {comp.id}: already running — submitted value(s) "
+                                   f"NOT applied: {_vals}; restart {stack.id} to apply them")
                 record(comp, stack, Outcome.ALREADY_HEALTHY, "already running")
                 continue
             # A GUI app cannot work without a display. Voice is kept off headless rigs
@@ -2069,6 +2087,26 @@ class LifecycleOpsMixin:
             details = [f"  [stop] {comp.id}" for _, comp in items]
             for cmd in sysd:
                 details.append(f"    {cmd}")
+            # AUDIT-FOUND: the plan hid the collateral — disclose the dependency stacks and the
+            # daemon band this stop would also take down (predicted from current topology; the
+            # apply re-decides under its locks). Only a stop that will actually stop something
+            # releases anything (see the actually-stopped gate below).
+            if not target_is_daemon and release_daemon and self.stack_running(target):
+                _psid = self.stack_of(target)
+                _deps_rel = self._dep_stacks_to_release(_stk, _psid)
+                for _dep in _deps_rel:
+                    details.append(f"  [also stops] {_dep}: dependency no other stack needs")
+                # Daemon prediction must look PAST the dependency releases above (kiss still
+                # counts as a daemon dependent right now, but its own release will free it).
+                _dsid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
+                if _dsid:
+                    for _b in sorted(b for b in self._operation_bands(target, band, "", "stop")
+                                     if b in ("433", "868")):
+                        _others = [d for d in self.stop_dependents(_dsid, bands={_b})
+                                   if d != _psid and d not in _deps_rel]
+                        if not _others and self.daemon_view(_b).reachable:
+                            details.append(f"  [also stops] {_dsid} {_b} MHz: "
+                                           "no other stack needs it")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).",
                                 details=details,
                                 next_commands=[f"lhpc stack stop {target} --yes"],
@@ -2187,7 +2225,12 @@ class LifecycleOpsMixin:
         # re-enters stop() with release_daemon=True and thereby releases the daemon band it
         # used, after which the daemon-release below no-ops via its reachable guard. A failed
         # release feeds the aggregate success like every other typed result.
-        if own_ok and not target_is_daemon and release_daemon:
+        # AUDIT-FOUND (High): gated on this stop having ACTUALLY stopped something — an
+        # entirely ALREADY_STOPPED target (stop of a not-running graywolf) must never tear
+        # down a dependency stack the operator may have started independently. The daemon
+        # release below keeps its long-standing semantics unchanged (operator ruling).
+        _own_stopped = any(r.outcome is Outcome.STOPPED for r in own_results)
+        if own_ok and not target_is_daemon and release_daemon and _own_stopped:
             for dep_sid in self._dep_stacks_to_release(_stk, sid):
                 dep_stk = self.stack(dep_sid)
                 rres = self.stop(dep_sid, apply=True, _operator=False)
@@ -3461,13 +3504,20 @@ class LifecycleOpsMixin:
         installed = (self.fetched_version_state(target) or {}).get("installed", "")
         ahead = bool(tag and installed
                      and self._ver_tuple(tag) > self._ver_tuple(installed))
-        avail = " — update available" if ahead else " — up to date"
+        # AUDIT-FOUND: with NO version stamp on disk, "up to date" was claimed for an unknown
+        # install. Say what is actually known; never claim currency without a stamp.
+        if installed:
+            inst_txt = f"installed {installed}"
+            avail = " — update available" if ahead else " — up to date"
+        else:
+            inst_txt = "installed version unknown (no version stamp)"
+            avail = " — refetch/reinstall to record it"
         if not _write(tag, ""):
-            return ActionResult(False, f"observed upstream {tag} (installed {installed}"
+            return ActionResult(False, f"observed upstream {tag} ({inst_txt}"
                                        f"{avail}) but could NOT record it — the pill may not "
                                        "persist across a reload",
                                 next_commands=[f"lhpc status {target}"])
-        return ActionResult(True, f"upstream latest is {tag}; installed {installed}{avail}",
+        return ActionResult(True, f"upstream latest is {tag}; {inst_txt}{avail}",
                             next_commands=[f"lhpc status {target}"])
 
     def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
@@ -3494,11 +3544,17 @@ class LifecycleOpsMixin:
         # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
         # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
         # another op may have moved the version or the running state while we waited.
+        from . import reslock
         try:
             with self._admission_guard("graywolf-upstream-update", target):
                 return self._graywolf_upstream_update_locked(target, main)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy as busy:
+            # AUDIT-FOUND: admission contention with ANOTHER process raises ResourceBusy, not
+            # AdmissionRefused — return the same typed refusal every peer op gives.
+            return ActionResult(False, f"Cannot update '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
 
     def _graywolf_upstream_update_locked(self, target: str, main) -> ActionResult:
         from . import runtime_fs
@@ -3532,7 +3588,13 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
         notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
         restart_ok = True
-        if was_running:
+        # AUDIT-FOUND: `was_running` was sampled BEFORE a fetch that can run for minutes; an
+        # operator stop during the fetch (stop needs no task admission) was then overridden by
+        # the restart. Re-sample: restart only what is STILL running now.
+        if was_running and not self.stack_running(target):
+            notes.append("  [restart] skipped — the stack was stopped during the fetch "
+                         "(operator stop preserved)")
+        elif was_running:
             res = self.restart(target, apply=True)
             restart_ok = res.ok
             notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")

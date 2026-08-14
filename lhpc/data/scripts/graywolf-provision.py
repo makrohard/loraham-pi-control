@@ -28,6 +28,7 @@ import http.cookiejar
 import json
 import os
 import secrets
+import stat
 import sys
 import time
 import urllib.error
@@ -97,8 +98,18 @@ def wait_ready(api: Api, deadline: float) -> None:
 def read_password(state_dir: str) -> str | None:
     # O_NOFOLLOW: a credential-path symlink must never be read THROUGH (it would leak
     # whatever it points at as the password). A symlink leaf raises ELOOP -> None.
+    # O_NONBLOCK + S_ISREG: a planted FIFO at this path would otherwise BLOCK the open
+    # forever and silently wedge the whole chain start (AUDIT-FOUND); anything that is
+    # not a regular file reads as absent. (A regular file ignores O_NONBLOCK on read.)
+    # ACCEPTED RISK (operator ruling): a symlinked PARENT directory is still followed —
+    # state_dir lives under the operator's own runtime root, so planting one requires
+    # the operator account itself; no privilege boundary is crossed.
     try:
-        fd = os.open(os.path.join(state_dir, CRED_FILE), os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(os.path.join(state_dir, CRED_FILE),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
         with os.fdopen(fd, encoding="utf-8") as fh:
             value = fh.read().strip()
     except OSError:

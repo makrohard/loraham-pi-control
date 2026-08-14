@@ -425,11 +425,20 @@ def test_dep_stacks_to_release_selection(tmp_path, monkeypatch):
 
 
 def test_client_stop_tears_down_unused_dependency_stack(tmp_path, monkeypatch):
-    """Operator stop of graywolf stops the kiss it alone used — internally (_operator=False),
-    so the released stack is never tombstoned; only graywolf carries the stop intent."""
+    """Operator stop of a RUNNING graywolf stops the kiss it alone used — internally
+    (_operator=False), so the released stack is never tombstoned; only graywolf carries
+    the stop intent."""
+    from lhpc.core import lifecycle as lcmod
+    from lhpc.core.outcomes import CompResult, Outcome
     svc = _svc(tmp_path)
     monkeypatch.setattr(ControllerService, "_dep_stacks_to_release",
                         lambda self, stk, sid: ["kiss"] if sid == "graywolf" else [])
+    # graywolf's own component ACTUALLY stops (the gate: an entirely already-stopped
+    # target never releases anything — see the negative test below).
+    monkeypatch.setattr(lcmod.Lifecycle, "stop",
+                        lambda self, comp, band=None: CompResult(
+                            component=comp.id, stack="", action="stop",
+                            outcome=Outcome.STOPPED, summary="stopped"))
     calls = []
     orig = ControllerService.stop
 
@@ -442,6 +451,78 @@ def test_client_stop_tears_down_unused_dependency_stack(tmp_path, monkeypatch):
     assert any("dependency] kiss" in d for d in res.details)
     intents = svc._stop_intent_stacks()
     assert "graywolf" in intents and "kiss" not in intents and "daemon" not in intents
+
+
+def test_stop_of_not_running_stack_never_releases_dependencies(tmp_path, monkeypatch):
+    """AUDIT (High): `stop graywolf` while graywolf is NOT running must not tear down a kiss
+    the operator may have started independently — ALREADY_STOPPED alone never releases."""
+    import types
+
+    from lhpc.core.model import RunState
+    svc = _svc(tmp_path)
+    kiss = svc.stack("kiss")
+
+    def fake_snap(self, fresh=False):
+        comps = {c.id: types.SimpleNamespace(run_state=RunState.RUNNING)
+                 for c in kiss.components}
+        return types.SimpleNamespace(stacks=[types.SimpleNamespace(stack=kiss,
+                                                                   components=comps)])
+    calls = []
+    orig = ControllerService.stop
+
+    def spy(self, target, apply=False, **kw):
+        calls.append(target)
+        return orig(self, target, apply=apply, **kw)
+    monkeypatch.setattr(ControllerService, "build_snapshot", fake_snap)
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: [])
+    monkeypatch.setattr(ControllerService, "stop", spy)
+    res = svc.stop("graywolf", apply=True)                       # graywolf is NOT running
+    assert res.ok
+    assert calls == ["graywolf"]                                 # kiss untouched
+    assert not any(r.stack == "kiss" for r in (res.results or ()))
+
+
+def test_dep_override_on_running_dep_warns_and_starts(tmp_path):
+    """AUDIT (warn-and-start, operator ruling): a dependency override submitted while that
+    dependency is already running is NOT applied — the start proceeds but says so loudly,
+    never reporting silent success. An override equal to the saved value stays quiet."""
+    from lhpc.core.probes.backends import Listener
+    svc = ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+                       200: ["loraham-kiss-tnc"]},
+        listeners=[Listener(family="ipv4", ip="0.0.0.0", port=8001, inode=1)],
+        owners={1: 200},
+        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    res = svc.start("graywolf", apply=True, params={"loraham-kiss-tnc.tx_freq": "434.100"})
+    assert any("[warn] loraham-kiss-tnc" in d and "tx_freq=434.1" in d
+               and "restart kiss" in d for d in res.details), res.details
+    # equal to the saved/default value -> untouched form -> no warning
+    res2 = svc.start("graywolf", apply=True, params={"loraham-kiss-tnc.tx_freq": "433.775"})
+    assert not any("[warn] loraham-kiss-tnc" in d for d in res2.details)
+
+
+def test_stop_plan_discloses_dependency_and_daemon_collateral(tmp_path, monkeypatch):
+    """AUDIT: the dry-run stop plan must name the dependency stacks AND the daemon band the
+    stop would also take down — the confirm page hid the collateral entirely."""
+    svc = _svc(tmp_path)
+
+    class _V:
+        reachable = True
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, t: t == "graywolf")
+    monkeypatch.setattr(ControllerService, "_dep_stacks_to_release",
+                        lambda self, stk, sid: ["kiss"])
+    # kiss is the only current daemon dependent — and it is being released, so the plan
+    # must look PAST it and predict the daemon release too.
+    monkeypatch.setattr(ControllerService, "stop_dependents",
+                        lambda self, t, bands=None: ["kiss"])
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b: _V())
+    monkeypatch.setattr(ControllerService, "_operation_bands",
+                        lambda self, t, band, radio, op: {"433"})
+    res = svc.stop("graywolf", apply=False)
+    assert any("[also stops] kiss" in d for d in res.details)
+    assert any("[also stops] daemon 433" in d for d in res.details)
 
 
 # --- M6: band-aware radio conflicts + non-disruptive daemon (re)start -----------------------

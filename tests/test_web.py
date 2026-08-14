@@ -932,6 +932,33 @@ def test_confirm_save_routes_dependency_values_to_their_stack(tmp_path, monkeypa
     assert svc2.stack_config("graywolf").get("call") == "DJ0CHE-7"     # own values still saved
 
 
+def test_confirm_save_reports_partial_dependency_save(tmp_path, monkeypatch):
+    """AUDIT (Low): the target's config persists BEFORE a dependency's — a failed dependency
+    save must block the start and report saved vs NOT-saved precisely, never the blanket
+    'the stack configuration could not be saved'."""
+    from lhpc.core.services import ActionResult as _AR
+    from lhpc.core.services import ControllerService as _CS
+    monkeypatch.setattr(_CS, "is_installed", lambda self, t: True)
+    monkeypatch.setattr(_CS, "unbuilt_components", lambda self, t: [])
+    orig = _CS.save_config_bundle
+
+    def flaky(self, target, **kw):
+        if target == "kiss":
+            return _AR(False, "disk full")
+        return orig(self, target, **kw)
+    monkeypatch.setattr(_CS, "save_config_bundle", flaky)
+    c = _install_igate(tmp_path)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf",
+                                "_save": "stack", "_save_then_start": "1", "_params": "1",
+                                "p_call": "DJ0CHE-7",
+                                "p_loraham-kiss-tnc__tx_freq": "434.200", "band": ""})
+    body = r.get_data(as_text=True)
+    assert r.status_code == 200                              # re-rendered, not started
+    assert "saved: &#39;graywolf&#39; config" in body or "saved: 'graywolf' config" in body
+    assert "NOT saved" in body and "kiss" in body
+
+
 def test_confirm_save_does_not_start(tmp_path):
     # A ReadOnlyGuard app would raise if Save invoked a mutating lifecycle method — Save only writes
     # config. Use the guarded client to prove Save never starts.
