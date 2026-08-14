@@ -752,8 +752,11 @@ main = "loraham-kiss-tnc"
     max = 65535
     label = "KISS TCP port"
     # 868 LoRa-APRS uses the 869.4–869.65 MHz sub-band (g3: 10% duty / 500 mW) for
-    # automated stations -> 869.525 MHz. 433 keeps the LoRa-APRS split (RX 433.775 /
-    # TX 433.900). Per-band defaults are picked from the band the stack runs on.
+    # automated stations -> 869.525 MHz. 433 defaults to SINGLE-CHANNEL 433.775 both
+    # ways — the frequency standard ESP32 trackers (CA2RXU/OE5BPA) both TX and LISTEN
+    # on; the classic LoRa-APRS split (RX 433.775 / TX 433.900) left our beacons
+    # unheard by every stock tracker (live-found) and stays available by config.
+    # Per-band defaults are picked from the band the stack runs on.
     [[stack.component.param]]
     name = "rx_freq"
     validator = "freq"
@@ -767,8 +770,8 @@ main = "loraham-kiss-tnc"
     validator = "freq"
     kind = "str"
     arg = "--tx-freq"
-    band_defaults = { "433" = "433.900", "868" = "869.525" }
-    default = "433.900"
+    band_defaults = { "433" = "433.775", "868" = "869.525" }
+    default = "433.775"
     label = "TX frequency (MHz)"
     [[stack.component.param]]
     name = "kiss_bind"

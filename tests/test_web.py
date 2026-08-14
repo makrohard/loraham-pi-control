@@ -423,7 +423,8 @@ def test_multi_band_config_stored_per_band(tmp_path):
     c.post("/stacks/kiss/config", data={"_csrf": token, "band": "868",
                                         "c_tx_freq": "869.525"})
     assert "869.525" in c.get("/stacks?band=868&open=kiss").get_data(as_text=True)   # kiss body lazy-loaded
-    assert "433.900" in c.get("/stacks?band=433&open=kiss").get_data(as_text=True)  # 433 untouched
+    body_433 = c.get("/stacks?band=433&open=kiss").get_data(as_text=True)
+    assert "433.775" in body_433 and "869.525" not in body_433                      # 433 untouched
 
 
 
