@@ -1263,11 +1263,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         nothing here."""
         values: dict = {}
         for r in service.stack_start_params(target, band, params, file_over):
+            if r.get("dep_stack"):
+                continue                       # dependency rows persist into THEIR stack's config
             if r["field"].startswith("pf_"):
                 values[f"file_{r['key']}"] = r["value"]
             else:
                 values[r["key"]] = r["value"]
         return values
+
+    def _dep_save_values(target: str, band: str, params: dict, file_over) -> dict:
+        """Per-dependency-stack `save_config_bundle` values from the confirm panel's dependency
+        rows — {dep_stack_id: values}. Keys stay component-qualified (they resolve in the
+        dependency's own scope); locked rows (the GPS switch) are never persisted from here."""
+        by_dep: dict = {}
+        for r in service.stack_start_params(target, band, params, file_over):
+            dsid = r.get("dep_stack")
+            if not dsid or r["locked"]:
+                continue
+            k = f"file_{r['key']}" if r["field"].startswith("pf_") else r["key"]
+            by_dep.setdefault(dsid, {})[k] = r["value"]
+        return by_dep
 
     def _save_daemon_confirm(target: str) -> dict:
         """Persist the inline daemon-radio panel values (per band) from the confirm form. Returns a
@@ -1403,6 +1418,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
                       "ok" if res.ok else "warn")
                 stack_ok = res.ok
+            # Dependency rows persist into the DEPENDENCY's own stack config (band-aware) —
+            # part of the same fail-closed Save: any failed dependency save blocks the start.
+            if save_mode in ("stack", "all") and stack_ok:
+                for _dsid, _dvals in _dep_save_values(target, band, params, file_over).items():
+                    _dres = service.save_config_bundle(_dsid, values=_dvals, band=band)
+                    flash(f"{_dsid}: " + _dres.summary
+                          + (" " + "; ".join(_dres.details) if _dres.details else ""),
+                          "ok" if _dres.ok else "warn")
+                    stack_ok = stack_ok and _dres.ok
             # Save & start SHORT-CIRCUIT: a failed stack save must NOT trigger the daemon save and
             # must NOT start — re-render immediately with the submitted values. (`_save_daemon_confirm`
             # / `save_daemon_params` are never reached.)

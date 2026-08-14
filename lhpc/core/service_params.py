@@ -322,15 +322,64 @@ class ParamsConfigMixin:
             c = next((c for c in comps if c.id == cid), None)
             p = _pget(c, nm) if c is not None else None
             if p is None:
-                return None, None, f"unknown {kind} parameter {key!r}"
+                return self._dep_param_ref(target, kind, key)
             return c, p, None
         owners = [(c, _pget(c, key)) for c in comps if _pget(c, key) is not None]
         if not owners:
-            return None, None, f"unknown {kind} parameter {key!r}"
+            return self._dep_param_ref(target, kind, key)
         if len(owners) == 1:
             return owners[0][0], owners[0][1], None
         return None, None, (f"{kind} parameter {key!r} is declared by multiple components — qualify "
                             f"it as '<component>.{key}'")
+
+    def _dep_param_components(self, target: str) -> list[tuple[str, object]]:
+        """(dep_stack_id, component) pairs a STACK target's start pulls up from OTHER stacks
+        (its run order, the daemon excluded — the daemon panel is its own channel): the
+        confirm page shows their params and the start accepts component-qualified ephemeral
+        overrides for them. [] for a non-stack target — a direct component run keeps its
+        narrow scope."""
+        if self.stack(target) is None:
+            return []
+        sid = self.stack_of(target)
+        out: list[tuple[str, object]] = []
+        seen: set[str] = set()
+        for _, c in self._run_order(target):
+            dsid = self.stack_of(c.id)
+            if (not dsid or dsid == sid or self._is_daemon_target(dsid)
+                    or c.id in seen or getattr(c, "test_fixture", False)):
+                continue
+            seen.add(c.id)
+            out.append((dsid, c))
+        return out
+
+    def _dep_param_ref(self, target: str, kind: str, key: str):
+        """Dependency-scope fallback for `_param_ref` (reached only when the target's OWN scope
+        does not resolve the key): a STACK target's start also accepts overrides for the
+        dependency components its run order pulls up (kiss under graywolf) — the qualified
+        `component_id.name`, or a bare name unique among the dependencies. Operator ruling:
+        starting one app or a stack of apps must offer the same control, so a value editable
+        when starting kiss directly is editable when graywolf pulls kiss up."""
+        deps = self._dep_param_components(target)
+
+        def _pget(c, nm):
+            ps = (c.run_params if kind == "run"
+                  else (c.config_file.params if c.config_file else ()))
+            return next((p for p in ps if p.name == nm), None)
+
+        if "." in key:
+            cid, nm = key.split(".", 1)
+            c = next((c for _s, c in deps if c.id == cid), None)
+            p = _pget(c, nm) if c is not None else None
+            if p is None:
+                return None, None, f"unknown {kind} parameter {key!r}"
+            return c, p, None
+        owners = [(c, _pget(c, key)) for _s, c in deps if _pget(c, key) is not None]
+        if not owners:
+            return None, None, f"unknown {kind} parameter {key!r}"
+        if len(owners) == 1:
+            return owners[0][0], owners[0][1], None
+        return None, None, (f"{kind} parameter {key!r} is declared by multiple dependency "
+                            f"components — qualify it as '<component>.{key}'")
 
     def _overrides_for_comp(self, target: str, kind: str, overrides, comp_id: str) -> dict:
         """The subset of ephemeral overrides (API-key form) that target `comp_id`, as {name: value}
@@ -837,6 +886,17 @@ class ParamsConfigMixin:
         # (component, param) and REJECTS an unqualified duplicate — so colliding names never flatten.
         clean_params: list = []      # (kind 'r'|'f', component, param, value)
         clean_auto: dict = {}        # autostart_<id> -> "on"/""  (stack target only, flat)
+        # `_param_ref` also resolves DEPENDENCY components' params (the start-override channel);
+        # a persisted config write must stay in the component's OWN stack store, so anything the
+        # dependency fallback resolved is refused here with a pointer to the right stack.
+        own_ids = {c.id for c in self._target_components(target)}
+
+        def _own(c, key):
+            if c.id in own_ids:
+                return True
+            errors.append(f"{key!r} belongs to dependency component '{c.id}' — save it on its "
+                          f"own stack ('{self.stack_of(c.id)}')")
+            return False
         for key, value in (values or {}).items():
             if key.startswith("autostart_"):
                 if key[len("autostart_"):] in optional_ids:
@@ -849,6 +909,8 @@ class ParamsConfigMixin:
                 if err:
                     errors.append(f"unknown config field: {key!r}" if err.startswith("unknown")
                                   else err)
+                    continue
+                if not _own(c, key):
                     continue
                 vf = str(value)
                 if vf.strip() == "":
@@ -864,6 +926,8 @@ class ParamsConfigMixin:
             c, p, err = self._param_ref(target, "run", key)
             if err:
                 errors.append(f"unknown config field: {key!r}" if err.startswith("unknown") else err)
+                continue
+            if not _own(c, key):
                 continue
             if self._is_hmac_managed_param(c, p) and p.name not in _allow_managed_params:
                 errors.append(self._HMAC_MANAGED_PARAM_MSG)     # never clearable via generic config
@@ -1752,6 +1816,39 @@ class ParamsConfigMixin:
                         "Settings") if locked else ""
                 rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
                                             c.name, key, c.id, locked, hint))
+        rows.extend(self._dep_param_rows(target, band, params, file_over))
+        return rows
+
+    def _dep_param_rows(self, target: str, band: str = "", params: dict | None = None,
+                        file_over: dict | None = None) -> list[dict]:
+        """Start-confirm rows for the DEPENDENCY components a stack start pulls up (kiss under
+        graywolf) — EDITABLE exactly like the target's own rows (operator ruling: starting one
+        app or a stack of apps must offer the same control; the earlier saved-only rendering
+        hid the KISS TX frequency behind another page). The start accepts these as component-
+        qualified ephemeral overrides, and Save persists them into the dependency's OWN stack
+        config. Fields/keys are ALWAYS component-qualified (`p_<comp>__<name>` / `<comp>.<name>`)
+        so they can never collide with the target's own fields; each row carries `dep_stack` so
+        the save path routes it to the dependency's config. The GPS switch keeps its saved-only
+        rendering — the one-frozen-decision rule is stack-level, the same as everywhere else."""
+        rows: list[dict] = []
+        for dep_sid, c in self._dep_param_components(target):
+            dep = self.stack(dep_sid)
+            dep_band = self._config_band(dep_sid, band)
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
+                               if not getattr(p, "hidden", False)]):
+                default = self._op_subst(dict(p.band_defaults).get(dep_band or band, p.default))
+                saved = self._resolved_param_value(dep_sid, kind, c.id, p.name, band)
+                key = f"{c.id}.{p.name}"
+                field = f"{'p_' if kind == 'run' else 'pf_'}{c.id}__{p.name}"
+                cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
+                locked = kind == "run" and p.name == self.GPS_PARAM
+                hint = (f"saved setting — change it under Apps → "
+                        f"{dep.name if dep else dep_sid} → Settings") if locked else ""
+                row = self._param_row(p, field, kind, cur, saved, default, False,
+                                      c.name, key, c.id, locked, hint)
+                row["dep_stack"] = dep_sid
+                rows.append(row)
         return rows
 
     def start_param_fields(self, target: str, band: str = "") -> list[dict]:
@@ -1768,6 +1865,18 @@ class ParamsConfigMixin:
                     "field": self._param_field(target, kind, c.id, p.name),
                     "key": self._param_key(target, kind, c.id, p.name),
                     "saved": self._resolved_param_value(target, kind, c.id, p.name, band)})
+        # Dependency components (kiss under graywolf): ALWAYS component-qualified field/key —
+        # the same addressing `_dep_param_rows` renders, so the confirm POST parser and the
+        # save path read them like every other field.
+        for dep_sid, c in self._dep_param_components(target):
+            for kind, p in ([("run", p) for p in self._form_run_params(c)]
+                            + [("file", p) for p in (c.config_file.params if c.config_file else ())]):
+                out.append({
+                    "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
+                    "field": f"{'p_' if kind == 'run' else 'pf_'}{c.id}__{p.name}",
+                    "key": f"{c.id}.{p.name}",
+                    "saved": self._resolved_param_value(dep_sid, kind, c.id, p.name, band),
+                    "dep_stack": dep_sid})
         return out
 
     def stack_start_param_groups(self, target: str, band: str = "", params: dict | None = None,
@@ -1783,7 +1892,7 @@ class ParamsConfigMixin:
         by_comp: dict[str, list] = {}
         order: list[str] = []
         for r in rows:
-            if r["is_identity"]:
+            if r["is_identity"] or r.get("dep_stack"):
                 continue
             if r["comp_name"] not in by_comp:
                 by_comp[r["comp_name"]] = []
@@ -1791,39 +1900,22 @@ class ParamsConfigMixin:
             by_comp[r["comp_name"]].append(r)
         for name in order:
             groups.append({"header": name, "rows": by_comp[name]})
-        groups.extend(self._dep_saved_param_groups(target, band))
-        return groups
-
-    def _dep_saved_param_groups(self, target: str, band: str = "") -> list[dict]:
-        """Start-confirm groups for the DEPENDENCY stacks this start pulls up (the KISS TNC
-        under graywolf) — SAVED-ONLY rows showing the values their internal starts will use.
-        A dependency starts from its own saved config; there is no per-start override channel
-        into it, so locked display is the only honest rendering (see `_param_row`). The daemon
-        is excluded (its radio params are the separate daemon panel), and only components
-        actually in the run order appear (a dependency's optional extras are not started).
-        Live-found: graywolf's confirm page hid the KISS TNC's TX frequency — exactly the
-        value that decides whether stock trackers hear the station."""
-        sid = self.stack_of(target)
-        if not self.stack(target):          # a direct component run keeps its narrow page
-            return []
-        order = self._run_order(target)
-        order_comp_ids = {c.id for _, c in order}
-        dep_sids = [d for d in dict.fromkeys(self.stack_of(c.id) for _, c in order)
-                    if d and d != sid and not self._is_daemon_target(d)]
-        groups: list[dict] = []
-        for dep_sid in dep_sids:
-            dep = self.stack(dep_sid)
-            if dep is None:
+        # Dependency stacks the run order pulls up render AFTER the target's own groups, one
+        # group per dependency stack — editable like everything else (see _dep_param_rows).
+        dep_by: dict[str, list] = {}
+        dep_order: list[str] = []
+        for r in rows:
+            dsid = r.get("dep_stack") or ""
+            if not dsid:
                 continue
-            hint = f"saved setting — change it under Apps → {dep.name} → Settings"
-            rows = []
-            for r in self.stack_start_params(dep_sid, band):
-                if r["component"] not in order_comp_ids:
-                    continue
-                rows.append({**r, "locked": True, "locked_hint": hint,
-                             "is_identity": False})
-            if rows:
-                groups.append({"header": f"{dep.name} (dependency)", "rows": rows})
+            if dsid not in dep_by:
+                dep_by[dsid] = []
+                dep_order.append(dsid)
+            dep_by[dsid].append(r)
+        for dsid in dep_order:
+            dep = self.stack(dsid)
+            groups.append({"header": f"{dep.name if dep else dsid} (dependency)",
+                           "rows": dep_by[dsid]})
         return groups
 
     @staticmethod

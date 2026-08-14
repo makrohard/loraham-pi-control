@@ -1092,8 +1092,11 @@ class LifecycleOpsMixin:
             # COMPONENT-scoped launch config (this component's OWN run params from the owner-stack
             # store) so a stored sibling run parameter can never leak into another component's argv
             # through a name collision. Ephemeral confirm-page params (this start only) override it
-            # for BOTH the launch and post-start — but only for the explicit target (or every
-            # component of a stack target), never leaking the target's values into a dependency.
+            # for BOTH the launch and post-start. For a STACK target this includes DEPENDENCY
+            # components pulled up by the run order (kiss under graywolf): `_param_ref`'s
+            # dependency fallback resolves their component-qualified keys, and
+            # `_overrides_for_comp` hands each component ONLY its own subset — a target value
+            # still never leaks into a dependency through a name collision.
             comp_cfg = dict(self.stack_config(comp.id, cfg_band))
             if _target_is_stack or comp.id == target:
                 comp_cfg.update(self._overrides_for_comp(target, "run", params, comp.id))

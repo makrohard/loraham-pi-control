@@ -914,6 +914,24 @@ def test_confirm_save_stack_persists_config(tmp_path):
     assert cfg["call"] == "DJ0CHE-10" and cfg["tx_freq"] == "434.500"
 
 
+def test_confirm_save_routes_dependency_values_to_their_stack(tmp_path, monkeypatch):
+    """A dependency row edited on the confirm page (kiss's tx_freq under graywolf) persists
+    into the DEPENDENCY's own stack config on Save — never into the target's store."""
+    from lhpc.core.services import ControllerService as _CS
+    monkeypatch.setattr(_CS, "is_installed", lambda self, t: True)     # skip the install gate
+    monkeypatch.setattr(_CS, "unbuilt_components", lambda self, t: [])
+    c = _install_igate(tmp_path)
+    tok = _csrf(c)
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf",
+                                "_save": "stack", "_params": "1", "p_call": "DJ0CHE-7",
+                                "p_loraham-kiss-tnc__tx_freq": "434.200", "band": ""})
+    assert r.status_code == 200                              # re-rendered confirm, not started
+    svc2 = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc2.stack_config("kiss")["tx_freq"] == "434.200"           # in KISS's own store
+    assert svc2.stack_config("graywolf").get("tx_freq") is None        # never the target's
+    assert svc2.stack_config("graywolf").get("call") == "DJ0CHE-7"     # own values still saved
+
+
 def test_confirm_save_does_not_start(tmp_path):
     # A ReadOnlyGuard app would raise if Save invoked a mutating lifecycle method — Save only writes
     # config. Use the guarded client to prove Save never starts.

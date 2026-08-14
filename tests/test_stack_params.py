@@ -239,19 +239,27 @@ def test_param_groups_required_on_top_then_by_component(tmp_path):
     assert all(g["header"] != "Required" for g in svc.stack_start_param_groups("kiss"))
 
 
-def test_param_groups_show_dependency_stacks_saved_only(tmp_path):
+def test_param_groups_show_dependency_stacks_editable(tmp_path):
     """The confirm page also shows the DEPENDENCY stacks a start pulls up (kiss under
-    graywolf) — saved-only rows (locked: a dependency starts from its own saved config;
-    there is no per-start override channel into it). Live-found: graywolf's page hid the
-    KISS TNC's TX frequency, the value that decides whether stock trackers hear the box."""
+    graywolf) — EDITABLE like the target's own rows (operator ruling: starting one app or
+    a stack of apps must offer the same control). Fields/keys are always component-
+    qualified so they can never collide with the target's own; each row carries
+    `dep_stack` so the save path routes it into the dependency's own config."""
     svc = _svc(tmp_path)
     groups = svc.stack_start_param_groups("graywolf")
     headers = [g["header"] for g in groups]
     kiss = next(g for g in groups if g["header"] == "LoRaHAM KISS TNC (dependency)")
-    assert all(r["locked"] and not r["is_identity"] for r in kiss["rows"])
-    assert all("Apps" in r["locked_hint"] for r in kiss["rows"])           # points at Settings
+    assert all(not r["locked"] and not r["is_identity"] for r in kiss["rows"])
     tx = next(r for r in kiss["rows"] if r["name"] == "tx_freq")
     assert tx["value"] == "433.775"                                        # the value this start uses
+    assert tx["field"] == "p_loraham-kiss-tnc__tx_freq"                    # always qualified
+    assert tx["key"] == "loraham-kiss-tnc.tx_freq"
+    assert tx["dep_stack"] == "kiss"
+    # an ephemeral submitted value prefills the row (round-trip on re-render)
+    over = {"loraham-kiss-tnc.tx_freq": "434.100"}
+    g2 = svc.stack_start_param_groups("graywolf", params=over)
+    tx2 = next(r for g in g2 for r in g["rows"] if r.get("key") == "loraham-kiss-tnc.tx_freq")
+    assert tx2["value"] == "434.100" and tx2["config_value"] == "433.775"
     # the daemon keeps its own dedicated panel — never duplicated here
     assert not any("daemon" in h.lower() for h in headers)
     # optional dependency components that the run order does not start stay off the page
@@ -264,6 +272,41 @@ def test_param_groups_show_dependency_stacks_saved_only(tmp_path):
     # a DIRECT component run keeps its narrow page
     assert all("(dependency)" not in g["header"]
                for g in svc.stack_start_param_groups("meshcom-gps-relay"))
+    # ...and the form-parse source of truth carries the same qualified dep fields
+    f = next(f for f in svc.start_param_fields("graywolf")
+             if f.get("dep_stack") == "kiss" and f["name"] == "tx_freq")
+    assert f["field"] == "p_loraham-kiss-tnc__tx_freq" and f["key"] == "loraham-kiss-tnc.tx_freq"
+
+
+def test_dependency_param_override_channel(tmp_path):
+    """The start accepts component-qualified ephemeral overrides for dependency components
+    — validated against the DEPENDENCY's param defs and routed only to that component —
+    while persisted saves are refused from the wrong stack's bundle."""
+    svc = _svc(tmp_path)
+    # validation: qualified + unique-bare resolve; bad values and unknown names are typed errors
+    assert svc._normalize_run_params("graywolf", {"loraham-kiss-tnc.tx_freq": "433.900"}) \
+        == ({"loraham-kiss-tnc.tx_freq": "433.900"}, "")
+    assert svc._normalize_run_params("graywolf", {"tx_freq": "433.900"}) \
+        == ({"tx_freq": "433.900"}, "")                    # bare, unique among the deps
+    assert "invalid frequency" in svc._normalize_run_params(
+        "graywolf", {"loraham-kiss-tnc.tx_freq": "banana"})[1]
+    assert "unknown parameter" in svc._normalize_run_params(
+        "graywolf", {"loraham-kiss-tnc.nope": "1"})[1]
+    # routing: each component receives ONLY its own subset — no cross-leak either way
+    over = {"loraham-kiss-tnc.tx_freq": "433.900", "tnc_port": "8123"}
+    assert svc._overrides_for_comp("graywolf", "run", over, "loraham-kiss-tnc") \
+        == {"tx_freq": "433.900"}
+    assert svc._overrides_for_comp("graywolf", "run", over, "graywolf") == {"tnc_port": "8123"}
+    # a dry-run start does not refuse the dep override as an unknown parameter
+    res = svc.start("graywolf", apply=False, params={"loraham-kiss-tnc.tx_freq": "433.900"})
+    assert "invalid parameter" not in (res.summary or "")
+    # persisted saves stay in the owning stack: the target's bundle refuses a dep key with a
+    # pointer at the right stack; the dependency's own bundle accepts the same key
+    r = svc.save_config_bundle("graywolf", values={"loraham-kiss-tnc.tx_freq": "433.900"})
+    assert not r.ok and any("save it on its own stack" in d for d in r.details)
+    assert svc.stack_config("graywolf").get("tx_freq") is None             # nothing leaked
+    r2 = svc.save_config_bundle("kiss", values={"loraham-kiss-tnc.tx_freq": "433.900"})
+    assert r2.ok and svc.stack_config("kiss").get("tx_freq") == "433.900"
 
 
 def test_same_process_claim_waits_then_succeeds(tmp_path):
