@@ -239,6 +239,33 @@ def test_param_groups_required_on_top_then_by_component(tmp_path):
     assert all(g["header"] != "Required" for g in svc.stack_start_param_groups("kiss"))
 
 
+def test_param_groups_show_dependency_stacks_saved_only(tmp_path):
+    """The confirm page also shows the DEPENDENCY stacks a start pulls up (kiss under
+    graywolf) — saved-only rows (locked: a dependency starts from its own saved config;
+    there is no per-start override channel into it). Live-found: graywolf's page hid the
+    KISS TNC's TX frequency, the value that decides whether stock trackers hear the box."""
+    svc = _svc(tmp_path)
+    groups = svc.stack_start_param_groups("graywolf")
+    headers = [g["header"] for g in groups]
+    kiss = next(g for g in groups if g["header"] == "LoRaHAM KISS TNC (dependency)")
+    assert all(r["locked"] and not r["is_identity"] for r in kiss["rows"])
+    assert all("Apps" in r["locked_hint"] for r in kiss["rows"])           # points at Settings
+    tx = next(r for r in kiss["rows"] if r["name"] == "tx_freq")
+    assert tx["value"] == "433.775"                                        # the value this start uses
+    # the daemon keeps its own dedicated panel — never duplicated here
+    assert not any("daemon" in h.lower() for h in headers)
+    # optional dependency components that the run order does not start stay off the page
+    assert all(r["component"] != "loraham-kiss-serial" for r in kiss["rows"])
+    # dependency groups render AFTER the target's own groups
+    assert headers.index("LoRaHAM KISS TNC (dependency)") > headers.index("Graywolf APRS station")
+    # a stack whose only dependency is the daemon gets no dependency group
+    assert all("(dependency)" not in h for h in
+               (g["header"] for g in svc.stack_start_param_groups("voice")))
+    # a DIRECT component run keeps its narrow page
+    assert all("(dependency)" not in g["header"]
+               for g in svc.stack_start_param_groups("meshcom-gps-relay"))
+
+
 def test_same_process_claim_waits_then_succeeds(tmp_path):
     # Two overlapping controller ops in DIFFERENT threads of the SAME process that share a claim
     # must SERIALIZE (wait), not fail with "your own stack is busy". A different-process holder

@@ -1791,6 +1791,39 @@ class ParamsConfigMixin:
             by_comp[r["comp_name"]].append(r)
         for name in order:
             groups.append({"header": name, "rows": by_comp[name]})
+        groups.extend(self._dep_saved_param_groups(target, band))
+        return groups
+
+    def _dep_saved_param_groups(self, target: str, band: str = "") -> list[dict]:
+        """Start-confirm groups for the DEPENDENCY stacks this start pulls up (the KISS TNC
+        under graywolf) — SAVED-ONLY rows showing the values their internal starts will use.
+        A dependency starts from its own saved config; there is no per-start override channel
+        into it, so locked display is the only honest rendering (see `_param_row`). The daemon
+        is excluded (its radio params are the separate daemon panel), and only components
+        actually in the run order appear (a dependency's optional extras are not started).
+        Live-found: graywolf's confirm page hid the KISS TNC's TX frequency — exactly the
+        value that decides whether stock trackers hear the station."""
+        sid = self.stack_of(target)
+        if not self.stack(target):          # a direct component run keeps its narrow page
+            return []
+        order = self._run_order(target)
+        order_comp_ids = {c.id for _, c in order}
+        dep_sids = [d for d in dict.fromkeys(self.stack_of(c.id) for _, c in order)
+                    if d and d != sid and not self._is_daemon_target(d)]
+        groups: list[dict] = []
+        for dep_sid in dep_sids:
+            dep = self.stack(dep_sid)
+            if dep is None:
+                continue
+            hint = f"saved setting — change it under Apps → {dep.name} → Settings"
+            rows = []
+            for r in self.stack_start_params(dep_sid, band):
+                if r["component"] not in order_comp_ids:
+                    continue
+                rows.append({**r, "locked": True, "locked_hint": hint,
+                             "is_identity": False})
+            if rows:
+                groups.append({"header": f"{dep.name} (dependency)", "rows": rows})
         return groups
 
     @staticmethod

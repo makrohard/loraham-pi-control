@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Stopping a stack now also tears down the dependency stacks it alone was using (stop graywolf → kiss stops → daemon released); a dependency another running stack still needs stays up
+- The Start-confirm page also shows the dependency stacks the start pulls up (kiss under graywolf) as read-only saved settings — the TX frequency is visible before keying up
 
 ## 0.1.15
 
