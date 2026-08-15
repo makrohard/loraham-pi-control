@@ -1,13 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.17
 
-- New **Network** panel (AP-managed boxes only): join an existing Wi-Fi from the console by name — the box's own AP is the automatic safety net (back after every reboot and within seconds of losing the WLAN), and a **preferred** network is re-joined at boot and whenever it reappears. The console follows onto the joined network automatically (nginx allowlist + client cert stay the gate; nft console ports are unscoped on AP-managed boxes — live-found lockout); a clock-jump-expired CRL self-heals (the box's first NTP sync used to lock every client cert out). Authorization via a second bootstrap-installed polkit rule (opt-out `--no-network-controls`; polkitd rides either feature's flag)
-
-## Unreleased
-
-- Power buttons now show on a correctly authorized box (live-found on the fresh image): visibility asks logind directly (`CanReboot`/`CanPowerOff`, bounded + cached **per action**, TTL both ways) — the rule file sits in a directory Debian keeps unreadable to the operator process, so the presence probe could never see it; a partial grant shows only its button, and a revocation disappears within a minute
-- The Reboot confirm page warns that the box's Wi-Fi AP vanishes for a minute or two mid-reboot (live-found: a rebooting AP box "looks shut down" — clients silently fall back to another network instead of re-joining)
+- New **Network** panel (AP-managed boxes only): join an existing Wi-Fi from the console; the box's own AP stays the automatic fallback, and a **preferred** network is re-joined whenever it reappears. Console follows onto the joined network (cert + nginx allowlist stay the gate); expired-CRL self-heal; second polkit rule via bootstrap (opt-out `--no-network-controls`)
+- Power buttons now show on a correctly authorized box: visibility asks logind directly (per-action, cached)
+- The Reboot confirm page warns that the AP vanishes for a minute or two mid-reboot
 
 ## 0.1.16
 
