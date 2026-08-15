@@ -532,18 +532,48 @@ class MaintenanceOpsMixin:
     # past the TTL the trigger provably cannot fire, so admissions may safely reopen.
     POWER_PENDING_TTL_S: ClassVar[float] = 120.0
 
+    # A non-yes visibility verdict re-probes at most this often; a yes is cached for the
+    # process lifetime (installing the rule shows up within a minute, no restart needed).
+    _POWER_REPROBE_S: ClassVar[float] = 60.0
+
+    def _power_verdict(self, kind: str) -> str:
+        """logind's CanReboot/CanPowerOff answer for THIS process's user — one of
+        yes/no/challenge/na, or '' on any failure. Structured parse of the busctl output
+        (exactly `s "<verdict>"`), never substring."""
+        import re as _re
+        r = self._system.runner.run(
+            ["busctl", "--timeout=5", "call", "org.freedesktop.login1",
+             "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+             self._POWER_KINDS[kind]], 8.0)
+        if getattr(r, "returncode", 1) != 0:
+            return ""
+        m = _re.fullmatch(r'\s*s\s+"([a-z]+)"\s*', (getattr(r, "stdout", "") or ""))
+        return m.group(1) if m else ""
+
+    def _power_authorized(self) -> bool:
+        """Cached logind verdict gating VISIBILITY (buttons, /power routes, the dependency
+        panel's satisfied flag). LIVE-FOUND: the original presence probe stat()ed the rule
+        file, but Debian ships /etc/polkit-1/rules.d as 0750 root:polkitd — unreadable to the
+        operator process, so the probe read False on a perfectly authorized box. logind's own
+        CanReboot answer is the same ground truth the apply handshake trusts. Cost control:
+        a 'yes' is cached for the process lifetime; a non-yes re-probes at most every
+        `_POWER_REPROBE_S`, so a GET is at most one bounded busctl per minute until then."""
+        now = time.monotonic()
+        cached = getattr(self, "_power_auth_cache", None)
+        if cached is not None and (cached[0] or now - cached[1] < self._POWER_REPROBE_S):
+            return cached[0]
+        ok = self._power_verdict("reboot") == "yes"
+        self._power_auth_cache = (ok, now)
+        return ok
+
     def power_supported(self) -> bool:
-        """GET-safe presence probe gating the dashboard's power buttons: the polkit rule +
-        polkitd + the two tools the apply path actually executes (busctl, systemctl).
-        Presence only — whether polkitd honors the rule is proven at APPLY time, as a typed
-        refusal carrying the install copybox (so a stale rule heals itself there)."""
-        from . import deps as deps_mod
+        """Gates the dashboard's power buttons and the /power routes: the two tools the
+        execution path runs (busctl, systemctl — presence, no subprocess) AND the cached
+        logind authorization verdict (see `_power_authorized`)."""
         fs = self._system.fs
-        return (fs.exists(deps_mod.POWER_RULE_PATH)
-                and any(fs.exists(p) for p in ("/usr/lib/polkit-1/polkitd",
-                                               "/usr/libexec/polkitd", "/usr/bin/pkcheck"))
-                and any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
-                and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl")))
+        return (any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
+                and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl"))
+                and self._power_authorized())
 
     def _power_pending_path(self):
         return self._paths.under("state", "power-pending.json")
@@ -635,7 +665,6 @@ class MaintenanceOpsMixin:
     def _power_apply_locked(self, kind: str, verb: str, running: list) -> ActionResult:
         import getpass as _getpass
         import json as _json
-        import re as _re
 
         from . import deps as deps_mod
         from .lifecycle import current_boot_id
@@ -644,15 +673,9 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"Cannot {kind}: the boot id is unavailable — the "
                                        "pending-action guard cannot be scoped to this boot")
         # SYNCHRONOUS authorization handshake: logind answers yes/no/challenge/na without
-        # side effects. Structured parse — exactly `s "<verdict>"` — never substring.
-        r = self._system.runner.run(
-            ["busctl", "--timeout=5", "call", "org.freedesktop.login1",
-             "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
-             self._POWER_KINDS[kind]], 8.0)
-        verdict = ""
-        if getattr(r, "returncode", 1) == 0:
-            m = _re.fullmatch(r'\s*s\s+"([a-z]+)"\s*', (getattr(r, "stdout", "") or ""))
-            verdict = m.group(1) if m else ""
+        # side effects — the same verdict the visibility cache trusts.
+        verdict = self._power_verdict(kind)
+        self._power_auth_cache = (verdict == "yes", time.monotonic())
         if verdict != "yes":
             why = (f"logind answered {verdict!r}" if verdict
                    else "the logind authorization check failed")

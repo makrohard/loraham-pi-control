@@ -164,8 +164,9 @@ console to your LAN is opt-in and gated: [webserver](webserver.md), [firewall](f
 The dashboard's system card ends with **Reboot…** / **Shut down…** buttons (each behind a
 confirm page). They act through logind (`systemctl reboot|poweroff`) — a graceful teardown, so
 the SD card is safe and running stacks come back via boot-restore on the next power-on. The
-buttons render **only** when the authorization dependency is satisfied: `polkitd` plus the rule
-file `/etc/polkit-1/rules.d/49-lhpc-power.rules` naming the operator user. Fresh installs get
+buttons render **only** when logind actually authorizes the operator (`CanReboot` — probed
+bounded and cached, since the rule file `/etc/polkit-1/rules.d/49-lhpc-power.rules` lives in a
+directory the operator process cannot read on stock Debian). Fresh installs get
 both from `bootstrap-deps.sh` (opt out with `--no-power-controls`); on an existing box the
 System-dependencies panel (and `lhpc doctor`) shows a paste-ready install command. lhpc never
 installs the rule itself — it never runs privileged commands. Apply performs a synchronous

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Power buttons now show on a correctly authorized box (live-found on the fresh image): visibility asks logind directly (`CanReboot`, bounded + cached) — the rule file sits in a directory Debian keeps unreadable to the operator process, so the presence probe could never see it
+
 ## 0.1.16
 
 - Stopping a stack now also tears down the dependency stacks it alone was using (stop graywolf → kiss stops → daemon released); a dependency another running stack still needs stays up

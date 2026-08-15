@@ -74,7 +74,9 @@ class SelfUpdateOpsMixin:
         grouped, each with presence + install command. The SINGLE source of truth for both the
         controller System-dependencies panel (/stacks) and `lhpc doctor`, so the two never drift.
         GET-SAFE: presence probes only — `shutil.which` / `System.fs.exists` / `importlib.util.find_spec`
-        — never a subprocess (git/nginx/systemctl are NOT executed)."""
+        — never a subprocess (git/nginx/systemctl are NOT executed). ONE documented exception:
+        the Power-controls entry consults the CACHED logind verdict (bounded busctl, at most
+        one probe per minute — see its comment; a file probe cannot work there)."""
         import getpass as _getpass
         import importlib.util
         import shutil
@@ -160,15 +162,15 @@ class SelfUpdateOpsMixin:
             {"title": "Power controls", "deps": [
                 # `bootstrap: False` — this copybox embeds THIS box's username and has its own
                 # dedicated (opt-out) scaffold in bootstrap-deps.sh, so `_declared_dep_scopes`
-                # must never fold it into the generated script. Presence-only probe (GET-safe):
-                # the rule file + polkitd; whether polkitd actually honors the rule is proven at
-                # apply time with a typed refusal that repeats this install command.
+                # must never fold it into the generated script. `satisfied` is the CACHED
+                # logind CanReboot verdict (see `_power_authorized`) — the ONE deliberate
+                # exception to this method's no-subprocess rule (bounded busctl, at most one
+                # per minute while unauthorized, cached permanently once yes): a file-presence
+                # probe CANNOT work here — Debian ships /etc/polkit-1/rules.d 0750 root:polkitd,
+                # unreadable to this process even when the rule is correctly installed.
                 {"what": "reboot/shutdown authorization (polkitd + polkit rule)",
                  "required": False, "bootstrap": False,
-                 "satisfied": (fs.exists(_deps_mod.POWER_RULE_PATH)
-                               and (fs.exists("/usr/lib/polkit-1/polkitd")
-                                    or fs.exists("/usr/libexec/polkitd")
-                                    or fs.exists("/usr/bin/pkcheck"))),
+                 "satisfied": self.power_supported(),
                  "install": _deps_mod.power_rule_install_cmd(_getpass.getuser()),
                  "purpose": "the dashboard's Reboot / Shut down buttons (logind authorization; "
                             "buttons stay hidden until this is installed)"},

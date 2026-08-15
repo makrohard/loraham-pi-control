@@ -67,22 +67,27 @@ def test_rule_text_and_install_cmd():
     assert "tee" not in cmd
 
 
-def test_dependency_entry_probe_and_bootstrap_exclusion(tmp_path):
+_TOOLS = {"/usr/bin/busctl": "x", "/usr/bin/systemctl": "x"}
+
+
+def test_dependency_entry_probe_and_bootstrap_exclusion(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     grp = next(g for g in svc.controller_system_deps() if g["title"] == "Power controls")
     d = grp["deps"][0]
     assert d["required"] is False and d["bootstrap"] is False
-    assert d["satisfied"] is False                            # bare FakeSystem: nothing present
+    assert d["satisfied"] is False                            # bare FakeSystem: no tools, no yes
     assert "49-lhpc-power.rules" in d["install"]
     import getpass
     assert getpass.getuser() in d["install"]                  # THIS box's user, paste-ready
-    # satisfied flips only with rule file AND polkitd
-    svc2 = _svc(tmp_path / "b", files={deps_mod.POWER_RULE_PATH: "x"})
+    # satisfied = tools present AND logind says yes (LIVE-FOUND: a file probe cannot work —
+    # Debian's /etc/polkit-1/rules.d is unreadable to the operator process)
+    svc2 = _svc(tmp_path / "b", files=dict(_TOOLS))
+    _busctl(svc2, monkeypatch, verdict='s "no"\n')
     d2 = next(g for g in svc2.controller_system_deps()
               if g["title"] == "Power controls")["deps"][0]
-    assert d2["satisfied"] is False                           # rule alone is not enough
-    svc3 = _svc(tmp_path / "c", files={deps_mod.POWER_RULE_PATH: "x",
-                                       "/usr/lib/polkit-1/polkitd": "x"})
+    assert d2["satisfied"] is False                           # tools alone are not enough
+    svc3 = _svc(tmp_path / "c", files=dict(_TOOLS))
+    _busctl(svc3, monkeypatch)                                # logind: yes
     d3 = next(g for g in svc3.controller_system_deps()
               if g["title"] == "Power controls")["deps"][0]
     assert d3["satisfied"] is True
@@ -93,18 +98,57 @@ def test_dependency_entry_probe_and_bootstrap_exclusion(tmp_path):
     assert not any("49-lhpc-power" in c for c in core + gui + gps)
     script = svc.deps_script()
     assert script.count("install -D -m 0644 /dev/stdin") == 1
-    import getpass
     assert getpass.getuser() not in script                    # no baked username, ever
 
 
-def test_power_supported_requires_the_full_execution_path(tmp_path):
-    base = {deps_mod.POWER_RULE_PATH: "x", "/usr/lib/polkit-1/polkitd": "x",
-            "/usr/bin/busctl": "x", "/usr/bin/systemctl": "x"}
-    assert _svc(tmp_path, files=base).power_supported() is True
-    for missing in base:
-        files = {k: v for k, v in base.items() if k != missing}
-        assert _svc(tmp_path / re.sub(r"\W", "_", missing),
-                    files=files).power_supported() is False, missing
+def test_power_supported_requires_tools_and_logind_yes(tmp_path, monkeypatch):
+    # tools present + logind yes -> supported
+    svc = _svc(tmp_path, files=dict(_TOOLS))
+    _busctl(svc, monkeypatch)
+    assert svc.power_supported() is True
+    # a missing execution tool short-circuits BEFORE any probe
+    for missing in _TOOLS:
+        files = {k: v for k, v in _TOOLS.items() if k != missing}
+        s = _svc(tmp_path / re.sub(r"\W", "_", missing), files=files)
+        assert s.power_supported() is False, missing
+    # logind refuses -> not supported
+    svc2 = _svc(tmp_path / "no", files=dict(_TOOLS))
+    _busctl(svc2, monkeypatch, verdict='s "challenge"\n')
+    assert svc2.power_supported() is False
+
+
+def test_power_visibility_cache_yes_sticks_no_reprobes(tmp_path, monkeypatch):
+    """A 'yes' verdict is cached for the process lifetime; a non-yes re-probes only after
+    the TTL — so a GET costs at most one bounded busctl per minute while unauthorized."""
+    import time as _time
+    svc = _svc(tmp_path, files=dict(_TOOLS))
+    _busctl(svc, monkeypatch)                                 # yes
+    assert svc.power_supported() is True
+    _busctl(svc, monkeypatch, verdict='s "no"\n')             # verdict changes...
+    assert svc.power_supported() is True                      # ...but yes stays cached
+    # a NO caches too: repeated GETs within the TTL never re-probe
+    svc2 = _svc(tmp_path / "b", files=dict(_TOOLS))
+    calls = []
+    orig = svc2._system.runner.run
+
+    class RNo:
+        returncode = 0
+        stdout = 's "no"\n'
+        stderr = ""
+
+    def run(argv, timeout=None):
+        if argv and argv[0] == "busctl":
+            calls.append(argv)
+            return RNo()
+        return orig(argv, timeout)
+    monkeypatch.setattr(svc2._system.runner, "run", run)
+    assert svc2.power_supported() is False
+    assert svc2.power_supported() is False
+    assert len(calls) == 1                                    # cached within the TTL
+    # past the TTL the next GET re-probes (rule installed later shows up within a minute)
+    svc2._power_auth_cache = (False, _time.monotonic() - 61.0)
+    assert svc2.power_supported() is False
+    assert len(calls) == 2
 
 
 # --- service: dry-run + apply ---------------------------------------------------------------------
