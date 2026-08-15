@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Join Wi-Fi — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# Dedicated network confirm (power_confirm pattern): the AP drops with the session, so
+     everything the operator needs afterwards is said HERE, before the click. The Wi-Fi
+     PASSWORD is collected on THIS page and rides exactly one request — AUDIT: it is never
+     echoed back into any response (a hidden echo put it into the browser DOM/cache). #}
+  <div class="card">
+    <header><h2>{{ question }}</h2></header>
+    <div class="body">
+      {% if details %}
+        <pre class="next">{% for d in details %}{{ d }}
+{% endfor %}</pre>
+      {% endif %}
+      <form method="post" action="{{ url_for('network_action', op=op_target) }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <input type="hidden" name="confirmed" value="yes">
+        {% if op_target == 'connect' %}
+          <input type="hidden" name="ssid" value="{{ ssid }}">
+          <input type="hidden" name="uuid" value="{{ uuid }}">
+          {% if not uuid %}
+            <label>Wi-Fi password
+              <input type="password" name="psk" autocomplete="off"
+                     aria-label="Wi-Fi password"
+                     placeholder="leave empty for an open network">
+            </label>
+          {% endif %}
+          <input type="hidden" name="allow_console" value="{{ '1' if allow_console else '0' }}">
+          <button type="submit" class="warnbtn">Yes, join now — the AP goes down</button>
+        {% else %}
+          <button type="submit" class="warnbtn">Yes, back to AP mode now</button>
+        {% endif %}
+        <a class="btnlink" href="{{ url_for('stacks_overview', open='network') }}#controller-network">Cancel</a>
+      </form>
+    </div>
+  </div>
+{% endblock %}

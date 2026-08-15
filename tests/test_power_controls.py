@@ -99,7 +99,8 @@ def test_dependency_entry_probe_and_bootstrap_exclusion(tmp_path, monkeypatch):
     core, gui, gps = svc._declared_dep_scopes()
     assert not any("49-lhpc-power" in c for c in core + gui + gps)
     script = svc.deps_script()
-    assert script.count("install -D -m 0644 /dev/stdin") == 1
+    # exactly ONE install site for THIS rule (the network twin has its own test)
+    assert script.count("49-lhpc-power.rules <<POWERRULE") == 1
     assert getpass.getuser() not in script                    # no baked username, ever
 
 

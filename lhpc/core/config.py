@@ -1338,12 +1338,15 @@ def _cert_days(value, field: str) -> int:
 def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=None,
                           remote_exposed=None, allowed_cidrs=None, dns_sans=None,
                           ip_sans=None, server_cert_days=None, client_cert_days=None,
-                          scheme=None) -> Path:
+                          scheme=None, hold_lock=True) -> Path:
     """Persist DESIRED webserver settings into the runtime-local layer (git-ignored).
     Every supplied value is validated BEFORE any write (fail closed); a ``None`` argument
     means 'leave that key unchanged'. List fields are stored as comma-separated scalar
     strings (local.toml is flat-scalar). This writes INTENT only — it activates nothing and
-    is never the source of truth for effective/exposed state."""
+    is never the source of truth for effective/exposed state. `hold_lock=False` skips the
+    internal config_lock — the CALLER already holds it (same contract as
+    `save_firewall_config`), which is what lets a read-union-save stay atomic without
+    self-contending."""
     from . import validators
     patch: dict = {}
     if bind is not None:
@@ -1383,6 +1386,8 @@ def save_webserver_config(paths: Paths, *, bind=None, port=None, access_mode=Non
     # scheme=http alone must still be refused when the stored access_mode requires a client cert.
     _reject_http_with_cert_auth(paths, patch, "webserver")
     path = paths.runtime_root / "config" / "local.toml"
+    if not hold_lock:
+        return _write_local_tables(paths, path, {"webserver": patch})
     with config_lock(paths):
         return _write_local_tables(paths, path, {"webserver": patch})
 
@@ -1446,10 +1451,11 @@ def _reject_http_with_cert_auth(paths: Paths, patch: dict, what: str,
 
 
 def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, scheme=None,
-                         access_mode=None, allowed_cidrs=None) -> Path:
+                         access_mode=None, allowed_cidrs=None, hold_lock=True) -> Path:
     """Persist DESIRED web-UI proxy exposure for ONE stack into `[stackweb]` (flat scalars,
     `<stack_id>_<field>`). Validated before any write; `None` = leave unchanged. INTENT only —
-    activation is `webserver apply`."""
+    activation is `webserver apply`. `hold_lock=False` skips the internal config_lock — the
+    CALLER already holds it (same contract as `save_webserver_config`)."""
     from . import validators
     sid = validators.path_component(stack_id, field="stackweb stack id")
     patch: dict = {}
@@ -1478,6 +1484,8 @@ def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, s
     _reject_http_with_cert_auth(paths, patch, f"stackweb.{sid}", current)
     table = {f"{sid}_{k}": v for k, v in patch.items()}
     path = paths.runtime_root / "config" / "local.toml"
+    if not hold_lock:
+        return _write_local_tables(paths, path, {"stackweb": table})
     with config_lock(paths):
         return _write_local_tables(paths, path, {"stackweb": table})
 

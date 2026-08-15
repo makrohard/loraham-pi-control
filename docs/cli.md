@@ -347,6 +347,9 @@ password between bridge and firmware (default stack: meshcom).
 ### _gps-bridge
 Internal service — `lhpc _gps-bridge <meshtastic|meshcom>` — started by the lifecycle when the global position source needs to be presented as a device. Publishes NMEA on a PTY (Meshtastic) or a UNIX socket (MeshCom) under `state/gps/<consumer>/`, with a readiness marker driven by the upstream source. One instance per consumer. Not for direct use.
 
+### _network-finalize
+Internal driver — `lhpc _network-finalize --uuid <uuid> --op-id <token> [--pwfile <path>] [--allow-console] [--delay <s>]` — spawned detached by the web Network panel's connect flow: activates the Wi-Fi profile (secrets via a 0600 passwd-file, unlinked after activation), waits for the lease, and extends the console allowlist for the joined subnet when asked. Only the helper carrying the pending record's own op-id token may run; the outcome lands in `state/network-outcome.json`. Not for direct use.
+
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.
 

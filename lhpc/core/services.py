@@ -119,6 +119,7 @@ from .service_firewall import FirewallOpsMixin
 from .service_hmac import HmacOpsMixin
 from .service_lifecycle_ops import LifecycleOpsMixin
 from .service_maintenance import MaintenanceOpsMixin
+from .service_network import NetworkOpsMixin
 from .service_params import ParamsConfigMixin
 from .service_selfupdate import SelfUpdateOpsMixin
 from .service_system import SystemStatsMixin
@@ -126,7 +127,7 @@ from .service_webserver import WebserverOpsMixin
 
 
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
-                        BinaryChannelMixin, BinaryOpsMixin):
+                        BinaryChannelMixin, BinaryOpsMixin, NetworkOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
 
     `system` and `paths` are injectable so tests drive it with fakes.

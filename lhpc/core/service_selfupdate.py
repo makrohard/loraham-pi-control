@@ -159,6 +159,17 @@ class SelfUpdateOpsMixin:
                 {"what": "cryptography", "required": True, "satisfied": have_mod("cryptography"),
                  "install": f"{_pipi} 'cryptography>=42'", "purpose": "all PKI (CA / cert / PKCS#12 / CRL)"},
             ]},
+            # Network controls: emitted ONLY on AP-managed boxes (the lhpc-ap capability
+            # gate) — a desktop never sees the entry at all. Same bootstrap:False leak
+            # exclusion and cached-verdict probe rationale as the power entry below.
+            *([{"title": "Network controls", "deps": [
+                {"what": "Wi-Fi join authorization (polkitd + polkit rule)",
+                 "required": False, "bootstrap": False,
+                 "satisfied": self._network_authorized(),
+                 "install": _deps_mod.network_rule_install_cmd(_getpass.getuser()),
+                 "purpose": "the Apps page's Network panel (join Wi-Fi with AP fallback; "
+                            "actions stay refused until this is installed)"},
+            ]}] if self.network_supported() else []),
             {"title": "Power controls", "deps": [
                 # `bootstrap: False` — this copybox embeds THIS box's username and has its own
                 # dedicated (opt-out) scaffold in bootstrap-deps.sh, so `_declared_dep_scopes`

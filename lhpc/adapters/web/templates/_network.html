@@ -1,0 +1,150 @@
+{% from "_macros.html" import cmdbox %}
+{# Network panel — Wi-Fi client mode with AP fallback. Rendered ONLY when `network_view`
+   is present (AP-managed box: the lhpc-ap NM profile exists). The id sits on the
+   <details class="advcfg"> itself (hash-open JS constraint, see _firewall.html). #}
+{% set nv = network_view %}
+<details class="advcfg" id="controller-network"{% if request.args.get('open') == 'network' %} open data-force-open="1"{% endif %}>
+  <summary>Network
+    {% if nv.mode == 'client' %}<span class="pill pill-ok">{{ nv.active.name }}</span>
+    {% elif nv.mode == 'ap' %}<span class="pill pill-muted">AP</span>
+    {% else %}<span class="pill pill-warn">offline</span>{% endif %}
+    {% if not nv.authorized %}<span class="pill pill-warn">not authorized</span>{% endif %}
+    {% if nv.pending %}<span class="pill pill-warn">working…</span>{% endif %}
+  </summary>
+  <div class="body">
+    <p class="muted">This box joins an existing Wi-Fi as a client; its own AP is the safety
+      net — back automatically after reboots and whenever the network is unreachable. A
+      <strong>preferred</strong> network is re-joined whenever it reappears (the AP drops for
+      up to a minute per retry while it is away).</p>
+    <p>Current: <strong>{% if nv.mode == 'client' %}{{ nv.active.name }} ({{ nv.active.address }})
+      {% elif nv.mode == 'ap' %}own AP{% else %}no active Wi-Fi{% endif %}</strong>
+      — reachable as <code>https://{{ nv.hostname }}.local:8443</code> on a joined network.</p>
+    {% if nv.authorized and nv.mode == 'client' %}
+      <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="act">Back to AP mode…</button>
+      </form>
+    {% endif %}
+
+    {% if not nv.authorized %}
+      <div class="depnote depnote-warn">
+        <strong>Not authorized:</strong> joining networks needs a polkit rule. Run this
+        yourself, then retry (takes effect within a minute):
+        {{ cmdbox('network-authorize', nv.install) }}
+      </div>
+    {% else %}
+
+      {% if nv.outcome and nv.outcome.uuid %}
+        <div class="depnote {{ 'depnote-warn' if not nv.outcome.ok or nv.outcome.console == 'pending' else '' }}">
+          <strong>Last join:</strong>
+          {% if nv.outcome.ok %}
+            joined {{ nv.outcome.ssid or 'network' }} ({{ nv.outcome.address }}).
+            {% if nv.outcome.fqdn %}
+              Phone-friendly address: <code>https://{{ nv.outcome.fqdn }}:8443</code> (your
+              router's DNS name — works where .local does not).
+            {% else %}
+              Phone-friendly address: <code>https://{{ nv.outcome.address.split('/')[0] }}:8443</code>
+              (your router announced no local DNS domain, so the plain address is the way in
+              from phones; PC/iPhone can use <code>https://{{ nv.hostname }}.local:8443</code>).
+            {% endif %}
+            {% if nv.outcome.console == 'applied' %}Console allowed from {{ nv.outcome.cidr }}.{% endif %}
+            {% if nv.outcome.console == 'pending' and nv.outcome.firewall_cmd %}
+              Console access from {{ nv.outcome.cidr }} needs ONE privileged firewall step
+              (run it over SSH; the console then appears by itself):
+              {{ cmdbox('network-fw-apply', nv.outcome.firewall_cmd) }}
+            {% endif %}
+            {% if nv.outcome.console in ('refused', 'error') %}
+              Console NOT extended: {{ nv.outcome.console_detail }}
+            {% endif %}
+            {% if nv.outcome.console == 'off' %}Console stays AP-only (checkbox was off).{% endif %}
+          {% else %}
+            failed — {{ nv.outcome.error }}
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if nv.stored %}
+        <section class="cfgsec">
+          <h4>Stored networks</h4>
+          <table class="paramgrid dptab">
+            {% for c in nv.stored %}
+              <tr>
+                <th>{{ c.name }}{% if c.preferred %} <span class="pill pill-ok">preferred</span>{% endif %}</th>
+                <td>
+                  <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="uuid" value="{{ c.uuid }}">
+                    <button type="submit" class="act" aria-label="Reconnect to {{ c.name }}">Reconnect…</button>
+                  </form>
+                  <form method="post" action="{{ url_for('network_action', op='prefer') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="uuid" value="{{ c.uuid }}">
+                    <input type="hidden" name="on" value="{{ '0' if c.preferred else '1' }}">
+                    <button type="submit" class="act" aria-label="{{ 'Stop preferring' if c.preferred else 'Prefer' }} {{ c.name }}">{{ 'Stop preferring' if c.preferred else 'Prefer' }}</button>
+                  </form>
+                  <form method="post" action="{{ url_for('network_action', op='forget') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="uuid" value="{{ c.uuid }}">
+                    <button type="submit" class="act" aria-label="Forget {{ c.name }}">Forget</button>
+                  </form>
+                </td>
+                <td class="dphelp muted">{% if c.preferred %}re-joined automatically whenever reachable{% else %}kept for one-click reconnect{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </table>
+          {% if nv.preferred and nv.mode == 'ap' %}
+            <form method="post" action="{{ url_for('network_action', op='retry') }}" class="act">
+              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+              <button type="submit" class="act">Retry {{ nv.preferred.ssid }} now</button>
+            </form>
+          {% endif %}
+        </section>
+      {% endif %}
+
+      <section class="cfgsec">
+        <h4>Join a network</h4>
+        {# Manual entry — while this box hosts its own AP the radio cannot survey other
+           channels (live-found: scans see only the AP itself), so typing the name is THE
+           commissioning path and the Scan button renders only in client mode (operator
+           ruling: no button that cannot work). #}
+        {# The password is asked on the CONFIRM page, never here — it must ride exactly one
+           request (AUDIT: an echoed hidden field put it into the browser DOM/cache). #}
+        <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <input type="text" name="ssid" autocomplete="off" required
+                 aria-label="Network name (SSID)" placeholder="network name (SSID)">
+          <label><input type="checkbox" name="allow_console" value="1" checked
+                        aria-label="Allow console from the joined network">
+            allow console from that network</label>
+          <button type="submit" class="act">Join…</button>
+        </form>
+        {% if nv.mode != 'ap' %}
+        <form method="post" action="{{ url_for('network_action', op='scan') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="act">Scan for networks</button>
+        </form>
+        {% endif %}
+        {% if nv.scan and nv.mode != 'ap' %}
+          <table class="paramgrid dptab">
+            {% for s in nv.scan %}
+              <tr>
+                <th>{{ s.ssid }}</th>
+                <td>
+                  <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="ssid" value="{{ s.ssid }}">
+                    <label><input type="checkbox" name="allow_console" value="1" checked
+                                  aria-label="Allow console from the joined network">
+                      allow console from that network</label>
+                    <button type="submit" class="act">Join…</button>
+                  </form>
+                </td>
+                <td class="dphelp muted">{{ s.signal }}% · {{ s.security }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% endif %}
+      </section>
+    {% endif %}
+  </div>
+</details>

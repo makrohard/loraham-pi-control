@@ -434,6 +434,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # box shows nothing, and the dep panel offers the copybox.
             power_ok={"reboot": service.power_supported("reboot"),
                       "poweroff": service.power_supported("poweroff")},
+            network_dash=_network_dash_safe(service),
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -921,6 +922,19 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None                    # fail-safe: never break the Apps page over firewall
 
+    def _network_dash_safe(svc):
+        """One line for the dashboard system card — '' on non-AP boxes or any failure."""
+        try:
+            nv = svc.network_view()
+            if not nv.get("supported"):
+                return ""
+            if nv.get("mode") == "client":
+                act = nv.get("active") or {}
+                return f"{act.get('name', '?')} ({act.get('address', '?')})"
+            return "own AP" if nv.get("mode") == "ap" else "no active Wi-Fi"
+        except Exception:
+            return ""                      # fail-safe: never break the dashboard over Wi-Fi
+
     def _stacks_context(band="", *, hw_probe=None, only_sid=None, cfg_sid=""):
         """The FULL Apps-page render context (all globals every per-stack body/include needs). Shared
         by the whole-page render AND the per-stack lazy-body partial, so the partial can never render
@@ -1001,6 +1015,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             ctx.setdefault("gps_global", service.gps_view())
         except (OSError, ValueError, AttributeError, KeyError):
             ctx.setdefault("gps_global", None)          # never break the page over a view
+        # Network panel (controller-row only): cached view, absent on non-AP boxes.
+        try:
+            _nv = service.network_view()
+            ctx.setdefault("network_view", _nv if _nv.get("supported") else None)
+        except (OSError, ValueError, AttributeError, KeyError):
+            ctx.setdefault("network_view", None)        # never break the page over a view
         ctx.update(over)
         return render_template("stacks.html", **ctx)
 
@@ -1050,6 +1070,66 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         res = service.source_check(target)         # NETWORK (explicit): git ls-remote, refresh cache
         flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
         return _install_back(sid)                  # land on the stack's Install section
+
+    @app.post("/network/<op>")
+    def network_action(op: str):
+        # Wi-Fi Network panel (AP-managed boxes only): scan / connect / prefer / forget /
+        # retry. POST + CSRF; 404 while the capability gate is unsatisfied (desktop boxes
+        # and any box without the lhpc-ap profile never expose these). The connect flow is
+        # two-stage (dedicated confirm page — the AP drops with the session) and
+        # respond-first: the detached finalize helper does the activation.
+        if not _csrf_ok():
+            abort(400)
+        if op not in ("scan", "connect", "prefer", "forget", "retry", "ap") \
+                or not service.network_supported():
+            abort(404)
+        back = redirect(url_for("stacks_overview", open="network")
+                        + "#controller-network")
+        if op == "scan":
+            res = service.network_scan()
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "prefer":
+            res = service.network_prefer(request.form.get("uuid", ""),
+                                         request.form.get("on") == "1")
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "forget":
+            res = service.network_forget(request.form.get("uuid", ""))
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "retry":
+            res = service.network_retry_now()
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        if op == "ap":
+            # back-to-AP: same two-stage confirm shape as connect (the session dies with
+            # the switch, so everything the operator needs is said before the click).
+            if request.form.get("confirmed") != "yes":
+                plan = service.network_ap_now(apply=False)
+                return render_template("network_confirm.html", op_target="ap",
+                                       ssid="", uuid="", psk="", allow_console=False,
+                                       question=plan.summary, details=plan.details)
+            res = service.network_ap_now(apply=True)
+            flash(res.summary, "ok" if res.ok else "warn")
+            return back
+        # connect: the PASSWORD is collected on the confirm page (stage 1 never sees it,
+        # stage 2 reads it once and it is never echoed into any response — AUDIT).
+        ssid = request.form.get("ssid", "")
+        uuid = request.form.get("uuid", "")
+        psk = request.form.get("psk", "")
+        allow_console = request.form.get("allow_console") == "1"
+        if request.form.get("confirmed") != "yes":
+            plan = service.network_connect(ssid=ssid, uuid=uuid,
+                                           allow_console=allow_console, apply=False)
+            return render_template("network_confirm.html", op_target="connect",
+                                   ssid=ssid, uuid=uuid,
+                                   allow_console=allow_console,
+                                   question=plan.summary, details=plan.details)
+        res = service.network_connect(ssid=ssid, uuid=uuid, psk=psk,
+                                      allow_console=allow_console, apply=True)
+        flash(res.summary, "ok" if res.ok else "warn")
+        return back
 
     @app.post("/power/<kind>")
     def power(kind: str):
@@ -2210,6 +2290,30 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
                     time.sleep(min(30.0, max(0.1, deadline - time.monotonic())))
 
         threading.Thread(target=_selfcheck_loop, name="lhpc-selfcheck", daemon=True).start()
+
+        # Network watchdog — the ONE worker for the Wi-Fi feature (started HERE only, never
+        # from service construction: CLI runs and tests must not spawn threads). Each tick
+        # reads the current preference/state fresh, so enabling Prefer later just takes
+        # effect; the first pass primes the cached views for cold-process GETs. Same shape
+        # as the self-check loop: ≤30 s sleep slices, every unit in its own try/except.
+        def _network_watch_loop():
+            interval_s = 60.0
+            while True:
+                try:
+                    svc = ControllerService()
+                    if not svc.network_supported():
+                        interval_s = 300.0          # non-AP box: probe rarely, exit never
+                    else:
+                        interval_s = 60.0
+                        svc._network_watch_tick()
+                except Exception:
+                    pass
+                deadline = time.monotonic() + interval_s
+                while time.monotonic() < deadline:
+                    time.sleep(min(30.0, max(0.1, deadline - time.monotonic())))
+
+        threading.Thread(target=_network_watch_loop, name="lhpc-network-watch",
+                         daemon=True).start()
         try:
             from waitress import serve as _waitress_serve
         except ImportError:

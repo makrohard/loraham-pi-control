@@ -114,6 +114,9 @@
               {% endfor %}
             </div>
           </details>
+          {% if network_view %}
+            {% include "_network.html" %}
+          {% endif %}
           {% if ws_mon %}
             {% with mon = ws_mon, certs = ws_certs, modes = ws_modes, loopback = ws_loopback %}
               {% include "_webserver.html" %}

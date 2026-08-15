@@ -11,16 +11,22 @@
 # unprivileged on purpose: the pre-flight is read-only and zero-trust, meant to be vetted
 # BEFORE the script is ever granted root. lhpc itself never runs privileged commands.
 #
-#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls]
+#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]
 #   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing
 #     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay=spi0-0cs  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs — the kernel must NOT claim CE0/CE1)
 #     hardware-cs  kernel-driven CE0+CE1, no overlay: dtparam=spi=on only  (only for boards that really use kernel chip-selects; NOT for Uputronics — CE0/CE1=GPIO7/8 would collide with the daemon's GPIO chip-selects)
 #     skip         no boot-config change (SPI already configured)
 #     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)
 #     --swap-size <MB>   swapfile size when provisioned (default 768)
-#     --no-power-controls  do NOT install polkitd + the polkit rule that lets the operator
+#     --no-power-controls  do NOT install the polkit rule that lets the operator
 #                        use the console's Reboot/Shut down buttons (installed by default;
 #                        the rule file is /etc/polkit-1/rules.d/49-lhpc-power.rules)
+#     --no-network-controls  do NOT install the polkit rule that lets the operator join
+#                        Wi-Fi networks from the console's Network panel (installed by
+#                        default; the rule file is /etc/polkit-1/rules.d/49-lhpc-network.rules; the panel
+#                        itself appears only on AP-managed boxes — desktop images pass
+#                        this flag). polkitd is installed unless BOTH power AND network
+#                        controls are opted out.
 # Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·
 #             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·
 #             7 hardware group grant failed · 8 system nginx.service could not be confirmed stopped ·
@@ -45,7 +51,7 @@
 set -euo pipefail
 
 usage() {
-	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls]" >&2
+	echo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>] [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]" >&2
 	echo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2
 }
 
@@ -53,6 +59,7 @@ SPI_MODE=""
 OPERATOR_USER=""
 NO_SWAPFILE=""
 NO_POWER=""
+NO_NETWORK=""
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
@@ -64,6 +71,7 @@ while [ $# -gt 0 ]; do
 		--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;
 		--no-swapfile) NO_SWAPFILE=1; shift ;;
 		--no-power-controls) NO_POWER=1; shift ;;
+		--no-network-controls) NO_NETWORK=1; shift ;;
 		--with-gui) WITH_GUI=1; shift ;;
 		--with-gps) WITH_GPS=1; shift ;;
 		--keep-wifi-powersave) KEEP_WIFI=1; shift ;;
@@ -74,11 +82,12 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-# polkitd (console Reboot/Shut down authorization daemon — systemd only Suggests it) joins
-# the ONE merged apt transaction below AND its --dry-run simulation, unless opted out —
-# never a separate side transaction outside the simulated closure.
-POWER_PKG="polkitd"
-[ -n "$NO_POWER" ] && POWER_PKG=""
+# polkitd (authorization daemon for the console's power buttons AND its Network panel —
+# systemd only Suggests it) joins the ONE merged apt transaction below AND its --dry-run
+# simulation. It is omitted only when BOTH features are opted out — a rule without its
+# daemon would be dead weight, and either rule alone still needs polkitd.
+POLKIT_PKG="polkitd"
+[ -n "$NO_POWER" ] && [ -n "$NO_NETWORK" ] && POLKIT_PKG=""
 
 # --- --dry-run: simulate the DEFAULT apt transaction, change NOTHING -----------------------
 # The blocker this guards against: the real package closure used to be discovered only while
@@ -91,7 +100,7 @@ if [ -n "$DRY_RUN" ]; then
 		echo "ERROR: dry-run: apt-get is not available — cannot simulate the transaction." >&2
 		exit 5
 	fi
-	DRY_PKGS="build-essential ca-certificates cmake curl git libbluetooth-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd $POWER_PKG"
+	DRY_PKGS="build-essential ca-certificates cmake curl git libbluetooth-dev libgcrypt20-dev libglib2.0-dev libgpiod-dev libi2c-dev liblgpio-dev libncurses-dev libpixman-1-dev libslirp-dev libslirp0 libssl-dev libulfius-dev libusb-1.0-0-dev libuv1-dev libyaml-cpp-dev meson nftables nginx ninja-build pkg-config python3 python3-libgpiod python3-pip python3-spidev python3-venv socat zlib1g-dev zstd $POLKIT_PKG"
 	# Simulate EXACTLY what the install below runs (same flags, same package set).
 	# -o Dir::State::status=/dev/null resolves against an EMPTY installed-package
 	# database, so the verdict is the FULL closure a fresh image would get, not the delta
@@ -236,7 +245,7 @@ sudo apt-get install -y --no-install-recommends \
     socat \
     zlib1g-dev \
     zstd \
-    $POWER_PKG
+    $POLKIT_PKG
 
 # --- system nginx: keep the package, disable the ROOT service ----------------------------
 nginx_rc=0; unit_present nginx.service || nginx_rc=$?
@@ -595,6 +604,23 @@ polkit.addRule(function(action, subject) {
 });
 POWERRULE
 	echo "[bootstrap-deps] power controls: reboot/shutdown polkit rule installed for $OP (/etc/polkit-1/rules.d/49-lhpc-power.rules)."
+fi
+
+# --- network controls: polkit rule for the console's Wi-Fi Network panel (opt-out) --------
+if [ -n "$NO_NETWORK" ]; then
+	echo "[bootstrap-deps] network controls: skipped (--no-network-controls)."
+else
+	install -D -m 0644 /dev/stdin /etc/polkit-1/rules.d/49-lhpc-network.rules <<NETWORKRULE
+// Installed by LoRaHAM Pi Control — lets the operator user join Wi-Fi networks from the console.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "$OP" &&
+        (action.id == "org.freedesktop.NetworkManager.network-control" ||
+         action.id == "org.freedesktop.NetworkManager.settings.modify.system")) {
+        return polkit.Result.YES;
+    }
+});
+NETWORKRULE
+	echo "[bootstrap-deps] network controls: Wi-Fi polkit rule installed for $OP (/etc/polkit-1/rules.d/49-lhpc-network.rules)."
 fi
 
 # --- disable an OS-packaged service (lhpc manages its own) --------------------------------

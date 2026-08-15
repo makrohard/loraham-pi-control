@@ -821,6 +821,32 @@ def test_candidate_includes_console_ingress_when_remote(tmp_path):
     assert all(e["port"] != 5000 for e in cand["proxy_ingress"])
 
 
+def test_ap_managed_console_ingress_is_unscoped(tmp_path):
+    """Operator ruling (live-found lockout): on AP-managed (Lite) boxes the console/proxy
+    nft ingress is UNSCOPED — the box roams between its AP subnet and joined WLANs, and a
+    subnet-scoped rule locked the operator out of the console on every new network. nginx
+    CIDR allowlist + mTLS stay the gate; non-AP boxes keep full CIDR scoping."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0", port=8443,
+                                 remote_exposed=True, allowed_cidrs=["10.42.0.0/24"])
+    cfgmod.save_firewall_config(svc._paths, ap_enabled=True, ap_interface="wlan0",
+                                ap_cidr="10.42.0.0/24")
+    svc._invalidate_config()
+    cand = svc.firewall_candidate()
+    ing = [e for e in cand["proxy_ingress"] if e["port"] == 8443]
+    assert ing and ing[0]["allow_cidrs"] == []            # one unrestricted accept
+    # non-AP boxes keep scoping (the sibling test above pins that case);
+    # and the nft intent no longer changes when the nginx allowlist widens:
+    h1 = __import__("lhpc.core.firewall", fromlist=["intent_hash"]).intent_hash(cand)
+    cfgmod.save_webserver_config(svc._paths,
+                                 allowed_cidrs=["10.42.0.0/24", "192.168.178.0/24"])
+    svc._invalidate_config()
+    h2 = __import__("lhpc.core.firewall", fromlist=["intent_hash"]).intent_hash(
+        svc.firewall_candidate())
+    assert h1 == h2                                        # joining a WLAN trips no gate
+
+
 def test_selected_endpoint_marks_candidate(tmp_path):
     import pathlib
     svc = _svc(tmp_path)

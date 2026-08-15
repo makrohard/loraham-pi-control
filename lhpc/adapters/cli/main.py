@@ -372,6 +372,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Required to DISABLE (removes client authentication): "
                              f"--confirm-phrase {_HMAC_DISABLE_CONFIRM}")
 
+    # Internal: the detached Wi-Fi connect/finalize helper spawned by the Network panel's
+    # connect flow (activation + lease + console CIDR). Not for direct use.
+    p_nf = sub.add_parser("_network-finalize")
+    p_nf.add_argument("--uuid", required=True)
+    p_nf.add_argument("--op-id", required=True)
+    p_nf.add_argument("--pwfile", default="")
+    p_nf.add_argument("--allow-console", action="store_true")
+    p_nf.add_argument("--delay", type=float, default=1.5)
+
     # Internal: the detached HMAC-apply driver spawned by the web/CLI apply flow. Not for direct use.
     p_hd = sub.add_parser("_hmac-apply")
     p_hd.add_argument("stack")
@@ -891,6 +900,13 @@ def _run(argv: list[str] | None = None) -> int:
         # `disable` needs the typed phrase too; the service refuses without it (bare --yes is not enough).
         confirm = args.confirm_phrase == _HMAC_DISABLE_CONFIRM
         return svc.hmac_apply_cli(sid, args.action, emit=print, confirm=confirm)
+    if args.command == "_network-finalize":
+        # Detached Wi-Fi connect helper: activation + lease + console CIDR. Its stdout goes
+        # to logs/network-connect.log; the outcome lands in state/network-outcome.json.
+        rc = svc.network_finalize(uuid=args.uuid, op_id=args.op_id, pwfile=args.pwfile,
+                                  allow_console=args.allow_console, delay=args.delay)
+        print(f"[network-finalize] done rc={rc}")
+        return rc
     if args.command == "_hmac-apply":
         # Detached driver: stdout/stderr are captured to the run log by spawn_job, so `print`
         # streams into the live log window. Never prints the secret (the step runner redacts).

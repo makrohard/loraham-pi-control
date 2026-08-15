@@ -201,10 +201,13 @@ this unit to a public address: the managed **`lhpc-nginx.service`** terminates H
 client-certificate (mTLS) auth plus a source-CIDR gate, and remote exposure is opt-in behind a typed
 confirmation. See [`webserver.md`](webserver.md) for the topology and the expose-with-mTLS runbook.
 
-One root-owned system file is deployed OUTSIDE lhpc's control, by `bootstrap-deps.sh` (opt-out
-`--no-power-controls`), never by lhpc itself: `/etc/polkit-1/rules.d/49-lhpc-power.rules`, the
-polkit rule that authorizes the operator user for the console's Reboot/Shut down buttons via
-logind (see [`operations.md`](operations.md#reboot--shut-down)). lhpc only probes its presence.
+Two root-owned system files are deployed OUTSIDE lhpc's control, by `bootstrap-deps.sh`
+(opt-outs `--no-power-controls` / `--no-network-controls`), never by lhpc itself:
+`/etc/polkit-1/rules.d/49-lhpc-power.rules` (console Reboot/Shut down via logind, see
+[`operations.md`](operations.md#reboot--shut-down)) and
+`/etc/polkit-1/rules.d/49-lhpc-network.rules` (the Network panel's NetworkManager control,
+see [`operations.md`](operations.md#network-wi-fi-client-with-ap-fallback)). lhpc only
+probes their effect (logind/NM verdicts), never the files.
 
 ## Security & lifecycle hardening
 

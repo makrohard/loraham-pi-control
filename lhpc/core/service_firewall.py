@@ -152,7 +152,8 @@ class FirewallOpsMixin:
                      "selected": key in selected, "deny_default": sc["deny"],
                      "auth": sc.get("auth", "none"), "band": "" if band_agnostic else band})
 
-        proxy = self._fw_proxy_ingress(cfg)
+        proxy = self._fw_proxy_ingress(cfg,
+                                       ap_managed=bool(getattr(fwcfg, "ap_enabled", False)))
         ssh_ports = list(getattr(fwcfg, "ssh_ports", ()) or ())
         ap = {"enabled": bool(getattr(fwcfg, "ap_enabled", False)),
               "interface": getattr(fwcfg, "ap_interface", "") or "",
@@ -162,10 +163,20 @@ class FirewallOpsMixin:
                 "proxy_ingress": proxy, "ssh_ports": ssh_ports, "ap": ap,
                 "extra_allow": extra}
 
-    def _fw_proxy_ingress(self, cfg):
+    def _fw_proxy_ingress(self, cfg, ap_managed: bool = False):
         """External nginx ingress the firewall must ALLOW: the console when remote-exposed,
         and each enabled+remote stack proxy — each following its configured bind (0.0.0.0
-        when remote) and allowed CIDRs. Loopback-only backends are NEVER opened here."""
+        when remote) and allowed CIDRs. Loopback-only backends are NEVER opened here.
+
+        AP-MANAGED (Lite) boxes emit these UNSCOPED (empty allow_cidrs -> one unrestricted
+        accept per port): the box roams between its own AP subnet and joined WLANs, and a
+        subnet-scoped nft rule locked the operator out of the console on every newly joined
+        network — the privileged re-apply is a step field users cannot take (live-found;
+        operator ruling). Reachability stays gated by the nginx CIDR allowlist + mTLS, both
+        of which lhpc manages unprivileged — the same trust level as the already-unscoped
+        SSH port, and stronger auth. It also makes the nft intent independent of the nginx
+        allowlist, so joining a network never trips the firewall gate. Non-AP boxes
+        (desktop/custom) keep full CIDR scoping."""
         out = []
         ws = cfg.webserver
         if ws.remote_exposed:
@@ -173,13 +184,15 @@ class FirewallOpsMixin:
             # must scope to THAT address, never every local address of the family.
             fam, addr = _classify_bind(ws.bind)
             out.append({"proto": "tcp", "family": fam, "addr": addr, "port": int(ws.port),
-                        "allow_cidrs": _norm_cidrs(ws.allowed_cidrs, fam)})
+                        "allow_cidrs": [] if ap_managed
+                        else _norm_cidrs(ws.allowed_cidrs, fam)})
         for swc in (cfg.stackweb or {}).values():
             if swc.enabled and swc.remote:
                 # A remote stack proxy is rendered by nginx as `listen 0.0.0.0:<port>` (IPv4
                 # wildcard) — independent of the console bind. Match that exactly.
                 out.append({"proto": "tcp", "family": "ipv4", "addr": "*", "port": int(swc.port),
-                            "allow_cidrs": _norm_cidrs(swc.allowed_cidrs, "ipv4")})
+                            "allow_cidrs": [] if ap_managed
+                            else _norm_cidrs(swc.allowed_cidrs, "ipv4")})
         return out
 
     # ---- status (FW-4): three honest dimensions ---------------------------------------------

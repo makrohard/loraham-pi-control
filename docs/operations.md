@@ -13,6 +13,7 @@ Operational rules for `lhpc`. See `architecture.md` for internals.
 - [Backup & restore](#backup--restore)
 - [Web console](#web-console)
 - [Reboot / Shut down](#reboot--shut-down)
+- [Network (Wi-Fi client with AP fallback)](#network-wi-fi-client-with-ap-fallback)
 - [Daemon radio parameters](#daemon-radio-parameters)
 - [Safety](#safety)
 
@@ -174,6 +175,24 @@ logind authorization check (a refusal is typed and repeats the install command),
 short-lived pending marker that refuses new builds/updates until the trigger fires, then
 requests the action detached so the HTTP response reaches the browser first; failures after
 that authorization land only in `logs/power-<kind>.log`.
+
+## Network (Wi-Fi client with AP fallback)
+
+On AP-managed boxes (the `lhpc-ap` NetworkManager profile exists — the Lite image; desktops
+never show this) the Apps page gains a **Network** panel: scan, pick an SSID, enter the
+password, join. The box's own AP is the safety net — back automatically after every reboot
+and within seconds of losing the WLAN (NetworkManager-native). A **preferred** network is
+re-joined whenever it reappears: a watchdog retries it every 10 minutes while the box sits
+on the AP (each attempt costs the AP up to a minute — the panel shows a Retry-now button).
+Identity is the NM profile UUID; stored networks offer one-click Reconnect / Prefer /
+Forget. The Wi-Fi password is handed to NetworkManager via a 0600 secrets file (never in a
+command line or log) and persisted root-owned by NM itself. Joining drops your AP session by
+nature — the box reappears as `https://<hostname>.local:8443` on the joined network. The
+"allow console from that network" checkbox (default on) extends the console allowlist to the
+joined subnet automatically, plus ONE privileged firewall step shown as a copy-paste sudo
+command (run it over SSH — port 22 is open there); the watchdog then completes the console
+apply by itself. Authorization is a polkit rule installed by `bootstrap-deps.sh` (opt-out
+`--no-network-controls`) or via the System-dependencies copybox.
 
 ## Daemon radio parameters
 

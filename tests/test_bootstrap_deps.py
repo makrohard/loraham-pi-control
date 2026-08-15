@@ -49,13 +49,18 @@ def _fakebin(tmp_path, *, no_sudo=False):
     w("systemctl", 'units="${FAKE_SYSTEMCTL_UNITS:-}"\n[ -n "${FAKE_SYSTEMCTL_BROKEN:-}" ] && { echo "Failed to connect to bus: No such file or directory" >&2; exit 1; }\nif [ "$1" = "list-unit-files" ]; then\n  shift\n  pattern=""\n  for a in "$@"; do case "$a" in --*) ;; *) pattern="$a" ;; esac; done\n  if [ -n "$pattern" ]; then\n    for u in $units; do [ "$u" = "$pattern" ] && echo "$u enabled enabled"; done\n    exit 0\n  fi\n  echo "aaa-first-decoy.service enabled enabled"\n  for u in $units; do echo "$u enabled enabled"; done\n  exec seq 1 200000\nfi\nif [ "$1" = "is-enabled" ] || [ "$1" = "is-active" ]; then\n  last=""; for a in "$@"; do case "$a" in --*) ;; *) last="$a" ;; esac; done\n  case " ${FAKE_SYSTEMCTL_DISABLED:-} " in *" $last "*|*" ${last%.service} "*) exit 1 ;; esac\n  case " $units " in *" $last "*|*" $last.service "*) exit 0 ;; esac\n  exit 1\nfi\nif [ "$1" = "disable" ] || [ "$1" = "enable" ]; then\n  last=""; for a in "$@"; do last="$a"; done\n  case " ${FAKE_SYSTEMCTL_FAIL:-} " in\n    *" $last "*) echo "Failed to disable unit: $last" >&2; exit 1 ;;\n  esac\n  case " $units " in\n    *" $last.service "*|*" $last "*) exit 0 ;;\n  esac\n  echo "Failed to disable unit: Unit file $last.service does not exist." >&2\n  exit 1\nfi\nexit 0\n')
     w("curl", "exit 0\n")
     w("gpg", "cat >/dev/null 2>&1 || true; exit 0\n")
-    # install: keyring dirs stay a no-op; the power-controls rule write (target under
-    # /etc/polkit-1) is captured — args to power.log, the heredoc body to POWER_RULE_OUT —
-    # so tests can assert the real runtime write (mode, path, $OP-resolved content).
+    # install: keyring dirs stay a no-op; the polkit RULE writes (targets under
+    # /etc/polkit-1) are captured PER RULE — args to power.log / network.log, the heredoc
+    # bodies to POWER_RULE_OUT / NETWORK_RULE_OUT — so tests can assert each real runtime
+    # write (mode, path, $OP-resolved content) independently.
     pw = tmp_path / "power.log"
-    w("install", 'if printf "%s" "$*" | grep -q polkit; then\n'
+    nw = tmp_path / "network.log"
+    w("install", 'if printf "%s" "$*" | grep -q "49-lhpc-power"; then\n'
                  f'  echo "install $*" >> "{pw}"\n'
                  '  cat > "${POWER_RULE_OUT:-/dev/null}"\n'
+                 'elif printf "%s" "$*" | grep -q "49-lhpc-network"; then\n'
+                 f'  echo "install $*" >> "{nw}"\n'
+                 '  cat > "${NETWORK_RULE_OUT:-/dev/null}"\n'
                  "fi\nexit 0\n")
     w("wget", "exit 0\n")
     # swap provisioning: fake the mutating tools and log every call. fallocate/dd also create the
@@ -149,7 +154,8 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
            "FSTAB": str(fstab or (tmp_path / "fstab")),
            "WIFI_PSAVE_CONF": str(tmp_path / "wifi-nopowersave.conf"),   # redirect the Wi-Fi write to a temp
            "JOURNAL_DIR": str(tmp_path / "journal"),      # redirect the persistent-journal dir to a temp
-           "POWER_RULE_OUT": str(tmp_path / "power-rule.out")}   # capture the polkit-rule heredoc body
+           "POWER_RULE_OUT": str(tmp_path / "power-rule.out"),   # capture the polkit-rule heredoc bodies
+           "NETWORK_RULE_OUT": str(tmp_path / "network-rule.out")}
     if free_kb is not None:
         env["FAKE_DF_FREE_KB"] = str(free_kb)
     if swapon_fail:
@@ -1136,14 +1142,15 @@ def test_readonly_failclosed_checks_run_before_any_mutation(tmp_path):
 
 
 def test_power_controls_installed_by_default(tmp_path):
-    """Default run: polkitd rides the ONE merged apt transaction and the rule file is written
-    via `install -D -m 0644` with the RUNTIME-resolved operator inside — never a baked name."""
+    """Default run: polkitd rides the ONE merged apt transaction and both rule files are
+    written via `install -D -m 0644` with the RUNTIME-resolved operator inside — never a
+    baked name."""
     r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip"])
     assert r.returncode == 0, r.stderr
     # polkitd inside the merged default transaction (no separate side apt-get)
     merged = [ln for ln in apt.splitlines() if "install -y --no-install-recommends" in ln]
     assert len(merged) == 1 and "polkitd" in merged[0]
-    # the rule write: one install call, -D -m 0644, the exact path
+    # the power rule write: one install call, -D -m 0644, the exact path
     power_log = (tmp_path / "power.log").read_text()
     assert power_log.count("install") == 1
     assert "-D -m 0644" in power_log and "/etc/polkit-1/rules.d/49-lhpc-power.rules" in power_log
@@ -1154,20 +1161,51 @@ def test_power_controls_installed_by_default(tmp_path):
                 "login1.power-off", "login1.power-off-multiple-sessions"):
         assert f"org.freedesktop.{act}" in body
     assert "power controls: reboot/shutdown polkit rule installed" in r.stdout
+    # the network rule write, same guarantees (both NM actions, runtime $OP)
+    net_log = (tmp_path / "network.log").read_text()
+    assert net_log.count("install") == 1
+    assert "-D -m 0644" in net_log and "/etc/polkit-1/rules.d/49-lhpc-network.rules" in net_log
+    nbody = (tmp_path / "network-rule.out").read_text()
+    assert f'subject.user == "{_USER}"' in nbody
+    for act in ("NetworkManager.network-control", "NetworkManager.settings.modify.system"):
+        assert f"org.freedesktop.{act}" in nbody
 
 
-def test_power_controls_opt_out_installs_neither(tmp_path):
-    """--no-power-controls: polkitd absent from the merged transaction AND no rule written."""
-    r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "skip", "--no-power-controls"])
+def test_polkit_package_matrix_all_four_flag_combinations(tmp_path):
+    """AUDIT: polkitd joins the merged transaction when EITHER feature is enabled — only
+    opting out of BOTH removes it; each rule follows exactly its own flag."""
+    cases = [
+        ([], True, True, True),
+        (["--no-power-controls"], True, False, True),
+        (["--no-network-controls"], True, True, False),
+        (["--no-power-controls", "--no-network-controls"], False, False, False),
+    ]
+    for i, (flags, want_polkitd, want_power, want_net) in enumerate(cases):
+        d = tmp_path / f"c{i}"
+        d.mkdir()
+        r, _cfg, apt, _um = _run(d, ["--spi-mode", "skip", *flags])
+        assert r.returncode == 0, (flags, r.stderr)
+        merged = [ln for ln in apt.splitlines()
+                  if "install -y --no-install-recommends" in ln]
+        assert ("polkitd" in merged[0]) is want_polkitd, flags
+        assert (d / "power.log").exists() is want_power, flags
+        assert (d / "network.log").exists() is want_net, flags
+        if not want_power:
+            assert "power controls: skipped (--no-power-controls)" in r.stdout
+        if not want_net:
+            assert "network controls: skipped (--no-network-controls)" in r.stdout
+    # --with-gui alone is NOT a suppression signal (it means GUI libraries, not desktop)
+    g = tmp_path / "gui"
+    g.mkdir()
+    r, _cfg, _apt, _um = _run(g, ["--spi-mode", "skip", "--with-gui"])
     assert r.returncode == 0, r.stderr
-    assert "polkitd" not in apt
-    assert not (tmp_path / "power.log").exists()
-    assert "power controls: skipped (--no-power-controls)" in r.stdout
+    assert (g / "power.log").exists() and (g / "network.log").exists()
 
 
 def test_power_dry_run_simulates_the_same_closure(tmp_path):
     """--dry-run resolves the SAME package set a real run installs: polkitd is part of the
-    simulated transaction by default and absent under --no-power-controls."""
+    simulated transaction whenever EITHER feature is enabled, and absent only when BOTH
+    are opted out (the audit's package matrix, dry-run side)."""
     r, _cfg, apt, _um = _run(tmp_path, ["--dry-run"], nonroot=True)
     assert r.returncode == 0, r.stderr
     assert "polkitd" in apt                       # simulated transaction includes it
@@ -1175,7 +1213,13 @@ def test_power_dry_run_simulates_the_same_closure(tmp_path):
     b.mkdir()
     r2, _cfg2, apt2, _um2 = _run(b, ["--dry-run", "--no-power-controls"], nonroot=True)
     assert r2.returncode == 0, r2.stderr
-    assert "polkitd" not in apt2
+    assert "polkitd" in apt2                      # network controls still need it
+    c = tmp_path / "c"
+    c.mkdir()
+    r3, _cfg3, apt3, _um3 = _run(c, ["--dry-run", "--no-power-controls",
+                                     "--no-network-controls"], nonroot=True)
+    assert r3.returncode == 0, r3.stderr
+    assert "polkitd" not in apt3
 
 
 def test_power_rule_has_exactly_one_install_site(tmp_path):
@@ -1189,14 +1233,15 @@ def test_power_rule_has_exactly_one_install_site(tmp_path):
     assert 'subject.user == "$OP"' in text
 
 
-def test_power_op_resolution_without_groups_is_gated_on_the_flag():
-    """A manifest with NO hardware groups still resolves $OP for the power rule — but only
-    when power controls are enabled, so `--no-power-controls` on such a box is never refused
-    for an operator it does not need."""
+def test_power_op_resolution_without_groups_is_gated_on_the_flags():
+    """A manifest with NO hardware groups still resolves $OP for the polkit rules — but only
+    when at least one of power/network controls is enabled, so a box run with BOTH opt-outs
+    and no grants is never refused for an operator it does not need."""
     from lhpc.core import deps as deps_mod
     text = deps_mod.render_bootstrap_script(["sudo apt install -y git"], "test-rev")
-    guard = text.index('if [ -z "$NO_POWER" ]; then')
+    guard = text.index('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ]; then')
     op = text.index('OP="$OPERATOR_USER"')
     assert guard < op                                          # resolution inside the gate
     assert "usermod" not in text                               # really the no-groups branch
     assert "49-lhpc-power.rules <<POWERRULE" in text
+    assert "49-lhpc-network.rules <<NETWORKRULE" in text

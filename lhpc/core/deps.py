@@ -261,6 +261,42 @@ def power_rule_install_cmd(user: str) -> str:
     )
 
 
+# --- network controls (console Wi-Fi client mode with AP fallback) ---------------------------
+# The Network panel joins the box to an existing WLAN via NetworkManager. Unprivileged nmcli
+# can scan and list, but connecting and saving profiles need `network-control` and
+# `settings.modify.system` — granted by this rule, delivered exactly like the power rule
+# (bootstrap scaffold with opt-out, or the dependency-panel copybox on an existing box).
+NETWORK_RULE_PATH = "/etc/polkit-1/rules.d/49-lhpc-network.rules"
+
+
+def network_rule_text(user: str) -> str:
+    """The polkit rule granting `user` the two NetworkManager actions the Network panel
+    needs. `user` may be a literal account name (copybox) or `$OP` (bootstrap scaffold —
+    expanded at script runtime by an unquoted heredoc)."""
+    return (
+        "// Installed by LoRaHAM Pi Control — lets the operator user join Wi-Fi networks "
+        "from the console.\n"
+        "polkit.addRule(function(action, subject) {\n"
+        f'    if (subject.user == "{user}" &&\n'
+        '        (action.id == "org.freedesktop.NetworkManager.network-control" ||\n'
+        '         action.id == "org.freedesktop.NetworkManager.settings.modify.system")) {\n'
+        "        return polkit.Result.YES;\n"
+        "    }\n"
+        "});\n"
+    )
+
+
+def network_rule_install_cmd(user: str) -> str:
+    """Paste-ready command(s) to authorize `user` for the console's Network panel on THIS
+    box: polkitd + the rule file, `install -D -m 0644` (same rationale as the power rule)."""
+    return (
+        "sudo apt install -y polkitd\n"
+        f"sudo install -D -m 0644 /dev/stdin {NETWORK_RULE_PATH} <<'NETWORKRULE'\n"
+        + network_rule_text(user)
+        + "NETWORKRULE"
+    )
+
+
 def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=()) -> str:
     """Render every declared dependency-remediation command into ONE hardened, executable bootstrap
     script. Standalone `sudo apt install` commands merge into a single deduplicated `apt-get install`
@@ -382,7 +418,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#",
         "#   bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]"
         " [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps]"
-        " [--keep-wifi-powersave] [--no-power-controls]",
+        " [--keep-wifi-powersave] [--no-power-controls] [--no-network-controls]",
         "#   bootstrap-deps.sh --dry-run        PRE-FLIGHT: simulate only, change nothing",
         "#     soft-cs      software CS (/dev/spidev0.0): dtparam=spi=on + dtoverlay="
         + spi_overlay + "  (LoRaHAM Pi / Uputronics rigs, single-radio AND dual Uputronics:"
@@ -393,9 +429,15 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "#     skip         no boot-config change (SPI already configured)",
         "#     --no-swapfile      do NOT provision the small-RAM disk swapfile (see below)",
         "#     --swap-size <MB>   swapfile size when provisioned (default 768)",
-        "#     --no-power-controls  do NOT install polkitd + the polkit rule that lets the operator",
+        "#     --no-power-controls  do NOT install the polkit rule that lets the operator",
         "#                        use the console's Reboot/Shut down buttons (installed by default;",
         "#                        the rule file is " + POWER_RULE_PATH + ")",
+        "#     --no-network-controls  do NOT install the polkit rule that lets the operator join",
+        "#                        Wi-Fi networks from the console's Network panel (installed by",
+        "#                        default; the rule file is " + NETWORK_RULE_PATH + "; the panel",
+        "#                        itself appears only on AP-managed boxes — desktop images pass",
+        "#                        this flag). polkitd is installed unless BOTH power AND network",
+        "#                        controls are opted out.",
         "# Exit codes: 2 usage · 3 conflicting SPI config · 4 required swap unprovisioned ·",
         "#             5 --dry-run could not resolve · 6 --dry-run found graphical packages ·",
         "#             7 hardware group grant failed · 8 system nginx.service could not be confirmed"
@@ -436,7 +478,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     out("usage() {",
         '\techo "usage: bootstrap-deps.sh --spi-mode <soft-cs|hardware-cs|skip> [--operator-user <name>]'
         ' [--no-swapfile] [--swap-size <MB>] [--with-gui] [--with-gps] [--keep-wifi-powersave]'
-        ' [--no-power-controls]" >&2',
+        ' [--no-power-controls] [--no-network-controls]" >&2',
         '\techo "       bootstrap-deps.sh --dry-run   (simulate the default apt transaction; no changes)" >&2',
         "}",
         "")
@@ -445,6 +487,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'OPERATOR_USER=""',
         'NO_SWAPFILE=""',
         'NO_POWER=""',
+        'NO_NETWORK=""',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
         'WITH_GPS=""',
@@ -456,6 +499,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         '\t\t--operator-user) OPERATOR_USER="${2:?--operator-user needs a value}"; shift 2 ;;',
         '\t\t--no-swapfile) NO_SWAPFILE=1; shift ;;',
         '\t\t--no-power-controls) NO_POWER=1; shift ;;',
+        '\t\t--no-network-controls) NO_NETWORK=1; shift ;;',
         '\t\t--with-gui) WITH_GUI=1; shift ;;',
         '\t\t--with-gps) WITH_GPS=1; shift ;;',
         '\t\t--keep-wifi-powersave) KEEP_WIFI=1; shift ;;',
@@ -466,11 +510,12 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         "\tesac",
         "done",
         "",
-        "# polkitd (console Reboot/Shut down authorization daemon — systemd only Suggests it) joins",
-        "# the ONE merged apt transaction below AND its --dry-run simulation, unless opted out —",
-        "# never a separate side transaction outside the simulated closure.",
-        'POWER_PKG="polkitd"',
-        '[ -n "$NO_POWER" ] && POWER_PKG=""',
+        "# polkitd (authorization daemon for the console's power buttons AND its Network panel —",
+        "# systemd only Suggests it) joins the ONE merged apt transaction below AND its --dry-run",
+        "# simulation. It is omitted only when BOTH features are opted out — a rule without its",
+        "# daemon would be dead weight, and either rule alone still needs polkitd.",
+        'POLKIT_PKG="polkitd"',
+        '[ -n "$NO_POWER" ] && [ -n "$NO_NETWORK" ] && POLKIT_PKG=""',
         "")
 
     # The denylist scan as ONE shell line, composed here so the nested awk/grep quoting stays
@@ -493,7 +538,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             '		echo "ERROR: dry-run: apt-get is not available — cannot simulate the transaction." >&2',
             "		exit 5",
             "	fi",
-            f'	DRY_PKGS="{pkgs_line} $POWER_PKG"',
+            f'	DRY_PKGS="{pkgs_line} $POLKIT_PKG"',
             "	# Simulate EXACTLY what the install below runs (same flags, same package set).",
             "\t# -o Dir::State::status=/dev/null resolves against an EMPTY installed-package",
             "\t# database, so the verdict is the FULL closure a fresh image would get, not the delta",
@@ -602,10 +647,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
             "fi",
             "")
 
-    # $OP is needed by the hardware-group grants AND by the power-controls rule. With groups
-    # declared it must ALWAYS resolve (grants are unconditional); with none, it resolves only
-    # when power controls are enabled — a box run with --no-power-controls and no grants is
-    # never refused for an operator it does not need.
+    # $OP is needed by the hardware-group grants AND by the power/network-controls rules. With
+    # groups declared it must ALWAYS resolve (grants are unconditional); with none, it resolves
+    # only when at least one of the rules is enabled — a box run with both --no-*-controls
+    # flags and no grants is never refused for an operator it does not need.
     _op_lines = (
         "# Operator for the group grants / power controls: explicit --operator-user, else SUDO_USER",
         "# when run under sudo, else the invoking user. NEVER grant to root; require a real account.",
@@ -626,7 +671,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     if groups_csv:
         out(*_op_lines, "")
     else:
-        out('if [ -z "$NO_POWER" ]; then')
+        out('if [ -z "$NO_POWER" ] || [ -z "$NO_NETWORK" ]; then')
         out(*("\t" + ln for ln in _op_lines))
         out("fi", "")
 
@@ -662,9 +707,10 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         pk = sorted(apt_pkgs)
         for p in pk:
             out(f"    {p} \\")
-        # $POWER_PKG (polkitd, or empty under --no-power-controls) rides the SAME merged
-        # transaction the dry-run simulates — an empty unquoted expansion adds no argument.
-        out("    $POWER_PKG")
+        # $POLKIT_PKG (polkitd, or empty when BOTH power and network controls are opted out)
+        # rides the SAME merged transaction the dry-run simulates — an empty unquoted
+        # expansion adds no argument.
+        out("    $POLKIT_PKG")
         out("")
 
         if any(pkg == "nginx" or pkg.startswith("nginx-") for pkg in pk):
@@ -1097,7 +1143,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
 
     # Power controls: the polkit rule that authorizes $OP for the console's Reboot / Shut down
     # buttons (logind action ids). polkitd itself rides the merged apt transaction above via
-    # $POWER_PKG. The rule text is the SAME source the dependency-panel copybox renders
+    # $POLKIT_PKG. The rule text is the SAME source the dependency-panel copybox renders
     # (power_rule_text) — the unquoted heredoc expands $OP at script runtime. install -D
     # creates rules.d if needed and guarantees mode 0644 even over an existing file.
     out("# --- power controls: polkit rule for the console's Reboot/Shut down (opt-out) ------------",
@@ -1110,6 +1156,23 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     out("POWERRULE",
         '\techo "[bootstrap-deps] power controls: reboot/shutdown polkit rule installed for $OP'
         f' ({POWER_RULE_PATH})."',
+        "fi",
+        "")
+
+    # Network controls: the polkit rule that authorizes $OP for the console's Network panel
+    # (join Wi-Fi via NetworkManager). Same delivery as the power rule; the PANEL itself
+    # additionally gates on the lhpc-ap profile existing, so a box without the managed AP
+    # (desktop) never shows the feature even when the rule is present.
+    out("# --- network controls: polkit rule for the console's Wi-Fi Network panel (opt-out) --------",
+        'if [ -n "$NO_NETWORK" ]; then',
+        '\techo "[bootstrap-deps] network controls: skipped (--no-network-controls)."',
+        "else",
+        f"\tinstall -D -m 0644 /dev/stdin {NETWORK_RULE_PATH} <<NETWORKRULE")
+    for ln in network_rule_text("$OP").rstrip("\n").split("\n"):
+        out(ln)
+    out("NETWORKRULE",
+        '\techo "[bootstrap-deps] network controls: Wi-Fi polkit rule installed for $OP'
+        f' ({NETWORK_RULE_PATH})."',
         "fi",
         "")
 

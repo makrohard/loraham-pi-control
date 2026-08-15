@@ -1070,6 +1070,47 @@ class WebserverOpsMixin:
         return _dc.replace(res, details=[gate_msg, *res.details],
                            next_commands=[*res.next_commands, *(gate_cmds or [])])
 
+    def crl_refresh_if_expired(self) -> bool:
+        """Rebuild the client-CA CRL when its nextUpdate lies in the past, then reload nginx
+        via the normal apply. LIVE-FOUND (clock-jump class): an AP-isolated box gets NTP the
+        moment it joins a WLAN, the clock jumps months forward past the CRL's nextUpdate,
+        and nginx then rejects EVERY client cert ("The SSL certificate error") — a total
+        console lockout with nothing actually revoked. lhpc owns the CRL file, so the heal
+        is unprivileged. Fail-soft, returns True when it acted (rebuild or retry). AUDIT:
+        a rebuild makes the FILE fresh even when the nginx reload fails — a reload-pending
+        marker survives until an apply actually SUCCEEDS, so the heal is retried instead
+        of silently skipped forever."""
+        try:
+            import datetime as _dt
+
+            from cryptography import x509
+
+            from . import pki as _pki
+            from . import runtime_fs as _rfs
+            pending = self._paths.under("state", "crl-reload-pending")
+            if pending.exists():
+                if self.webserver_apply().ok:
+                    self._safe_unlink(pending)
+                return True                  # acted (retried the reload)
+            p = self._paths.under("config", "tls", "client-ca", "crl.pem")
+            if not p.exists():
+                return False
+            pem = _rfs.read_text_regular(self._paths, p, max_bytes=262144)
+            if not pem:
+                return False
+            crl = x509.load_pem_x509_crl(pem.encode())
+            nu = getattr(crl, "next_update_utc", None) or crl.next_update
+            if nu.tzinfo is None:
+                nu = nu.replace(tzinfo=_dt.UTC)
+            if nu > _dt.datetime.now(_dt.UTC):
+                return False
+            _pki.build_crl(self._paths)
+            if not self.webserver_apply().ok:   # nginx must re-read the fresh CRL
+                _rfs.atomic_write(self._paths, pending, "reload-pending\n", 0o600)
+            return True
+        except Exception:
+            return False
+
     def webserver_apply(self) -> ActionResult:
         """Activate the DESIRED config: render + validate the nginx config FIRST (never
         activate an invalid one), then reload an already-running LHPC-owned nginx master, then

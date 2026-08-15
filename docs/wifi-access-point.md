@@ -163,3 +163,9 @@ imported to the phone (see [`webserver.md`](webserver.md) for the full mTLS runb
 sudo nmcli connection down field-ap
 sudo nmcli connection delete field-ap
 ```
+
+## Joining a WLAN from the console
+
+On AP-managed boxes the Apps page's **Network** panel does the client-mode dance for you —
+scan, join, AP-fallback on reboot/loss, and an optional preferred network that is re-joined
+automatically. See [`operations.md`](operations.md#network-wi-fi-client-with-ap-fallback).
