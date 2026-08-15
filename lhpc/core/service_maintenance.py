@@ -532,8 +532,9 @@ class MaintenanceOpsMixin:
     # past the TTL the trigger provably cannot fire, so admissions may safely reopen.
     POWER_PENDING_TTL_S: ClassVar[float] = 120.0
 
-    # A non-yes visibility verdict re-probes at most this often; a yes is cached for the
-    # process lifetime (installing the rule shows up within a minute, no restart needed).
+    # Visibility verdicts re-probe at most this often — BOTH ways (RE-AUDIT: a yes cached
+    # forever kept the buttons after the rule was revoked; a bounded TTL makes install AND
+    # revocation visible within a minute, at ≤ one bounded busctl per action per minute).
     _POWER_REPROBE_S: ClassVar[float] = 60.0
 
     def _power_verdict(self, kind: str) -> str:
@@ -550,30 +551,35 @@ class MaintenanceOpsMixin:
         m = _re.fullmatch(r'\s*s\s+"([a-z]+)"\s*', (getattr(r, "stdout", "") or ""))
         return m.group(1) if m else ""
 
-    def _power_authorized(self) -> bool:
-        """Cached logind verdict gating VISIBILITY (buttons, /power routes, the dependency
-        panel's satisfied flag). LIVE-FOUND: the original presence probe stat()ed the rule
-        file, but Debian ships /etc/polkit-1/rules.d as 0750 root:polkitd — unreadable to the
-        operator process, so the probe read False on a perfectly authorized box. logind's own
-        CanReboot answer is the same ground truth the apply handshake trusts. Cost control:
-        a 'yes' is cached for the process lifetime; a non-yes re-probes at most every
-        `_POWER_REPROBE_S`, so a GET is at most one bounded busctl per minute until then."""
+    def _power_authorized(self, kind: str) -> bool:
+        """Cached PER-ACTION logind verdict gating VISIBILITY (buttons, /power routes, the
+        dependency panel's satisfied flag). LIVE-FOUND: the original presence probe stat()ed
+        the rule file, but Debian ships /etc/polkit-1/rules.d as 0750 root:polkitd —
+        unreadable to the operator process, so the probe read False on a perfectly authorized
+        box. logind's own CanReboot/CanPowerOff answer is the same ground truth the apply
+        handshake trusts. RE-AUDIT: one action per cache entry (a box may authorize reboot
+        but not power-off) with a bounded TTL both ways — never a shared forever-yes."""
         now = time.monotonic()
-        cached = getattr(self, "_power_auth_cache", None)
-        if cached is not None and (cached[0] or now - cached[1] < self._POWER_REPROBE_S):
-            return cached[0]
-        ok = self._power_verdict("reboot") == "yes"
-        self._power_auth_cache = (ok, now)
+        cache = getattr(self, "_power_auth_cache", None) or {}
+        hit = cache.get(kind)
+        if hit is not None and now - hit[1] < self._POWER_REPROBE_S:
+            return hit[0]
+        ok = self._power_verdict(kind) == "yes"
+        cache[kind] = (ok, now)
+        self._power_auth_cache = cache
         return ok
 
-    def power_supported(self) -> bool:
-        """Gates the dashboard's power buttons and the /power routes: the two tools the
-        execution path runs (busctl, systemctl — presence, no subprocess) AND the cached
-        logind authorization verdict (see `_power_authorized`)."""
+    def power_supported(self, kind: str | None = None) -> bool:
+        """Gates the power UI: the two tools the execution path runs (busctl, systemctl —
+        presence, no subprocess) AND the cached logind verdict for `kind`. Each button and
+        each /power route asks for ITS OWN action; `kind=None` (the dependency panel)
+        requires EVERY action — a partial grant keeps the copybox on offer."""
         fs = self._system.fs
-        return (any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
-                and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl"))
-                and self._power_authorized())
+        if not (any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
+                and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl"))):
+            return False
+        kinds = self._POWER_KINDS if kind is None else (kind,)
+        return all(self._power_authorized(k) for k in kinds)
 
     def _power_pending_path(self):
         return self._paths.under("state", "power-pending.json")
@@ -652,6 +658,13 @@ class MaintenanceOpsMixin:
                            "  [note] you need PHYSICAL access to power the box back on — safe "
                            "to unplug once shutdown completes; running stacks come back via "
                            "boot-restore on the next power-on")
+            if kind == "reboot":
+                # LIVE-FOUND: a rebooting AP box "looks shut down" from the outside — the AP
+                # vanishes for a minute or two and phones/PCs silently fall back to another
+                # network instead of re-joining. Say so before the operator concludes failure.
+                details.append("  [note] this box's Wi-Fi AP disappears for a minute or two "
+                               "during the reboot — your device may fall back to another "
+                               "network; re-join the AP afterwards")
             return ActionResult(True, f"{verb} this box?", details=details)
         from . import reslock
         try:
@@ -675,7 +688,9 @@ class MaintenanceOpsMixin:
         # SYNCHRONOUS authorization handshake: logind answers yes/no/challenge/na without
         # side effects — the same verdict the visibility cache trusts.
         verdict = self._power_verdict(kind)
-        self._power_auth_cache = (verdict == "yes", time.monotonic())
+        _c = getattr(self, "_power_auth_cache", None) or {}
+        _c[kind] = (verdict == "yes", time.monotonic())
+        self._power_auth_cache = _c
         if verdict != "yes":
             why = (f"logind answered {verdict!r}" if verdict
                    else "the logind authorization check failed")

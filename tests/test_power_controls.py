@@ -26,17 +26,19 @@ def _svc(tmp_path, uptime="100.00 380.00\n", **fk):
                              paths=Paths(runtime_root=tmp_path))
 
 
-def _busctl(svc, monkeypatch, verdict='s "yes"\n', rc=0):
-    """Intercept ONLY busctl; every other runner call keeps its real Fake behavior."""
+def _busctl(svc, monkeypatch, verdict='s "yes"\n', rc=0, per=None):
+    """Intercept ONLY busctl; every other runner call keeps its real Fake behavior.
+    `per` maps a method name (CanReboot/CanPowerOff) to its own verdict string."""
     orig = svc._system.runner.run
 
-    class R:
-        returncode = rc
-        stdout = verdict
-        stderr = ""
-
     def run(argv, timeout=None):
-        return R() if argv and argv[0] == "busctl" else orig(argv, timeout)
+        if argv and argv[0] == "busctl":
+            class R:
+                returncode = rc
+                stdout = (per or {}).get(argv[-1], verdict)
+                stderr = ""
+            return R()
+        return orig(argv, timeout)
     monkeypatch.setattr(svc._system.runner, "run", run)
 
 
@@ -102,9 +104,11 @@ def test_dependency_entry_probe_and_bootstrap_exclusion(tmp_path, monkeypatch):
 
 
 def test_power_supported_requires_tools_and_logind_yes(tmp_path, monkeypatch):
-    # tools present + logind yes -> supported
+    # tools present + logind yes -> supported (per kind AND the dep-panel all-kinds form)
     svc = _svc(tmp_path, files=dict(_TOOLS))
     _busctl(svc, monkeypatch)
+    assert svc.power_supported("reboot") is True
+    assert svc.power_supported("poweroff") is True
     assert svc.power_supported() is True
     # a missing execution tool short-circuits BEFORE any probe
     for missing in _TOOLS:
@@ -117,38 +121,54 @@ def test_power_supported_requires_tools_and_logind_yes(tmp_path, monkeypatch):
     assert svc2.power_supported() is False
 
 
-def test_power_visibility_cache_yes_sticks_no_reprobes(tmp_path, monkeypatch):
-    """A 'yes' verdict is cached for the process lifetime; a non-yes re-probes only after
-    the TTL — so a GET costs at most one bounded busctl per minute while unauthorized."""
+def test_power_authorization_is_per_action(tmp_path, monkeypatch):
+    """RE-AUDIT: CanReboot=yes with CanPowerOff=no must expose ONLY the reboot side —
+    never both buttons from one shared verdict."""
+    svc = _svc(tmp_path, files=dict(_TOOLS))
+    _busctl(svc, monkeypatch, per={"CanReboot": 's "yes"\n', "CanPowerOff": 's "no"\n'})
+    assert svc.power_supported("reboot") is True
+    assert svc.power_supported("poweroff") is False
+    assert svc.power_supported() is False                      # dep panel: partial != satisfied
+    # and a refused poweroff never hides an authorized reboot (independent cache entries)
+    assert svc.power_supported("reboot") is True
+
+
+def test_power_visibility_cache_bounded_both_ways(tmp_path, monkeypatch):
+    """Verdicts cache per action with a bounded TTL BOTH ways: repeated GETs inside the TTL
+    never re-probe, and BOTH a later install AND a revocation become visible once the TTL
+    passes (RE-AUDIT: a forever-yes kept revoked buttons alive until restart)."""
     import time as _time
     svc = _svc(tmp_path, files=dict(_TOOLS))
-    _busctl(svc, monkeypatch)                                 # yes
-    assert svc.power_supported() is True
-    _busctl(svc, monkeypatch, verdict='s "no"\n')             # verdict changes...
-    assert svc.power_supported() is True                      # ...but yes stays cached
-    # a NO caches too: repeated GETs within the TTL never re-probe
-    svc2 = _svc(tmp_path / "b", files=dict(_TOOLS))
     calls = []
-    orig = svc2._system.runner.run
-
-    class RNo:
-        returncode = 0
-        stdout = 's "no"\n'
-        stderr = ""
+    verdict = {"v": 's "yes"\n'}
+    orig = svc._system.runner.run
 
     def run(argv, timeout=None):
         if argv and argv[0] == "busctl":
-            calls.append(argv)
-            return RNo()
+            calls.append(argv[-1])
+
+            class R:
+                returncode = 0
+                stdout = verdict["v"]
+                stderr = ""
+            return R()
         return orig(argv, timeout)
-    monkeypatch.setattr(svc2._system.runner, "run", run)
-    assert svc2.power_supported() is False
-    assert svc2.power_supported() is False
-    assert len(calls) == 1                                    # cached within the TTL
-    # past the TTL the next GET re-probes (rule installed later shows up within a minute)
-    svc2._power_auth_cache = (False, _time.monotonic() - 61.0)
-    assert svc2.power_supported() is False
-    assert len(calls) == 2
+    monkeypatch.setattr(svc._system.runner, "run", run)
+    # yes cached: repeated GETs inside the TTL probe once per action
+    assert svc.power_supported("reboot") is True
+    assert svc.power_supported("reboot") is True
+    assert calls == ["CanReboot"]
+    # REVOCATION: verdict flips to no — still cached-yes inside the TTL...
+    verdict["v"] = 's "no"\n'
+    assert svc.power_supported("reboot") is True
+    # ...but past the TTL the next GET re-probes and the button disappears
+    svc._power_auth_cache["reboot"] = (True, _time.monotonic() - 61.0)
+    assert svc.power_supported("reboot") is False
+    assert calls == ["CanReboot", "CanReboot"]
+    # and a NO also re-probes after the TTL (a later install shows up within a minute)
+    verdict["v"] = 's "yes"\n'
+    svc._power_auth_cache["reboot"] = (False, _time.monotonic() - 61.0)
+    assert svc.power_supported("reboot") is True
 
 
 # --- service: dry-run + apply ---------------------------------------------------------------------
@@ -168,8 +188,12 @@ def test_dry_run_names_running_stacks_and_notes(tmp_path, monkeypatch):
     assert any("[running] graywolf" in d for d in res.details)
     assert any("[running] kiss" in d for d in res.details)
     assert any("boot-restore" in d for d in res.details)
+    # LIVE-FOUND: the AP vanishes during a reboot and clients fall back to other networks —
+    # the confirm page must warn, or the operator concludes the box shut down.
+    assert any("Wi-Fi AP" in d and "re-join" in d for d in res.details)
     off = svc.power_action("poweroff", apply=False)
     assert any("PHYSICAL access" in d for d in off.details)
+    assert not any("Wi-Fi AP" in d for d in off.details)      # poweroff: box stays down anyway
 
 
 def test_apply_refuses_without_boot_id(tmp_path, monkeypatch):
@@ -379,7 +403,8 @@ def _web(tmp_path, monkeypatch=None, supported=False):
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     if monkeypatch is not None and supported:
-        monkeypatch.setattr(ControllerService, "power_supported", lambda self: True)
+        monkeypatch.setattr(ControllerService, "power_supported",
+                            lambda self, kind=None: True)
     return svc, create_app(lambda: svc).test_client()
 
 
@@ -393,6 +418,22 @@ def test_web_hidden_and_404_when_unsupported(tmp_path):
     body = c.get("/").get_data(as_text=True)
     assert "Shut down" not in body and "/power/" not in body
     assert c.post("/power/reboot", data={"_csrf": _tok(c)}).status_code == 404
+
+
+def test_web_buttons_and_routes_gate_per_action(tmp_path, monkeypatch):
+    """RE-AUDIT: reboot-only authorization renders ONLY the Reboot button, and the poweroff
+    route 404s — never both surfaces from one shared verdict."""
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(ControllerService, "power_supported",
+                        lambda self, kind=None: kind == "reboot")
+    c = create_app(lambda: svc).test_client()
+    body = c.get("/").get_data(as_text=True)
+    assert 'action="/power/reboot"' in body
+    assert 'action="/power/poweroff"' not in body
+    tok = _tok(c)
+    assert c.post("/power/poweroff", data={"_csrf": tok}).status_code == 404
+    assert c.post("/power/reboot", data={"_csrf": tok}).status_code == 200
 
 
 def test_web_csrf_required(tmp_path, monkeypatch):

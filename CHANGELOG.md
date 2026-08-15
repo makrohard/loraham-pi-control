@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Power buttons now show on a correctly authorized box (live-found on the fresh image): visibility asks logind directly (`CanReboot`, bounded + cached) — the rule file sits in a directory Debian keeps unreadable to the operator process, so the presence probe could never see it
+- Power buttons now show on a correctly authorized box (live-found on the fresh image): visibility asks logind directly (`CanReboot`/`CanPowerOff`, bounded + cached **per action**, TTL both ways) — the rule file sits in a directory Debian keeps unreadable to the operator process, so the presence probe could never see it; a partial grant shows only its button, and a revocation disappears within a minute
+- The Reboot confirm page warns that the box's Wi-Fi AP vanishes for a minute or two mid-reboot (live-found: a rebooting AP box "looks shut down" — clients silently fall back to another network instead of re-joining)
 
 ## 0.1.16
 

@@ -429,9 +429,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             tasks=service.running_tasks(),
             radio_mode=service.radio_mode(),
             hardware_configured=service.hardware_configured(),
-            # Power buttons render ONLY when the polkit-rule dependency is satisfied (presence
-            # probe) — an unauthorized box shows nothing, and the dep panel offers the copybox.
-            power_ok=service.power_supported(),
+            # Each power button renders ONLY when logind authorizes ITS action (cached
+            # per-kind verdict — a box may allow reboot but not power-off); an unauthorized
+            # box shows nothing, and the dep panel offers the copybox.
+            power_ok={"reboot": service.power_supported("reboot"),
+                      "poweroff": service.power_supported("poweroff")},
             dash_sig=service.dash_signature())
 
     @app.get("/api/dash-signature")
@@ -1058,7 +1060,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # marker + bounded respond-first trigger) and redirects with the typed result.
         if not _csrf_ok():
             abort(400)
-        if kind not in ("reboot", "poweroff") or not service.power_supported():
+        if kind not in ("reboot", "poweroff") or not service.power_supported(kind):
             abort(404)
         if request.form.get("confirmed") != "yes":
             plan = service.power_action(kind, apply=False)
