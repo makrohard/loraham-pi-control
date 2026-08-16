@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
-- Generic extension point: `ControllerService` honors `$LHPC_SYSTEM_PROVIDER` (`module:factory`) to supply an alternate System/manifest/spawn for out-of-tree simulation harnesses; unset (production, always) it is byte-identical to before. This is what the separate **`lhpc-testlab`** package (a real-console-on-simulated-hardware lab for GitHub Codespaces — badge in the README, see `docs/testlab.md`) hooks into; the lab ships nothing in the lhpc wheel or the Pi image
+- **Interactive in-browser demo** (GitHub Pages): the real console compiled to WebAssembly with Pyodide, driven against a pure in-browser simulation backend — browse the dashboard/Apps and install → build → start → stop any stack with one-stack-per-band handoff and a live radio panel, no Pi, no server, no sign-in. Badge in the README; see `demo/`
+- **Codespaces test lab** (`lhpc-testlab`): the real console + CLI + real stack processes (kiss, graywolf, meshcore, meshcom, …) against deterministic fake hardware/OS backends, one click in a GitHub Codespace — fault scenarios, RX/TX injection, simulated reboot, and a coverage-matrix gate. Ships nothing in the lhpc wheel or the Pi image. Badge in the README; see `docs/testlab.md`
+- Generic extension point behind both: `ControllerService` honors `$LHPC_SYSTEM_PROVIDER` (`module:factory`) to supply an alternate System/manifest/spawn for out-of-tree simulation harnesses; unset (production, always) it is byte-identical to before
 - `{multiarch}` token in manifest `check_file` paths (libslirp) — resolves to the aarch64 literal on the Pi (unchanged), truthful on x86
 
 ## 0.1.17
