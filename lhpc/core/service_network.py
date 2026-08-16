@@ -55,9 +55,13 @@ class NetworkOpsMixin:
     # Capability/authorization verdicts re-probe at most this often — both ways.
     _NET_PROBE_TTL_S: ClassVar[float] = 60.0
     _NET_VIEW_TTL_S: ClassVar[float] = 10.0
-    # NetworkManager actions the Network panel needs (scan/list are already unprivileged).
+    # NetworkManager actions the Network panel needs (scan/list are already unprivileged):
+    # join/save a client profile, plus re-activate the box's own shared AP (wifi.share.*) —
+    # without the latter the "Back to AP mode" way home is denied and the box strands.
     _NET_ACTIONS: ClassVar[tuple] = ("org.freedesktop.NetworkManager.network-control",
-                                     "org.freedesktop.NetworkManager.settings.modify.system")
+                                     "org.freedesktop.NetworkManager.settings.modify.system",
+                                     "org.freedesktop.NetworkManager.wifi.share.open",
+                                     "org.freedesktop.NetworkManager.wifi.share.protected")
 
     # ---- nmcli plumbing --------------------------------------------------------------
 

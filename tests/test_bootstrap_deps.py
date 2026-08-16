@@ -1167,7 +1167,8 @@ def test_power_controls_installed_by_default(tmp_path):
     assert "-D -m 0644" in net_log and "/etc/polkit-1/rules.d/49-lhpc-network.rules" in net_log
     nbody = (tmp_path / "network-rule.out").read_text()
     assert f'subject.user == "{_USER}"' in nbody
-    for act in ("NetworkManager.network-control", "NetworkManager.settings.modify.system"):
+    for act in ("NetworkManager.network-control", "NetworkManager.settings.modify.system",
+                "NetworkManager.wifi.share.open", "NetworkManager.wifi.share.protected"):
         assert f"org.freedesktop.{act}" in nbody
 
 

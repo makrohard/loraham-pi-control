@@ -262,24 +262,32 @@ def power_rule_install_cmd(user: str) -> str:
 
 
 # --- network controls (console Wi-Fi client mode with AP fallback) ---------------------------
-# The Network panel joins the box to an existing WLAN via NetworkManager. Unprivileged nmcli
-# can scan and list, but connecting and saving profiles need `network-control` and
-# `settings.modify.system` — granted by this rule, delivered exactly like the power rule
-# (bootstrap scaffold with opt-out, or the dependency-panel copybox on an existing box).
+# The Network panel joins the box to an existing WLAN via NetworkManager and, when a join is
+# undone ("Back to AP mode"), re-activates the box's OWN AP so there is always a way home.
+# Unprivileged nmcli can scan and list, but joining/saving profiles need `network-control` +
+# `settings.modify.system`, AND re-activating the AP — an `ipv4.method=shared` connection —
+# additionally needs `wifi.share.open`/`wifi.share.protected`. Without the share actions NM
+# refuses the AP with "Not authorized to share connections via wifi" and the box strands with
+# no active connection. Granted by this rule, delivered exactly like the power rule (bootstrap
+# scaffold with opt-out, or the dependency-panel copybox on an existing box).
 NETWORK_RULE_PATH = "/etc/polkit-1/rules.d/49-lhpc-network.rules"
 
 
 def network_rule_text(user: str) -> str:
-    """The polkit rule granting `user` the two NetworkManager actions the Network panel
-    needs. `user` may be a literal account name (copybox) or `$OP` (bootstrap scaffold —
-    expanded at script runtime by an unquoted heredoc)."""
+    """The polkit rule granting `user` the NetworkManager actions the Network panel needs —
+    joining/saving a client profile (`network-control`, `settings.modify.system`) AND
+    re-activating the box's shared AP (`wifi.share.open`, `wifi.share.protected`), without
+    which the "way home" is denied. `user` may be a literal account name (copybox) or `$OP`
+    (bootstrap scaffold — expanded at script runtime by an unquoted heredoc)."""
     return (
         "// Installed by LoRaHAM Pi Control — lets the operator user join Wi-Fi networks "
-        "from the console.\n"
+        "from the console and switch the box back to its own AP.\n"
         "polkit.addRule(function(action, subject) {\n"
         f'    if (subject.user == "{user}" &&\n'
         '        (action.id == "org.freedesktop.NetworkManager.network-control" ||\n'
-        '         action.id == "org.freedesktop.NetworkManager.settings.modify.system")) {\n'
+        '         action.id == "org.freedesktop.NetworkManager.settings.modify.system" ||\n'
+        '         action.id == "org.freedesktop.NetworkManager.wifi.share.open" ||\n'
+        '         action.id == "org.freedesktop.NetworkManager.wifi.share.protected")) {\n'
         "        return polkit.Result.YES;\n"
         "    }\n"
         "});\n"

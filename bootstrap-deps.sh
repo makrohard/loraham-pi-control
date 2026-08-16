@@ -611,11 +611,13 @@ if [ -n "$NO_NETWORK" ]; then
 	echo "[bootstrap-deps] network controls: skipped (--no-network-controls)."
 else
 	install -D -m 0644 /dev/stdin /etc/polkit-1/rules.d/49-lhpc-network.rules <<NETWORKRULE
-// Installed by LoRaHAM Pi Control — lets the operator user join Wi-Fi networks from the console.
+// Installed by LoRaHAM Pi Control — lets the operator user join Wi-Fi networks from the console and switch the box back to its own AP.
 polkit.addRule(function(action, subject) {
     if (subject.user == "$OP" &&
         (action.id == "org.freedesktop.NetworkManager.network-control" ||
-         action.id == "org.freedesktop.NetworkManager.settings.modify.system")) {
+         action.id == "org.freedesktop.NetworkManager.settings.modify.system" ||
+         action.id == "org.freedesktop.NetworkManager.wifi.share.open" ||
+         action.id == "org.freedesktop.NetworkManager.wifi.share.protected")) {
         return polkit.Result.YES;
     }
 });

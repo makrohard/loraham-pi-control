@@ -85,8 +85,12 @@ def simulate(paths, argv: list) -> CommandResult:
     st = _load(paths)
 
     if "general permissions" in joined:
+        # A properly-provisioned box: the lhpc polkit rule grants join/save AND the
+        # wifi.share.* actions needed to re-activate the shared AP (the way home).
         return _ok("org.freedesktop.NetworkManager.network-control:yes\n"
-                   "org.freedesktop.NetworkManager.settings.modify.system:yes\n")
+                   "org.freedesktop.NetworkManager.settings.modify.system:yes\n"
+                   "org.freedesktop.NetworkManager.wifi.share.open:yes\n"
+                   "org.freedesktop.NetworkManager.wifi.share.protected:yes\n")
 
     if "connection show --active" in joined:
         act = _by_uuid(st, st.get("active_uuid", ""))

@@ -18,7 +18,9 @@ NM = "/usr/bin/nmcli"
 AP_ROW = "AP-UUID-1:lhpc-ap:802-11-wireless:yes:0\n"
 CL_ROW = "CL-UUID-2:HomeNet:802-11-wireless:no:0\n"
 PERMS_YES = ("org.freedesktop.NetworkManager.network-control:yes\n"
-             "org.freedesktop.NetworkManager.settings.modify.system:yes\n")
+             "org.freedesktop.NetworkManager.settings.modify.system:yes\n"
+             "org.freedesktop.NetworkManager.wifi.share.open:yes\n"
+             "org.freedesktop.NetworkManager.wifi.share.protected:yes\n")
 
 
 def _svc(tmp_path, files=None, uptime="100.0 200.0\n"):
@@ -123,7 +125,8 @@ def test_dependency_entry_only_on_ap_boxes(tmp_path):
 def test_rule_helpers_and_single_install_site(tmp_path):
     txt = deps_mod.network_rule_text("makro")
     assert 'subject.user == "makro"' in txt
-    for act in ("network-control", "settings.modify.system"):
+    for act in ("network-control", "settings.modify.system",
+                "wifi.share.open", "wifi.share.protected"):
         assert f"org.freedesktop.NetworkManager.{act}" in txt
     cmd = deps_mod.network_rule_install_cmd("makro")
     assert f"sudo install -D -m 0644 /dev/stdin {deps_mod.NETWORK_RULE_PATH}" in cmd
@@ -132,6 +135,23 @@ def test_rule_helpers_and_single_install_site(tmp_path):
     assert script.count("49-lhpc-network.rules <<NETWORKRULE") == 1
     import getpass
     assert getpass.getuser() not in script
+
+
+def test_shared_ap_way_home_actions_are_required_and_granted(tmp_path):
+    # Regression for the stranding bug: the box's own AP is an ipv4.method=shared connection,
+    # so re-activating it ("Back to AP mode") needs wifi.share.open/protected. If the preflight
+    # does not require them, the panel offers a control it cannot complete; if the rule does not
+    # grant them, NM refuses the AP with "Not authorized to share connections via wifi" and the
+    # box strands off-network. Pin BOTH: the actions are required, and everything the preflight
+    # requires is actually granted (no drift between what we check and what we grant).
+    svc = _svc(tmp_path)
+    share = ("org.freedesktop.NetworkManager.wifi.share.open",
+             "org.freedesktop.NetworkManager.wifi.share.protected")
+    for act in share:
+        assert act in svc._NET_ACTIONS, f"{act} must be required by the auth preflight"
+    txt = deps_mod.network_rule_text("makro")
+    for act in svc._NET_ACTIONS:
+        assert act in txt, f"{act} required by preflight but not granted by the polkit rule"
 
 
 # --- connect + PSK hygiene ------------------------------------------------------------------------
