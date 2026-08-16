@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LHPC — interactive demo</title>
+  <link rel="stylesheet" href="./static/style.css">
+  <link rel="stylesheet" href="./demo.css">
+</head>
+<body>
+  <div id="demobar">
+    <span><strong>LHPC demo</strong> — the real console UI in your browser, backed by simulated hardware. <span class="warn">Demo only: most actions are expected to fail.</span></span>
+    <button id="resetbtn" type="button">Reset demo</button>
+  </div>
+  <div id="loader">
+    <div class="spinner"></div>
+    <div>Loading the LHPC demo… <span id="status">starting…</span></div>
+    <div class="hint">First load fetches the Python runtime (~a few seconds).</div>
+  </div>
+  <div id="app" hidden></div>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+  <script src="./boot.js"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+# GitHub Pages demo — builds the interactive Pyodide demo (the REAL lhpc app + the demo
+# simulation backend) and deploys it. INDEPENDENT of ci.yml and testlab.yml; touches only
+# demo/. One-time setup: repo Settings -> Pages -> Build and deployment -> Source:
+# "GitHub Actions".
+name: demo-pages
+
+on:
+  workflow_dispatch:        # manual (also refreshes the bundled lhpc version)
+  push:
+    branches: [main]
+    paths:
+      - "demo/**"
+      - ".github/workflows/pages.yml"
+      # The demo bundles the lhpc wheel + lhpc's web static assets (assemble.sh), so a
+      # production UI/API change must redeploy it too or the demo silently goes stale.
+      - "lhpc/**"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: demo-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade build
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Assemble the bundle (both wheels + lhpc static + manifest)
+        run: PYTHON=python demo/tools/assemble.sh
+
+      - name: Gate — headless Pyodide boot + lifecycle test
+        working-directory: demo
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install --no-save pyodide@0.26.2 >/dev/null 2>&1
+          LHPC_WHEEL="$(ls "$PWD"/web/wheels/loraham_pi_control-*.whl)" \
+            DEMO_DIR="$PWD" node tests/boot.mjs
+
+      - name: Gate — headless browser smoke test (render + install + persistence)
+        working-directory: demo
+        run: |
+          npm install --no-save puppeteer-core@23 >/dev/null 2>&1
+          ( cd web && python3 -m http.server 8099 >/tmp/httpd.log 2>&1 & )
+          sleep 2
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || true)"
+          test -n "$CHROME" || { echo "no chrome on runner"; exit 1; }
+          DEMO_URL="http://127.0.0.1:8099/index.html" CHROME="$CHROME" node tests/browser.mjs
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: demo/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

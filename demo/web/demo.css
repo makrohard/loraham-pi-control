@@ -1,0 +1,13 @@
+#demobar{position:sticky;top:0;z-index:1000;display:flex;gap:1rem;align-items:center;
+  justify-content:space-between;padding:.5rem 1rem;background:#0f2b46;color:#eaf2fb;
+  font:14px/1.4 system-ui,sans-serif}
+#demobar button{background:#2b6cb0;color:#fff;border:0;border-radius:4px;padding:.35rem .8rem;
+  cursor:pointer;font-size:13px}
+#demobar button:hover{background:#3182ce}
+#demobar .warn{background:#f6ad55;color:#1a202c;padding:.1rem .45rem;border-radius:4px;font-weight:600;white-space:nowrap}
+#loader{max-width:520px;margin:12vh auto;text-align:center;font:15px/1.6 system-ui,sans-serif;
+  color:#334}
+#loader .hint{margin-top:.6rem;color:#889;font-size:13px}
+.spinner{width:38px;height:38px;margin:0 auto 1rem;border:4px solid #cdd7e2;border-top-color:#2b6cb0;
+  border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}

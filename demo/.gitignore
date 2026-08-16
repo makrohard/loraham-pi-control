@@ -1,0 +1,7 @@
+# assembled by tools/assemble.sh / the Pages workflow — not source
+web/wheels/
+web/static/
+web/wheels.json
+# python build leftovers
+lib/
+*.egg-info/

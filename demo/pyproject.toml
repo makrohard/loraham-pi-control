@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lhpc-demo"
+version = "0.1.0"
+description = "GitHub Pages demo backend for LHPC — a Pyodide in-browser simulation. Independent of lhpc (loaded as a wheel) and of the Codespaces testlab."
+requires-python = ">=3.11"
+dependencies = []          # lhpc is loaded as its own wheel in Pyodide; no PyPI deps
+
+[tool.setuptools]
+packages = ["lhpc_demo"]
