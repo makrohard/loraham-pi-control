@@ -147,11 +147,15 @@ def test_status_commit_ahead_same_version_is_yellow(env):
 
 
 def test_status_version_ahead_is_red(env):
-    _upstream_commit(env["up"], version="0.2.0", touch_pyproject=True)
+    # Upstream must be STRICTLY newer than whatever we currently ship — derive it from the
+    # live version so a release bump (e.g. 0.1.17 -> 0.2.0) never turns this red case green.
+    major, minor, _patch = (int(x) for x in selfupdate.__version__.split("."))
+    newer = f"{major}.{minor + 1}.0"
+    _upstream_commit(env["up"], version=newer, touch_pyproject=True)
     selfupdate.refresh_cache(env["sys"], env["paths"])
     v = selfupdate.status_view(env["paths"])
     assert v["ver_color"] == "red" and v["commit_color"] == "red"
-    assert v["update_available"] is True and v["upstream_version"] == "0.2.0"
+    assert v["update_available"] is True and v["upstream_version"] == newer
     assert v["deps_changed"] is True          # pyproject changed -> pip hint
 
 
