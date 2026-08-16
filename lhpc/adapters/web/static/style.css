@@ -757,3 +757,4 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
   .sys-val { width: 8.5rem; }
 }
 .wsopen { margin: .4rem 0 .6rem; font-size: .9rem; }
+

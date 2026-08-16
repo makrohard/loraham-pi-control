@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import re
 
 # Version of the CANDIDATE data schema (what the controller writes and the helper parses).
@@ -356,17 +357,23 @@ def intent_hash(cand: dict) -> str:
 # take the receipt directory with it), loader ordered after nftables.service and before
 # network-pre.target, and no foreign unit is ever enabled/modified/owned.
 
-HELPER_DEST = "/etc/lhpc/firewall-helper"
-CANDIDATE_DEST = "/etc/lhpc/firewall.candidate.json"
-META_DEST = "/etc/lhpc/firewall.meta.json"
-SNAPSHOT_DEST = "/etc/lhpc/firewall.snapshot.json"
-TRANSITION_DEST = "/etc/lhpc/firewall.transition.json"
-JOURNAL_DEST = "/etc/lhpc/firewall.journal.json"
-LOCK_DEST = "/etc/lhpc/.firewall.lock"
+# Advanced relocation knob for sandboxes/simulators: $LHPC_FW_PATH_PREFIX prepends a
+# directory to the host-global firewall paths so the REAL freshness/receipt logic runs
+# against relocated files. Captured at import. Unset (production, always) leaves every
+# value byte-identical to the literals below.
+_PFX = os.environ.get("LHPC_FW_PATH_PREFIX", "")
+
+HELPER_DEST = _PFX + "/etc/lhpc/firewall-helper"
+CANDIDATE_DEST = _PFX + "/etc/lhpc/firewall.candidate.json"
+META_DEST = _PFX + "/etc/lhpc/firewall.meta.json"
+SNAPSHOT_DEST = _PFX + "/etc/lhpc/firewall.snapshot.json"
+TRANSITION_DEST = _PFX + "/etc/lhpc/firewall.transition.json"
+JOURNAL_DEST = _PFX + "/etc/lhpc/firewall.journal.json"
+LOCK_DEST = _PFX + "/etc/lhpc/.firewall.lock"
 LOADER_UNIT = "lhpc-firewall.service"
 CHECKER_UNIT = "lhpc-firewall-check.service"
 CHECKER_TIMER = "lhpc-firewall-check.timer"
-RECEIPT_PATH = "/run/lhpc-firewall/check.json"
+RECEIPT_PATH = _PFX + "/run/lhpc-firewall/check.json"
 
 _SANDBOX = """\
 NoNewPrivileges=yes

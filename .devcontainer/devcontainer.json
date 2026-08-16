@@ -1,0 +1,80 @@
+{
+    "name": "LHPC Test Lab",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "remoteUser": "lhpclab",
+    "containerEnv": {
+        "LHPC_SYSTEM_PROVIDER": "lhpc_testlab.provider:build",
+        "LHPC_TESTLAB": "1",
+        "LHPC_BOOT_ID_FILE": "/home/lhpclab/loraham-pi-control/state/testlab/host/boot_id",
+        "LHPC_FW_PATH_PREFIX": "/home/lhpclab/loraham-pi-control/state/testlab/host",
+        "LHPC_ACCEPTANCE": "1",
+        "LHPC_BROWSER": "1",
+        "DISPLAY": ":99",
+        "LHPC_QEMU_MIN_FREE_INODES": "0"
+    },
+    "onCreateCommand": "bash .devcontainer/oncreate.sh",
+    "postStartCommand": "bash .devcontainer/start.sh",
+    "forwardPorts": [
+        8770,
+        8080,
+        5000,
+        18083,
+        9080,
+        9443,
+        8444,
+        8445,
+        8446
+    ],
+    "portsAttributes": {
+        "8770": {
+            "label": "LHPC console",
+            "visibility": "private",
+            "onAutoForward": "openBrowser",
+            "requireLocalPort": false
+        },
+        "8080": {
+            "label": "graywolf web UI",
+            "visibility": "private"
+        },
+        "5000": {
+            "label": "meshcore",
+            "visibility": "private"
+        },
+        "18083": {
+            "label": "meshcom web UI",
+            "visibility": "private"
+        },
+        "9080": {
+            "label": "meshtastic web UI",
+            "visibility": "private",
+            "onAutoForward": "notify"
+        },
+        "9443": {
+            "label": "meshtastic web UI (direct https, self-signed)",
+            "visibility": "private",
+            "protocol": "https"
+        },
+        "8444": {
+            "label": "stackweb proxy 1",
+            "visibility": "private"
+        },
+        "8445": {
+            "label": "stackweb proxy 2",
+            "visibility": "private"
+        },
+        "8446": {
+            "label": "stackweb proxy 3",
+            "visibility": "private"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python"
+            ]
+        }
+    },
+    "postAttachCommand": "bash .devcontainer/start.sh"
+}

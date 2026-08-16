@@ -126,6 +126,34 @@ from .service_system import SystemStatsMixin
 from .service_webserver import WebserverOpsMixin
 
 
+def _load_system_provider(paths):
+    """Resolve $LHPC_SYSTEM_PROVIDER ("module:factory") and call factory(paths). Returns
+    the provider (with .system / .manifest_path / .wrap_spawn), or None.
+
+    FAIL CLOSED when a provider is REQUESTED but cannot be delivered. Production (env
+    UNSET) returns None and yields RealSystem, byte-for-byte — a provider can never break
+    a process that did not ask for one. But once the env NAMES a provider, an unusable spec
+    or a factory that raises PROPAGATES: never silently fall back to the real command runner
+    while a simulation harness believes it is sandboxed (a test lab must fail closed, not
+    run real shutdown/nft/apt under a "SIMULATED HARDWARE" banner). A factory that returns
+    None is an explicit "not active here" (e.g. the lab latch is not engaged) → RealSystem."""
+    import importlib
+    import os as _os
+    spec = _os.environ.get("LHPC_SYSTEM_PROVIDER")
+    if not spec:
+        return None                                  # production: nothing requested
+    if ":" not in spec:
+        raise RuntimeError(f"LHPC_SYSTEM_PROVIDER {spec!r} is malformed (want 'module:factory')")
+    mod_name, _, attr = spec.partition(":")
+    try:
+        factory = getattr(importlib.import_module(mod_name), attr)
+    except Exception as exc:
+        raise RuntimeError(
+            f"LHPC_SYSTEM_PROVIDER {spec!r} could not be loaded ({exc}) — refusing to run "
+            "against real hardware under a requested simulation provider") from exc
+    return factory(paths)                            # None => not active; raising => propagates
+
+
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
                         BinaryChannelMixin, BinaryOpsMixin, NetworkOpsMixin):
     """Facade over the core. Construct once per process; cheap and stateless.
@@ -139,9 +167,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         system: System | None = None,
         paths: Paths | None = None,
     ) -> None:
-        self._manifest_path = manifest_path
-        self._system = system or RealSystem()
         self._paths = paths or resolve_paths()
+        # Generic extension point: when the caller injected NOTHING, an out-of-tree
+        # provider named by $LHPC_SYSTEM_PROVIDER ("module:factory") may supply the
+        # System, an alternate manifest, and a spawn wrapper — used by simulation/test
+        # harnesses that are not part of this package. Unset (production, always) costs
+        # one getenv and yields RealSystem, byte-for-byte. Any explicit injection
+        # (system= or manifest_path=, every existing test) bypasses the probe entirely.
+        _ext = None
+        if system is None and manifest_path is None:
+            _ext = _load_system_provider(self._paths)
+        self._manifest_path = manifest_path or (_ext.manifest_path if _ext else None)
+        self._system = system or (_ext.system if _ext else RealSystem())
+        self._ext = _ext
         self._stacks: tuple[Stack, ...] | None = None
         # Derived-from-manifest GPS sets, same lifetime as _stacks (which is never invalidated).
         self._gps_stacks_cache: frozenset | None = None
@@ -1518,7 +1556,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # ---- lifecycle operations: build/start/stop/logs/test ----------------
 
     def _lifecycle(self) -> Lifecycle:
-        return Lifecycle(self._paths, self.stacks(), self.config(), self._system)
+        lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
+        wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
+        if wrap is not None:
+            # A provider may wrap the detached-spawn path (the one call that bypasses the
+            # command runner) — production leaves it untouched.
+            lc._spawn = wrap(lc._real_spawn)
+        return lc
 
     def _resolve(self, target: str):
         """Resolve a target to an ordered list of (stack, component). A stack id

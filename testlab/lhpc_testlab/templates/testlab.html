@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Test Lab — LoRaHAM Pi Control{% endblock %}
+{% block content %}
+  {# The Test Lab panel: deterministic scenario switch, RX injection, reset, health
+     check. Reachable only while the two-key lab latch holds (404 otherwise). #}
+  <div class="card">
+    <header><h2>Test Lab — simulated hardware</h2></header>
+    <div class="body">
+      <p class="muted">This box is a LAB: nmcli/systemd/logind and the radios are
+        simulated; stacks, builds, the console and the CLI are real. Nothing here
+        touches a real host.</p>
+      <pre class="next">{% for d in status.details %}{{ d }}
+{% endfor %}</pre>
+
+      <section class="cfgsec">
+        <h4>Scenario</h4>
+        <form method="post" action="{{ url_for('testlab_bp.action', op='scenario') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          {% for name in scenario_names %}
+            <label><input type="radio" name="name" value="{{ name }}"
+                          aria-label="Scenario {{ name }}"
+                          {% if name == current %}checked{% endif %}> {{ name }}</label>
+          {% endfor %}
+          <button type="submit" class="act">Switch scenario</button>
+        </form>
+      </section>
+
+      <section class="cfgsec">
+        <h4>Inject RX traffic</h4>
+        <form method="post" action="{{ url_for('testlab_bp.action', op='inject') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <label>Band
+            <select name="band" aria-label="Band">
+              <option value="433">433</option>
+              <option value="868">868</option>
+            </select>
+          </label>
+          <label>Frame
+            <select name="preset" aria-label="Frame preset">
+              {% for p in presets %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+            </select>
+          </label>
+          <button type="submit" class="act">Inject</button>
+        </form>
+      </section>
+
+      <section class="cfgsec">
+        <h4>Maintenance</h4>
+        <form method="post" action="{{ url_for('testlab_bp.action', op='check') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="act">Run health check</button>
+        </form>
+        <form method="post" action="{{ url_for('testlab_bp.action', op='reset') }}" class="act">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <button type="submit" class="warnbtn">Reset to healthy baseline</button>
+        </form>
+      </section>
+    </div>
+  </div>
+{% endblock %}

@@ -107,7 +107,10 @@ is guarded by `test_readme_not_drifted`; `tests/README.md` documents the test ti
   3. no route-level binary-channel SWITCH test (only confirm-page channel selection);
   4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running at the web seam;
   5. no direct `/hardware` setup POST test (only `/hardware/probe`);
-  6. `test_get_routes_make_no_network_calls` walks 11 GET paths, not the full ~54-route table;
+  6. full route table — a coverage-matrix gate over every route OPERATION, form, CLI leaf and stack
+     phase lives in the SEPARATE `lhpc-testlab` package (`testlab/tests/`), which enumerates lhpc's
+     own url_map + CLI; it runs in that package's CI lane, not lhpc's (testlab is not part of the
+     product — see `docs/testlab.md`). lhpc's own suite still has no route-table gate;
   7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
 - **One coverage-hostile flaky test** — `test_stack_params::test_same_process_claim_retries_while_ownership_is_unpublished`
   flakes UNDER the coverage tracer (0.2 s/0.05 s threading windows); green without `--cov`. If a coverage

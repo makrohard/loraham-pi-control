@@ -1,0 +1,64 @@
+# The test-lab CI lane: coverage-matrix gate + the acceptance and browser lanes, run
+# INSIDE the published lab image (the exact environment Codespaces users get). ci.yml is
+# untouched — this is its own independent check. Falls back to building the image from
+# the Dockerfile when the GHCR pull fails (first run / private package).
+name: testlab
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testlab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testlab:
+    runs-on: ubuntu-24.04-arm   # aarch64: matches the Pi + our lhpc-binaries artifacts
+    timeout-minutes: 120
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the lab image from THIS commit's Dockerfile
+        # Build (never pull) so the image deps always match the checkout — a stale
+        # published `latest` (e.g. racing the image-publish workflow) would miss deps a
+        # new commit added and fail spuriously. INCLUDE_MESHCOM=0 keeps it fast; the
+        # meshcom leg then skips (its own documented CI limitation — the QEMU-baked
+        # image is exercised in Codespaces (INCLUDE_MESHCOM=1 there).
+        run: |
+          IMG=lhpc-testlab:ci
+          docker build -t "$IMG" -f .devcontainer/Dockerfile .devcontainer
+          echo "IMG=$IMG" >> "$GITHUB_ENV"
+
+      - name: Run the lab lanes in the image
+        # Root copies the checkout in and DROPS to the unprivileged lab user — the
+        # same privilege boundary users get (uid mapping of -v mounts is not assumed).
+        run: |
+          docker run --rm --user root -v "$PWD":/repo:ro \
+            -v lhpc_lab_tmp:/tmp \
+            "$IMG" bash -lc '
+              set -e
+              cp -r /repo /tmp/repo && chown -R lhpclab /tmp/repo
+              su lhpclab -c "
+                set -e
+                cd /tmp/repo
+                export LHPC_SYSTEM_PROVIDER=lhpc_testlab.provider:build DISPLAY=:99
+                python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
+                pip install -q -e .            # the product
+                pip install -q -e ./testlab    # the SEPARATE lab package
+                pip install -q pytest playwright
+                python -m playwright install chromium
+                (Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &)
+                python -m pytest testlab/tests/test_coverage_matrix.py testlab/tests/test_testlab.py -q
+                # LHPC_CHAIN_HEAVY=1: this runner is NATIVE aarch64 (not nested emulation),
+                # so the binary meshcom (qemu-system-xtensa) and meshtastic START legs can
+                # actually boot and be verified here — proving every stack starts.
+                LHPC_ACCEPTANCE=1 LHPC_CHAIN_HEAVY=1 python -m pytest testlab/tests/acceptance -q -rs
+                LHPC_BROWSER=1 python -m pytest testlab/tests/browser -q -rs"'

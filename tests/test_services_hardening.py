@@ -12,6 +12,33 @@ def _svc(tmp_path):
                              paths=Paths(runtime_root=tmp_path))
 
 
+def test_requested_provider_fails_closed(tmp_path, monkeypatch):
+    """A REQUESTED simulation provider that cannot be delivered must fail CLOSED — never
+    silently fall back to the real command runner while a harness believes it is sandboxed
+    (the test-lab-fails-open audit finding: real runner active under a SIMULATED banner)."""
+    from lhpc.core.services import _load_system_provider
+    paths = Paths(runtime_root=tmp_path)
+    # malformed spec (no "module:factory") raises rather than yielding RealSystem
+    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "no_colon_here")
+    with pytest.raises(RuntimeError):
+        _load_system_provider(paths)
+    # a named-but-unimportable provider raises (refuses to run against real hardware)
+    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "lhpc_no_such_provider_xyz:build")
+    with pytest.raises(RuntimeError):
+        _load_system_provider(paths)
+    # production (env unset) is unchanged: no provider requested -> None -> RealSystem
+    monkeypatch.delenv("LHPC_SYSTEM_PROVIDER", raising=False)
+    assert _load_system_provider(paths) is None
+    # a factory that INTENTIONALLY returns None (e.g. lab latch not engaged) -> None, no raise
+    import sys
+    import types
+    mod = types.ModuleType("lhpc_fake_prov_test")
+    mod.build = lambda _paths: None
+    monkeypatch.setitem(sys.modules, "lhpc_fake_prov_test", mod)
+    monkeypatch.setenv("LHPC_SYSTEM_PROVIDER", "lhpc_fake_prov_test:build")
+    assert _load_system_provider(paths) is None
+
+
 def test_audit_prune_ephemeral_launchers(tmp_path):
     # AUDIT ER1: transient launcher scripts under state/jobs and state/post must be pruned
     # (they were created every build/start and never removed).

@@ -1,6 +1,18 @@
 # LoRaHAM Pi Control (`lhpc`)
 
+[![Live demo](https://img.shields.io/badge/%E2%96%B6%20Live%20demo-in%20your%20browser-2ea44f)](https://makrohard.github.io/loraham-pi-control/)
+<br>
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/makrohard/loraham-pi-control)
+
 > Deutsche Anleitung: [`README.de.md`](README.de.md)
+>
+> **No Pi? Two ways to try it, no hardware needed:**
+> - **[Live demo](https://makrohard.github.io/loraham-pi-control/)** — the real console
+>   in your browser. Nothing to install, **no sign-in**, works for anyone (simulated, via
+>   Pyodide).
+> - **Codespace** (badge above) — the full test lab with real stack processes against
+>   simulated hardware. **Requires signing in to a (free) GitHub account.** See
+>   [`docs/testlab.md`](docs/testlab.md).
 
 Install, configure and run the amateur-radio LoRa software stacks on a Raspberry Pi from one place
 — a CLI and a local web console. `lhpc` adopts each stack's source, builds it, starts/stops it in

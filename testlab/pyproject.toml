@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lhpc-testlab"
+version = "0.1.0"
+description = "LHPC test lab — the real console/CLI/stacks against simulated hardware (GitHub Codespaces). Separate from lhpc; never shipped in the product or the Pi image."
+requires-python = ">=3.11"
+# Drives `lhpc` (installed separately — it is not on PyPI). Installed only in the
+# devcontainer / CI, never on a box. Flask/waitress come with lhpc.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+browser = ["playwright"]
+
+[project.scripts]
+lhpc-testlab = "lhpc_testlab.cli:main"
+
+[tool.setuptools]
+packages = ["lhpc_testlab"]
+
+[tool.setuptools.package-data]
+"lhpc_testlab" = [
+    "templates/*.html",
+    "data/*",
+    "data/*/*",
+    "data/*/*/*",
+    "data/*/*/*/*",
+]

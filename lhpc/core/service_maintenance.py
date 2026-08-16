@@ -13,6 +13,15 @@ from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
 
+POWER_TRIGGER_TEMPLATE = "sleep 1.5; exec timeout -k 5s 90s systemctl --no-block {kind}"
+
+
+def power_trigger_argv(kind: str) -> list:
+    """THE power trigger, single source of truth: the lab's spawn guard matches this
+    exact shape (tests lock the two together), so a composition change here can never
+    silently slip past the guard onto a real host."""
+    return ["sh", "-c", POWER_TRIGGER_TEMPLATE.format(kind=kind)]
+
 
 class MaintenanceOpsMixin:
 
@@ -717,7 +726,7 @@ class MaintenanceOpsMixin:
         # Respond-first detached trigger, bounded strictly under POWER_PENDING_TTL_S:
         # --no-block returns after enqueuing with logind; timeout SIGKILL-backstops the client.
         log_path = self._paths.under("logs", f"power-{kind}.log")
-        argv = ["sh", "-c", f"sleep 1.5; exec timeout -k 5s 90s systemctl --no-block {kind}"]
+        argv = power_trigger_argv(kind)
         try:
             pid = self._lifecycle()._spawn(argv, log_path)
         except (OSError, PathContainmentError) as exc:

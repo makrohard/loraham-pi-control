@@ -1940,7 +1940,7 @@ main = "meshcom-qemu"
     label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [[stack.component.require]]
-    check_file = "/usr/lib/aarch64-linux-gnu/libslirp.so.0"
+    check_file = "/usr/lib/{multiarch}/libslirp.so.0"
     install = "sudo apt install -y libslirp0"
     note = "libslirp0 — QEMU user-mode networking; the Espressif qemu-system-xtensa (run.sh) aborts with 'libslirp.so.0 missing' without it. arm64/aarch64 path (this project's target)."
     # ---- QEMU-from-source build toolchain (scripts/build-qemu.sh) -----------------------------------

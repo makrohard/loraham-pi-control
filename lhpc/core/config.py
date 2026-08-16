@@ -1314,6 +1314,23 @@ def save_hardware_setup(paths: Paths, setup_id: str) -> Path:
         return _write_local_tables(paths, path, {"radio": {"hardware": setup_id}})
 
 
+def save_install_config(paths: Paths, *, adopt_search_root: str | None = None,
+                        source_strategy: str | None = None) -> Path:
+    """Persist install-channel settings into the runtime-local layer; patches only the
+    named `[install]` keys. Used by the test lab to point adoption at its materialized
+    fake sources — the values are ordinary, operator-settable config."""
+    updates = {}
+    if adopt_search_root is not None:
+        updates["adopt_search_root"] = adopt_search_root
+    if source_strategy is not None:
+        if source_strategy not in ("adopt", "copy", "link"):
+            raise ConfigError(f"invalid source_strategy {source_strategy!r}")
+        updates["source_strategy"] = source_strategy
+    path = paths.runtime_root / "config" / "local.toml"
+    with config_lock(paths):
+        return _write_local_tables(paths, path, {"install": updates})
+
+
 def save_boot_restore(paths: Paths, enabled: bool) -> Path:
     """Persist the boot auto-restore switch. Accepts ONLY an actual bool (internal callers must
     not smuggle strings/ints — a truthy "false" is exactly the failure mode the strict parser

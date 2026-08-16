@@ -1,0 +1,269 @@
+# tests/coverage_matrix.toml — machine-readable coverage of the lab-composed surface
+# (lhpc routes + the /testlab blueprint, lhpc CLI + the lab CLI, forms, stacks). Every
+# surface id MUST carry a class; the gate fails on drift. Classes differ in DEPTH — this
+# matrix accounts for coverage, it does NOT claim every function is fully exercised:
+#   "acceptance"          driven against the RUNNING app/executable; effect verified.
+#   "sweep"               route EXISTS + CSRF-enforced (POST) or renders w/o mutating
+#                         (parameterless GET). The action's EFFECT is NOT asserted.
+#   { limitation="..." }  documented gap; the reason states in-process-covered vs deferred.
+# `grep limitation` lists every gap. See docs/testlab.md for the depth breakdown.
+
+[route]
+"GET /_testlab/banner.css" = "sweep"
+"GET /" = "acceptance"
+"GET /api/auto-install" = "acceptance"
+"GET /api/daemon/<band>" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /api/daemon/<band>/socket" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /api/dash-signature" = "acceptance"
+"GET /api/hmac-apply" = "acceptance"
+"GET /api/logs/<target>" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /api/system" = "acceptance"
+"GET /api/tasks" = "acceptance"
+"GET /auto-install" = "acceptance"
+"GET /controller/logs" = "acceptance"
+"GET /dependencies" = "acceptance"
+"GET /firewall/configure" = "sweep"
+"GET /firewall/logs" = "acceptance"
+"GET /healthz" = "acceptance"
+"GET /logs/<target>" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /self-update/apply" = "sweep"
+"GET /stacks" = "acceptance"
+"GET /stacks/<sid>/body" = "acceptance"
+"GET /stacks/<sid>/hmac/<action>" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /stacks/<stack_id>" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /stacks/loraham-pi-control" = "acceptance"
+"GET /testlab" = "acceptance"
+"GET /webserver/ca.crt" = "acceptance"
+"GET /webserver/cert/<label>/download" = { limitation = "parameterized GET; covered in-process (lhpc web suite); running-app case pending" }
+"GET /webserver/logs" = "acceptance"
+"POST /action#build" = "sweep"
+"POST /action#clean" = "sweep"
+"POST /action#install" = "sweep"
+"POST /action#restart" = "sweep"
+"POST /action#start" = "sweep"
+"POST /action#stop" = "sweep"
+"POST /action#test" = "sweep"
+"POST /action#test-tx" = "sweep"
+"POST /action#uninstall" = "sweep"
+"POST /action#update" = "sweep"
+"POST /api/tasks/dismiss" = "sweep"
+"POST /api/tasks/recover" = "sweep"
+"POST /auto-install/abort" = "sweep"
+"POST /auto-install/ack" = "sweep"
+"POST /auto-install/start" = "sweep"
+"POST /boot-restore" = "sweep"
+"POST /dependencies/dismiss" = "sweep"
+"POST /firewall/configure" = "sweep"
+"POST /firewall/refresh" = "sweep"
+"POST /gps" = "sweep"
+"POST /graywolf/upstream-check/<target>" = "sweep"
+"POST /graywolf/upstream-update/<target>" = "sweep"
+"POST /hardware" = "sweep"
+"POST /hardware/probe" = "sweep"
+"POST /interactive/<stack_id>/dismiss" = "sweep"
+"POST /network/<op>#ap" = "acceptance"
+"POST /network/<op>#connect" = "acceptance"
+"POST /network/<op>#forget" = "sweep"
+"POST /network/<op>#prefer" = "sweep"
+"POST /network/<op>#retry" = "sweep"
+"POST /network/<op>#scan" = "acceptance"
+"POST /power/<kind>#poweroff" = "sweep"
+"POST /power/<kind>#reboot" = "acceptance"
+"POST /radio/<band>/set" = "sweep"
+"POST /self-update/apply" = "sweep"
+"POST /self-update/check" = "sweep"
+"POST /source-check/<target>" = "sweep"
+"POST /stacks/<sid>/hmac/<action>/abort" = "sweep"
+"POST /stacks/<sid>/hmac/<action>/apply" = "sweep"
+"POST /stacks/<sid>/hmac/<action>/recover" = "sweep"
+"POST /stacks/<stack_id>/config" = "sweep"
+"POST /stacks/<stack_id>/config/reset" = "sweep"
+"POST /stacks/<stack_id>/daemon-params" = "sweep"
+"POST /stacks/<stack_id>/daemon-params/apply" = "sweep"
+"POST /stacks/<stack_id>/daemon-params/reset" = "sweep"
+"POST /stacks/<stack_id>/known-working/confirm" = "sweep"
+"POST /stacks/<stack_id>/webserver" = "sweep"
+"POST /testlab/<op>#check" = "acceptance"
+"POST /testlab/<op>#inject" = "sweep"
+"POST /testlab/<op>#reset" = "sweep"
+"POST /testlab/<op>#scenario" = "acceptance"
+"POST /webserver/cert" = "sweep"
+"POST /webserver/configure" = "sweep"
+"POST /webserver/init" = "sweep"
+"POST /webserver/reset" = "sweep"
+"POST /webserver/tls-renew" = "sweep"
+"POST /webserver/verify" = "sweep"
+"POST /welcome/dismiss" = "sweep"
+
+[cli]
+"auto-install" = "acceptance"
+"autostart" = "acceptance"
+"bootstrap" = "acceptance"
+"build" = "acceptance"
+"clean" = "acceptance"
+"config" = "acceptance"
+"daemon" = "acceptance"
+"deps" = "acceptance"
+"doctor" = "acceptance"
+"explain" = "acceptance"
+"firewall" = "acceptance"
+"gps" = "acceptance"
+"hardware" = "acceptance"
+"help" = "acceptance"
+"hmac" = "acceptance"
+"install" = "acceptance"
+"known-working" = "acceptance"
+"list" = "acceptance"
+"logs" = "acceptance"
+"self-update" = "acceptance"
+"source-check" = "acceptance"
+"stack" = "acceptance"
+"stack poststart" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"stack restart" = "acceptance"
+"stack start" = "acceptance"
+"stack stop" = "acceptance"
+"status" = "acceptance"
+"test" = "acceptance"
+"uninstall" = "acceptance"
+"update" = "acceptance"
+"web" = "acceptance"
+"webserver" = "acceptance"
+"webserver apply" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver cert" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver configure" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver disable-remote" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver expose" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver init" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver logs" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver proxy" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver reset-defaults" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver start-service" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver status" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver tls-renew" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+"webserver verify" = { limitation = "subcommand covered in-process (lhpc test_cli); real-executable case pending" }
+
+[labcli]
+"check" = { limitation = "lab CLI verb; covered by test_cli_exec's lab table where claimed, otherwise pending" }
+"init" = { limitation = "lab CLI verb; covered by test_cli_exec's lab table where claimed, otherwise pending" }
+"inject" = { limitation = "lab CLI verb; covered by test_cli_exec's lab table where claimed, otherwise pending" }
+"reset" = { limitation = "lab CLI verb; covered by test_cli_exec's lab table where claimed, otherwise pending" }
+"scenario" = "acceptance"
+"status" = "acceptance"
+"web" = { limitation = "lab CLI verb; covered by test_cli_exec's lab table where claimed, otherwise pending" }
+
+[form]
+"_daemon_params.html#daemon_params_save" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_firewall.html#firewall_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_firewall.html#firewall_refresh" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_gps.html#gps_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_macros.html#action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_macros.html#graywolf_upstream_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_macros.html#graywolf_upstream_update" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_macros.html#source_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_network.html#network_action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_body.html#action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_body.html#known_working_confirm" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_settings.html#hardware_probe" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_settings.html#hardware_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_settings.html#radio_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_settings.html#stack_config_reset" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_settings.html#stack_config_save" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stackweb.html#stack_web_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_update.html#self_update_apply" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_update.html#self_update_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#boot_restore_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_cert" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_init" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_reset" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_tls_renew" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#webserver_verify" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"auto_install.html#auto_install_abort_route" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"auto_install.html#auto_install_ack" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"auto_install.html#auto_install_start" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"auto_install_confirm.html#auto_install_start" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"confirm.html#action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"confirm_radio.html#radio_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"dashboard.html#action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"dashboard.html#interactive_dismiss" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"dashboard.html#power" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"dashboard.html#welcome_dismiss" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"hmac_apply.html#hmac_apply_abort_route" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"hmac_apply.html#hmac_apply_recover_route" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"hmac_apply.html#hmac_apply_run" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"network_confirm.html#network_action" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"power_confirm.html#power" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"stacks.html#dep_note_dismiss" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"testlab.html#testlab_bp.action" = "acceptance"
+
+[stack]
+"chat#configure" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#data" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#failure" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#restart" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#start" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#stop" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"chat#ui" = { limitation = "interactive TUI — LHPC never spawns it (MANUAL_REQUIRED by design)" }
+"daemon#configure" = "acceptance"
+"daemon#data" = "acceptance"
+"daemon#failure" = { limitation = "pending" }
+"daemon#restart" = "acceptance"
+"daemon#start" = "acceptance"
+"daemon#stop" = "acceptance"
+"daemon#ui" = { limitation = "the daemon has no web UI" }
+"graywolf#configure" = "acceptance"
+"graywolf#data" = "acceptance"
+"graywolf#failure" = { limitation = "pending" }
+"graywolf#restart" = { limitation = "pending" }
+"graywolf#start" = "acceptance"
+"graywolf#stop" = "acceptance"
+"graywolf#ui" = "acceptance"
+"igate#configure" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#data" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#failure" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#restart" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#start" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#stop" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"igate#ui" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
+"kiss#configure" = "acceptance"
+"kiss#data" = "acceptance"
+"kiss#failure" = { limitation = "pending" }
+"kiss#restart" = "acceptance"
+"kiss#start" = "acceptance"
+"kiss#stop" = "acceptance"
+"kiss#ui" = { limitation = "the kiss TNC has no web UI" }
+"meshcom#configure" = { limitation = "installed from our aarch64 lhpc-binaries by reset (proven); ESP32/qemu-xtensa BOOT is opt-in (LHPC_CHAIN_HEAVY=1), validated on real aarch64" }
+"meshcom#data" = { limitation = "real QEMU-emulated radio; boot opt-in (LHPC_CHAIN_HEAVY=1) on real aarch64" }
+"meshcom#failure" = { limitation = "real QEMU-emulated radio; boot opt-in (LHPC_CHAIN_HEAVY=1) on real aarch64" }
+"meshcom#restart" = { limitation = "real QEMU-emulated radio; boot opt-in (LHPC_CHAIN_HEAVY=1) on real aarch64" }
+"meshcom#start" = { limitation = "installed from our aarch64 lhpc-binaries by reset (proven); ESP32/qemu-xtensa BOOT is opt-in (LHPC_CHAIN_HEAVY=1), validated on real aarch64" }
+"meshcom#stop" = { limitation = "installed from our aarch64 lhpc-binaries by reset (proven); BOOT/stop is opt-in (LHPC_CHAIN_HEAVY=1), validated on real aarch64" }
+"meshcom#ui" = { limitation = "real QEMU-emulated radio in the lab image (prebuilt); acceptance-covered where claimed" }
+"meshcore#configure" = "acceptance"
+"meshcore#data" = { limitation = "pending" }
+"meshcore#failure" = { limitation = "pending" }
+"meshcore#restart" = { limitation = "pending" }
+"meshcore#start" = "acceptance"
+"meshcore#stop" = "acceptance"
+"meshcore#ui" = { limitation = "meshcore GUI is Tkinter (desktop), not web" }
+"meshtastic#configure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#data" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#failure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#restart" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#start" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#stop" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"meshtastic#ui" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
+"reticulum#configure" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#data" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#failure" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#restart" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#start" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#stop" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"reticulum#ui" = { limitation = "runs against the fake spidev/gpiod shims in the lab image; acceptance-covered where claimed, otherwise pending" }
+"voice#configure" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#data" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#failure" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#restart" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#start" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#stop" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }
+"voice#ui" = { limitation = "GTK GUI — starts headless under Xvfb in the lab image; not remotely viewable" }

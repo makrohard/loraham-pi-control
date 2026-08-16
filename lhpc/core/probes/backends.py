@@ -185,11 +185,15 @@ _FIXED_ENV = {
     "LANG": "C",
     "LC_ALL": "C",
 }
-# NOTE: no LHPC_* override is forwarded. The managed meshcom build invokes build-qemu.sh (from-source),
-# which does NOT read LHPC_QEMU_TARBALL — that var is fetch-qemu.sh's OWN standalone interface (run it
-# directly), so forwarding it here would falsely imply `lhpc build meshcom` honors it. NEVER wildcard LHPC_*.
+# Forward ONLY vars a managed build step actually reads — NEVER wildcard LHPC_*. Counter-example:
+# build-qemu.sh (from-source) does NOT read LHPC_QEMU_TARBALL — that is fetch-qemu.sh's OWN standalone
+# interface — so forwarding it would falsely imply `lhpc build meshcom` honors it. LHPC_QEMU_MIN_FREE_INODES
+# IS build-qemu.sh's own documented knob (its inode preflight reads it directly): forwarding it lets an
+# operator relax the check on dynamic-inode filesystems (btrfs/xfs/overlay report `df -i` favail as 0, so
+# the default 200000 preflight falsely aborts). Unset on a real Pi -> the 200000 guard is unchanged there.
 for _k in ("HOME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS",
-           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR"):
+           "PLATFORMIO_CORE_DIR", "IDF_TOOLS_PATH", "XDG_CACHE_HOME", "PIP_CACHE_DIR", "TMPDIR",
+           "LHPC_QEMU_MIN_FREE_INODES"):
     if os.environ.get(_k):
         _FIXED_ENV[_k] = os.environ[_k]
 

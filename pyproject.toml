@@ -48,6 +48,7 @@ dev = [
 [project.scripts]
 lhpc = "lhpc.adapters.cli.main:main"
 
+
 [tool.setuptools]
 packages = [
     "lhpc",

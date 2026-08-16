@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Generic extension point: `ControllerService` honors `$LHPC_SYSTEM_PROVIDER` (`module:factory`) to supply an alternate System/manifest/spawn for out-of-tree simulation harnesses; unset (production, always) it is byte-identical to before. This is what the separate **`lhpc-testlab`** package (a real-console-on-simulated-hardware lab for GitHub Codespaces — badge in the README, see `docs/testlab.md`) hooks into; the lab ships nothing in the lhpc wheel or the Pi image
+- `{multiarch}` token in manifest `check_file` paths (libslirp) — resolves to the aarch64 literal on the Pi (unchanged), truthful on x86
+
 ## 0.1.17
 
 - New **Network** panel (AP-managed boxes only): join an existing Wi-Fi from the console; the box's own AP stays the automatic fallback, and a **preferred** network is re-joined whenever it reappears. Console follows onto the joined network (cert + nginx allowlist stay the gate); expired-CRL self-heal; second polkit rule via bootstrap (opt-out `--no-network-controls`)

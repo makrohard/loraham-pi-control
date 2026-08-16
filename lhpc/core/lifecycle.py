@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import secrets
 import shutil
 import signal
@@ -151,11 +152,29 @@ def current_boot_id() -> str:
     THE shared definition of "this boot" — ownership records stamp it, cessation/verification
     compare against it, and the boot-restore driver gates on it. An empty value must always be
     treated as "cannot prove" (conservative), never as a wildcard match."""
+    # Advanced override for sandboxes/simulators: $LHPC_BOOT_ID_FILE names a file whose
+    # contents stand in for the kernel boot id (so a simulated reboot can advance "this
+    # boot" for every reader). Unset (production, always) -> the raw read below,
+    # byte-identical; a set-but-missing file also falls back (a provable boot id).
+    boot_file = os.environ.get("LHPC_BOOT_ID_FILE")
+    if boot_file:
+        try:
+            with open(boot_file, "rb") as fh:
+                return fh.read(64).decode("ascii", errors="replace").strip()
+        except OSError:
+            pass
     try:
         with open("/proc/sys/kernel/random/boot_id", "rb") as fh:
             return fh.read(64).decode("ascii", errors="replace").strip()
     except OSError:
         return ""
+
+
+# The Debian multiarch triple, architecture-constant — computed once (a require path
+# with {multiarch} resolves to the aarch64 literal on the Pi, truthfully elsewhere).
+_MULTIARCH = {"aarch64": "aarch64-linux-gnu", "arm64": "aarch64-linux-gnu",
+              "x86_64": "x86_64-linux-gnu"}.get(platform.machine().lower(),
+                                                "aarch64-linux-gnu")
 
 
 class Lifecycle:
@@ -222,10 +241,13 @@ class Lifecycle:
 
     def _resolve_req_path(self, path: str) -> str:
         """Resolve a requirement's file path: substitute `{runtime}` (the runtime root) so a require can
-        verify a MANAGED in-root artifact (`{runtime}/build/tool-cache/...`, `{runtime}/build/tools/...`),
-        then expanduser for a per-user tool path (`~/.espressif`). Best-effort — an unset HOME leaves `~`
-        literal, and the PATH `cmd` probe stays a reliable escape hatch/operator override."""
-        return os.path.expanduser(path.replace("{runtime}", str(self.paths.runtime_root)))
+        verify a MANAGED in-root artifact (`{runtime}/build/tool-cache/...`, `{runtime}/build/tools/...`)
+        and `{multiarch}` (the Debian multiarch triple, so a shared-library require is truthful on any
+        architecture — on the Pi it resolves to exactly the old aarch64 literal), then expanduser for a
+        per-user tool path (`~/.espressif`). Best-effort — an unset HOME leaves `~` literal, and the PATH
+        `cmd` probe stays a reliable escape hatch/operator override."""
+        return os.path.expanduser(path.replace("{runtime}", str(self.paths.runtime_root))
+                                  .replace("{multiarch}", _MULTIARCH))
 
     def missing_requirements(self, comp: Component) -> list:
         """Component dependencies not satisfied: a command not on PATH, or (for

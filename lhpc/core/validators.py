@@ -54,7 +54,8 @@ def callsign(value, *, field: str = "callsign", allow_empty: bool = True) -> str
         if allow_empty:
             return ""
         raise ValidationError(f"{field}: required")
-    # 1-8 alphanumerics with an optional -SSID (0-99). Covers club/portable calls.
+    # 1-8 alphanumerics with an optional -SSID (0-99): a bare or club call plus an
+    # APRS SSID. Slash compound/portable calls (e.g. EA4/DJ0CHE, DJ0CHE/P) are rejected.
     if not re.fullmatch(r"[A-Za-z0-9]{1,8}(-[0-9]{1,2})?", s):
         raise ValidationError(f"{field}: invalid callsign {s!r}")
     return s

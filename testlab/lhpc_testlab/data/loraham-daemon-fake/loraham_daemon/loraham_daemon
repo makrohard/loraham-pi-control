@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""Test-lab fake loraham_daemon — the REAL v112 wire protocol, no radio.
+
+SELF-CONTAINED (system python3, no lhpc import): lhpc spawns it exactly like the real
+daemon (`loraham_daemon --radio <band> --hw ... --tx-mode ...`, cwd={source},
+LORAHAM_SOCKET_DIR + LORAHAM_RUNTIME_DIR in env). It binds the three per-band
+SOCK_STREAM sockets and speaks the daemon's protocol:
+
+  loraconf{b}.sock  line-framed GET STATUS/STATS/CHANNEL (exact one-line formats) and
+                    SET (reserved runtime keys + generic RF keys) -> OK / ERR *
+  lora{b}f.sock     3-byte-header frames: inbound 0x02 TX (captured; TX_RESULT 0x04
+                    unicast when SET TXRESULT=1), outbound 0x01 RX broadcasts
+                    (int16-LE rssi/snr centi-units + RF bytes)
+  lora{b}.sock      raw byte stream: inbound chunks are transmits, outbound RX verbatim
+
+Scenario coupling (state/testlab/ under the runtime root, derived from
+LORAHAM_RUNTIME_DIR): scenario.json's radio_{band} drives RADIO=READY|FAILED per reply;
+rx-queue/{band}/*.json files are delivered EXACTLY ONCE, in name order, to all
+connected data clients; every TX is appended to tx.jsonl. Deliberately NOT emitted:
+unsolicited CONF broadcasts (TX=/CAD=/RSSI=) — lhpc's one-shot CONF clients read only
+the first line, and the kiss-tnc always upgrades to TXRESULT.
+"""
+import json
+import os
+import select
+import socket
+import struct
+import sys
+import time
+
+PRESETS = {
+    "aprs-position": "DL0LAB-9>APDR16,WIDE1-1:!4825.82N/01140.09E>Test Lab mobile",
+    "aprs-message": "DL0LAB-9>APDR16::DL0LAB   :hello from the test lab{001",
+    "meshcore-hello": "DL0LAB-9>APDR16:>meshcore hello (lab)",
+}
+RF_HDR = b"\x3c\xff\x01"
+
+
+def _root():
+    run_dir = os.environ.get("LORAHAM_RUNTIME_DIR", "")
+    if run_dir:
+        return os.path.dirname(os.path.dirname(run_dir))
+    return os.path.expanduser("~/loraham-pi-control")
+
+
+class Fake:
+    def __init__(self, band):
+        self.band = band
+        self.t0 = time.time()
+        self.root = _root()
+        self.set_ = {"TXRESULT": "0", "TXQUEUE": "0", "TXMODE": "MANAGED",
+                     "CADMONITOR": "0", "CADTXAFTERTIMEOUT": "0", "CADWAIT": "400",
+                     "CADIDLE": "0", "CADPOLL": "50", "CADRSSI": "-90",
+                     "GETRSSI": "0", "MODE": "LORA"}
+        self.rf = {}
+        self.n = {"RX": 0, "RXBYTES": 0, "TXOK": 0, "TXERR": 0}
+        self.seq = 0
+        self.done = 0
+        self.last = "NONE"
+        self.scn_read = 0.0
+        self.radio = "READY"
+
+    # -- scenario / queue ------------------------------------------------------------
+
+    def radio_state(self):
+        now = time.monotonic()
+        if now - self.scn_read > 0.8:
+            self.scn_read = now
+            try:
+                with open(os.path.join(self.root, "state", "testlab",
+                                       "scenario.json")) as fh:
+                    rec = json.load(fh)
+                flags = rec.get("flags", {})
+                rev = rec.get("auto_revert_s")
+                if (isinstance(rev, (int, float)) and not isinstance(rev, bool)
+                        and time.clock_gettime(time.CLOCK_BOOTTIME)
+                        - float(rec.get("applied_boottime") or 0) >= float(rev)):
+                    flags = {}
+                self.radio = str(flags.get(f"radio_{self.band}", "READY"))
+            except Exception:
+                self.radio = "READY"
+        return self.radio
+
+    def queue_dir(self):
+        return os.path.join(self.root, "state", "testlab", "rx-queue", self.band)
+
+    def capture_tx(self, payload, result):
+        try:
+            line = json.dumps({"band": self.band, "t": round(time.time(), 3),
+                               "len": len(payload), "result": result,
+                               "text": payload.decode("ascii", "replace")[:300]})
+            with open(os.path.join(self.root, "state", "testlab", "tx.jsonl"),
+                      "a") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass
+
+    # -- CONF ------------------------------------------------------------------------
+
+    def status_line(self):
+        s = self.set_
+        return ("STATUS RADIO={r} TX=0 CAD=0 GETRSSI={GETRSSI} TXRESULT={TXRESULT} "
+                "TXMODE={TXMODE} TXQUEUE={TXQUEUE} TXQ=0 TXQDROP=0 TXQREJECT=0 "
+                "TXQSTALE=0 TXQRESULTDROP=0 TXQDONE={d} TXQLAST={last} TXQSEQ={q} "
+                "CADWAIT={CADWAIT} CADIDLE={CADIDLE} CADPOLL={CADPOLL} "
+                "CADTXAFTERTIMEOUT={CADTXAFTERTIMEOUT} CADMONITOR={CADMONITOR} "
+                "CADRSSI={CADRSSI} RXREADY=1\n").format(
+            r=self.radio_state(), d=self.done, last=self.last, q=self.seq, **s)
+
+    def stats_line(self):
+        return ("STATS UPTIME={} RADIO={} RX={} RXBYTES={} RXDROPS=0 TXOK={} "
+                "TXERR={} TXBUSY=0 CADTIMEOUT=0 CADSEND=0 RXREARMFAIL=0\n").format(
+            int(time.time() - self.t0), self.radio_state(), self.n["RX"],
+            self.n["RXBYTES"], self.n["TXOK"], self.n["TXERR"])
+
+    def channel_line(self):
+        return ("CHANNEL RADIO={} BUSY=0 CAD=0 CADSCAN=0 CADSTATE=FREE RSSI=-95.00 "
+                "PACKETRSSI=-95.00 LIVERSSI=-95.00 MODE={} TXMODE={}\n").format(
+            self.radio_state(), self.set_["MODE"], self.set_["TXMODE"])
+
+    RESERVED = {"TXRESULT": ("0", "1"), "TXQUEUE": ("0", "1"),
+                "TXMODE": ("MANAGED", "DIRECT"), "CADMONITOR": ("0", "1"),
+                "CADTXAFTERTIMEOUT": ("0", "1"), "GETRSSI": ("0", "1")}
+    RESERVED_INT = {"CADRSSI": (-130, 0), "CADWAIT": (50, 5000),
+                    "CADIDLE": (0, 2000), "CADPOLL": (10, 500)}
+    RF_KEYS = {"MODE", "FREQ", "POWER", "PREAMBLE", "SYNC", "SF", "BW", "CR", "LDRO",
+               "CRC", "BR", "FREQDEV", "RXBW", "OOK", "SHAPING", "ENCODING"}
+
+    def conf_line(self, raw):
+        line = raw.strip()
+        up = line.upper()
+        if up == "GET STATUS":
+            return self.status_line()
+        if up == "GET STATS":
+            return self.stats_line()
+        if up == "GET CHANNEL":
+            return self.channel_line()
+        if not up.startswith("SET "):
+            return "ERR UNKNOWN\n"
+        tokens = up[4:].split()
+        if not tokens:
+            return "ERR MALFORMED\n"
+        # reserved runtime setters: single KEY=VALUE, matched exactly
+        if len(tokens) == 1 and "=" in tokens[0]:
+            key, _, val = tokens[0].partition("=")
+            if key in self.RESERVED:
+                if val in self.RESERVED[key]:
+                    self.set_[key] = val
+                    return "OK\n"
+                return "ERR INVALID\n" if val else "ERR MALFORMED\n"
+            if key in self.RESERVED_INT:
+                try:
+                    lo, hi = self.RESERVED_INT[key]
+                    if lo <= int(val) <= hi:
+                        self.set_[key] = str(int(val))
+                        return "OK\n"
+                    return "ERR INVALID\n"
+                except ValueError:
+                    return "ERR INVALID\n" if val else "ERR MALFORMED\n"
+        # generic RF SET KEY=VALUE ...
+        if self.radio_state() != "READY":
+            return "ERR RADIO_NOT_READY\n"
+        staged = {}
+        for tok in tokens:
+            if "=" not in tok:
+                return "ERR MALFORMED\n"
+            key, _, val = tok.partition("=")
+            if key not in self.RF_KEYS:
+                return "ERR UNKNOWN\n"
+            if not val:
+                return "ERR MALFORMED\n"
+            staged[key] = val
+        if staged.get("MODE") not in (None, "LORA", "FSK"):
+            return "ERR INVALID\n"
+        self.rf.update(staged)
+        if "MODE" in staged:
+            self.set_["MODE"] = staged["MODE"]
+        return "OK\n"
+
+    # -- TX --------------------------------------------------------------------------
+
+    def transmit(self, payload):
+        if self.radio_state() != "READY":
+            self.n["TXERR"] += 1
+            self.last = "RADIO_NOT_READY"
+            self.capture_tx(payload, "RADIO_NOT_READY")
+            return 3
+        self.n["TXOK"] += 1
+        self.done += 1
+        self.seq = (self.seq + 1) & 0xFFFF
+        self.last = "OK"
+        self.capture_tx(payload, "OK")
+        return 0
+
+    def rx_payload(self, preset=None, text=None, rf_hex=None):
+        if rf_hex:
+            try:
+                return bytes.fromhex(rf_hex)
+            except ValueError:
+                return b""
+        tnc2 = text or PRESETS.get(preset or "", "")
+        return RF_HDR + tnc2.encode("ascii", "replace") if tnc2 else b""
+
+
+class Conn:
+    def __init__(self, sock, kind):
+        self.sock = sock
+        self.kind = kind                    # conf | framed | raw
+        self.buf = b""
+        self.out = b""                      # pending outbound bytes (sockets are
+                                            # non-blocking; partial writes must never
+                                            # desync the 3-byte-header framing)
+
+
+def serve(band):
+    fake = Fake(band)
+    sock_dir = os.environ.get("LORAHAM_SOCKET_DIR", "/run/loraham")
+    listeners = {}
+    for kind, name in (("raw", f"lora{band}.sock"), ("framed", f"lora{band}f.sock"),
+                       ("conf", f"loraconf{band}.sock")):
+        path = os.path.join(sock_dir, name)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        os.chmod(path, 0o660)
+        srv.listen(10)
+        srv.setblocking(False)
+        listeners[srv] = kind
+    conns = []
+    print(f"testlab fake loraham_daemon: band {band}, sockets in {sock_dir}",
+          flush=True)
+    while True:
+        rlist = list(listeners) + [c.sock for c in conns]
+        wlist = [c.sock for c in conns if c.out]
+        readable, writable, _ = select.select(rlist, wlist, [], 0.5)
+        for sock in writable:
+            c = next((x for x in conns if x.sock is sock), None)
+            if c is None:
+                continue
+            try:
+                n = sock.send(c.out)
+                c.out = c.out[n:]
+            except BlockingIOError:
+                pass
+            except OSError:
+                conns.remove(c)
+                sock.close()
+        for sock in readable:
+            if sock in listeners:
+                try:
+                    conn, _a = sock.accept()
+                    conn.setblocking(False)
+                    conns.append(Conn(conn, listeners[sock]))
+                except OSError:
+                    pass
+                continue
+            # The writable pass above may have dropped this conn from the SAME
+            # select() round — a vanished socket is skipped, never a crash.
+            c = next((x for x in conns if x.sock is sock), None)
+            if c is None:
+                continue
+            try:
+                data = sock.recv(4096)
+            except BlockingIOError:
+                continue
+            except OSError:
+                data = b""
+            if not data:
+                conns.remove(c)
+                sock.close()
+                continue
+            c.buf += data
+            _consume(fake, c)
+        _deliver_queue(fake, conns)
+
+
+def _consume(fake, c):
+    if c.kind == "conf":
+        while b"\n" in c.buf:
+            line, _, c.buf = c.buf.partition(b"\n")
+            reply = fake.conf_line(line.decode("utf-8", "replace"))
+            _send(c, reply.encode())
+    elif c.kind == "framed":
+        while len(c.buf) >= 3:
+            ftype = c.buf[0]
+            ln = c.buf[1] | (c.buf[2] << 8)
+            if len(c.buf) < 3 + ln:
+                break
+            payload, c.buf = c.buf[3:3 + ln], c.buf[3 + ln:]
+            if ftype != 0x02:
+                _send(c, b"\x03" + struct.pack("<H", 18) + b"unknown frame type")
+                continue
+            status = fake.transmit(payload)
+            if fake.set_["TXRESULT"] == "1":
+                body = struct.pack("<BBH", status, 0x01, fake.seq)
+                _send(c, b"\x04" + struct.pack("<H", len(body)) + body)
+    else:                                   # raw: every <=255-byte chunk = one TX
+        data, c.buf = c.buf, b""
+        for i in range(0, len(data), 255):
+            fake.transmit(data[i:i + 255])
+
+
+_MAX_OUT = 1 << 20                          # a reader stalled past 1 MiB is dropped
+
+
+def _send(c, blob):
+    """Queue outbound bytes; the select loop drains them with partial-write-safe
+    send(). A frame is either fully queued or the connection is dropped — the framed
+    stream can never desync mid-frame."""
+    c.out += blob
+    if len(c.out) > _MAX_OUT:
+        c.out = b""
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+
+
+def _deliver_queue(fake, conns):
+    # A frame is consumed only when someone is listening: with no data client
+    # connected the queue files stay put (delivered on the next connect), and the
+    # RX counters advance only for frames that actually reached a client.
+    if not any(c.kind in ("raw", "framed") for c in conns):
+        return
+    qdir = fake.queue_dir()
+    try:
+        names = sorted(n for n in os.listdir(qdir) if n.endswith(".json"))
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(qdir, name)
+        try:
+            with open(path) as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            rec = {}
+        try:
+            os.unlink(path)                 # exactly-once, even on a malformed record
+        except OSError:
+            continue
+        rf = fake.rx_payload(preset=rec.get("preset"), text=rec.get("tnc2"),
+                             rf_hex=rec.get("rf_hex"))
+        if not rf:
+            continue
+        fake.n["RX"] += 1
+        fake.n["RXBYTES"] += len(rf)
+        rssi, snr = -9500, 800              # centi-dBm / centi-dB, int16 LE
+        frame = b"\x01" + struct.pack("<H", 4 + len(rf)) \
+            + struct.pack("<hh", rssi, snr) + rf
+        for c in conns:
+            if c.kind == "raw":
+                _send(c, rf)
+            elif c.kind == "framed":
+                _send(c, frame)
+
+
+def main(argv):
+    if "--version" in argv:
+        print("loraham_daemon testlab-fake (v112-protocol)")
+        return 0
+    band = "433"
+    if "--radio" in argv:
+        band = argv[argv.index("--radio") + 1]
+    serve(band)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
