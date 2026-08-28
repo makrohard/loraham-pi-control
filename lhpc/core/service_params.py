@@ -1296,16 +1296,24 @@ class ParamsConfigMixin:
         if fc is None:
             return ()
         out = []
+        linked = bool(comp.source) and self._lifecycle().is_linked_source(comp)
         for raw, is_base in ((fc.path, False), (fc.base, True)):
             if not raw:
+                continue
+            # A LINKED source is a symlink into someone's checkout, and every runtime read is
+            # descriptor-anchored (O_NOFOLLOW per component), so reading through it raises
+            # PathContainmentError rather than returning "no key". `_resolve_config_dest`
+            # only applies its linked-readonly guard when `not for_base`, so the BASE
+            # candidate must be skipped here — otherwise adopt_identity turns that read
+            # error into a refusal and blocks install/update/uninstall/clean outright,
+            # leaving an operator with a linked meshcore-pi no way out. The generated config
+            # (the first candidate) still covers the normal upgrade.
+            if is_base and linked:
                 continue
             try:
                 dest = self._resolve_config_dest(comp, raw, for_base=is_base)
             except (OSError, PathContainmentError, ValueError):
                 continue
-            # Only "ok" yields a usable path — `_resolve_config_dest` returns no path for a
-            # linked-readonly source, so a dev tree's template cannot be scanned. The
-            # generated config (the first candidate) still covers the normal upgrade.
             if dest.status == "ok" and dest.path is not None:
                 out.append(dest.path)
         return tuple(out)

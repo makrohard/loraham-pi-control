@@ -1789,8 +1789,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "281f045f9d01ec67abc97501d0848b79bc796c16"
-    pin_tag = "281f045"
+    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
+    pin_tag = "54c3ec3"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1859,7 +1859,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.06"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.06) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.29"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.29) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
@@ -2042,8 +2042,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "281f045f9d01ec67abc97501d0848b79bc796c16"
-    pin_tag = "281f045"
+    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
+    pin_tag = "54c3ec3"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2090,21 +2090,14 @@ main = "meshcom-qemu"
     # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     #
-    # NOT BUMPED, and KNOWN BROKEN UPSTREAM — deliberately left at the proven commit:
-    #   * icssw-org DELETED the `v4.35p.08.06` tag. `setup.sh --ref v4.35p.08.06` therefore
-    #     fails ("remote branch not found") on a fresh meshcom-qemu build. The COMMIT below is
-    #     still reachable on `dev`, but setup.sh clones with `--depth 1 --branch`, which does
-    #     not accept a bare SHA, so the pin alone cannot rescue the step.
-    #   * The next surviving release, v4.35p.08.29, does NOT work either: the QEMU overlay
-    #     patch fails `git apply --check` on src/esp32/esp32_main.cpp:2618 (verified), and
-    #     apply-overlay.sh fails closed rather than applying partially.
-    # Fixing this needs the overlay patch REBASED in makrohard/meshcom-qemu-raspi and validated
-    # with a full ESP32/QEMU build — real work, not a pin bump. Until then this component's
-    # firmware build is broken regardless of what is pinned here; the pin stays at the proven
-    # commit so the manifest keeps recording what was actually validated.
+    # Bumped to v4.35p.08.29 (== `dev` HEAD at the time of writing). icssw-org DELETED the
+    # old v4.35p.08.06 tag, so `setup.sh --ref v4.35p.08.06` no longer resolves at all; the
+    # QEMU overlay patch was REBASED onto 08.29 in makrohard/meshcom-qemu-raspi (32268d0) —
+    # same 26 hunks, byte-identical added/removed lines, only context offsets moved — and it
+    # now applies through apply-overlay.sh's fail-closed `git apply --check`.
     path = "src/MeshCom-Firmware"
-    pin_commit = "896d413787058a11ded45a019ff2d3c32f95f08e"
-    pin_tag = "v4.35p.08.06"
+    pin_commit = "2cb6bb4d3c9f8403d2f4278b6a01ae329ed6dc83"
+    pin_tag = "v4.35p.08.29"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 

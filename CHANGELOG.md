@@ -11,7 +11,8 @@
 - meshcore-pi repinned to `419a383`: the companion port no longer drops an idle client every ~90 s (a CLI waiting for messages stayed connected to nothing), current MeshCore v1 routing/path encoding, and a malformed packet can no longer take the node down
 - All external software repinned to current upstream: graywolf 0.14.13, meshcore-cli v1.6.3, RadioLib 7.7.1-57, meshtastic-firmware v2.7.26-32, Reticulum 1.5.1, Sideband 2.1.0, meshcom-qemu-raspi 281f045
 - The meshcore-cli pin was unreachable after an upstream history rewrite — a fresh install could not build it
-- MeshCom firmware stays at v4.35p.08.06: upstream deleted that tag and the QEMU overlay patch does not apply to the next release, so the meshcom-qemu firmware build needs overlay maintenance before it can move
+- MeshCom firmware to v4.35p.08.29: upstream deleted the old tag, so the QEMU overlay was rebased and the firmware builds again
+- Adopting meshcore-pi by link no longer blocks install/update/uninstall/clean
 - Validated on hardware: identity preserved across restart, live GPS into MeshCore, stale position cleared and recovered without a restart, Companion session stable well past the old ~90 s drop, and a real advert transmitted on 868. Peer-to-peer RF (contact learning, direct path, ACK routing) is **not** field-validated — no second MeshCore node was available; it is covered by tests against the current upstream wire format only
 
 ## 0.2.1

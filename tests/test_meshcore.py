@@ -581,3 +581,28 @@ def test_meshcore_daemon_defaults_match_what_the_pin_applies():
     from lhpc.core import daemon_params
     assert daemon_params.default_value("meshcore", "868", "POWER") == "14"
     assert daemon_params.default_value("meshcore", "868", "PREAMBLE") == "16"
+
+
+@pytest.mark.contract
+def test_a_linked_source_does_not_block_maintenance_on_the_base_template(tmp_path, monkeypatch):
+    """AUDIT-FOUND: adopting meshcore-pi BY LINK made install/update/uninstall/clean refuse.
+
+    `_resolve_config_dest` only applies its linked-readonly guard when `not for_base`, so the
+    BASE template still resolved to a path inside the symlinked checkout. Every runtime read
+    is descriptor-anchored (O_NOFOLLOW per component), so reading it raised
+    PathContainmentError -> MeshCoreIdentityError -> the identity guard refused the operation.
+    Uninstall and clean were refused too, so the operator could not even back out.
+
+    The generated config stays scannable; only the linked base is skipped.
+    """
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(Lifecycle, "is_linked_source", lambda self, c: True)
+
+    cands = svc.meshcore_identity_candidates()
+    # No candidate may point into the linked source tree...
+    assert not [p for p in cands if "src" in p.parts], cands
+    # ...but the generated {runtime} config stays scannable, so a normal upgrade still adopts.
+    assert [p.name for p in cands] == ["meshcore-pi.toml"]
+    # With nothing generated yet, adoption is a clean "no key here", not a refusal.
+    assert mi.adopt_identity(svc._paths, cands) == ""
