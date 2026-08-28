@@ -2296,7 +2296,10 @@ main = "meshcore-pi"
     pin_commit = "419a383074203b56b1b8cf0e587c8d0e3461be55"
     pin_tag = "419a383"
     remote = "https://github.com/makrohard/meshcore-pi.git"
-    branch = "loraham-daemon-interface"
+    # NOT `loraham-daemon-interface`: that branch is the head of an OPEN upstream pull
+    # request (brianwiddas/meshcore-pi#4), so LHPC must not depend on a ref whose history
+    # belongs to someone else's review. `-current` carries the same commit and is ours.
+    branch = "loraham-daemon-interface-current"
 
     # Position: a LIVE source (gpsd/auto->gpsd/nmea) is fed to the node continuously through
     # the meshcore-gps bridge, so its position follows the box. `fixed` writes static

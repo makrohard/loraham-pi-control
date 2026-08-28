@@ -33,9 +33,7 @@ import threading
 import time
 
 from .gps import (
-    CONSUMER_MESHCOM,
-    CONSUMER_MESHCORE,
-    CONSUMER_MESHTASTIC,
+    FEED_COMPONENTS,
     OUT_PTY,
     bridge_endpoint_path,
     bridge_state_dir,
@@ -705,7 +703,9 @@ def run(consumer: str, paths, stop=None) -> int:
     from .config import load_config
     from .gps import plan_from_config
 
-    if consumer not in (CONSUMER_MESHTASTIC, CONSUMER_MESHCOM, CONSUMER_MESHCORE):
+    # DERIVED from the one feed mapping — a private list here is exactly how a declared,
+    # selected, running feed was still refused as an unknown consumer.
+    if consumer not in FEED_COMPONENTS:
         _log(f"unknown consumer {consumer!r}")
         return EXIT_CONFIG
 
