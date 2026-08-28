@@ -262,8 +262,8 @@ main = "loraham-daemon"
     # Known-working fallback only (the default 'dev' selector installs the newest branch HEAD
     # regardless of this pin). Verified 2026-07-24: daemon built + RF-proven on the Zero 2W
     # acceptance runs against RadioLib 7.7.1-45.
-    pin_commit = "0795caa41c6350a2f862137cfc22528c2aaad2bc"
-    pin_tag = "7.7.1-45-g0795caa41"
+    pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
+    pin_tag = "7.7.1-57-g187ef247"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -1308,8 +1308,8 @@ main = "meshtastic"
     # cloned merely to read a yaml.
     [stack.component.source]
     path = "src/meshtastic-firmware"
-    pin_commit = "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd"
-    pin_tag = "v2.7.26.54e0d8d-28-g6de6c3d6d"
+    pin_commit = "6d41e279f1f51bd59f687b9d441c1bf47b1594fc"
+    pin_tag = "v2.7.26.54e0d8d-32-g6d41e279"
     remote = "https://github.com/meshtastic/firmware.git"
     branch = "master"
     local_dir = "meshtastic-firmware"
@@ -1789,8 +1789,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
-    pin_tag = "39ffb33"
+    pin_commit = "281f045f9d01ec67abc97501d0848b79bc796c16"
+    pin_tag = "281f045"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2042,8 +2042,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
-    pin_tag = "39ffb33"
+    pin_commit = "281f045f9d01ec67abc97501d0848b79bc796c16"
+    pin_tag = "281f045"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2092,8 +2092,8 @@ main = "meshcom-qemu"
     # and mheard_functions, none of which the overlay patches).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
     path = "src/MeshCom-Firmware"
-    pin_commit = "896d413787058a11ded45a019ff2d3c32f95f08e"
-    pin_tag = "v4.35p.08.06"
+    pin_commit = "2cb6bb4d3c9f8403d2f4278b6a01ae329ed6dc83"
+    pin_tag = "v4.35p.08.29"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2448,14 +2448,19 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    # AUDIT: pinned back from v1.5.0-68-g3921259, which introduced Python-3.12-only f-string
-    # syntax (PEP 701) while LHPC supports >=3.11 (Bookworm) — upstream HEAD still has it, so
-    # repinning forward cannot fix it. The features that pin added (rxlog/msgs handlers,
-    # aliases) are interactive-only; every flag THIS manifest renders is identical here.
-    # Take a newer pin only once upstream compiles on 3.11 again — the byte-compile build
-    # step above fails the build with file+line if a future pin regresses.
-    pin_commit = "56b246b4d45174817936c0fc910897b52bec66b4"
-    pin_tag = "v1.5.0-63-g56b246b"
+    # The previous pin (v1.5.0-63-g56b246b) had to move for TWO independent reasons:
+    #   1. Upstream rewrote `main`, leaving that commit in NO branch and NO tag. A plain
+    #      `git clone` + `git checkout <pin>` — exactly what install.py does — FAILED, so a
+    #      fresh install could not build the CLI at all. (A `--filter=blob:none` clone still
+    #      succeeded, lazily fetching the unreachable object; don't test reachability that way.)
+    #   2. It was held back because upstream had shipped Python-3.12-only f-string syntax
+    #      (PEP 701) while LHPC supports >=3.11 (Bookworm). That is fixed: v1.6.3 byte-compiles
+    #      under a real 3.11, as do v1.6.0-v1.6.2, and pyproject declares requires-python>=3.10.
+    # v1.6.3 is a tag reachable from main, and the four flags THIS manifest renders
+    # (-t -p -j -D) are all still present. The byte-compile build step above remains the guard
+    # that fails the BUILD with file+line if a future pin regresses on 3.11.
+    pin_commit = "568d158bc780c318c3d8706f71bfb980cb1ca588"
+    pin_tag = "v1.6.3"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -2500,8 +2505,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "b48b96e61676504e0a4e527b33b9a0b4495c6872"
-pin_tag = "b48b96e"
+pin_commit = "149e4151095adf098b8f53eab0c03b37169e8559"
+pin_tag = "1.5.1"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -2882,8 +2887,8 @@ KIVY_HOME = "{runtime}/state/sideband/kivy"
 path = "src/sideband"
 remote = "https://github.com/markqvist/Sideband.git"
 branch = "main"
-pin_commit = "2000d81a44bff57e3b3cb7d45915ba29bbde4e18"
-pin_tag = "2000d81"
+pin_commit = "1402bb6a492e87dc5224139a300cbb547487f7b6"
+pin_tag = "2.1.0"
 [stack.component.process]
 exec_name = "sideband"
 [[stack.component.pre_steps]]
