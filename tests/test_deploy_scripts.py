@@ -52,16 +52,29 @@ def _fake_bin(tmp_path: Path, *, git_src: Path | None = None, systemctl: str = "
             f'SRC="{git_src}"\n'
             'if [ "${1:-}" = "clone" ]; then\n'
             '  dest=""; for a in "$@"; do dest="$a"; done\n'
-            '  "$REAL" clone --quiet --branch main --single-branch "$SRC" "$dest"\n'
+            # Deploy the COMMIT UNDER TEST, then name it `main` in the destination.
+            #
+            # This used to `clone --branch main` from the checkout and overlay `main...HEAD`
+            # on top. That needed a local `main` REF to exist in the source repo, which is an
+            # ambient property of the working copy, not of the code: a PR checkout (detached
+            # at the merge ref, `--single-branch`) has no `main`, so `git clone` died with
+            # "Remote branch main not found in upstream origin" and these six tests failed on
+            # every branch build while passing locally. Resolving HEAD and force-creating the
+            # branch works from a branch, a detached HEAD or main itself, and deploys exactly
+            # the code under test instead of main-plus-a-patch.
+            #
+            # install.sh still refuses a checkout that is not on `main` — a real property we
+            # keep exercising, which is why the destination branch is named `main` here.
+            '  sha="$("$REAL" -C "$SRC" rev-parse HEAD)"\n'
+            '  "$REAL" clone --quiet --no-checkout "$SRC" "$dest"\n'
+            '  "$REAL" -C "$dest" checkout --quiet -B main "$sha"\n'
             '  "$REAL" -C "$dest" remote set-url origin '
             '"https://github.com/makrohard/loraham-pi-control.git"\n'
-            # Overlay = files this branch CHANGED vs main, plus anything uncommitted. The
-            # clone must stay on `main` (install.sh refuses a non-main checkout as unsafe
-            # — a real property, not a test detail), so a feature committed on a branch
-            # would otherwise be invisible here and the unit-render comparison would
-            # compare the deployed main code against the branch's renderer.
-            '  ( cd "$SRC" && { "$REAL" diff --name-only main...HEAD 2>/dev/null || true; '
-            '"$REAL" ls-files -m -o --exclude-standard; } | sort -u ) | while IFS= read -r f; do\n'
+            # Committed work is already present via the sha above; only UNCOMMITTED files
+            # (tracked-modified + non-ignored untracked) still need overlaying, so a
+            # not-yet-committed feature is present in the deployed checkout.
+            '  ( cd "$SRC" && "$REAL" ls-files -m -o --exclude-standard | sort -u ) '
+            '| while IFS= read -r f; do\n'
             '    [ -f "$SRC/$f" ] || continue\n'
             '    mkdir -p "$dest/$(dirname "$f")"; cp "$SRC/$f" "$dest/$f"\n'
             '  done\n'
