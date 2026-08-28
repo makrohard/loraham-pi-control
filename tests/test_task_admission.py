@@ -42,6 +42,11 @@ def test_absent_runtime_root_is_zero_mutation_pass(tmp_path):
 
 def test_apply_task_starts_refused_during_uninstall(tmp_path):
     svc = _svc(tmp_path)
+    # The stack must be INSTALLED: `build()` refuses an absent source before it reaches
+    # admission (both are zero-mutation refusals, but this test is about the ADMISSION one).
+    for c in svc.stack("daemon").components:
+        if c.source:
+            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
     _guard(tmp_path)
     assert svc.build("daemon", apply=True).data.get("admission_blocked")
     assert svc.install("daemon", apply=True).data.get("admission_blocked")

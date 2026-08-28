@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2
+
+- **MeshCore keeps its identity:** the node's private key is now LHPC-owned (`config/secrets/meshcore_identity.key`, 0600) instead of being re-minted on every config regeneration; an existing key is adopted, never rotated
+- The generated `meshcore-pi.toml` is 0600 — it carries that key and was world-readable
+- MeshCore position from the global GPS source (`use_gps`, default on): a live source now feeds it continuously through a `meshcore-gps` bridge, so the node's position follows the box instead of freezing at start; `fixed` still writes static coordinates and starts no bridge
+- MeshCore daemon defaults corrected to `POWER=14` / `PREAMBLE=16` — what the pinned presets actually apply
+- An absent optional component no longer reports the whole stack `not-installed`, fails `lhpc build <stack>`, or makes `source-check` report an error
+- `lhpc build <component>` on an uninstalled component says so, instead of failing with rc 127 or claiming nothing to do
+- meshcore-pi repinned to `640978e`: the companion port no longer drops an idle client every ~90 s (a CLI waiting for messages stayed connected to nothing), current MeshCore v1 routing/path encoding, and neither a malformed packet nor a hostile trace can take the node down; a client that vanishes without closing no longer wedges the companion port
+- All external software repinned to current upstream: graywolf 0.14.13, meshcore-cli v1.6.3, RadioLib 7.7.1-57, meshtastic-firmware v2.7.26-32, Reticulum 1.5.1, Sideband 2.1.0, meshcom-qemu-raspi 54c3ec3
+- The meshcore-cli pin was unreachable after an upstream history rewrite — a fresh install could not build it
+- MeshCom firmware to v4.35p.08.29: upstream deleted the old tag, so the QEMU overlay was rebased and the firmware builds again
+- Adopting meshcore-pi by link no longer blocks install/update/uninstall/clean
+- Validated on hardware: identity preserved across restart, live GPS into MeshCore, stale position cleared and recovered without a restart, Companion session stable well past the old ~90 s drop, and a real advert transmitted on 868. Peer-to-peer RF (contact learning, direct path, ACK routing) is **not** field-validated — no second MeshCore node was available; it is covered by tests against the current upstream wire format only
+
 ## 0.2.1
 
 - **"Back to AP mode" no longer refused:** re-activating the box's own shared AP needs the NetworkManager `wifi.share.open`/`.protected` polkit actions the network rule omitted, so it (and a failed join's AP fallback) failed with "Not authorized to share connections via wifi" — stranding the box when the AP was its only way home. The rule now grants them and the auth preflight checks them; re-run the copybox or `bootstrap-deps.sh` on existing boxes

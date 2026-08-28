@@ -51,7 +51,7 @@ Consequences worth knowing:
 - Bumping the version means editing the version in the manifest's build step *and* adding the
   new sha256 to the table in `graywolf-fetch.sh` — deliberately a reviewable two-line diff.
 
-Pinned at **v0.14.12** (GPL-2.0-or-later; each box fetches it from upstream, so LHPC
+Pinned at **v0.14.13** (GPL-2.0-or-later; each box fetches it from upstream, so LHPC
 redistributes nothing).
 
 ## Configuration

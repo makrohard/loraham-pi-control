@@ -313,6 +313,10 @@ class FileParam:
                                  # separate. Enforced hidden + non-overridable at manifest load.
     #                              — never write an empty value. For pins a board genuinely lacks
     #                              (Uputronics Reset/Busy): a written value assert-aborts meshtasticd.
+    secret_file: str = ""        # BARE filename under <runtime>/config/secrets/ holding a
+                                 # CONTROLLER-MANAGED secret (vs secret_ref's operator-authored
+                                 # secrets.toml). Read at write time only; same invariants as
+                                 # secret_ref (hidden, no default, file mode 0600).
 
 
 @dataclass(frozen=True)

@@ -182,6 +182,55 @@ def atomic_write_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600)
             raise
 
 
+def create_exclusive_bytes(paths: Paths, path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Create a contained runtime leaf that must NOT already exist, descriptor-anchored.
+
+    Unlike `atomic_write_bytes` — whose `O_EXCL` guards only its TEMP leaf before renaming
+    OVER the target — this is exclusive on the TARGET: `O_CREAT|O_EXCL|O_NOFOLLOW`, so a
+    concurrent creator loses with `FileExistsError` instead of being silently clobbered by
+    the last rename. That is what a write-once secret needs: two racing minters must not
+    each "succeed" with a different key. The file and the parent dir entry are both fsynced.
+
+    Raises `FileExistsError` if ANY leaf is already there (regular/symlink/special) — the
+    caller re-reads and uses the winner. On any failure the partial leaf is removed.
+
+    The content is written to a private temp leaf and PUBLISHED with `os.link`, which fails
+    with `FileExistsError` rather than clobbering. So the visible name never exists in a
+    half-written state: creating the target first and writing into it afterwards leaves a
+    window in which the racing loser reads an EMPTY file and mistakes it for a corrupt one.
+    """
+    with _walk_parent(paths, path, create=True) as (parent_fd, name):
+        tmp, fd = None, None
+        for _ in range(64):
+            cand = f".{name}.new-{os.getpid()}-{os.urandom(8).hex()}"
+            try:
+                fd = os.open(cand, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             mode, dir_fd=parent_fd)
+                tmp = cand
+                break
+            except FileExistsError:
+                continue
+        if tmp is None:
+            raise OSError(f"could not create a unique temp file for {path}")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fchmod(fh.fileno(), mode)      # mode on the HELD fd (umask-proof)
+                os.fsync(fh.fileno())
+            # Atomic exclusive publish: never replaces an existing leaf.
+            os.link(tmp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            try:
+                os.fsync(parent_fd)               # the new dir entry is durable
+            except OSError:
+                pass
+        finally:
+            try:
+                os.unlink(tmp, dir_fd=parent_fd)
+            except OSError:
+                pass
+
+
 def write_marker(paths: Paths, path: Path, text: str, mode: int = 0o600) -> None:
     """Write a small runtime state marker atomically (containment + no-follow)."""
     atomic_write(paths, path, text, mode)

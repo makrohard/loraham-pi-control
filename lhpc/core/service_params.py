@@ -39,6 +39,12 @@ from .snapshot_memo import invalidates_snapshot
 # disagreeing is what made the switch read as its default while being saved as "on".
 _BANDLESS_STACK_PARAMS = ("use_gps",)
 
+# MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
+# bridge, and `fixed` writes static coordinates. Either way the values come from the one
+# global plan, never from saved config or a start override.
+MESHCORE_COMPONENT = "meshcore-pi"
+_POSITION_PARAMS = ("lat", "lon")
+
 
 class ParamsConfigMixin:
 
@@ -1276,6 +1282,120 @@ class ParamsConfigMixin:
         return ActionResult(True, f"hardware setup set to {setup_id}",
                             details=[f"  served band(s): {', '.join(self.active_bands()) or '(none)'}"])
 
+    def meshcore_identity_candidates(self) -> tuple:
+        """Files that may already hold the MeshCore identity, newest-authority first.
+
+        Resolved from the MANIFEST (never hardcoded paths): the generated config, then the
+        upstream template it is built from — the only two places a key could be living
+        before LHPC owned it, the second because pinning the identity used to mean
+        hand-editing that template.
+        """
+        hit = self._component_index().get(MESHCORE_COMPONENT)
+        comp = hit[1] if hit else None
+        fc = getattr(comp, "config_file", None) if comp else None
+        if fc is None:
+            return ()
+        out = []
+        linked = bool(comp.source) and self._lifecycle().is_linked_source(comp)
+        for raw, is_base in ((fc.path, False), (fc.base, True)):
+            if not raw:
+                continue
+            # A LINKED source is a symlink into someone's checkout, and every runtime read is
+            # descriptor-anchored (O_NOFOLLOW per component), so reading through it raises
+            # PathContainmentError rather than returning "no key". `_resolve_config_dest`
+            # only applies its linked-readonly guard when `not for_base`, so the BASE
+            # candidate must be skipped here — otherwise adopt_identity turns that read
+            # error into a refusal and blocks install/update/uninstall/clean outright,
+            # leaving an operator with a linked meshcore-pi no way out. The generated config
+            # (the first candidate) still covers the normal upgrade.
+            if is_base and linked:
+                continue
+            try:
+                dest = self._resolve_config_dest(comp, raw, for_base=is_base)
+            except (OSError, PathContainmentError, ValueError):
+                continue
+            if dest.status == "ok" and dest.path is not None:
+                out.append(dest.path)
+        return tuple(out)
+
+    def meshcore_position(self, target: str) -> tuple[dict | None, str]:
+        """The STATIC coordinates for a MeshCore start — `(position, message)`.
+
+          * `({...}, "")`     — write these coordinates into the config;
+          * `({}, note)`      — write none, and strip any stale pair;
+          * `(None, reason)`  — REFUSE the start; nothing has been touched yet.
+
+        Only `fixed` produces coordinates. Every LIVE source is served by the `meshcore-gps`
+        bridge instead, which feeds NMEA to the node continuously — so its position follows
+        the box instead of freezing at whatever it was when the stack started. Writing a
+        snapshot as well would hand the node a stale fallback to revert to the moment the
+        live feed aged out, defeating the staleness clearing on both sides.
+
+        Liveness for a live source is therefore the FEED's business, gated by the bridge's
+        readiness exactly as it is for Meshtastic and MeshCom — not by a refusal here.
+        """
+        from .gps import CONSUMER_MESHCORE, plan_from_config
+        # `_run_order` is None for an unknown target — the caller reports that properly a
+        # moment later, so say "no position" rather than raising out of the start path.
+        if not any(c.id == MESHCORE_COMPONENT for _s, c in (self._run_order(target) or ())):
+            return {}, ""                              # not a MeshCore start
+        if not self.gps_enabled_for(target):
+            return {}, ""                              # use_gps off — omit, never refuse
+        plan = plan_from_config(self.config())
+        if not plan.valid:
+            # A broken [gps] table is NOT an ordinary "off": the operator asked for a
+            # position and we cannot tell what they meant.
+            return None, (f"the global position source is not usable: "
+                          f"{plan.reason or 'invalid [gps] configuration'}")
+        if plan.needs_bridge(CONSUMER_MESHCORE):
+            return {}, ""                              # the live feed owns the position
+        if plan.is_fixed:
+            # NORMALISE, never pass the saved strings through: `[gps]` validates with
+            # `float()`, which accepts forms TOML rejects — a European `fixed_lon = "007.6"`
+            # is a valid position and an invalid TOML number.
+            try:
+                return ({"lat": f"{float(plan.fixed_lat):.7f}",
+                         "lon": f"{float(plan.fixed_lon):.7f}"}, "")
+            except (TypeError, ValueError):
+                return None, ("the configured fixed position is not a pair of numbers — "
+                              "set it again with `lhpc gps --lat <n> --lon <n>`")
+        return {}, ""                                  # deliberately off
+
+    def meshcore_identity_guard(self, comps) -> str:
+        """Rescue the MeshCore identity before an operation replaces or removes its source.
+
+        Returns "" to proceed, or a reason to REFUSE with. Call it after the authoritative
+        refusal/running checks, with the operation's locks held, and before the first source
+        or config deletion — an identity that still lives only in a file we are about to
+        overwrite has to be copied out first, or the node silently comes back as a stranger.
+
+        Adopts only: an operator updating or uninstalling a MeshCore they never ran must not
+        end up with a freshly minted key. A candidate that is present but invalid refuses,
+        rather than letting the destructive step proceed over an identity we could not read.
+        """
+        if not any(getattr(c, "id", "") == MESHCORE_COMPONENT for c in comps):
+            return ""
+        from . import meshcore_identity
+        try:
+            meshcore_identity.adopt_identity(self._paths, self.meshcore_identity_candidates())
+        except meshcore_identity.MeshCoreIdentityError as exc:
+            return str(exc)
+        except (OSError, PathContainmentError) as exc:
+            return f"could not preserve the MeshCore identity: {exc}"
+        return ""
+
+    def _controller_secret(self, name: str) -> str:
+        """Resolve a `secret_file` FileParam to its value, creating it if this is first use.
+
+        Config generation is the ONE place allowed to mint a MeshCore identity: every other
+        caller adopts only. An unusable existing key raises rather than being replaced.
+        """
+        from . import meshcore_identity
+        if name != meshcore_identity.IDENTITY_FILENAME:
+            raise ValueError(f"unknown controller secret {name!r}")
+        return meshcore_identity.ensure_identity(self._paths,
+                                                 self.meshcore_identity_candidates())
+
     def _gps_config_values(self, target: str) -> dict:
         """Controller-owned `{gps_*}` values for a stack's generated config.
 
@@ -1291,14 +1411,21 @@ class ParamsConfigMixin:
           * `fixed`/`off` -> empty, and the param is `omit_if_empty`.
         Sideband needs no device path for gpsd — its plugin is a native gpsd client.
         """
-        from .gps import CONSUMER_MESHTASTIC, bridge_endpoint_path
+        from .gps import CONSUMER_MESHCORE, CONSUMER_MESHTASTIC, bridge_endpoint_path
         # TARGET-AWARE: the global source says WHERE, the stack's switch says WHETHER. Using
         # the bare global plan here rendered a device into a stack whose GPS was off.
         plan = self.gps_plan(target)
         owner = self.gps_owner_stack(target)
         device = ""
         if plan.enabled:
-            if plan.source == "nmea":
+            if owner == CONSUMER_MESHCORE:
+                # ALWAYS the bridge PTY, never the real receiver: MeshCore reads a device
+                # continuously, so pointing it at the hardware would put two readers on one
+                # receiver. The bridge owns the device (and holds the exclusive claim) and
+                # republishes it. Empty for `fixed`, which needs no feed at all.
+                device = (bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHCORE)
+                          if plan.needs_bridge(CONSUMER_MESHCORE) else "")
+            elif plan.source == "nmea":
                 device = plan.device
             elif plan.source == "gpsd" and owner == CONSUMER_MESHTASTIC:
                 device = bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHTASTIC)
@@ -2025,7 +2152,8 @@ class ParamsConfigMixin:
         return params, file_over, None
 
     def write_config_files(self, target: str, band: str = "",
-                           overrides: dict | None = None) -> list[ConfigWrite]:
+                           overrides: dict | None = None,
+                           position: dict | None = None) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         linked-readonly / no-base / failed) so an auto-start can block on a generation
@@ -2033,7 +2161,12 @@ class ParamsConfigMixin:
 
         `overrides` are EPHEMERAL per-start file values ({param_name: value}, this launch only,
         never persisted) taken from the Start-confirm 'Stack parameters' panel — validated by the
-        caller via `_normalize_file_overrides` before they reach here."""
+        caller via `_normalize_file_overrides` before they reach here.
+
+        `position` is MeshCore's STATIC position ({"lat": …, "lon": …}) from
+        `meshcore_position`, set only for a `fixed` source. Absent or empty means "no static
+        position" — a live source is fed by the meshcore-gps bridge instead — and the
+        coordinate keys are then omitted, which also strips a stale pair from an earlier start."""
         cfg = self.config()
         op = cfg.operator
         runtime = str(self._paths.runtime_root)
@@ -2113,6 +2246,24 @@ class ParamsConfigMixin:
                                         f"config/secrets.toml")
                         break
                     values[p.name] = val
+                    continue
+                if p.hidden and p.name in _POSITION_PARAMS and c.id == MESHCORE_COMPONENT:
+                    # CONTROLLER-OWNED: only the start's snapshot may set these. Reading
+                    # `over`/`stored` here would let a per-start override or a hand-edited
+                    # stack config put a position on the air that the global plan never
+                    # authorised. Empty -> `omit_if_empty` drops the key (and any stale one).
+                    values[p.name] = str((position or {}).get(p.name, "") or "")
+                    continue
+                if getattr(p, "secret_file", ""):
+                    # CONTROLLER-managed secret (vs secret_ref's operator-authored
+                    # secrets.toml). Same trust rule: never `over`, never `stored`, never a
+                    # default. Currently only the MeshCore node identity, which must EXIST by
+                    # generation time — this is the one call site allowed to mint it.
+                    try:
+                        values[p.name] = self._controller_secret(p.secret_file)
+                    except (OSError, PathContainmentError, ValueError) as exc:
+                        secret_error = str(exc)
+                        break
                     continue
                 raw = over.get(p.name, stored.get(p.name, p.default))
                 try:

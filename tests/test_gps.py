@@ -1210,6 +1210,54 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
+def test_the_bridge_serves_meshcore_over_a_real_pty(tmp_path, fake_gpsd):
+    """AUDIT-FOUND: the manifest declared a `meshcore-gps` component and the planner
+    selected it, but the bridge RUNTIME still accepted only meshtastic/meshcom — so the
+    real `lhpc _gps-bridge meshcore` exited EXIT_CONFIG and the feed could never come up.
+
+    A declaration nothing can execute is worse than no declaration: the stack looks wired.
+    """
+    import os
+    import threading
+    import time
+    from lhpc.core.config import save_gps
+    from lhpc.core.gps import bridge_state_dir
+    from lhpc.core.gps_bridge import EXIT_OK
+    from lhpc.core.paths import Paths
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths(runtime_root=tmp_path)
+    srv = fake_gpsd(sentences=["$GPGGA,000000.00,,,,,0,00,,,M,,M,,*66"])
+    save_gps(paths, source="gpsd", host="127.0.0.1", port=srv.port)
+    stop = threading.Event()
+    rc = {}
+    t = threading.Thread(target=lambda: rc.setdefault("v", _run_feed(paths, "meshcore", stop)),
+                         daemon=True)
+    t.start()
+    state = os.path.join(bridge_state_dir(tmp_path, "meshcore"), "readiness.json")
+    link = os.path.join(bridge_state_dir(tmp_path, "meshcore"), "nmea0")
+    deadline = time.time() + _FEED_UP_S
+    while not os.path.exists(state) and time.time() < deadline:
+        time.sleep(0.05)
+    assert os.path.islink(link), "the PTY endpoint must be published"
+    assert os.path.exists(state), f"readiness must be written (waited {_FEED_UP_S}s)"
+
+    stop.set()
+    t.join(timeout=_FEED_UP_S)
+    srv.close()
+    assert rc.get("v") == EXIT_OK, "the bridge must not refuse meshcore as an unknown consumer"
+    assert not os.path.islink(link)
+    assert not os.path.exists(state)
+
+
+def test_the_pty_the_bridge_publishes_is_the_one_the_config_names(tmp_path):
+    """The generated config must point at exactly the path the bridge creates — a mismatch
+    would leave the node opening a device that never appears."""
+    from lhpc.core.gps import CONSUMER_MESHCORE, bridge_endpoint_path, bridge_state_dir
+    import os
+    self_path = bridge_endpoint_path(tmp_path, CONSUMER_MESHCORE)
+    assert self_path == os.path.join(bridge_state_dir(tmp_path, CONSUMER_MESHCORE), "nmea0")
+
+
 def test_run_refuses_when_the_source_is_off(tmp_path):
     """Starting a feed with no configured source would publish an endpoint that can never
     deliver — the component must fail, not sit there looking healthy."""
@@ -2394,8 +2442,12 @@ def test_gps_consumers_are_derived_from_the_manifest_and_gate_graywolf(tmp_path)
     assert svc._gps_consumer_ids() == declared
     assert {"graywolf", "meshtastic", "meshcom-qemu", "sideband"} <= declared
     assert "rns" not in declared                      # declares use_gps, reads nothing
-    # Every GPS-capable stack must contain a reader — a use_gps switch with nobody
-    # reading is exactly the drift this test exists to catch.
+    # Every GPS-capable stack must contain a RUNTIME reader — a use_gps switch with nobody
+    # reading is exactly the drift this test exists to catch. MeshCore joined that set when
+    # it gained a live NMEA feed: it now holds a reader open for as long as it runs, so it
+    # must gate the admission/liveness machinery like every other consumer.
+    assert "meshcore" in svc._gps_stacks()
+    assert "meshcore-pi" in declared
     for sid in svc._gps_stacks():
         s = svc.stack(sid)
         assert any(c.reads_position for c in s.components), sid
@@ -2519,14 +2571,18 @@ def test_fixed_source_says_that_graywolf_gets_no_position(tmp_path):
 
 
 def test_meshcore_cli_build_byte_compiles_the_pinned_source():
-    """AUDIT-FOUND: upstream meshcore-cli shipped Python-3.12-only f-string syntax while
-    LHPC supports >=3.11 (Bookworm). The pin now sits at the last 3.11-clean commit, and the
-    build byte-compiles the source so a future pin that regresses fails the BUILD with file
-    and line instead of a SyntaxError at first run. This test pins both halves of that
-    contract: the guard step exists, and the pinned commit is the 3.11-clean one."""
+    """AUDIT-FOUND: upstream meshcore-cli once shipped Python-3.12-only f-string syntax
+    (PEP 701) while LHPC supports >=3.11 (Bookworm), so the pin was held back to the last
+    3.11-clean commit. Upstream has since fixed that — v1.6.3 byte-compiles under a real
+    3.11 — and the old pin had to move anyway: a `main` rewrite left it in no branch and no
+    tag, so a fresh clone+checkout could not reach it at all.
+
+    The build still byte-compiles the source so a future pin that regresses on 3.11 fails
+    the BUILD with file and line instead of a SyntaxError at first run. This test pins both
+    halves of that contract: the guard step exists, and the pin is the vetted one."""
     from lhpc.core.manifest import load_manifest
     mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
-    assert mc.source.pin_commit == "56b246b4d45174817936c0fc910897b52bec66b4"
+    assert mc.source.pin_commit == "568d158bc780c318c3d8706f71bfb980cb1ca588"   # v1.6.3
     compile_steps = [st for st in mc.build_steps
                      if "compileall" in " ".join(st.get("argv", []))]
     assert len(compile_steps) == 1

@@ -120,9 +120,9 @@ class LifecycleOpsMixin:
         """
         import json
 
-        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC, bridge_state_dir
-        consumer = (CONSUMER_MESHTASTIC if comp.id == "meshtastic-gps"
-                    else CONSUMER_MESHCOM if comp.id == "meshcom-gps" else "")
+        from .gps import bridge_state_dir, consumer_for_component
+        # DERIVED from the ONE feed mapping, never a private copy — see gps.FEED_COMPONENTS.
+        consumer = consumer_for_component(comp.id)
         if not consumer:
             return {}
         marker = Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
@@ -556,7 +556,8 @@ class LifecycleOpsMixin:
               stop_owners: bool = False, band: str = "",
               daemon_overrides: dict | None = None,
               file_overrides: dict | None = None, auto_install_ctx=None, *,
-              _before_start_locked=None, _operator: bool = True) -> ActionResult:
+              _before_start_locked=None, _operator: bool = True,
+              position: dict | None = None, position_note: str = "") -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
@@ -606,12 +607,30 @@ class LifecycleOpsMixin:
                 # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
                 _order = self._run_order(target)
                 _radio = ""
+                # Carried down from restart, which took the snapshot before its stop — so the
+                # "started without a position" note is not lost on the way through.
+                _pos_note = position_note
                 if _order:
                     _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
                     _radio = _r or ""
                 try:
                     with self._lifecycle_guard("start", target, band,
                                                stop_owners=stop_owners, radio=_radio):
+                        # MESHCORE POSITION SNAPSHOT: the one GPS query of this start. Taken
+                        # under every lock but BEFORE the boot hook, feed clearing and any
+                        # other mutation, because it does network I/O that can legitimately
+                        # refuse the start — and only when there is something to start, so an
+                        # already-healthy no-op never touches gpsd. `position` is passed down
+                        # rather than re-queried, so a restart asks exactly once.
+                        # `_order` is None/empty for an unknown target or nothing to run —
+                        # `_start_impl` reports that properly, so take no snapshot here.
+                        if position is None and _order \
+                                and not self._order_already_healthy(_order, _radio):
+                            position, _pos_note = self.meshcore_position(target)
+                            if position is None:
+                                return ActionResult(
+                                    False, f"Cannot start '{target}': {_pos_note}",
+                                    next_commands=[f"lhpc status {target}"])
                         # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
                         # mutation. A refusal cancels the start with zero side effects.
                         if _before_start_locked is not None:
@@ -629,7 +648,8 @@ class LifecycleOpsMixin:
                         _res = self._start_impl(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
                                                 daemon_overrides=daemon_overrides,
-                                                file_overrides=file_overrides)
+                                                file_overrides=file_overrides,
+                                                position=position, position_note=_pos_note)
                         # An OPERATOR stack start that actually brought something up
                         # supersedes any standing stop intent. Three review-found refinements:
                         # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
@@ -675,7 +695,8 @@ class LifecycleOpsMixin:
     def _start_impl(self, target: str, apply: bool = False, params: dict | None = None,
                     stop_owners: bool = False, band: str = "",
                     daemon_overrides: dict | None = None,
-                    file_overrides: dict | None = None) -> ActionResult:
+                    file_overrides: dict | None = None,
+                    position: dict | None = None, position_note: str = "") -> ActionResult:
         """Applied starts run under the configuration-stability guard so saved config is a stable
         snapshot from the first read through generation/launch/post-start — a direct/internal
         apply=True call cannot bypass it. Dry-run holds no long-lived guard. A guard/read failure is
@@ -684,13 +705,15 @@ class LifecycleOpsMixin:
             return self._start_impl_inner(target, apply=False, params=params,
                                           stop_owners=stop_owners, band=band,
                                           daemon_overrides=daemon_overrides,
-                                          file_overrides=file_overrides)
+                                          file_overrides=file_overrides,
+                                          position=position, position_note=position_note)
         try:
             with self._config_stable():                          # re-entrant (no-op if start() holds it)
                 return self._start_impl_inner(target, apply=True, params=params,
                                               stop_owners=stop_owners, band=band,
                                               daemon_overrides=daemon_overrides,
-                                              file_overrides=file_overrides)
+                                              file_overrides=file_overrides,
+                                              position=position, position_note=position_note)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
@@ -705,7 +728,9 @@ class LifecycleOpsMixin:
     def _start_impl_inner(self, target: str, apply: bool = False, params: dict | None = None,
                           stop_owners: bool = False, band: str = "",
                           daemon_overrides: dict | None = None,
-                          file_overrides: dict | None = None) -> ActionResult:
+                          file_overrides: dict | None = None,
+                          position: dict | None = None,
+                          position_note: str = "") -> ActionResult:
         order = self._run_order(target)
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
@@ -850,17 +875,14 @@ class LifecycleOpsMixin:
         # already healthy, return ALREADY_HEALTHY immediately. Never run blockers for mutation,
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
-        if apply:
-            _hsnap = self.build_snapshot()
-            _hidx = {c.id: ss.components[c.id] for ss in _hsnap.stacks for c in ss.stack.components}
-            if self._all_components_healthy(order, _hidx, radio):
-                _hres = [CompResult(component=comp.id, stack=stack.id, action="start",
-                             outcome=Outcome.ALREADY_HEALTHY, summary="already running")
-                         for stack, comp in order
-                         if comp.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
-                return ActionResult(True, f"'{target}' already healthy — nothing to start.",
-                    details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
-                    results=tuple(_hres), next_commands=[f"lhpc status {target}"])
+        if apply and self._order_already_healthy(order, radio):
+            _hres = [CompResult(component=comp.id, stack=stack.id, action="start",
+                                outcome=Outcome.ALREADY_HEALTHY, summary="already running")
+                     for stack, comp in order
+                     if comp.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
+            return ActionResult(True, f"'{target}' already healthy — nothing to start.",
+                details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
+                results=tuple(_hres), next_commands=[f"lhpc status {target}"])
 
         # FW-R8 exposure gate: if the managed firewall is installed and this start would bind a
         # non-loopback listener whose containment is not live-verified against the current saved
@@ -1037,7 +1059,8 @@ class LifecycleOpsMixin:
                 # tree, DO NOT write the interactive marker and DO NOT present a manual
                 # command as ready-to-run — return a typed block/manual-required instead.
                 if comp.config_file:
-                    cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id))
+                    cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
+                                                 position=position)
                     mine = [w for w in cw if w.component == comp.id]
                     bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                     if bad:
@@ -1091,7 +1114,8 @@ class LifecycleOpsMixin:
             # generation FAILURE for this component blocks the launch — never start with
             # stale or absent configuration.
             if comp.config_file:
-                cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id))
+                cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
+                                             position=position)
                 mine = [w for w in cw if w.component == comp.id]
                 bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
                 if bad:
@@ -1246,6 +1270,10 @@ class LifecycleOpsMixin:
         if ok and self.stack(target) is not None:
             self._capture_start_composition(target, cfg_band)
             self._clear_restart_required(target)
+        if position_note:
+            # `auto` could not get a fix. Never gating, but never silent either: the node is
+            # on the air without a position and the operator has to be able to see that.
+            out = [*out, f"  [gps] {position_note}"]
         return ActionResult(ok, summary, details=out, results=tuple(results),
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {target}"])
@@ -2343,9 +2371,20 @@ class LifecycleOpsMixin:
                 try:
                     with self._lifecycle_guard("restart", target, _rband,
                                                stop_owners=stop_owners, radio=_radio):
+                        # MESHCORE POSITION: taken HERE — under the guard, before the stop —
+                        # and handed to the nested start, so a restart queries gpsd exactly
+                        # once and a refusal leaves the running node up rather than stopping
+                        # it and only then discovering there is no position.
+                        _position, _pos_note = self.meshcore_position(target)
+                        if _position is None:
+                            return ActionResult(
+                                False, f"Cannot restart '{target}': {_pos_note}",
+                                next_commands=[f"lhpc status {target}"])
                         return self._restart_impl(target, apply=True, params=params,
                                                   stop_owners=stop_owners, band=_rband,
-                                                  file_overrides=file_over)
+                                                  file_overrides=file_over,
+                                                  position=_position,
+                                                  position_note=_pos_note)
                 except SourceTxnBlocked as blocked:
                     return ActionResult(False, f"Cannot restart '{target}': {blocked}",
                                         next_commands=[f"lhpc status {target}"])
@@ -2366,7 +2405,9 @@ class LifecycleOpsMixin:
 
     def _restart_impl(self, target: str, apply: bool = False, params: dict | None = None,
                       stop_owners: bool = False, band: str = "",
-                      file_overrides: dict | None = None) -> ActionResult:
+                      file_overrides: dict | None = None,
+                      position: dict | None = None,
+                      position_note: str = "") -> ActionResult:
         """Applied restarts run the WHOLE preflight→stop→start transition under the configuration-
         stability guard, so a concurrent save can never change the inputs mid-transition (and a valid
         target is never stopped only to be rejected by the later start). A direct/internal apply=True
@@ -2379,7 +2420,9 @@ class LifecycleOpsMixin:
             with self._config_stable():                          # re-entrant (no-op if restart() holds it)
                 return self._restart_impl_inner(target, apply=True, params=params,
                                                 stop_owners=stop_owners, band=band,
-                                                file_overrides=file_overrides)
+                                                file_overrides=file_overrides,
+                                                position=position,
+                                                position_note=position_note)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
@@ -2391,7 +2434,9 @@ class LifecycleOpsMixin:
 
     def _restart_impl_inner(self, target: str, apply: bool = False, params: dict | None = None,
                             stop_owners: bool = False, band: str = "",
-                            file_overrides: dict | None = None) -> ActionResult:
+                            file_overrides: dict | None = None,
+                            position: dict | None = None,
+                            position_note: str = "") -> ActionResult:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
         restart doesn't move a band-switchable stack back to its default band)."""
@@ -2432,7 +2477,8 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, params=params, stop_owners=stop_owners, band=band,
-                         file_overrides=file_overrides)
+                         file_overrides=file_overrides, position=position,
+                         position_note=position_note)
         # Restart's typed results are the stop results followed by the start results.
         return ActionResult(res.ok, f"Restarted '{target}'. {res.summary}",
                             details=res.details,
@@ -2470,6 +2516,42 @@ class LifecycleOpsMixin:
                              if c.build_steps and c.id not in have]
         life = self._lifecycle()
         buildable = [(s, c) for s, c in items if c.build_steps]
+        # MISSING-SOURCE PREFLIGHT — BEFORE the GUI one, and for the same reason: decide
+        # explicitly instead of letting the build discover it. `Lifecycle.build` joins the
+        # source path lexically and hands it to Popen as `cwd`, so an absent directory
+        # surfaced as a bare rc-127 "Build FAILED", indistinguishable from a missing tool.
+        # ORDER MATTERS: after the GUI preflight, a direct `lhpc build meshcore-nodegui` on a
+        # headless box returned the GUI no-work SUCCESS instead of saying it is not installed.
+        # APPLY ONLY: a dry run executes nothing, so there is no cwd to be wrong and no
+        # reason to refuse a plan. Gating it too would stop the console planning a build for
+        # a stack the operator is about to install.
+        _is_component_target = target != "" and self.stack(target) is None
+        _absent = [(s, c) for s, c in buildable
+                   if c.source and not life.source_dir(c).exists()] if apply else []
+        if _absent:
+            # A NAMED component is always refused — the operator asked for that one by name,
+            # and reporting "nothing to do" would hide that it is not installed. Within a
+            # stack (or a bulk build) an OPTIONAL absent component is simply skipped.
+            _refused = [(s, c) for s, c in _absent if _is_component_target or not c.optional]
+            if _refused:
+                _sids = sorted({s.id for s, _ in _refused})
+                return ActionResult(
+                    False,
+                    f"Refusing to build '{target}': "
+                    f"{', '.join(sorted(c.id for _, c in _refused))} is not installed.",
+                    details=[f"  [not-installed] {c.id}: no source at "
+                             f"{life.source_dir(c)}" for _, c in _refused],
+                    next_commands=[f"lhpc install {sid}" for sid in _sids])
+            _absent_ids = sorted(c.id for _, c in _absent)
+            buildable = [(s, c) for s, c in buildable if c.id not in set(_absent_ids)]
+            if not buildable:
+                return ActionResult(
+                    True,
+                    f"Nothing to build for '{target}': all requested component(s) skipped "
+                    f"({', '.join(_absent_ids)}) — not installed.",
+                    details=[f"  [skip] {cid}: not installed" for cid in _absent_ids],
+                    next_commands=[f"lhpc status {target}"],
+                    data={"skipped": _absent_ids, "built": 0, "changes": 0})
         # GUI PREFLIGHT — the SAME predicate auto-install planning uses, applied HERE: before the
         # index/source locks, before any build marker and before a single build step runs. A
         # component whose GUI toolkit is absent must be refused (mandatory) or dropped (optional)

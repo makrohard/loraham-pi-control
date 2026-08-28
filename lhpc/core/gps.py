@@ -26,12 +26,29 @@ from dataclasses import dataclass
 CONSUMER_MESHTASTIC = "meshtastic"
 CONSUMER_MESHCOM = "meshcom"
 CONSUMER_GRAYWOLF = "graywolf"
+CONSUMER_MESHCORE = "meshcore"
 
 # How the bridge hands NMEA to a consumer.
 OUT_PTY = "pty"
 OUT_UNIX = "unix"
 
-_OUTPUT_FOR = {CONSUMER_MESHTASTIC: OUT_PTY, CONSUMER_MESHCOM: OUT_UNIX}
+_OUTPUT_FOR = {CONSUMER_MESHTASTIC: OUT_PTY, CONSUMER_MESHCOM: OUT_UNIX,
+               CONSUMER_MESHCORE: OUT_PTY}
+
+# consumer -> the manifest component that carries its production feed. THE one mapping:
+# every site that needs it derives from here. There used to be four independent copies of
+# this knowledge (run-order selection, the start gate's readiness reader, the status
+# prober, and the bridge's own accepted-consumer list), and adding a feed to some but not
+# all of them produced a component that started, streamed, and was still reported as
+# "no readiness marker" forever — healthy and invisible at the same time.
+FEED_COMPONENTS = {CONSUMER_MESHTASTIC: "meshtastic-gps",
+                   CONSUMER_MESHCOM: "meshcom-gps",
+                   CONSUMER_MESHCORE: "meshcore-gps"}
+
+
+def consumer_for_component(component_id: str) -> str:
+    """The GPS consumer a feed component serves, or "" when it is not a feed."""
+    return next((c for c, cid in FEED_COMPONENTS.items() if cid == component_id), "")
 
 
 @dataclass(frozen=True)
@@ -85,11 +102,18 @@ class GpsPlan:
         pointing meshtasticd straight at the real device gives it a chip it can actually
         detect. MeshCom always needs one when GPS is on, because its pinned relay supports
         only a LOCAL gpsd and cannot serve remote gpsd, direct NMEA, or a fixed position.
+
+        MeshCore needs one for every LIVE source: the pinned node reads NMEA from a device
+        path and knows nothing about gpsd, so a bridge is the only way its position follows
+        the box while it runs. For `fixed` it needs none — the coordinates go straight into
+        its config, which is simpler and has nothing to keep alive.
         """
         if not self.enabled:
             return False
         if consumer == CONSUMER_MESHTASTIC:
             return self.source == "gpsd"
+        if consumer == CONSUMER_MESHCORE:
+            return not self.is_fixed
         return consumer == CONSUMER_MESHCOM
 
     def output_kind(self, consumer: str) -> str:

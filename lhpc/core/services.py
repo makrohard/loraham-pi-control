@@ -1349,6 +1349,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             _adm_stack.close()
             return ActionResult(False, "A task is starting right now (admission contended) — retry the "
                                 "install.", data={"contended": True})
+        # An install re-adopts source trees, which can replace the template the MeshCore
+        # identity may still live in. Copy it out before the first adoption — after every
+        # plan/coherence refusal above, so a refused install still mints nothing.
+        _id_err = self.meshcore_identity_guard([c for _s, c in install_items])
+        if _id_err:
+            _adm_stack.close()
+            return ActionResult(False, f"Refusing to install '{stack_id or 'all'}': {_id_err}")
         _guard = (self._source_operation_guard(_guard_paths, op="install")
                   if on_admit is not None else contextlib.nullcontext())
         _switch_txn = ""
@@ -1771,8 +1778,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def _production_feeds(self) -> dict:
         """Stack id -> the component that carries its PRODUCTION position feed."""
-        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC
-        return {CONSUMER_MESHTASTIC: "meshtastic-gps", CONSUMER_MESHCOM: "meshcom-gps"}
+        from .gps import FEED_COMPONENTS
+        return dict(FEED_COMPONENTS)
 
     def _all_gps_feed_ids(self) -> set:
         """Every production feed component id — what a direct start must be checked against."""
@@ -1913,6 +1920,18 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         for sid in seeds:
             visit(sid)
         return [idx[cid] for cid in order]
+
+    def _order_already_healthy(self, order, radio: str) -> bool:
+        """`_all_components_healthy` against the CURRENT snapshot.
+
+        One helper so the no-side-effect Start check and the callers that must run BEFORE it
+        (the MeshCore static-position resolution, which a healthy no-op must not redo) can
+        never drift apart. `build_snapshot` is memoized within an operation, so asking twice
+        inside one start is cheap.
+        """
+        snap = self.build_snapshot()
+        idx = {c.id: ss.components[c.id] for ss in snap.stacks for c in ss.stack.components}
+        return self._all_components_healthy(order, idx, radio)
 
     def _all_components_healthy(self, order, st_index, radio: str) -> bool:
         """True when EVERY requested component is already healthy — the daemon serving every needed

@@ -1861,7 +1861,7 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
     monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [])
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [])
     monkeypatch.setattr(type(svc), "_lifecycle",
                         lambda self: Lifecycle(self._paths, self.stacks(), self.config(),
                                                self._system, spawn=real_spawn))

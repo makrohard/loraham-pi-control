@@ -262,8 +262,8 @@ main = "loraham-daemon"
     # Known-working fallback only (the default 'dev' selector installs the newest branch HEAD
     # regardless of this pin). Verified 2026-07-24: daemon built + RF-proven on the Zero 2W
     # acceptance runs against RadioLib 7.7.1-45.
-    pin_commit = "0795caa41c6350a2f862137cfc22528c2aaad2bc"
-    pin_tag = "7.7.1-45-g0795caa41"
+    pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
+    pin_tag = "7.7.1-57-g187ef247"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -941,7 +941,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # auto-install run all fetch it — and adds NO system dependency (curl is already a bootstrap
   # package, dpkg-deb ships with dpkg), so bootstrap-deps.sh stays untouched.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.12"], announce = "[fetch] graywolf 0.14.12 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
+    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.13"], announce = "[fetch] graywolf 0.14.13 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
   ]
   bin = "build/tools/graywolf/usr/bin/graywolf"
   # The marker FILENAME carries the version on purpose: with only `bin`, `is_built` is satisfied
@@ -951,7 +951,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # build step above. It is deliberately NOT the fetch script's own `.lhpc-graywolf-version`
   # stamp: LHPC deletes the marker before every build, which would defeat the script's
   # already-at-this-version short-circuit (the one thing that lets a rebuild work offline).
-  build_marker = "build/tools/graywolf/.lhpc-built-0.14.12"
+  build_marker = "build/tools/graywolf/.lhpc-built-0.14.13"
   # The tree the build OWNS. There is no `source` for `clean` to remove here, so name the
   # artifact directory explicitly or "Clean all" would leave the graywolf binaries behind.
   build_root = "build/tools/graywolf"
@@ -1216,7 +1216,7 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6d41e279f1f51bd59f687b9d441c1bf47b1594fc", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]
@@ -1308,8 +1308,8 @@ main = "meshtastic"
     # cloned merely to read a yaml.
     [stack.component.source]
     path = "src/meshtastic-firmware"
-    pin_commit = "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd"
-    pin_tag = "v2.7.26.54e0d8d-28-g6de6c3d6d"
+    pin_commit = "6d41e279f1f51bd59f687b9d441c1bf47b1594fc"
+    pin_tag = "v2.7.26.54e0d8d-32-g6d41e279"
     remote = "https://github.com/meshtastic/firmware.git"
     branch = "master"
     local_dir = "meshtastic-firmware"
@@ -1789,8 +1789,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
-    pin_tag = "39ffb33"
+    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
+    pin_tag = "54c3ec3"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1859,7 +1859,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.06"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.06) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.29"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.29) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
@@ -2042,8 +2042,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "39ffb33097d5e7de02c72be708b3175462c1611c"
-    pin_tag = "39ffb33"
+    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
+    pin_tag = "54c3ec3"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2086,14 +2086,18 @@ main = "meshcom-qemu"
     [stack.component.source]
     # The QEMU build CLONES this repo BY REF (see meshcom-qemu's `setup.sh --ref` step), so the
     # pin records the commit that ref was proven at rather than driving the checkout. The
-    # external-radio feature merged upstream (icssw-org PR #1072), so this now tracks the
-    # CANONICAL repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip; the QEMU
-    # overlay patch applies cleanly — 08.03..08.06 touches configuration_global.h, lora_setchip
-    # and mheard_functions, none of which the overlay patches).
+    # external-radio feature merged upstream (icssw-org PR #1072), so this tracks the CANONICAL
+    # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
+    #
+    # Bumped to v4.35p.08.29 (== `dev` HEAD at the time of writing). icssw-org DELETED the
+    # old v4.35p.08.06 tag, so `setup.sh --ref v4.35p.08.06` no longer resolves at all; the
+    # QEMU overlay patch was REBASED onto 08.29 in makrohard/meshcom-qemu-raspi (32268d0) —
+    # same 26 hunks, byte-identical added/removed lines, only context offsets moved — and it
+    # now applies through apply-overlay.sh's fail-closed `git apply --check`.
     path = "src/MeshCom-Firmware"
-    pin_commit = "896d413787058a11ded45a019ff2d3c32f95f08e"
-    pin_tag = "v4.35p.08.06"
+    pin_commit = "2cb6bb4d3c9f8403d2f4278b6a01ae329ed6dc83"
+    pin_tag = "v4.35p.08.29"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2105,6 +2109,24 @@ id = "meshcore"
 name = "MeshCore Pi (868)"
 summary = "MeshCore Python node, daemon-backed on 868 (auto-starts the daemon). Optional Node Manager GUI and CLI."
 main = "meshcore-pi"
+
+  [[stack.component]]
+  id = "meshcore-gps"
+  readiness = "gps-feed"
+  name = "GPS feed (MeshCore)"
+  kind = "service"
+  purpose = "Publishes the global position source as a serial device meshcore-pi can read."
+  tx_capable = false
+  optional = true
+  start_order = 0
+  # `{controller_python}` is controller-derived — the bridge is lhpc's OWN internal service
+  # and must run through this controller's interpreter, never whatever python3 is on PATH.
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore"]
+  note = "Starts automatically when the global position source is live (see `lhpc gps`) — not a manual choice."
+
+    [stack.component.process]
+    exec_name = "python3"
+    all_args = ["_gps-bridge", "meshcore"]
 
   [[stack.component]]
   id = "meshcore-pi"
@@ -2119,7 +2141,10 @@ main = "meshcore-pi"
   band = "868"
   purpose = "Async MeshCore node using the daemon on 868 (lorahaminterface)."
   tx_capable = true
-  depends_on = ["loraham-daemon"]
+  # It holds a live NMEA reader open for as long as it runs, so lifecycle planning and the
+  # resource claims must know that.
+  reads_position = true
+  depends_on = ["loraham-daemon", "meshcore-gps"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
@@ -2156,6 +2181,10 @@ main = "meshcore-pi"
     [stack.component.config_file]
     path = "{runtime}/config/files/meshcore-pi.toml"
     fmt = "toml-update"
+    # 0600: this file carries the node's PRIVATE KEY (see `privatekey` below). It used to be
+    # world-readable, and the key was only persistent if the operator hand-edited the upstream
+    # template — which any source refresh discarded, rotating the node's on-air identity.
+    mode = 0o600
     base = "examples/config-loraham868.toml"
       [[stack.component.config_file.param]]
       name = "preset"
@@ -2189,6 +2218,48 @@ main = "meshcore-pi"
       default = "127.0.0.1"
       group = "Network exposure"
       label = "Allow-list — who may connect (127.0.0.1 = this Pi only; LAN CIDR or 0.0.0.0/0 to expose; NO auth)"
+      # The node's IDENTITY. LHPC owns it (config/secrets/meshcore_identity.key, 0600) because
+      # meshcore-pi mints a fresh random key whenever its config has none — so every config
+      # regeneration silently changed the node's public key and its contacts stopped
+      # recognising it. Controller-managed: never operator-settable, never shown.
+      [[stack.component.config_file.param]]
+      name = "privatekey"
+      key = "privatekey"
+      section = "device.companion"
+      kind = "str"
+      hidden = true
+      secret_file = "meshcore_identity.key"
+      # CONTROLLER-OWNED static position, written ONLY for `fixed`. A live source feeds the
+      # node through meshcore-gps instead and writes no coordinates at all — a static pair
+      # alongside a live feed would be a stale fallback for the node to revert to the moment
+      # the feed aged out. Hidden, and `omit_if_empty` REMOVES the key when there is no
+      # static position, so a stale pair can never stay on the air.
+      # LIVE position: the PTY the GPS bridge publishes. Controller-owned and hidden — the
+      # path comes from the one global plan, never from a saved or hand-edited value.
+      # `omit_if_empty` means a `fixed` or `off` source writes no device at all, which is
+      # exactly how meshcore-pi is told to stay on its static coordinates.
+      [[stack.component.config_file.param]]
+      name = "gps_device"
+      key = "gps.device"
+      section = "device.companion"
+      kind = "str"
+      hidden = true
+      omit_if_empty = true
+      default = "{gps_device}"
+      [[stack.component.config_file.param]]
+      name = "lat"
+      key = "lat"
+      section = "device.companion"
+      kind = "float"
+      hidden = true
+      omit_if_empty = true
+      [[stack.component.config_file.param]]
+      name = "lon"
+      key = "lon"
+      section = "device.companion"
+      kind = "float"
+      hidden = true
+      omit_if_empty = true
       [[stack.component.config_file.param]]
       name = "txpower"
       key = "txpower"
@@ -2226,10 +2297,23 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-pi"
-    pin_commit = "3f14d3a82afecf62d2f6896b603d697761c61dc0"
-    pin_tag = "3f14d3a"
+    pin_commit = "640978ef38694490a83c8b79a03661dc6beee1ef"
+    pin_tag = "640978e"
     remote = "https://github.com/makrohard/meshcore-pi.git"
-    branch = "loraham-daemon-interface"
+    # NOT `loraham-daemon-interface`: that branch is the head of an OPEN upstream pull
+    # request (brianwiddas/meshcore-pi#4), so LHPC must not depend on a ref whose history
+    # belongs to someone else's review. `-current` carries the same commit and is ours.
+    branch = "loraham-daemon-interface-current"
+
+    # Position: a LIVE source (gpsd/auto->gpsd/nmea) is fed to the node continuously through
+    # the meshcore-gps bridge, so its position follows the box. `fixed` writes static
+    # coordinates and starts no bridge; `off` gives neither.
+    [[stack.component.param]]
+    name = "use_gps"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "on"
+    label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [stack.component.process]
     exec_name = "python"
@@ -2368,14 +2452,19 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-cli"
-    # AUDIT: pinned back from v1.5.0-68-g3921259, which introduced Python-3.12-only f-string
-    # syntax (PEP 701) while LHPC supports >=3.11 (Bookworm) — upstream HEAD still has it, so
-    # repinning forward cannot fix it. The features that pin added (rxlog/msgs handlers,
-    # aliases) are interactive-only; every flag THIS manifest renders is identical here.
-    # Take a newer pin only once upstream compiles on 3.11 again — the byte-compile build
-    # step above fails the build with file+line if a future pin regresses.
-    pin_commit = "56b246b4d45174817936c0fc910897b52bec66b4"
-    pin_tag = "v1.5.0-63-g56b246b"
+    # The previous pin (v1.5.0-63-g56b246b) had to move for TWO independent reasons:
+    #   1. Upstream rewrote `main`, leaving that commit in NO branch and NO tag. A plain
+    #      `git clone` + `git checkout <pin>` — exactly what install.py does — FAILED, so a
+    #      fresh install could not build the CLI at all. (A `--filter=blob:none` clone still
+    #      succeeded, lazily fetching the unreachable object; don't test reachability that way.)
+    #   2. It was held back because upstream had shipped Python-3.12-only f-string syntax
+    #      (PEP 701) while LHPC supports >=3.11 (Bookworm). That is fixed: v1.6.3 byte-compiles
+    #      under a real 3.11, as do v1.6.0-v1.6.2, and pyproject declares requires-python>=3.10.
+    # v1.6.3 is a tag reachable from main, and the four flags THIS manifest renders
+    # (-t -p -j -D) are all still present. The byte-compile build step above remains the guard
+    # that fails the BUILD with file+line if a future pin regresses on 3.11.
+    pin_commit = "568d158bc780c318c3d8706f71bfb980cb1ca588"
+    pin_tag = "v1.6.3"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -2420,8 +2509,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "b48b96e61676504e0a4e527b33b9a0b4495c6872"
-pin_tag = "b48b96e"
+pin_commit = "149e4151095adf098b8f53eab0c03b37169e8559"
+pin_tag = "1.5.1"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -2802,8 +2891,8 @@ KIVY_HOME = "{runtime}/state/sideband/kivy"
 path = "src/sideband"
 remote = "https://github.com/markqvist/Sideband.git"
 branch = "main"
-pin_commit = "2000d81a44bff57e3b3cb7d45915ba29bbde4e18"
-pin_tag = "2000d81"
+pin_commit = "1402bb6a492e87dc5224139a300cbb547487f7b6"
+pin_tag = "2.1.0"
 [stack.component.process]
 exec_name = "sideband"
 [[stack.component.pre_steps]]

@@ -1078,6 +1078,11 @@ def test_stack_build_includes_buildable_libraries_dep_first(tmp_path):
     from lhpc.core.paths import Paths
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
+    # The stack must be INSTALLED: `build()` refuses a component whose source is absent
+    # rather than handing Popen a nonexistent cwd, so ORDERING is only meaningful here.
+    for c in svc.stack("daemon").components:
+        if c.source:
+            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
     plan = svc.build("daemon", apply=False)
     assert plan.ok
     order = [d.split()[1].rstrip(":") for d in plan.details if d.strip().startswith("[build]")]
