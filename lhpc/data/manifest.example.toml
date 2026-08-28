@@ -2297,8 +2297,8 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-pi"
-    pin_commit = "419a383074203b56b1b8cf0e587c8d0e3461be55"
-    pin_tag = "419a383"
+    pin_commit = "640978ef38694490a83c8b79a03661dc6beee1ef"
+    pin_tag = "640978e"
     remote = "https://github.com/makrohard/meshcore-pi.git"
     # NOT `loraham-daemon-interface`: that branch is the head of an OPEN upstream pull
     # request (brianwiddas/meshcore-pi#4), so LHPC must not depend on a ref whose history
