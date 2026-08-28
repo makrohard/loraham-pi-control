@@ -250,9 +250,9 @@ class StatusProber:
         from pathlib import Path as _Path
 
         from . import runtime_fs
-        from .gps import CONSUMER_MESHCOM, CONSUMER_MESHTASTIC, bridge_state_dir
-        consumer = (CONSUMER_MESHTASTIC if comp.id == "meshtastic-gps"
-                    else CONSUMER_MESHCOM if comp.id == "meshcom-gps" else "")
+        from .gps import bridge_state_dir, consumer_for_component
+        # DERIVED from the ONE feed mapping — see gps.FEED_COMPONENTS.
+        consumer = consumer_for_component(comp.id)
         if not consumer:
             return True, "not a GPS feed"
         marker = _Path(bridge_state_dir(self._paths.runtime_root, consumer)) / "readiness.json"
@@ -418,11 +418,25 @@ def stack_dependencies(stacks) -> dict[str, list[str]]:
 
 
 def rollup_states(snapshot: Snapshot) -> dict[str, str]:
-    """Worst (highest-severity) run state per stack, as a value string."""
+    """Worst (highest-severity) run state per stack, as a value string.
+
+    An OPTIONAL component that was never installed does not count. `NOT_INSTALLED` outranks
+    `STOPPED`, so one never-cloned optional helper (MeshCore's Tk Node Manager) rolled an
+    otherwise fine stack's badge to "not-installed" — telling the operator their installed,
+    merely stopped stack was missing. The COMPONENT still reports `not-installed`
+    truthfully; only this summary looks past it.
+
+    Deliberately narrow: an optional component that IS installed keeps its full weight, so a
+    `FAILED` or `DEGRADED` optional is never hidden, and a missing MANDATORY component still
+    rolls the stack up to not-installed.
+    """
     out: dict[str, str] = {}
     for ss in snapshot.stacks:
+        optional_ids = {c.id for c in ss.stack.components if c.optional}
         worst = RunState.NOT_APPLICABLE
-        for st in ss.components.values():
+        for cid, st in ss.components.items():
+            if st.run_state is RunState.NOT_INSTALLED and cid in optional_ids:
+                continue
             if _SEVERITY[st.run_state] > _SEVERITY[worst]:
                 worst = st.run_state
         out[ss.stack.id] = worst.value

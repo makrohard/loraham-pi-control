@@ -244,13 +244,21 @@ def test_gui_unavailable_overlay_marks_component_not_applicable(tmp_path, monkey
 def test_gui_unavailable_overlay_leaves_gui_capable_box_alone(tmp_path, monkeypatch):
     # With the GUI dependency PRESENT the predicate returns nothing and not-installed stays
     # not-installed — the overlay never hides a genuinely missing install.
+    #
+    # Two different jobs, deliberately: the OVERLAY answers "can this component work on this
+    # box at all", so on a GUI-capable box an absent Node Manager is honestly not-installed.
+    # The ROLLUP separately declines to let a never-installed OPTIONAL component speak for
+    # the whole stack (see test_meshcore.py) — which is why the badge below reads "stopped"
+    # while the component still reads "not-installed".
     from lhpc.core.services import ControllerService
+    from lhpc.core.status import rollup_states
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "gui_unavailable_components",
                         lambda self, stack: ())
     snap, ss = _meshcore_snapshot(svc)
     svc._overlay_gui_unavailable(snap)
     assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_INSTALLED
+    assert rollup_states(snap)["meshcore"] == "stopped"
 
 
 # ---- licensed TX overlay -----------------------------------------------------------------

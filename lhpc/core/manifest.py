@@ -62,6 +62,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             group=p.get("group", ""),
             omit_if_empty=p.get("omit_if_empty", False),
             secret_ref=str(p.get("secret_ref", "")),
+            secret_file=str(p.get("secret_file", "")),
         )
         for p in raw.get("param", [])
     )
@@ -97,19 +98,33 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
         raise ManifestError(f"config_file.mode {mode:#o} not permitted "
                             f"(allowed: {', '.join(oct(m) for m in sorted(_CONFIG_MODES))})")
     # A secret must never be able to compete with an operator-settable value, and a file
-    # carrying one must not be world-readable.
+    # carrying one must not be world-readable. Both secret sources share these invariants;
+    # they differ only in WHERE the value comes from (operator secrets.toml vs a
+    # controller-managed file under config/secrets/).
     for prm in params:
-        if not prm.secret_ref:
+        if prm.secret_ref and prm.secret_file:
+            raise ManifestError(f"param {prm.name!r} declares both secret_ref and secret_file "
+                                f"— a secret has exactly one source")
+        if prm.secret_ref:
+            if prm.secret_ref.count(".") != 1 or not all(prm.secret_ref.split(".")):
+                raise ManifestError(f"secret_ref {prm.secret_ref!r} must be '<table>.<key>'")
+        elif prm.secret_file:
+            # A BARE filename: config/secrets/<name>. Anything path-shaped could escape the
+            # managed secrets directory, so it is rejected at LOAD, not at write time.
+            if "/" in prm.secret_file or prm.secret_file in (".", "..") \
+                    or prm.secret_file.startswith("."):
+                raise ManifestError(f"secret_file {prm.secret_file!r} must be a bare filename "
+                                    f"under config/secrets/")
+        else:
             continue
-        if prm.secret_ref.count(".") != 1 or not all(prm.secret_ref.split(".")):
-            raise ManifestError(f"secret_ref {prm.secret_ref!r} must be '<table>.<key>'")
+        which = "secret_ref" if prm.secret_ref else "secret_file"
         if not prm.hidden:
-            raise ManifestError(f"param {prm.name!r} has secret_ref and must be hidden")
+            raise ManifestError(f"param {prm.name!r} has {which} and must be hidden")
         if prm.default or prm.band_defaults:
-            raise ManifestError(f"param {prm.name!r} has secret_ref and must not declare "
+            raise ManifestError(f"param {prm.name!r} has {which} and must not declare "
                                 f"a default or band_defaults — the secret is the only source")
         if mode != 0o600:
-            raise ManifestError(f"config_file carrying secret_ref param {prm.name!r} "
+            raise ManifestError(f"config_file carrying {which} param {prm.name!r} "
                                 f"must declare mode 0600, got {mode:#o}")
     return FileConfig(path=path, fmt=fmt, mode=mode,
                       base=base, apply_cmd=raw.get("apply_cmd", ""),

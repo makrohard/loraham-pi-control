@@ -2107,6 +2107,24 @@ summary = "MeshCore Python node, daemon-backed on 868 (auto-starts the daemon). 
 main = "meshcore-pi"
 
   [[stack.component]]
+  id = "meshcore-gps"
+  readiness = "gps-feed"
+  name = "GPS feed (MeshCore)"
+  kind = "service"
+  purpose = "Publishes the global position source as a serial device meshcore-pi can read."
+  tx_capable = false
+  optional = true
+  start_order = 0
+  # `{controller_python}` is controller-derived — the bridge is lhpc's OWN internal service
+  # and must run through this controller's interpreter, never whatever python3 is on PATH.
+  run_argv = ["{controller_python}", "-m", "lhpc.adapters.cli.main", "_gps-bridge", "meshcore"]
+  note = "Starts automatically when the global position source is live (see `lhpc gps`) — not a manual choice."
+
+    [stack.component.process]
+    exec_name = "python3"
+    all_args = ["_gps-bridge", "meshcore"]
+
+  [[stack.component]]
   id = "meshcore-pi"
   readiness = "endpoint"
   # A Python node that imports its stack (scapy/crypto) before opening TCP 5000 can
@@ -2119,7 +2137,10 @@ main = "meshcore-pi"
   band = "868"
   purpose = "Async MeshCore node using the daemon on 868 (lorahaminterface)."
   tx_capable = true
-  depends_on = ["loraham-daemon"]
+  # It holds a live NMEA reader open for as long as it runs, so lifecycle planning and the
+  # resource claims must know that.
+  reads_position = true
+  depends_on = ["loraham-daemon", "meshcore-gps"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
@@ -2156,6 +2177,10 @@ main = "meshcore-pi"
     [stack.component.config_file]
     path = "{runtime}/config/files/meshcore-pi.toml"
     fmt = "toml-update"
+    # 0600: this file carries the node's PRIVATE KEY (see `privatekey` below). It used to be
+    # world-readable, and the key was only persistent if the operator hand-edited the upstream
+    # template — which any source refresh discarded, rotating the node's on-air identity.
+    mode = 0o600
     base = "examples/config-loraham868.toml"
       [[stack.component.config_file.param]]
       name = "preset"
@@ -2189,6 +2214,48 @@ main = "meshcore-pi"
       default = "127.0.0.1"
       group = "Network exposure"
       label = "Allow-list — who may connect (127.0.0.1 = this Pi only; LAN CIDR or 0.0.0.0/0 to expose; NO auth)"
+      # The node's IDENTITY. LHPC owns it (config/secrets/meshcore_identity.key, 0600) because
+      # meshcore-pi mints a fresh random key whenever its config has none — so every config
+      # regeneration silently changed the node's public key and its contacts stopped
+      # recognising it. Controller-managed: never operator-settable, never shown.
+      [[stack.component.config_file.param]]
+      name = "privatekey"
+      key = "privatekey"
+      section = "device.companion"
+      kind = "str"
+      hidden = true
+      secret_file = "meshcore_identity.key"
+      # CONTROLLER-OWNED static position, written ONLY for `fixed`. A live source feeds the
+      # node through meshcore-gps instead and writes no coordinates at all — a static pair
+      # alongside a live feed would be a stale fallback for the node to revert to the moment
+      # the feed aged out. Hidden, and `omit_if_empty` REMOVES the key when there is no
+      # static position, so a stale pair can never stay on the air.
+      # LIVE position: the PTY the GPS bridge publishes. Controller-owned and hidden — the
+      # path comes from the one global plan, never from a saved or hand-edited value.
+      # `omit_if_empty` means a `fixed` or `off` source writes no device at all, which is
+      # exactly how meshcore-pi is told to stay on its static coordinates.
+      [[stack.component.config_file.param]]
+      name = "gps_device"
+      key = "gps.device"
+      section = "device.companion"
+      kind = "str"
+      hidden = true
+      omit_if_empty = true
+      default = "{gps_device}"
+      [[stack.component.config_file.param]]
+      name = "lat"
+      key = "lat"
+      section = "device.companion"
+      kind = "float"
+      hidden = true
+      omit_if_empty = true
+      [[stack.component.config_file.param]]
+      name = "lon"
+      key = "lon"
+      section = "device.companion"
+      kind = "float"
+      hidden = true
+      omit_if_empty = true
       [[stack.component.config_file.param]]
       name = "txpower"
       key = "txpower"
@@ -2226,10 +2293,20 @@ main = "meshcore-pi"
 
     [stack.component.source]
     path = "src/meshcore-pi"
-    pin_commit = "3f14d3a82afecf62d2f6896b603d697761c61dc0"
-    pin_tag = "3f14d3a"
+    pin_commit = "419a383074203b56b1b8cf0e587c8d0e3461be55"
+    pin_tag = "419a383"
     remote = "https://github.com/makrohard/meshcore-pi.git"
     branch = "loraham-daemon-interface"
+
+    # Position: a LIVE source (gpsd/auto->gpsd/nmea) is fed to the node continuously through
+    # the meshcore-gps bridge, so its position follows the box. `fixed` writes static
+    # coordinates and starts no bridge; `off` gives neither.
+    [[stack.component.param]]
+    name = "use_gps"
+    kind = "enum"
+    choices = ["on", "off"]
+    default = "on"
+    label = "Use the global position source (Position (GPS) card on the Stacks page)"
 
     [stack.component.process]
     exec_name = "python"

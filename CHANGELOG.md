@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+- **MeshCore keeps its identity:** the node's private key is now LHPC-owned (`config/secrets/meshcore_identity.key`, 0600) instead of being re-minted on every config regeneration; an existing key is adopted, never rotated
+- The generated `meshcore-pi.toml` is 0600 — it carries that key and was world-readable
+- MeshCore position from the global GPS source (`use_gps`, default on): a live source now feeds it continuously through a `meshcore-gps` bridge, so the node's position follows the box instead of freezing at start; `fixed` still writes static coordinates and starts no bridge
+- MeshCore daemon defaults corrected to `POWER=14` / `PREAMBLE=16` — what the pinned presets actually apply
+- An absent optional component no longer reports the whole stack `not-installed`, fails `lhpc build <stack>`, or makes `source-check` report an error
+- `lhpc build <component>` on an uninstalled component says so, instead of failing with rc 127 or claiming nothing to do
+- meshcore-pi repinned to `419a383`: the companion port no longer drops an idle client every ~90 s (a CLI waiting for messages stayed connected to nothing), current MeshCore v1 routing/path encoding, and a malformed packet can no longer take the node down
+
 ## 0.2.1
 
 - **"Back to AP mode" no longer refused:** re-activating the box's own shared AP needs the NetworkManager `wifi.share.open`/`.protected` polkit actions the network rule omitted, so it (and a failed join's AP fallback) failed with "Not authorized to share connections via wifi" — stranding the box when the AP was its only way home. The rule now grants them and the auth preflight checks them; re-run the copybox or `bootstrap-deps.sh` on existing boxes

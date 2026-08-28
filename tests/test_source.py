@@ -1826,6 +1826,11 @@ def test_build_blocked_by_held_source_lock(tmp_path):
     from lhpc.core.services import ControllerService
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    # The stack must be INSTALLED, or `build()` refuses as not-installed before it ever
+    # contends for the lock — and the lock contention is what this test is about.
+    for c in svc.stack("daemon").components:
+        if c.source:
+            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
     svc._SELF_LOCK_WAIT_S = 0.2          # fast contention (default 5.0s just delays the refusal)
     with reslock.operation_lock(svc._paths, reslock.source_lock_key("src/loraham-daemon"),
                                 "update", "x"):
@@ -3077,7 +3082,7 @@ def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
         ConfigWrite("loraham-voice", "/x/voice.conf", "failed", "disk full")])
     set_call(svc)
     res = svc.start("voice", apply=True)
@@ -3104,7 +3109,7 @@ def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
         ConfigWrite("loraham-voice", "/ext/voice.conf", "linked-readonly", "read-only")])
     set_call(svc)
     res = svc.start("voice", apply=True)
@@ -3133,7 +3138,7 @@ def test_interactive_start_blocks_when_config_generation_fails(tmp_path, monkeyp
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
     monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
         self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None: [
+    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
         ConfigWrite("loraham-chat", "/x/lorachat.conf", "failed", "disk full")])
     marks = {"n": 0}
     monkeypatch.setattr(type(svc), "mark_interactive", lambda self, s, b="": marks.__setitem__("n", marks["n"] + 1))

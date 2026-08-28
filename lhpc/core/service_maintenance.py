@@ -133,18 +133,48 @@ class MaintenanceOpsMixin:
         if not comps:
             return ActionResult(True, f"Nothing to check for '{target or 'all'}' — "
                                       "no component declares a source remote.")
+        # An OPTIONAL component that was never installed has nothing to compare, and that is
+        # not a fault of the stack: it must not make `lhpc source-check meshcore` report ERR.
+        # It is still probed, still listed and still recorded — only excused from the
+        # pass/fail verdict. A component asked for BY NAME is never excused (the operator
+        # wants that component's real answer), and an optional source that IS installed but
+        # unreadable stays a genuine error.
+        named_component = bool(target) and self.stack(target) is None
+        excused = set()
+        if not named_component:
+            # A HARD BUILD DEPENDENCY is never excused, even though it is marked optional:
+            # RadioLib is `optional` yet the daemon cannot build without it, so an absent
+            # RadioLib is a real, reportable gap in an installed daemon — not an unused
+            # extra. `update()` draws the same line for the same reason.
+            required = {dep for c in comps if not c.optional for dep in c.build_requires}
+            for c in comps:
+                if c.optional and c.id not in required and c.source and \
+                        not self._paths.resolve_source(c.source.path).is_dir():
+                    excused.add(c.id)
         results, details = {}, []
         counts = {stackupdates.BEHIND: 0, stackupdates.UP_TO_DATE: 0,
                   stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
+        excused_counts = {stackupdates.UNKNOWN: 0, stackupdates.ERROR: 0}
         for c in comps:
             entry = self._update_probe(c)
             results[c.id] = entry
             counts[entry["status"]] = counts.get(entry["status"], 0) + 1
-            details.append(f"  {c.id}: {entry['status'].replace('_', ' ')}")
+            note = entry["status"].replace("_", " ")
+            if c.id in excused:
+                if entry["status"] in excused_counts:
+                    excused_counts[entry["status"]] += 1
+                note += " (optional, not installed — not counted)"
+            details.append(f"  {c.id}: {note}")
         stackupdates.record(self._paths, results)
         n = len(comps)
-        behind, errs = counts[stackupdates.BEHIND], counts[stackupdates.ERROR]
-        unknown, uptodate = counts[stackupdates.UNKNOWN], counts[stackupdates.UP_TO_DATE]
+        behind, uptodate = counts[stackupdates.BEHIND], counts[stackupdates.UP_TO_DATE]
+        # What is left once the excused optionals are set aside. The SUMMARY uses these too,
+        # not the raw counts — an "ok" result whose text still says something could not be
+        # checked would just move the confusion instead of fixing it.
+        errs = counts[stackupdates.ERROR] - excused_counts[stackupdates.ERROR]
+        unknown = counts[stackupdates.UNKNOWN] - excused_counts[stackupdates.UNKNOWN]
+        excused_unresolved = sum(excused_counts.values())
+        unresolved = errs + unknown
         who = target or "all"
         # UNKNOWN is "nothing to compare" (no remote / not installed / invalid remote) — it is NOT
         # a passing check, and must never be summarized as, or flashed green like, "up to date".
@@ -161,11 +191,14 @@ class MaintenanceOpsMixin:
             summary = f"{uptodate} up to date, {unknown} unknown/not comparable for '{who}'."
         elif uptodate:
             summary = f"All checked sources are up to date for '{who}'."
+            if excused_unresolved:
+                summary += f" {excused_unresolved} optional not installed."
         else:
             summary = (f"No installed/comparable sources could be checked for '{who}' — "
                        f"{unknown} unknown/not comparable.")
-        return ActionResult(errs == 0 and unknown == 0, summary, details=details,
-                            data={"counts": counts, "checked": n})
+        return ActionResult(unresolved == 0, summary, details=details,
+                            data={"counts": counts, "checked": n,
+                                  "excused": sorted(excused)})
 
     def source_check_view(self) -> dict:
         """Cached, network-free freshness view for GET pages. `{checked_at, components}`."""
@@ -1563,6 +1596,13 @@ class MaintenanceOpsMixin:
                                         "incompatible source resolutions for a shared "
                                         "checkout.",
                                         details=[f"  {c}" for c in plan_conflicts])
+                # An update REPLACES the source tree, and the MeshCore identity may still
+                # live only in the template inside it. Copy it out now — after every
+                # refusal check, with all locks held, before the first mutation.
+                _id_err = self.meshcore_identity_guard([c for _s, c in items])
+                if _id_err:
+                    return ActionResult(False, f"Refusing to update '{target or 'all'}': "
+                                               f"{_id_err}")
                 inst = self._installer()
                 out, ok = [], True
                 mutated_paths = []
@@ -2039,6 +2079,12 @@ class MaintenanceOpsMixin:
                 # Recompute the destructive set from POST-LOCK reality.
                 to_remove, kept, orphans, consumers = self._classify_uninstall_paths(
                     items, target_ids)
+                # Preserve the MeshCore identity before its source tree goes: a reinstall
+                # must bring the SAME node back, not a stranger with a new public key.
+                _id_err = self.meshcore_identity_guard([c for _s, c in items])
+                if _id_err:
+                    return ActionResult(False, f"Refusing to uninstall '{target or 'all'}': "
+                                               f"{_id_err}")
                 removed_paths = []
                 for path, c in to_remove.items():
                     removed, lines = self._remove_source_leaf(path, c, consumers, inst,
@@ -2218,6 +2264,12 @@ class MaintenanceOpsMixin:
                     _br = self.binary_retire(sid, force=True, locked=True)
                     out.append(f"  [binary] {_br.summary}")
                     ok = _br.ok and ok
+                # Preserve the MeshCore identity before a purge removes the source AND the
+                # generated config. `clean` deliberately does NOT touch config/secrets, so
+                # the adopted key survives here and a reinstall restores the same node.
+                _id_err = self.meshcore_identity_guard(list(stack.components))
+                if _id_err:
+                    return ActionResult(False, f"Refusing to clean '{sid}': {_id_err}")
                 # Recompute the destructive sets from POST-LOCK reality (the dry-run
                 # preview above may predate the locks).
                 consumers = self._source_consumers()

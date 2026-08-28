@@ -107,8 +107,11 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
         "868": {"FREQ": "869.525", "SF": "11", "BW": "250.0", "CR": "6", "POWER": "10"},
     },
     "meshcore": {
+        # PREAMBLE 16 / POWER 14 are what every preset in the pinned meshcore-pi actually
+        # applies on connect (eu_uk_long/medium/narrow all do). Declaring 8/20 made the daemon
+        # start on a preamble and a power the app then overwrote — a live-found mismatch.
         "868": {"TXMODE": "MANAGED", "FREQ": "869.618", "SF": "8", "BW": "62.5", "CR": "8",
-                "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "20"},
+                "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "16", "SYNC": "0x12", "POWER": "14"},
     },
     # The daemon has no app overwriting it; its base config = the LoRaHAM amateur baseline
     # (the daemon boots with only FREQ set, so these give it a sane, editable starting radio

@@ -1068,31 +1068,74 @@ def update_ini(text: str, params, values, subst) -> str:
 
 
 def update_toml(text: str, params, values, subst) -> str:
-    """Update declared keys (by section) in an existing TOML file, preserving the
-    rest. A blank value leaves the base file as-is (e.g. keep a preset default);
-    a set value updates the key — uncommenting a `# key = …` line if needed."""
-    want = {}
+    """Update declared keys (by section) in an existing TOML file, preserving the rest.
+
+    A set value updates the key — uncommenting a `# key = …` line if needed — and is
+    APPENDED to its section when the template has no such line at all (a declared key that
+    silently vanished used to look configured while doing nothing).
+
+    A blank value leaves the base as-is, EXCEPT for an `omit_if_empty` param, which REMOVES
+    an active key: those are controller-owned (the MeshCore position), and leaving the
+    previous line in place would keep publishing a stale value after the source of it was
+    switched off. A COMMENTED example line is never removed — it documents the key.
+
+    A declared section the template does not have is an error, as in `update_ini`: silently
+    dropping it would ship a config missing settings the operator set. The result is parsed
+    before it is returned, so a malformed edit fails here rather than at app start.
+    """
+    want, drop = {}, set()
     for p in params:
         raw = subst(str(values.get(p.name, p.default)))
-        if p.kind != "flag" and raw.strip() == "":
+        blank = p.kind != "flag" and raw.strip() == ""
+        if blank and getattr(p, "omit_if_empty", False):
+            drop.add((p.section, p.key))
+            continue
+        if blank:
             continue                       # blank -> don't touch the base
         want[(p.section, p.key)] = _toml_value(p.kind, raw)
-    lines = text.splitlines()
+
+    out: list = []
     section = ""
     done = set()                           # update the FIRST occurrence of each key only
-    for i, line in enumerate(lines):
+
+    def flush(sec: str) -> None:
+        """Append declared keys this section never had (order follows `want`)."""
+        for (s, key), val in want.items():
+            if s == sec and (s, key) not in done:
+                out.append(f"{key} = {val}")
+                done.add((s, key))
+
+    for line in text.splitlines():
         st = line.strip()
         if st.startswith("[") and st.endswith("]"):
+            flush(section)                 # close the previous section first
             section = st[1:-1]
+            out.append(line)
             continue
-        candidate = st[1:].strip() if st.startswith("#") else st
+        commented = st.startswith("#")
+        candidate = st[1:].strip() if commented else st
         if "=" in candidate:
             key = candidate.split("=", 1)[0].strip()
-            if (section, key) in want and (section, key) not in done:
+            slot = (section, key)
+            if slot in want and slot not in done:
                 indent = line[: len(line) - len(line.lstrip())]
-                lines[i] = f"{indent}{key} = {want[(section, key)]}"
-                done.add((section, key))
-    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+                out.append(f"{indent}{key} = {want[slot]}")
+                done.add(slot)
+                continue
+            if slot in drop and not commented:
+                continue                   # drop the ACTIVE line; keep commented examples
+        out.append(line)
+    flush(section)
+
+    missing = {sec for (sec, _k) in want} - {sec for (sec, _k) in done}
+    if missing:
+        raise ValueError(f"config base has no section {min(missing)!r}")
+    rendered = "\n".join(out) + "\n"
+    try:
+        tomllib.loads(rendered)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"generated TOML is invalid: {exc}") from exc
+    return rendered
 
 
 def _yaml_value(kind: str, value: str) -> str:

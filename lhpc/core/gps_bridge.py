@@ -34,6 +34,7 @@ import time
 
 from .gps import (
     CONSUMER_MESHCOM,
+    CONSUMER_MESHCORE,
     CONSUMER_MESHTASTIC,
     OUT_PTY,
     bridge_endpoint_path,
@@ -704,7 +705,7 @@ def run(consumer: str, paths, stop=None) -> int:
     from .config import load_config
     from .gps import plan_from_config
 
-    if consumer not in (CONSUMER_MESHTASTIC, CONSUMER_MESHCOM):
+    if consumer not in (CONSUMER_MESHTASTIC, CONSUMER_MESHCOM, CONSUMER_MESHCORE):
         _log(f"unknown consumer {consumer!r}")
         return EXIT_CONFIG
 

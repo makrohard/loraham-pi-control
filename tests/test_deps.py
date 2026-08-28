@@ -18,6 +18,17 @@ def _svc(tmp_path, cmdlines=None):
                              paths=Paths(runtime_root=tmp_path))
 
 
+def _seed_sources(svc, tmp_path, stack_id):
+    """Create the source directories for a stack, so a build test exercises the GUI gate
+    rather than the missing-source one. `build()` refuses a component whose source is absent
+    (it would otherwise hand Popen a nonexistent cwd and fail with a bare rc 127), so a test
+    about GUI skipping has to start from an INSTALLED stack — which is the only state in
+    which building it was ever meaningful."""
+    for c in svc.stack(stack_id).components:
+        if c.source:
+            (tmp_path / c.source.path).mkdir(parents=True, exist_ok=True)
+
+
 def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
@@ -589,6 +600,7 @@ def _tree(root):
 
 def test_direct_build_voice_refuses_before_running_a_step(tmp_path):
     svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "voice")
     before = _tree(tmp_path)
     r = svc.build("voice", apply=True)
     assert r.ok is False
@@ -601,6 +613,7 @@ def test_direct_build_voice_refuses_before_running_a_step(tmp_path):
 
 def test_direct_build_meshcore_skips_nodegui_and_continues(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "meshcore")
     _no_tkinter(monkeypatch)
     r = svc.build("meshcore", apply=False)
     assert r.ok is True
@@ -614,10 +627,11 @@ def test_skipped_is_a_valid_marker_status_and_not_a_failure(tmp_path):
 
 
 def test_direct_build_of_a_skipped_component_is_typed_no_work_not_success(tmp_path, monkeypatch):
-    """`lhpc build meshcore-nodegui` on a headless box: every requested component is skipped, so the
-    result must be an explicit no-work/skipped outcome — never "succeeded"/"built" — and it must not
-    execute a build step, mutate a marker or take a source lock."""
+    """`lhpc build meshcore-nodegui` on a headless box where it IS installed: every requested
+    component is skipped, so the result must be an explicit no-work/skipped outcome — never
+    "succeeded"/"built" — and it must not execute a build step, mutate a marker or take a lock."""
     svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "meshcore")
     _no_tkinter(monkeypatch)
     before = _tree(tmp_path)
     r = svc.build("meshcore-nodegui", apply=True)
@@ -627,8 +641,23 @@ def test_direct_build_of_a_skipped_component_is_typed_no_work_not_success(tmp_pa
     assert _tree(tmp_path) == before                      # zero mutation
 
 
+def test_direct_build_of_an_uninstalled_component_says_so(tmp_path, monkeypatch):
+    """The same command when the component was never cloned. "Nothing to build" would hide the
+    real reason behind the headless skip — the operator asked for THIS component by name, and
+    the answer is that it is not installed. Checked BEFORE the GUI gate for exactly that."""
+    svc = _svc(tmp_path)
+    _no_tkinter(monkeypatch)
+    before = _tree(tmp_path)
+    r = svc.build("meshcore-nodegui", apply=True)
+    assert r.ok is False
+    assert "not installed" in r.summary
+    assert r.next_commands == ["lhpc install meshcore"]
+    assert _tree(tmp_path) == before                      # zero mutation
+
+
 def test_dry_run_build_of_a_skipped_component_reports_no_work(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "meshcore")
     _no_tkinter(monkeypatch)
     r = svc.build("meshcore-nodegui", apply=False)
     assert "Nothing to build" in r.summary
@@ -638,6 +667,7 @@ def test_dry_run_build_of_a_skipped_component_reports_no_work(tmp_path, monkeypa
 def test_partial_build_reports_succeeded_with_gui_skips(tmp_path, monkeypatch):
     """Headless work remains -> it is built AND the skip is preserved in the result."""
     svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "meshcore")
     _no_tkinter(monkeypatch)
     calls = []
     life = svc._lifecycle()
