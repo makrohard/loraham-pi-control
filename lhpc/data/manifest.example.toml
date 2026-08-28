@@ -941,7 +941,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # auto-install run all fetch it — and adds NO system dependency (curl is already a bootstrap
   # package, dpkg-deb ships with dpkg), so bootstrap-deps.sh stays untouched.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.12"], announce = "[fetch] graywolf 0.14.12 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
+    { argv = ["bash", "{asset}/scripts/graywolf-fetch.sh", "{runtime}/build/tools/graywolf", "0.14.13"], announce = "[fetch] graywolf 0.14.13 upstream .deb -> build/tools/graywolf (sha256-verified, unpacked rootless)" },
   ]
   bin = "build/tools/graywolf/usr/bin/graywolf"
   # The marker FILENAME carries the version on purpose: with only `bin`, `is_built` is satisfied
@@ -951,7 +951,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
   # build step above. It is deliberately NOT the fetch script's own `.lhpc-graywolf-version`
   # stamp: LHPC deletes the marker before every build, which would defeat the script's
   # already-at-this-version short-circuit (the one thing that lets a rebuild work offline).
-  build_marker = "build/tools/graywolf/.lhpc-built-0.14.12"
+  build_marker = "build/tools/graywolf/.lhpc-built-0.14.13"
   # The tree the build OWNS. There is no `source` for `clean` to remove here, so name the
   # artifact directory explicitly or "Clean all" would leave the graywolf binaries behind.
   build_root = "build/tools/graywolf"

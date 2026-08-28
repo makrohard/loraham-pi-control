@@ -9,6 +9,7 @@
 - An absent optional component no longer reports the whole stack `not-installed`, fails `lhpc build <stack>`, or makes `source-check` report an error
 - `lhpc build <component>` on an uninstalled component says so, instead of failing with rc 127 or claiming nothing to do
 - meshcore-pi repinned to `419a383`: the companion port no longer drops an idle client every ~90 s (a CLI waiting for messages stayed connected to nothing), current MeshCore v1 routing/path encoding, and a malformed packet can no longer take the node down
+- graywolf bumped to 0.14.13
 - Validated on hardware: identity preserved across restart, live GPS into MeshCore, stale position cleared and recovered without a restart, Companion session stable well past the old ~90 s drop, and a real advert transmitted on 868. Peer-to-peer RF (contact learning, direct path, ACK routing) is **not** field-validated — no second MeshCore node was available; it is covered by tests against the current upstream wire format only
 
 ## 0.2.1
