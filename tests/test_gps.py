@@ -2571,14 +2571,18 @@ def test_fixed_source_says_that_graywolf_gets_no_position(tmp_path):
 
 
 def test_meshcore_cli_build_byte_compiles_the_pinned_source():
-    """AUDIT-FOUND: upstream meshcore-cli shipped Python-3.12-only f-string syntax while
-    LHPC supports >=3.11 (Bookworm). The pin now sits at the last 3.11-clean commit, and the
-    build byte-compiles the source so a future pin that regresses fails the BUILD with file
-    and line instead of a SyntaxError at first run. This test pins both halves of that
-    contract: the guard step exists, and the pinned commit is the 3.11-clean one."""
+    """AUDIT-FOUND: upstream meshcore-cli once shipped Python-3.12-only f-string syntax
+    (PEP 701) while LHPC supports >=3.11 (Bookworm), so the pin was held back to the last
+    3.11-clean commit. Upstream has since fixed that — v1.6.3 byte-compiles under a real
+    3.11 — and the old pin had to move anyway: a `main` rewrite left it in no branch and no
+    tag, so a fresh clone+checkout could not reach it at all.
+
+    The build still byte-compiles the source so a future pin that regresses on 3.11 fails
+    the BUILD with file and line instead of a SyntaxError at first run. This test pins both
+    halves of that contract: the guard step exists, and the pin is the vetted one."""
     from lhpc.core.manifest import load_manifest
     mc = next(c for s in load_manifest() for c in s.components if c.id == "meshcore-cli")
-    assert mc.source.pin_commit == "56b246b4d45174817936c0fc910897b52bec66b4"
+    assert mc.source.pin_commit == "568d158bc780c318c3d8706f71bfb980cb1ca588"   # v1.6.3
     compile_steps = [st for st in mc.build_steps
                      if "compileall" in " ".join(st.get("argv", []))]
     assert len(compile_steps) == 1

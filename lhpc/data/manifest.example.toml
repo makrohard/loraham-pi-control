@@ -1216,7 +1216,7 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6de6c3d6dc8df1ff188f447b2446a799b4acbdbd", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6d41e279f1f51bd59f687b9d441c1bf47b1594fc", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]
@@ -2086,14 +2086,25 @@ main = "meshcom-qemu"
     [stack.component.source]
     # The QEMU build CLONES this repo BY REF (see meshcom-qemu's `setup.sh --ref` step), so the
     # pin records the commit that ref was proven at rather than driving the checkout. The
-    # external-radio feature merged upstream (icssw-org PR #1072), so this now tracks the
-    # CANONICAL repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip; the QEMU
-    # overlay patch applies cleanly — 08.03..08.06 touches configuration_global.h, lora_setchip
-    # and mheard_functions, none of which the overlay patches).
+    # external-radio feature merged upstream (icssw-org PR #1072), so this tracks the CANONICAL
+    # repo at release v4.35p.08.06 (feature verbatim vs the tested fork tip).
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD build surface unchanged.
+    #
+    # NOT BUMPED, and KNOWN BROKEN UPSTREAM — deliberately left at the proven commit:
+    #   * icssw-org DELETED the `v4.35p.08.06` tag. `setup.sh --ref v4.35p.08.06` therefore
+    #     fails ("remote branch not found") on a fresh meshcom-qemu build. The COMMIT below is
+    #     still reachable on `dev`, but setup.sh clones with `--depth 1 --branch`, which does
+    #     not accept a bare SHA, so the pin alone cannot rescue the step.
+    #   * The next surviving release, v4.35p.08.29, does NOT work either: the QEMU overlay
+    #     patch fails `git apply --check` on src/esp32/esp32_main.cpp:2618 (verified), and
+    #     apply-overlay.sh fails closed rather than applying partially.
+    # Fixing this needs the overlay patch REBASED in makrohard/meshcom-qemu-raspi and validated
+    # with a full ESP32/QEMU build — real work, not a pin bump. Until then this component's
+    # firmware build is broken regardless of what is pinned here; the pin stays at the proven
+    # commit so the manifest keeps recording what was actually validated.
     path = "src/MeshCom-Firmware"
-    pin_commit = "2cb6bb4d3c9f8403d2f4278b6a01ae329ed6dc83"
-    pin_tag = "v4.35p.08.29"
+    pin_commit = "896d413787058a11ded45a019ff2d3c32f95f08e"
+    pin_tag = "v4.35p.08.06"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
