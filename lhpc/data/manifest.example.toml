@@ -2371,10 +2371,10 @@ main = "meshcore-node"
   # runs npm at runtime. Only the Python backend is built on the target.
   build_steps = [
     { argv = ["python3", "-m", "venv", "backend/.venv"] },
-    { argv = ["backend/.venv/bin/pip", "install", "./backend"], announce = "[install] meshcore-webui backend (FastAPI/uvicorn/sqlalchemy/meshcore) into {source}/backend/.venv — pip is quiet off-TTY; progress: watch {source}/backend/.venv/lib grow" },
-    # Pin meshcore_py to the exact version proven for this integration, rather than letting
-    # the backend's floating `meshcore>=2.3.7` pull an uncontrolled release at build time.
-    { argv = ["backend/.venv/bin/pip", "install", "meshcore==2.3.9.1"], announce = "[pin] meshcore_py==2.3.9.1 (reproducible Companion client)" },
+    # Constrain EVERY dependency to the exact set proven in the integration run (the shipped
+    # constraints file), so a commit-pinned source can't still pull a floating/uncontrolled
+    # FastAPI/uvicorn/cryptography/meshcore release at build time.
+    { argv = ["backend/.venv/bin/pip", "install", "-c", "{asset}/meshcore-webui-constraints.txt", "./backend"], announce = "[install] meshcore-webui backend (FastAPI/uvicorn/sqlalchemy/meshcore, fully version-pinned) into {source}/backend/.venv — pip is quiet off-TTY; progress: watch {source}/backend/.venv/lib grow" },
   ]
   bin = "backend/.venv/bin/python"
   build_marker = "backend/.venv/.lhpc-build-complete"
@@ -2415,14 +2415,22 @@ main = "meshcore-node"
     # LoRa config; position bypasses LHPC's GPS policy; admin/reset can reboot/wipe device state;
     # name is LHPC-owned. Everything else (messages, contacts, channels, trace, adverts, ws) is
     # ordinary Companion-client traffic and passes through.
+    # Both the bare path and the trailing-slash form are denied: FastAPI would 307-redirect
+    # `/x/` to `/x` (which is denied), but denying both removes any reliance on that behaviour.
+    # NOTE (maintenance): this list must be re-reviewed against the backend's device/admin
+    # mutation routes whenever the pinned meshcore-webui SHA moves — see the deny-list guard in
+    # tests/test_web.py. The MeshCore identity has a deeper backstop regardless: it lives in the
+    # LHPC-owned key file the node loads at startup, and the openHop node implements no
+    # factory-reset command, so no Companion request can rotate it; these denies also stop the
+    # non-destructive radio/position/name mutations the node WOULD honour.
     proxy_deny_paths = [
-      "/api/device/reset",
-      "/api/device/radio",
-      "/api/device/tx-power",
-      "/api/device/tuning",
-      "/api/device/position",
-      "/api/device/name",
-      "/api/admin/reset",
+      "/api/device/reset", "/api/device/reset/",
+      "/api/device/radio", "/api/device/radio/",
+      "/api/device/tx-power", "/api/device/tx-power/",
+      "/api/device/tuning", "/api/device/tuning/",
+      "/api/device/position", "/api/device/position/",
+      "/api/device/name", "/api/device/name/",
+      "/api/admin/reset", "/api/admin/reset/",
     ]
 
     [[stack.component.resource]]

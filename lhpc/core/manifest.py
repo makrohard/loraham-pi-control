@@ -735,17 +735,26 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
     )
 
 
+# A conservative safe-path charset so an entry can only ever be a literal nginx
+# `location = <path>`: letters, digits and the URL-path punctuation `-._~/`. This rejects
+# braces, semicolons, whitespace and control characters that would otherwise be interpolated
+# verbatim into the generated nginx directive (manifest-authored input, but the validator's
+# stated contract must actually hold).
+_DENY_PATH_RE = re.compile(r"\A/[A-Za-z0-9\-._~/]*\Z")
+
+
 def _parse_proxy_deny_paths(raw) -> tuple:
-    """Exact request paths a web-UI proxy must refuse. Each must be an absolute path
-    (leading '/', no whitespace) so it maps to a literal nginx `location = <path>`."""
+    """Exact request paths a web-UI proxy must refuse. Each must be an absolute path that maps
+    to a literal nginx `location = <path>` — only `[A-Za-z0-9-._~/]`, leading '/'."""
     if raw is None:
         return ()
     if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
         raise ValueError("proxy_deny_paths must be a list of strings")
     for x in raw:
-        if not x.startswith("/") or any(c.isspace() for c in x):
-            raise ValueError(f"proxy_deny_paths entry must be an absolute path with no "
-                             f"whitespace: {x!r}")
+        if not _DENY_PATH_RE.match(x):
+            raise ValueError(
+                f"proxy_deny_paths entry is not a safe absolute path "
+                f"([A-Za-z0-9-._~/], leading '/'): {x!r}")
     return tuple(raw)
 
 

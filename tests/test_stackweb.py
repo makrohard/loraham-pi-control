@@ -1612,3 +1612,38 @@ def test_a_saved_proxy_port_move_keeps_advertising_the_port_that_still_answers(t
     assert "Currently listening on port 8555" not in panel
     assert "127.0.0.1:8445" in panel                             # the Open link and the pill
     assert ":8555" not in panel.replace('value="8555"', "")      # ...except the desired-port FIELD
+
+
+def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
+    """The MeshCore Web UI is a Companion CLIENT that could otherwise mutate LHPC-owned node
+    state (factory reset -> identity, radio/tx/tuning -> the daemon's LoRa config, position ->
+    the GPS policy, name, admin reset -> device wipe/reboot). LHPC's reverse proxy MUST refuse
+    each at the perimeter (the backend is loopback-only). This guard fails if a manifest edit
+    or an upstream repin drops one — the deny surface must not silently shrink.
+    """
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.services import ControllerService
+    from lhpc.core.paths import Paths
+    from lhpc.core import webserver as ws
+    from lhpc.core.webserver import StackWebProxy
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    required = {
+        "/api/device/reset", "/api/device/radio", "/api/device/tx-power",
+        "/api/device/tuning", "/api/device/position", "/api/device/name",
+        "/api/admin/reset",
+    }
+    deny = set(svc.stack_web_deny_paths("meshcore"))
+    missing = required - deny
+    assert not missing, f"MeshCore Web UI proxy no longer denies LHPC-owned operations: {missing}"
+    # And they actually render as nginx 403s.
+    up = svc.stack_web_upstream("meshcore")
+
+    class _SWC:
+        stack_id = "meshcore"; enabled = True; remote = False; allowed_cidrs = []
+        scheme = "https"; port = 8446; access_mode = "auth-everywhere"
+
+    out = ws.render_nginx_config(
+        svc._paths, svc.config().webserver,
+        [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore"))])
+    for p in required:
+        assert f"location = {p} {{ return 403; }}" in out, f"{p} not denied in nginx config"
