@@ -155,10 +155,11 @@ loginctl enable-linger "$USER"     # optional: keep running after logout
 - **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only`, `RestrictNamespaces`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and related restrictions. The **only**
-  writable areas are `ReadWritePaths=%h/loraham-pi-control %h/.meshcore_nm /tmp` — the runtime
-  root, the shared `/tmp`, and the `~/.meshcore_nm` data dir of the meshcore-nodegui stack GUI
-  (which persists its sessions/settings/favourites there). The service does **not** get broad
-  write access to the rest of your home or to `/var`.
+  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the shared
+  `/tmp` — plus a harmless optional `-%h/.meshcore_nm` vestige of the retired meshcore-nodegui Tk
+  GUI (its replacement, the browser `meshcore-webui`, runs as its own loopback service and needs no
+  home grant; the leading `-` skips the path when absent). The service does **not** get broad write
+  access to the rest of your home or to `/var`.
 - **Runtime-owned build/tool caches**: the console orchestrates builds (cmake / PlatformIO /
   pip) and the QEMU emulator, which write toolchain caches. The unit points them at a
   runtime-owned location under `build/tool-cache/` via

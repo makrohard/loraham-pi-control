@@ -100,7 +100,11 @@ class LifecycleOpsMixin:
         limited, running, running_ids = self._band_limited_running(snap, conservative=True)
         target = limited(comp, {band} if band else set())
         conflicts = resources_mod.interpret_conflicts([*running, target], running_ids | {comp.id})
-        return [c.message for c in conflicts if comp.id in c.holders and c.observed]
+        # Advisory conflicts (e.g. the Companion client slot) are shown but never block a start —
+        # arbitration is at runtime (the WebUI yields to a running CLI via a lock), so admission
+        # must let the start through. observed_conflicts() still reports them for the UI banner.
+        return [c.message for c in conflicts
+                if comp.id in c.holders and c.observed and not c.advisory]
 
     # Marker states the GPS feed publishes, and what each MEANS for readiness.
     #   ready       — sentences are flowing: healthy.
@@ -4536,8 +4540,11 @@ class LifecycleOpsMixin:
                           "blocker": self.install_blocker(c) if c.interactive else "",
                           # Has tunables -> a config link; lhpc captures a start log
                           # (non-interactive run) or it declares its own -> a log link.
-                          "configurable": bool(c.run_params or c.config_file),
-                          "writes_log": bool(c.log_paths) or bool(c.run_argv and not c.interactive),
+                          "configurable": (c.show_config_link if c.show_config_link is not None
+                                           else bool(c.run_params or c.config_file)),
+                          "writes_log": (c.show_log_link if c.show_log_link is not None
+                                         else bool(c.log_paths)
+                                         or bool(c.run_argv and not c.interactive)),
                           "state": ("booting" if booting
                                     else (live[c.id].run_state.value if c.id in live else "unknown")),
                           # No web-UI/client link while booting — it isn't serving yet.

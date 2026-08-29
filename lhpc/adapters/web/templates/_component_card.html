@@ -2,6 +2,19 @@
    No header, no action buttons — the caller supplies the wrapping <details>/<summary> and (for
    dependency components) the action bar. Requires: comp, st. Ported from the former stack.html. #}
 <p>{{ comp.purpose }}</p>
+{# Active resource conflicts this component is a HOLDER of (both claimants running) — surfaced
+   on the card itself, mirroring the page-level "Observed resource conflicts" banner. `conflicts`
+   is the stack's conflict list (may be absent when the card is included elsewhere). #}
+{% set ns = namespace(active=[]) %}
+{% for c in conflicts|default([]) %}
+  {% if c.observed and comp.id in c.holders %}{% set ns.active = ns.active + [c] %}{% endif %}
+{% endfor %}
+{% if ns.active %}
+  <div class="panel" role="alert">
+    <h3>⚠ Active conflict</h3>
+    <ul class="clean">{% for c in ns.active %}<li class="conflict">{{ c.message }}</li>{% endfor %}</ul>
+  </div>
+{% endif %}
 <table>
   <tbody>
     <tr><th>Run state</th><td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td></tr>

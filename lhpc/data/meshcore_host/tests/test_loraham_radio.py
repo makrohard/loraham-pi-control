@@ -34,6 +34,7 @@ def make_radio(daemon, **overrides):
         connect_timeout=1.0,
         reconnect_delay=0.2,
         tx_result_margin=0.5,
+        noise_poll_interval=0.05,
         resolve_sockets=False,
     )
     kwargs.update(overrides)
@@ -447,3 +448,78 @@ async def test_tx_not_ready_recovers_via_rehandshake(tmp_path):
     assert await r.send(b"now") is not None
     await r.aclose()
     await d.close()
+
+
+# ---------------------------------------------------------------------------
+# Noise floor (daemon live-channel RSSI -> openHop get_noise_floor)
+# ---------------------------------------------------------------------------
+
+
+def _radio_for_parsing():
+    # A bare adapter (never begun) is enough to exercise the pure parse helper.
+    return LoRaHAMRadio(
+        data_socket="/nonexistent/data.sock",
+        config_socket="/nonexistent/config.sock",
+        frequency=869618000, bandwidth=62500, spreading_factor=8,
+        coding_rate=8, txpower=14, resolve_sockets=False,
+    )
+
+
+def test_noise_floor_none_before_any_reading():
+    assert _radio_for_parsing().get_noise_floor() is None
+
+
+def test_noise_floor_parses_liverssi_from_channel_line():
+    r = _radio_for_parsing()
+    r._maybe_update_noise_floor(
+        "CHANNEL RADIO=IDLE/RX BUSY=0 CAD=0 CADSCAN=1 CADSTATE=FREE "
+        "RSSI=-95.00 PACKETRSSI=-95.00 LIVERSSI=-112.50 MODE=LORA TXMODE=MANAGED"
+    )
+    assert r.get_noise_floor() == -112.50
+
+
+def test_noise_floor_falls_back_to_rssi_without_liverssi():
+    r = _radio_for_parsing()
+    r._maybe_update_noise_floor("CHANNEL RADIO=IDLE/RX BUSY=0 RSSI=-101.00 MODE=LORA")
+    assert r.get_noise_floor() == -101.00
+
+
+def test_noise_floor_ignores_unavailable_sentinel():
+    r = _radio_for_parsing()
+    r._maybe_update_noise_floor("CHANNEL LIVERSSI=-100.00 RSSI=-100.00")
+    assert r.get_noise_floor() == -100.00
+    # -200 is the daemon's TX-busy / contended sentinel: keep the last real value.
+    r._maybe_update_noise_floor("CHANNEL LIVERSSI=-200.00 RSSI=-200.00")
+    assert r.get_noise_floor() == -100.00
+
+
+def test_noise_floor_ignores_non_channel_and_malformed_lines():
+    r = _radio_for_parsing()
+    r._maybe_update_noise_floor("STATUS RADIO=READY CADWAIT=1500 TXRESULT=1")
+    assert r.get_noise_floor() is None
+    r._maybe_update_noise_floor("CHANNEL LIVERSSI=notanumber")
+    assert r.get_noise_floor() is None
+
+
+async def test_noise_floor_populated_from_daemon_poll(daemon, radio):
+    # The poller issues GET CHANNEL on connect; the config reader parses the
+    # daemon's LIVERSSI into get_noise_floor().
+    daemon.live_rssi = -107.0
+    assert await wait_for(lambda: radio.get_noise_floor() == -107.0)
+    assert "GET CHANNEL" in daemon.config_commands
+
+
+async def test_refresh_noise_floor_tracks_new_readings(daemon, radio):
+    # The poller keeps refreshing: a changed daemon reading is picked up.
+    assert await wait_for(lambda: radio.get_noise_floor() is not None)
+    daemon.live_rssi = -121.0
+    assert await wait_for(lambda: radio.get_noise_floor() == -121.0)
+
+
+async def test_noise_floor_repopulates_after_reconnect(daemon, radio):
+    assert await wait_for(lambda: radio.get_noise_floor() is not None)
+    await daemon.drop_data_connection()  # forces a reconnect -> _close_sockets
+    # The poller is re-spawned on reconnect and repopulates the reading, proving
+    # it is tied to the live connection rather than carried stale across a drop.
+    daemon.live_rssi = -118.0
+    assert await wait_for(lambda: radio.get_noise_floor() == -118.0, timeout=5.0)

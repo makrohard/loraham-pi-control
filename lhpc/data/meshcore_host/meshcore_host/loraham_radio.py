@@ -82,6 +82,16 @@ TX_RESULT_FLAG_CAD_TIMEOUT = 0x04
 # Daemon CADWAIT default (seconds) if the status reply does not report it.
 DEFAULT_CADWAIT_S = 1.5
 
+# How often to ask the daemon (GET CHANNEL) for a fresh live-channel RSSI to keep
+# get_noise_floor() current. A light cadence: the daemon answers non-destructively
+# (it skips the CAD scan when an RX packet is pending), and openHop only reads the
+# cached value.
+NOISE_POLL_INTERVAL_S = 5.0
+
+# Daemon live-RSSI sentinel (config_status_live_rssi_dbm) returned when the radio is
+# TX-busy or its mutex is contended — not a real measurement, so it is never cached.
+LIVE_RSSI_UNAVAILABLE_DBM = -200.0
+
 # Largest RF payload the daemon protocol can carry (LoRa maximum).
 MAX_RF_PAYLOAD = 255
 
@@ -140,6 +150,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         tx_result_margin: float = 1.0,
         max_packet_size: int = 255,
         airtime_dutycycle: float = 10.0,
+        noise_poll_interval: float = NOISE_POLL_INTERVAL_S,
         resolve_sockets: bool = True,
     ) -> None:
         # Configured paths are kept as given; resolution against /run/loraham
@@ -171,6 +182,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self.tx_result_margin = tx_result_margin
         self.max_packet_size = max_packet_size
         self.airtime_dutycycle = airtime_dutycycle
+        self._noise_poll_interval = noise_poll_interval
 
         self._validate_config()
 
@@ -179,6 +191,10 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self._rx_available = asyncio.Event()
         self._last_rssi = 0
         self._last_snr = 0.0
+        # Cached idle-channel RSSI (dBm) from the daemon's live-RSSI reads; None
+        # until the first CHANNEL reply and reset on disconnect, so openHop's
+        # stats path omits noise_floor rather than reporting a stale/bogus 0.
+        self._noise_floor: Optional[float] = None
 
         self._data_reader: Optional[asyncio.StreamReader] = None
         self._data_writer: Optional[asyncio.StreamWriter] = None
@@ -421,6 +437,53 @@ class LoRaHAMRadio(_LoRaRadioBase):
     def get_last_snr(self) -> float:
         return float(self._last_snr)
 
+    def get_noise_floor(self) -> Optional[float]:
+        """Idle-channel RSSI (dBm) cached from the daemon's live-RSSI reads.
+
+        openHop's CompanionRadio._get_radio_stats surfaces this into
+        STATS_TYPE_RADIO (the same hasattr contract as the SX1262/TCP/KISS
+        radios). None until the first CHANNEL reply is seen (or while
+        disconnected), so the stats path omits noise_floor rather than
+        reporting a bogus 0.
+        """
+        return self._noise_floor
+
+    async def refresh_noise_floor(self) -> Optional[float]:
+        """Ask the daemon (GET CHANNEL) for a fresh channel read.
+
+        Best-effort: the reply is parsed and cached by the config reader loop
+        (LIVERSSI). Mirrors the TCP radio's refresh/get pair; the noise poller
+        drives this on a timer, but openHop may also call it directly.
+        """
+        writer = self._config_writer
+        if writer is not None and not writer.is_closing():
+            try:
+                await self._write_config_command("GET CHANNEL\n")
+            except Exception as exc:
+                logger.debug("Noise-floor refresh failed: %s", exc)
+        return self._noise_floor
+
+    def _maybe_update_noise_floor(self, line: str) -> None:
+        """Cache the daemon's live channel RSSI from a `CHANNEL …` status line.
+
+        LIVERSSI is a chip-native idle-channel RSSI read (readLiveRssi) — the
+        closest value the daemon exposes to a noise floor. The -200 dBm sentinel
+        (TX-busy / mutex contended) is discarded so a real reading is kept.
+        """
+        if "CHANNEL" not in line.upper():
+            return
+        fields = self._parse_key_value_fields(line)
+        raw = fields.get("LIVERSSI") or fields.get("RSSI")
+        if raw is None:
+            return
+        try:
+            value = float(raw)
+        except ValueError:
+            return
+        if value <= LIVE_RSSI_UNAVAILABLE_DBM:
+            return
+        self._noise_floor = value
+
     def check_radio_health(self) -> bool:
         """Periodic health probe (called by openHop's maintenance loop in a thread).
 
@@ -632,12 +695,22 @@ class LoRaHAMRadio(_LoRaRadioBase):
             while b"\n" in buffer:
                 line, _, rest = buffer.partition(b"\n")
                 buffer = bytearray(rest)
-                logger.debug(
-                    "LoRaHAM config socket: %s", line.decode(errors="replace").rstrip("\r")
-                )
+                decoded = line.decode(errors="replace").rstrip("\r")
+                logger.debug("LoRaHAM config socket: %s", decoded)
+                self._maybe_update_noise_floor(decoded)
             if len(buffer) > 4096:
                 logger.warning("Discarding oversized LoRaHAM config socket buffer")
                 buffer.clear()
+
+    async def _noise_poll_loop(self) -> None:
+        """Refresh the cached noise floor on a timer while connected.
+
+        Spawned per-connection alongside the reader loops and cancelled with
+        them on disconnect, so it only runs while the config socket is up.
+        """
+        while True:
+            await self.refresh_noise_floor()
+            await asyncio.sleep(self._noise_poll_interval)
 
     async def _read_exact(self, reader: asyncio.StreamReader, size: int, label: str) -> bytes:
         try:
@@ -778,6 +851,9 @@ class LoRaHAMRadio(_LoRaRadioBase):
                     asyncio.create_task(
                         self._config_reader_loop(), name="LoRaHAM config socket reader"
                     ),
+                    asyncio.create_task(
+                        self._noise_poll_loop(), name="LoRaHAM noise-floor poller"
+                    ),
                 ]
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
@@ -803,6 +879,10 @@ class LoRaHAMRadio(_LoRaRadioBase):
         # require a fresh handshake before the next TX.
         self._fail_pending_tx()
         self._set_link_state(False, False)
+        # Drop the cached noise floor: a value read before the drop is stale, and
+        # openHop should report "no reading" (0) rather than a stale one until the
+        # poller refreshes it after reconnect.
+        self._noise_floor = None
 
         writers = (self._data_writer, self._config_writer)
         self._data_reader = None

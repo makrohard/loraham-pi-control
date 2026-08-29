@@ -72,6 +72,11 @@ class FakeLoRaHAMDaemon:
         self.radio = radio
         self.txmode = txmode
         self.txresult = txresult
+        # Live channel RSSI (dBm) reported in the GET CHANNEL reply's LIVERSSI
+        # field; -200 is the daemon's "unavailable" sentinel. respond_to_channel
+        # lets a test suppress the reply entirely.
+        self.live_rssi = -108.0
+        self.respond_to_channel = True
 
         self.data_server = None
         self.config_server = None
@@ -135,6 +140,13 @@ class FakeLoRaHAMDaemon:
             f"TXMODE={self.txmode} TXQUEUE=1 "
             f"{cadwait}CADIDLE=250 CADPOLL=50 "
             f"CADTXAFTERTIMEOUT=0\n"
+        )
+
+    def _channel_line(self):
+        return (
+            f"CHANNEL RADIO={self.radio} BUSY=0 CAD=0 CADSCAN=1 CADSTATE=FREE "
+            f"RSSI={self.live_rssi:.2f} PACKETRSSI={self.live_rssi:.2f} "
+            f"LIVERSSI={self.live_rssi:.2f} MODE=LORA TXMODE={self.txmode}\n"
         )
 
     async def _send_config_line(self, line):
@@ -264,6 +276,8 @@ class FakeLoRaHAMDaemon:
 
                     if command == "GET STATUS" and self.respond_to_status:
                         await self._send_config_line(self._status_line())
+                    elif command == "GET CHANNEL" and self.respond_to_channel:
+                        await self._send_config_line(self._channel_line())
         finally:
             if self.config_writer is writer:
                 self.config_writer = None

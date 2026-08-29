@@ -1,0 +1,111 @@
+diff --git a/backend/app/api/device.py b/backend/app/api/device.py
+index 5b71ade..94f1575 100644
+--- a/backend/app/api/device.py
++++ b/backend/app/api/device.py
+@@ -279,6 +279,14 @@ async def update_policy(body: PolicyUpdate, request: Request) -> Response:
+     earlier fields may have already been committed to flash.
+     """
+     client = _require_client(request)
++    # LHPC owns advert-location (GPS) policy. Reject any attempt to change it through this
++    # combined endpoint BEFORE applying other fields (the endpoint is non-atomic), so a request
++    # carrying adv_loc_policy never partially commits. Telemetry / manual-add / multi-acks remain.
++    if body.adv_loc_policy is not None:
++        raise HTTPException(
++            status_code=403,
++            detail="advert-location policy is managed by LHPC (lhpc gps) and cannot be set here",
++        )
+     if body.telemetry is not None and (
+         body.telemetry.base is not None
+         or body.telemetry.loc is not None
+@@ -293,8 +301,6 @@ async def update_policy(body: PolicyUpdate, request: Request) -> Response:
+         )
+     if body.manual_add_contacts is not None:
+         await _call(client.set_manual_add_contacts(body.manual_add_contacts))
+-    if body.adv_loc_policy is not None:
+-        await _call(client.set_advert_loc_policy(body.adv_loc_policy))
+     if body.multi_acks is not None:
+         await _call(client.set_multi_acks(body.multi_acks))
+     return Response(status_code=204)
+diff --git a/backend/app/services/meshcore_client.py b/backend/app/services/meshcore_client.py
+index 29e0a36..6f48658 100644
+--- a/backend/app/services/meshcore_client.py
++++ b/backend/app/services/meshcore_client.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+ 
+ import asyncio
+ import contextlib
++import fcntl
++import os
+ import logging
+ from dataclasses import asdict, dataclass, field
+ from typing import Any
+@@ -192,17 +194,69 @@ class MeshCoreClient:
+                 await self._task
+         await self._shutdown_mc()
+ 
++    async def _acquire_slot_lease(self, lock_path: str):
++        """Acquire the Companion-slot transition lease, YIELDING while a live meshcore-cli holds
++        it. Returns an open fd that HOLDS the flock — the caller MUST release it once its own
++        connection is established — or None if no lock is configured or we are stopping.
++
++        Holding this lease ACROSS _connect_once() makes the WebUI check-and-connect atomic: a CLI
++        (which blocks for this same lease) cannot connect in the gap and then be evicted by our
++        connect. A stale lock pathname with no live owner is acquirable, so a CLI crash/reboot
++        never wedges the WebUI.
++        """
++        if not lock_path:
++            return None
++        try:
++            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
++        except OSError:
++            return None
++        announced = False
++        while not self._stopping.is_set():
++            try:
++                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++                return fd  # HELD across the connect; caller releases once connected
++            except OSError:
++                if not announced:
++                    log.info("meshcore-cli owns the Companion slot; WebUI yielding")
++                    announced = True
++                with contextlib.suppress(asyncio.TimeoutError):
++                    await asyncio.wait_for(self._stopping.wait(), timeout=1.0)
++        os.close(fd)
++        return None
++
++    @staticmethod
++    def _release_slot_lease(fd) -> None:
++        if fd is None:
++            return
++        try:
++            fcntl.flock(fd, fcntl.LOCK_UN)
++        finally:
++            os.close(fd)
++
+     async def _supervisor(self) -> None:
++        cli_lock = os.environ.get("MESHCORE_CLI_LOCK", "")
+         delay = 1
+         while not self._stopping.is_set():
++            # Take the slot-transition lease, yielding while a live meshcore-cli holds it, and hold
++            # it ACROSS _connect_once so a CLI cannot connect in the gap and then be evicted by our
++            # connect. Release it once connected; a later CLI then takes it and we yield. A stale
++            # lock file with no live owner is acquirable, so a CLI crash/reboot never wedges us.
++            lease_fd = await self._acquire_slot_lease(cli_lock)
++            if self._stopping.is_set():
++                self._release_slot_lease(lease_fd)
++                break
+             try:
+                 await self._connect_once()
+                 delay = 1
++                self._release_slot_lease(lease_fd)  # connected: the transition hold is over
++                lease_fd = None
+                 await self._wait_disconnect()
+             except asyncio.CancelledError:
+                 raise
+             except Exception as e:
+                 log.warning("MeshCore connect failed: %s", e)
++            finally:
++                self._release_slot_lease(lease_fd)  # releases on failure/cancel; no-op on success
+             await self._shutdown_mc()
+             log.info("Reconnecting in %ds", delay)
+             try:

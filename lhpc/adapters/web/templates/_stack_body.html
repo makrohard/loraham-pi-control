@@ -133,7 +133,7 @@
                   </div>
                   <details class="advcfg">
                     <summary>Info</summary>
-                    <div class="body">{% with comp = comp, st = st %}{% include "_component_card.html" %}{% endwith %}</div>
+                    <div class="body">{% with comp = comp, st = st, conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}</div>
                   </details>
                 </div>
               </details>
@@ -194,7 +194,7 @@
     <details class="advcfg">
       <summary>Info</summary>
       <div class="body">
-        {% with comp = g.main[0], st = g.main[1] %}{% include "_component_card.html" %}{% endwith %}
+        {% with comp = g.main[0], st = g.main[1], conflicts = g.conflicts %}{% include "_component_card.html" %}{% endwith %}
         {% if g.conflicts %}
           <h3>Resource conflicts</h3>
           <ul class="clean">{% for c in g.conflicts %}

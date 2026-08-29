@@ -58,6 +58,10 @@ export STATIC_DIR="$static"
 export DATABASE_URL="sqlite+aiosqlite:///$data/meshcore-webui.db"
 export VAPID_PRIVATE_KEY_PATH="$vapid"
 export MESHCORE_WEBUI_TILE_CACHE_DIR="$data/tiles"
+# The node serves ONE Companion client at a time. While an interactive meshcore-cli owns the
+# slot it holds this lock (created by meshcli-run.sh); the reconnect supervisor waits on it so
+# the WebUI yields the slot instead of evicting the CLI. Path matches the meshcore-cli run.
+export MESHCORE_CLI_LOCK="$runtime/state/meshcore-cli.lock"
 # No external elevation calls by default on a headless node; keep the SSRF-guarded default
 # but the operator can override. Bind LOOPBACK — the LHPC proxy is the only public path.
 cd "$src/backend"

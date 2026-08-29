@@ -57,6 +57,7 @@ def interpret_conflicts(
                         resource_key=key,
                         holders=(id_a, id_b),
                         observed=observed,
+                        advisory=bool(claim_a.advisory or claim_b.advisory),
                         message=(
                             f"{id_a} ({claim_a.mode.value}) vs {id_b} "
                             f"({claim_b.mode.value}) on {key}"

@@ -79,6 +79,11 @@ class ResourceKind(str, Enum):
     GPSD = "gpsd"                        # gpsd.local
     SPI_BUS = "spi-bus"                  # /dev/spidev0.0 + /run/lock/loraham/spi0.lock
     GPIO = "gpio"                        # /dev/gpiochip0
+    # The single Companion client slot a MeshCore node serves at a time: the frame server
+    # evicts an existing client when a new one connects, so two clients (webui + the operator's
+    # meshcore-cli) fight over it. An EXCLUSIVE claim on the same key makes that an observed
+    # conflict when both run.
+    COMPANION_CLIENT = "companion-client"
 
 
 class ResourceMode(str, Enum):
@@ -119,6 +124,11 @@ class ResourceClaim:
                                  # group_id, not yet consumed by conflict logic)
     requirement: str = ""        # for REQUIREMENT mode, the required value (e.g. "DIRECT")
     note: str = ""
+    # An advisory claim still produces an OBSERVED conflict (Apps-page banner + component card)
+    # but does NOT block a start: arbitration is handled at runtime elsewhere (the WebUI yields the
+    # node's single Companion slot to a running meshcore-cli via a lock), so admission must not
+    # refuse the start. Non-advisory EXCLUSIVE claims (SPI, TCP ports, …) still block.
+    advisory: bool = False
 
     @property
     def group_id(self) -> str:
@@ -469,6 +479,13 @@ class Component:
     interactive: bool = False    # must be run by the operator in a terminal (e.g. a TUI);
                                  # the controller tracks it but never starts it
     config_file: FileConfig | None = None   # a config FILE the controller writes
+    # Dashboard link overrides for the rare component the derived heuristic misjudges
+    # (config link = has run_params/config_file; log link = lhpc captures a start log or the
+    # component declares log_paths). meshcore-webui has no tunables but shares the stack
+    # Settings page, and the operator-run meshcore-cli has no captured log yet still wants the
+    # link — both want a link the heuristic withholds. None = use the heuristic.
+    show_config_link: bool | None = None
+    show_log_link: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -566,3 +583,4 @@ class ResourceConflict:
     holders: tuple[str, ...]     # component ids involved
     observed: bool               # True = both components currently running
     message: str = ""
+    advisory: bool = False       # a holder's claim is advisory: show it, but do not block a start

@@ -269,8 +269,8 @@ esac
 
 # --- GUI-only dependencies (opt-in: --with-gui) ---------------------------------------------
 # NOT installed by default. These are the toolkit libraries the DESKTOP components need
-# (voice's GTK app, the MeshCore Node Manager's Tk GUI, Sideband's Kivy app). On a headless
-# image installing them
+# (voice's GTK app and Sideband's Kivy app; the MeshCore node's GUI is now the headless
+# browser meshcore-webui — no X/Tk). On a headless image installing them
 # would drag in the whole X11/Wayland dev chain for software that can never render, so they
 # are opt-in. This installs LIBRARIES ONLY — never a desktop, display manager or X/Wayland
 # server: it assumes the machine already has a graphical session.

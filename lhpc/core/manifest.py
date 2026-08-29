@@ -657,6 +657,8 @@ def _parse_component(raw: dict) -> Component:
         interactive=raw.get("interactive", False),
         bands=tuple(str(b) for b in raw.get("bands", [])),
         config_file=_parse_file_config(raw.get("config_file")),
+        show_config_link=raw.get("show_config_link"),
+        show_log_link=raw.get("show_log_link"),
     )
 
 
@@ -702,6 +704,7 @@ def _parse_resource(raw: dict) -> ResourceClaim:
         group=raw.get("group", ""),
         requirement=raw.get("requirement", ""),
         note=raw.get("note", ""),
+        advisory=bool(raw.get("advisory", False)),
     )
 
 

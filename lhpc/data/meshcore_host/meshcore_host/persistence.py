@@ -43,8 +43,11 @@ FLUSH_INTERVAL_S = 30.0
 # silently override an operator's config change. Position prefs (latitude, longitude,
 # advert_loc_policy) are ALSO excluded: LHPC owns GPS policy, and persisting a live
 # moving coordinate would resurrect it as a stale static position after restart.
+# node_name is EXCLUDED for the same ownership reason as the radio and GPS settings above:
+# LHPC configures the node name (meshcore.toml), so a persisted value must never override the
+# configured one after a rename. A legacy row written by an older build is purged on restore.
 PERSISTED_PREFS = (
-    "node_name", "adv_type",
+    "adv_type",
     "multi_acks", "telemetry_mode_base", "telemetry_mode_location",
     "telemetry_mode_environment", "manual_add_contacts", "autoadd_config",
     "autoadd_max_hops", "rx_delay_base", "airtime_factor", "client_repeat",
@@ -52,6 +55,9 @@ PERSISTED_PREFS = (
 )
 # bytes-typed pref persisted hex-encoded.
 PERSISTED_PREFS_HEX = ("default_scope_key",)
+# Prefs once persisted but now configuration-owned: a stale row must not resurrect a value LHPC
+# owns (e.g. node_name), so it is deleted on restore rather than applied.
+_LEGACY_PREFS = ("node_name",)
 
 
 class StoreError(RuntimeError):
@@ -159,6 +165,12 @@ class CompanionStore:
                     "SELECT idx, name, secret FROM channels"
                 ).fetchall()
                 pref_rows = db.execute("SELECT key, value FROM prefs").fetchall()
+                # Purge legacy configuration-owned pref rows (e.g. node_name from an older build)
+                # so an existing DB can never override LHPC configuration. The apply loop below
+                # already ignores keys outside PERSISTED_PREFS; this also cleans the stored row.
+                # (autocommit: the connection is opened with isolation_level=None.)
+                for legacy_key in _LEGACY_PREFS:
+                    db.execute("DELETE FROM prefs WHERE key = ?", (legacy_key,))
         except sqlite3.Error as exc:
             raise StoreError(f"cannot read companion database: {exc}") from exc
 
@@ -173,7 +185,15 @@ class CompanionStore:
 
         for idx, name, secret in channel_rows:
             if not companion.channels.set(int(idx), Channel(name=name, secret=bytes(secret))):
-                logger.warning("Could not restore channel idx=%s", idx)
+                # FAIL CLOSED: a channel row that cannot be represented in memory (e.g. an
+                # out-of-range index) must abort restore BEFORE _restored=True. Otherwise the
+                # periodic flush — which does DELETE FROM channels then rewrites only the restored
+                # channels — would silently destroy this row, violating the module's contract that
+                # a read the store cannot handle never mutates the database.
+                raise StoreError(
+                    f"companion database has an unrestorable channel (idx={idx}); refusing to "
+                    f"continue so the periodic flush cannot delete it"
+                )
 
         prefs = companion.prefs
         for key, value in pref_rows:

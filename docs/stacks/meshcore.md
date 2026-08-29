@@ -109,10 +109,19 @@ the GUI never becomes a second owner of those.
   reverse proxy (TLS, optional mTLS, CIDR gate), enabled per stack on the **Webserver** page.
 * **Security boundary** — the proxy **refuses** (`403`) the operations LHPC owns: factory reset
   (would destroy the managed identity), radio / TX-power / tuning (the daemon owns the LoRa
-  config), position (LHPC owns the GPS policy), device name, and the device-touching admin reset.
-  Enforced server-side at the perimeter, not in JavaScript; the backend has no private-key
-  import/export endpoint. Everything else — messages, contacts, channels, TRACE, adverts — is
-  ordinary Companion-client traffic and passes through.
+  config), position, device name, and the device-touching admin reset. GPS **advert-location
+  policy** is LHPC-owned too, but it rides a combined `POST /api/device/policy` alongside
+  telemetry / manual-add / multi-ack controls that the GUI legitimately sets — so rather than
+  denying the whole route, a small reviewable WebUI patch rejects only its `adv_loc_policy` field
+  server-side. Enforced at the perimeter and in the backend, not in JavaScript; the backend has no
+  private-key import/export endpoint. Everything else — messages, contacts, channels, TRACE,
+  adverts — is ordinary Companion-client traffic and passes through.
+* **One Companion slot** — the node serves a single Companion client at a time (a new connection
+  evicts the existing one), so `meshcore-cli` and the WebUI contend for it. LHPC surfaces that as
+  an active conflict on the Apps page (banner + component card), and the WebUI **yields** the slot
+  to a running CLI: the CLI holds a lock while it runs and the WebUI waits on it instead of
+  reconnecting, then resumes when the CLI exits. Reconnect timing alone can't arbitrate the slot,
+  so the handoff is explicit.
 * **State** — the WebUI keeps its OWN SQLite store (message history, GUI preferences, tile cache)
   under `<runtime>/state/meshcore-webui/`. It is a cache/display layer; the authoritative MeshCore
   identity, contacts, channels and routes live in the node, never in the WebUI database.

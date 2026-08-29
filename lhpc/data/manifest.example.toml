@@ -2159,16 +2159,18 @@ main = "meshcore-node"
   build_timeout = 1800.0
   test_timeout = 900.0
   # The MeshCore implementation is upstream openhop_core, pinned below, plus ONE
-  # LHPC-shipped patch (a small upstream-mergeable fix, see the patch header) applied
-  # idempotently at build time. The host application glue (LoRaHAM radio adapter, identity
-  # loading, persistence, GPS feed consumer) ships WITH lhpc as the `meshcore_host`
-  # package-data asset and is installed into the same venv — so the checkout stays an
-  # unmodified upstream tree plus a reviewable patch, never a fork.
+  # LHPC-shipped patch applied idempotently at build time. That patch bundles three logical fixes
+  # destined for TWO upstream PRs: (1) the two ACK fixes together — deliver PATH-embedded ACKs to
+  # companion clients, then suppress client-repeat retransmission of consumed ACKs (the second
+  # builds on the first) — and (2) the independent cached radio noise floor. The host application
+  # glue (LoRaHAM radio adapter, identity loading, persistence, GPS feed consumer) ships WITH lhpc as
+  # the `meshcore_host` package-data asset and is installed into the same venv — so the checkout
+  # stays an unmodified upstream tree plus a reviewable patch, never a fork.
   # This node reaches the radio over the loraham daemon's unix sockets and NEVER drives
   # SPI/GPIO itself: no GPIO bindings, no SPI deps. --system-site-packages keeps any system
   # packages reusable; openhop's deps (pycryptodome, PyNaCl, pyyaml) are wheels on aarch64.
   build_steps = [
-    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-path-embedded-ack.patch"] },
+    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-companion-fixes.patch"] },
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
@@ -2358,6 +2360,11 @@ main = "meshcore-node"
   purpose = "Web GUI (adradr/meshcore-webui) — a browser client of the MeshCore Companion TCP endpoint. Reached through LHPC's TLS/PKI reverse proxy."
   tx_capable = false
   optional = true
+  # Dashboard: show config + log links like every sibling component. The heuristic withholds
+  # the config link because the backend exposes no lhpc-tunable params; force it on so the row
+  # matches meshcore-node/cli — it opens the shared stack Settings. (log already shows.)
+  show_config_link = true
+  show_log_link = true
   depends_on = ["meshcore-node"]
   # A FastAPI/uvicorn backend that connects to the openHop-backed Companion node on 5000 and
   # serves a prebuilt React SPA. Unlike the retired Tk Node Manager it has NO graphical
@@ -2370,6 +2377,16 @@ main = "meshcore-node"
   # meshcore-webui-dist): a Pi Zero 2 W cannot run the Node 20+/Vite build, and LHPC never
   # runs npm at runtime. Only the Python backend is built on the target.
   build_steps = [
+    # Reviewable local patch applied to the pinned, otherwise-unmodified upstream checkout (same
+    # idempotent git-apply helper the openhop-node uses). Two LHPC ownership guards:
+    #   1. Companion-slot handoff: the reconnect supervisor waits while the meshcore-cli lock
+    #      (MESHCORE_CLI_LOCK) exists, so the WebUI YIELDS the node's single client slot to a
+    #      running CLI instead of evicting it — reconnect timing alone cannot arbitrate the slot.
+    #   2. GPS-policy boundary: POST /api/device/policy rejects adv_loc_policy (LHPC owns GPS
+    #      policy) while keeping its telemetry / manual-add / multi-ack controls.
+    # Runtime imports app.* from {source} (run_cwd), so patching the source tree before the venv
+    # install is what takes effect.
+    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/meshcore-webui-lhpc-guards.patch"] },
     { argv = ["python3", "-m", "venv", "backend/.venv"] },
     # Constrain EVERY dependency to the exact set proven in the integration run (the shipped
     # constraints file), so a commit-pinned source can't still pull a floating/uncontrolled
@@ -2438,6 +2455,19 @@ main = "meshcore-node"
     kind = "tcp-port"
     mode = "exclusive"
 
+    # The openHop node serves ONE Companion client at a time (its frame server evicts the
+    # existing client when a new one connects). meshcore-cli claims the same slot, so running
+    # both at once is an observed EXCLUSIVE conflict — surfaced on the Apps page (conflicts
+    # banner + the component card). The webui yields via reconnect backoff, but the conflict is
+    # shown so the operator understands why the two fight over the radio.
+    [[stack.component.resource]]
+    key = "meshcore.companion-client"
+    kind = "companion-client"
+    mode = "exclusive"
+    # Advisory: show the conflict (banner + card) but do NOT block a start — the WebUI yields the
+    # slot to a running CLI at runtime (lock handoff), so admission must let the CLI start.
+    advisory = true
+
     [stack.component.source]
     path = "src/meshcore-webui"
     pin_commit = "94dcc3d845dd09be03896694de2190e39a020086"
@@ -2454,8 +2484,16 @@ main = "meshcore-node"
   tx_capable = true
   optional = true
   interactive = true
+  # Dashboard: show config + log links like every sibling component. The heuristic withholds
+  # the log link because an interactive component is operator-run (lhpc captures no start log);
+  # force it on so the row matches meshcore-node/webui. (config already shows: it has params.)
+  show_config_link = true
+  show_log_link = true
   depends_on = ["meshcore-node"]
-  run = ".venv/bin/meshcli {host} {port} {json} {debug}"
+  # Wrapped so the CLI OWNS the node's single Companion client slot while it runs: the wrapper
+  # creates the lock the WebUI supervisor watches (MESHCORE_CLI_LOCK), runs meshcli, and removes
+  # the lock on exit so the WebUI reconnects. run_cwd is {source}, so .venv/bin/meshcli resolves.
+  run = '{asset}/scripts/meshcli-run.sh {runtime}/state/meshcore-cli.lock .venv/bin/meshcli {host} {port} {json} {debug}'
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
     { argv = [".venv/bin/pip", "install", "."], announce = "[install] meshcli into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
@@ -2467,6 +2505,16 @@ main = "meshcore-node"
   ]
   # `pip install .` places the meshcli console script in the venv — that IS the build artifact.
   bin = ".venv/bin/meshcli"
+
+    # Same single Companion client slot as meshcore-webui: running both evicts each other, so
+    # this EXCLUSIVE claim makes it an observed conflict on the Apps page (banner + card).
+    [[stack.component.resource]]
+    key = "meshcore.companion-client"
+    kind = "companion-client"
+    mode = "exclusive"
+    # Advisory: show the conflict (banner + card) but do NOT block a start — the WebUI yields the
+    # slot to a running CLI at runtime (lock handoff), so admission must let the CLI start.
+    advisory = true
 
     [stack.component.process]
     exec_name = "meshcli"
