@@ -545,10 +545,10 @@ def test_an_absent_optional_component_does_not_sink_the_stack_badge(tmp_path):
     # installed and merely stopped — only the never-cloned optional GUI was missing.
     svc = _svc(tmp_path)
     snap, ss = _snapshot(svc, {"meshcore-node": RunState.STOPPED,
-                               "meshcore-nodegui": RunState.NOT_INSTALLED,
+                               "meshcore-webui": RunState.NOT_INSTALLED,
                                "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == "stopped"
-    assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_INSTALLED, \
+    assert ss.components["meshcore-webui"].run_state is RunState.NOT_INSTALLED, \
         "the component itself must stay truthful"
 
 
@@ -556,7 +556,7 @@ def test_an_absent_optional_component_does_not_sink_the_stack_badge(tmp_path):
 def test_a_missing_mandatory_component_still_sinks_the_badge(tmp_path):
     svc = _svc(tmp_path)
     snap, _ = _snapshot(svc, {"meshcore-node": RunState.NOT_INSTALLED,
-                              "meshcore-nodegui": RunState.NOT_INSTALLED,
+                              "meshcore-webui": RunState.NOT_INSTALLED,
                               "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == "not-installed"
 
@@ -567,7 +567,7 @@ def test_an_installed_optional_component_is_never_hidden(tmp_path, state):
     # Only NEVER-INSTALLED optionals are excused. A broken one that IS installed is news.
     svc = _svc(tmp_path)
     snap, _ = _snapshot(svc, {"meshcore-node": RunState.RUNNING,
-                              "meshcore-nodegui": state,
+                              "meshcore-webui": state,
                               "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == state.value
 
@@ -577,13 +577,13 @@ def test_building_a_stack_skips_an_absent_optional_component(tmp_path):
     # Before: Popen got a cwd that does not exist -> rc 127, "Build FAILED".
     svc = _svc(tmp_path)
     res = svc.build("meshcore", apply=True)
-    assert "meshcore-nodegui" not in (res.summary or "") or res.ok
+    assert "meshcore-webui" not in (res.summary or "") or res.ok
 
 
 @pytest.mark.contract
 def test_building_an_absent_component_by_name_is_refused_as_not_installed(tmp_path):
     svc = _svc(tmp_path)
-    res = svc.build("meshcore-nodegui", apply=True)
+    res = svc.build("meshcore-webui", apply=True)
     assert not res.ok
     assert "not installed" in res.summary
 
@@ -592,9 +592,9 @@ def test_building_an_absent_component_by_name_is_refused_as_not_installed(tmp_pa
 def test_source_check_does_not_fail_a_stack_for_an_absent_optional(tmp_path):
     svc = _svc(tmp_path)
     res = svc.source_check("meshcore")
-    assert "meshcore-nodegui" in " ".join(res.details or ()), \
+    assert "meshcore-webui" in " ".join(res.details or ()), \
         "the skipped component stays visible in the result"
-    assert "meshcore-nodegui" in (res.data or {}).get("excused", [])
+    assert "meshcore-webui" in (res.data or {}).get("excused", [])
 
 
 # --------------------------------------------------------------------------- daemon

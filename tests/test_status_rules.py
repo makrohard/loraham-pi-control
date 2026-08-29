@@ -211,15 +211,19 @@ def test_runtime_band_overlay_stopped_keeps_manifest_default(tmp_path):
 # --- GUI-unavailable overlay (headless truth: skipped-by-design is not "not-installed") -------
 
 def _meshcore_snapshot(svc):
-    """Prober-shaped snapshot for the real manifest meshcore stack: core installed-but-stopped,
-    the OPTIONAL Tk GUI helper not-installed (headless box that never cloned it)."""
+    """Prober-shaped snapshot for the real manifest reticulum stack: core installed-but-stopped,
+    the OPTIONAL GUI helper (sideband) not-installed (headless box that never cloned it).
+
+    Reticulum's `sideband` is the optional-GUI component the overlay must excuse — the same
+    role the Tk MeshCore Node Manager filled before the web-UI migration made MeshCore fully
+    headless (MeshCore now has no gui-gated component at all)."""
     from lhpc.core.model import ComponentStatus
     from lhpc.core.status import Snapshot, StackStatus
-    mc = next(s for s in svc.stacks() if s.id == "meshcore")
+    mc = next(s for s in svc.stacks() if s.id == "reticulum")
     snap = Snapshot(runtime_root_exists=True)
     ss = StackStatus(stack=mc)
     for comp in mc.components:
-        state = RunState.NOT_INSTALLED if comp.id == "meshcore-nodegui" else RunState.STOPPED
+        state = RunState.NOT_INSTALLED if comp.id == "sideband" else RunState.STOPPED
         ss.components[comp.id] = ComponentStatus(component_id=comp.id, run_state=state)
     snap.stacks.append(ss)
     return snap, ss
@@ -233,12 +237,12 @@ def test_gui_unavailable_overlay_marks_component_not_applicable(tmp_path, monkey
     from lhpc.core.status import rollup_states
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(ControllerService, "gui_unavailable_components",
-                        lambda self, stack: ("meshcore-nodegui",))
+                        lambda self, stack: ("sideband",))
     snap, ss = _meshcore_snapshot(svc)
     svc._overlay_gui_unavailable(snap)
-    assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_APPLICABLE
-    assert ss.components["meshcore-node"].run_state is RunState.STOPPED     # untouched
-    assert rollup_states(snap)["meshcore"] == "stopped"
+    assert ss.components["sideband"].run_state is RunState.NOT_APPLICABLE
+    assert ss.components["rns"].run_state is RunState.STOPPED     # untouched
+    assert rollup_states(snap)["reticulum"] == "stopped"
 
 
 def test_gui_unavailable_overlay_leaves_gui_capable_box_alone(tmp_path, monkeypatch):
@@ -257,8 +261,8 @@ def test_gui_unavailable_overlay_leaves_gui_capable_box_alone(tmp_path, monkeypa
                         lambda self, stack: ())
     snap, ss = _meshcore_snapshot(svc)
     svc._overlay_gui_unavailable(snap)
-    assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_INSTALLED
-    assert rollup_states(snap)["meshcore"] == "stopped"
+    assert ss.components["sideband"].run_state is RunState.NOT_INSTALLED
+    assert rollup_states(snap)["reticulum"] == "stopped"
 
 
 # ---- licensed TX overlay -----------------------------------------------------------------

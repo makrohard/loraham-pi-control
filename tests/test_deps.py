@@ -424,10 +424,9 @@ def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
                            "sudo apt install -y libcodec2-dev",
                            "sudo apt install -y libgtk-3-dev",
                            "sudo apt install -y libx11-dev",
-                           "sudo apt install -y python3-dev",
-                           "sudo apt install -y python3-tk"]
+                           "sudo apt install -y python3-dev"]
     assert not set(core) & set(gui)                 # a command lives in exactly one scope
-    assert not any("gtk" in c or "python3-tk" in c or "asound" in c or "codec2" in c for c in core)
+    assert not any("gtk" in c or "asound" in c or "codec2" in c for c in core)
     assert any("ncurses" in c for c in core)        # shared with chat -> core wins
 
 
@@ -568,18 +567,19 @@ def _no_tkinter(monkeypatch):
                         lambda name: None if name == "tkinter" else real(name))
 
 
-def test_meshcore_keeps_working_headless_only_nodegui_is_skipped(tmp_path, monkeypatch):
+def test_meshcore_is_fully_headless_after_the_webui_migration(tmp_path, monkeypatch):
+    # The MeshCore stack's GUI is now the browser-based meshcore-webui (no graphic dependency),
+    # which replaced the Tk Node Manager. So MeshCore has NO gui-gated component: on a headless
+    # box NOTHING is skipped — node, webui and CLI all install.
     svc = _svc(tmp_path)
     _no_tkinter(monkeypatch)
     st = svc.stack("meshcore")
-    assert svc.gui_unavailable_components(st) == ("meshcore-nodegui",)
-    # OPTIONAL GUI component -> the STACK is not skipped: the CLI still works.
+    assert svc.gui_unavailable_components(st) == ()
     assert svc.gui_skipped_stack(st) is False
     work = next(w for s, w in svc._auto_install_scope() if s.id == "meshcore")
-    assert work.skipped == ("meshcore-nodegui",)
+    assert work.skipped == ()
     ids = {c.id for c in work.source} | {c.id for c in work.build} | {c.id for c in work.test}
-    assert "meshcore-nodegui" not in ids
-    assert "meshcore-cli" in ids or "meshcore-node" in ids       # headless components survive
+    assert "meshcore-webui" in ids and "meshcore-node" in ids
 
 
 def test_voice_stack_is_skipped_whole_when_gtk_is_absent(tmp_path):
@@ -611,14 +611,13 @@ def test_direct_build_voice_refuses_before_running_a_step(tmp_path):
     assert _tree(tmp_path) == before
 
 
-def test_direct_build_meshcore_skips_nodegui_and_continues(tmp_path, monkeypatch):
+def test_direct_build_reticulum_skips_sideband_and_continues(tmp_path):
     svc = _svc(tmp_path)
-    _seed_sources(svc, tmp_path, "meshcore")
-    _no_tkinter(monkeypatch)
-    r = svc.build("meshcore", apply=False)
+    _seed_sources(svc, tmp_path, "reticulum")
+    r = svc.build("reticulum", apply=False)
     assert r.ok is True
-    assert not any("[build] meshcore-nodegui" in d for d in r.details)
-    assert any("[skip] meshcore-nodegui" in d for d in r.details)
+    assert not any("[build] sideband" in d for d in r.details)
+    assert any("[skip] sideband" in d for d in r.details)
 
 
 def test_skipped_is_a_valid_marker_status_and_not_a_failure(tmp_path):
@@ -631,13 +630,12 @@ def test_direct_build_of_a_skipped_component_is_typed_no_work_not_success(tmp_pa
     component is skipped, so the result must be an explicit no-work/skipped outcome — never
     "succeeded"/"built" — and it must not execute a build step, mutate a marker or take a lock."""
     svc = _svc(tmp_path)
-    _seed_sources(svc, tmp_path, "meshcore")
-    _no_tkinter(monkeypatch)
+    _seed_sources(svc, tmp_path, "reticulum")
     before = _tree(tmp_path)
-    r = svc.build("meshcore-nodegui", apply=True)
+    r = svc.build("sideband", apply=True)
     assert "succeed" not in r.summary.lower() and "built" not in r.summary.lower()
     assert "Nothing to build" in r.summary
-    assert r.data.get("skipped") == ["meshcore-nodegui"] and r.data.get("built") == 0
+    assert r.data.get("skipped") == ["sideband"] and r.data.get("built") == 0
     assert _tree(tmp_path) == before                      # zero mutation
 
 
@@ -646,29 +644,26 @@ def test_direct_build_of_an_uninstalled_component_says_so(tmp_path, monkeypatch)
     real reason behind the headless skip — the operator asked for THIS component by name, and
     the answer is that it is not installed. Checked BEFORE the GUI gate for exactly that."""
     svc = _svc(tmp_path)
-    _no_tkinter(monkeypatch)
     before = _tree(tmp_path)
-    r = svc.build("meshcore-nodegui", apply=True)
+    r = svc.build("sideband", apply=True)
     assert r.ok is False
     assert "not installed" in r.summary
-    assert r.next_commands == ["lhpc install meshcore"]
+    assert r.next_commands == ["lhpc install reticulum"]
     assert _tree(tmp_path) == before                      # zero mutation
 
 
-def test_dry_run_build_of_a_skipped_component_reports_no_work(tmp_path, monkeypatch):
+def test_dry_run_build_of_a_skipped_component_reports_no_work(tmp_path):
     svc = _svc(tmp_path)
-    _seed_sources(svc, tmp_path, "meshcore")
-    _no_tkinter(monkeypatch)
-    r = svc.build("meshcore-nodegui", apply=False)
+    _seed_sources(svc, tmp_path, "reticulum")
+    r = svc.build("sideband", apply=False)
     assert "Nothing to build" in r.summary
-    assert any("[skip] meshcore-nodegui" in d for d in r.details)
+    assert any("[skip] sideband" in d for d in r.details)
 
 
 def test_partial_build_reports_succeeded_with_gui_skips(tmp_path, monkeypatch):
     """Headless work remains -> it is built AND the skip is preserved in the result."""
     svc = _svc(tmp_path)
-    _seed_sources(svc, tmp_path, "meshcore")
-    _no_tkinter(monkeypatch)
+    _seed_sources(svc, tmp_path, "reticulum")
     calls = []
     life = svc._lifecycle()
     class L:
@@ -682,12 +677,12 @@ def test_partial_build_reports_succeeded_with_gui_skips(tmp_path, monkeypatch):
         def __getattr__(self, n):
             return getattr(life, n)
     monkeypatch.setattr(svc, "_lifecycle", lambda: L())
-    r = svc.build("meshcore", apply=True)
+    r = svc.build("reticulum", apply=True)
     assert r.ok is True
     assert "succeeded with GUI skips" in r.summary
-    assert "meshcore-nodegui" in r.summary
-    assert "meshcore-nodegui" not in calls                 # never built
-    assert r.data.get("skipped") == ["meshcore-nodegui"]
+    assert "sideband" in r.summary
+    assert "sideband" not in calls                 # never built
+    assert r.data.get("skipped") == ["sideband"]
 
 
 # --- order-independent dedup + disjoint counters ---------------------------------------------------

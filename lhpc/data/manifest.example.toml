@@ -2107,7 +2107,7 @@ main = "meshcom-qemu"
 [[stack]]
 id = "meshcore"
 name = "MeshCore (868)"
-summary = "MeshCore node, daemon-backed on 868 (auto-starts the daemon). Optional Node Manager GUI and CLI."
+summary = "MeshCore node, daemon-backed on 868 (auto-starts the daemon). Optional web GUI (browser, via the LHPC proxy) and CLI."
 main = "meshcore-node"
 
   [[stack.component]]
@@ -2352,55 +2352,90 @@ main = "meshcore-node"
     requirement = "MANAGED"
 
   [[stack.component]]
-  id = "meshcore-nodegui"
-  name = "MeshCore Node Manager (GUI)"
+  id = "meshcore-webui"
+  name = "MeshCore Web UI"
   kind = "service"
-  purpose = "Tkinter desktop GUI (main.py); connects to the companion TCP 5000."
+  purpose = "Web GUI (adradr/meshcore-webui) — a browser client of the MeshCore Companion TCP endpoint. Reached through LHPC's TLS/PKI reverse proxy."
   tx_capable = false
   optional = true
   depends_on = ["meshcore-node"]
-  # A GUI app (not a terminal TUI) — lhpc can Start/Stop it; it opens on the Pi's
-  # display (DISPLAY inherited, else :0).
-  run = 'env DISPLAY="${DISPLAY:-:0}" .venv/bin/python main.py'
-  run_argv = [".venv/bin/python", "main.py"]
+  # A FastAPI/uvicorn backend that connects to the openHop-backed Companion node on 5000 and
+  # serves a prebuilt React SPA. Unlike the retired Tk Node Manager it has NO graphical
+  # dependency, so it installs and runs on a headless Pi. The backend binds LOOPBACK; LHPC's
+  # nginx reverse proxy is the only public path (TLS + optional mTLS + CIDR gate), and the
+  # proxy REFUSES the endpoints that would mutate LHPC-owned state (see proxy_deny_paths).
+  run = "{asset}/scripts/meshcore-webui-run.sh {source} {runtime} {asset}/meshcore-webui-dist 127.0.0.1 5000 127.0.0.1 8788"
+  run_argv = ["{asset}/scripts/meshcore-webui-run.sh", "{source}", "{runtime}", "{asset}/meshcore-webui-dist", "127.0.0.1", "5000", "127.0.0.1", "8788"]
+  # The React frontend is PREBUILT and shipped WITH lhpc as package data ({asset}/
+  # meshcore-webui-dist): a Pi Zero 2 W cannot run the Node 20+/Vite build, and LHPC never
+  # runs npm at runtime. Only the Python backend is built on the target.
   build_steps = [
-    { argv = ["python3", "-m", "venv", ".venv"] },
-    { argv = [".venv/bin/pip", "install", "-r", "requirements.txt"], announce = "[install] Python deps (requirements.txt) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    { argv = ["python3", "-m", "venv", "backend/.venv"] },
+    { argv = ["backend/.venv/bin/pip", "install", "./backend"], announce = "[install] meshcore-webui backend (FastAPI/uvicorn/sqlalchemy/meshcore) into {source}/backend/.venv — pip is quiet off-TTY; progress: watch {source}/backend/.venv/lib grow" },
+    # Pin meshcore_py to the exact version proven for this integration, rather than letting
+    # the backend's floating `meshcore>=2.3.7` pull an uncontrolled release at build time.
+    { argv = ["backend/.venv/bin/pip", "install", "meshcore==2.3.9.1"], announce = "[pin] meshcore_py==2.3.9.1 (reproducible Companion client)" },
   ]
-  # In-tree venv interpreter is the build artifact (honest `is_built`).
-  bin = ".venv/bin/python"
-  run_cwd = "{source}"
-  # MESHCORE_NM_HOME: the app creates its state dir at IMPORT time, and under
-  # ProtectHome=read-only that write fails (EROFS) before the GUI is built — the
-  # unit's `-%h/.meshcore_nm` entry is OPTIONAL, so a dir that does not exist yet is
-  # never made writable. Same fix as Sideband's KIVY_HOME: keep the state in-root.
-  run_env = { DISPLAY = "@env:DISPLAY=:0", MESHCORE_NM_HOME = "{runtime}/state/meshcore-nm" }
-  readiness = "process"
-  note = "Desktop GUI (needs a display/X server on the Pi)."
-  start_note = "Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"
+  bin = "backend/.venv/bin/python"
+  build_marker = "backend/.venv/.lhpc-build-complete"
+  build_timeout = 1800.0
+  test_argv = ["backend/.venv/bin/python", "-c", "import app.main; print('meshcore-webui backend import OK')"]
+  test_timeout = 120.0
+  # Backend startup runs alembic migrations then connects to the Companion node; give it room.
+  readiness = "endpoint"
+  readiness_timeout = 90.0
+  run_cwd = "{source}/backend"
+  note = "Browser GUI via the LHPC web proxy — enable the proxy for the meshcore stack in the Webserver page."
+  start_note = "Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."
 
     [stack.component.process]
     exec_name = "python"
-    all_args = ["main.py"]
+    all_args = ["uvicorn", "app.main:app"]
 
-    [[stack.component.require]]
-    # GUI-ONLY: the Node Manager is a Tkinter app, and its venv is built WITHOUT
-    # --system-site-packages, so `import tkinter` resolves through the host python — which only has
-    # the _tkinter extension when python3-tk is installed. Probed by MODULE (in-process
-    # importlib.util.find_spec), never by a version-specific /usr/lib/python3.X/tkinter path.
-    # This component is OPTIONAL: on a headless box it is skipped and the rest of the MeshCore
-    # stack (meshcore-node + the CLI) installs, builds and runs normally.
-    gui = true
-    module = "tkinter"
-    install = "sudo apt install -y python3-tk"
-    note = "Tk toolkit for the Node Manager GUI (desktop only)"
+    # Loopback backend the LHPC proxy sits in front of. `client=true` + `scheme=http` is what
+    # marks it as a proxied web UI (service_webserver.stack_web_upstream). Firewall DENY-DEFAULT:
+    # the raw backend port is never exposed directly; the sanctioned path is the stack web proxy.
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:8788"
+    ready = true
+    role = "listener"
+    client = true
+    scheme = "http"
+    description = "MeshCore Web UI"
+    # The backend binds LOOPBACK (127.0.0.1:8788), so it is unreachable off-box and needs NO
+    # managed deny rule (unlike meshtasticd's 0.0.0.0 listeners, which do). `auth = "none"`
+    # records the firewall stance without adding a rule — no pending firewall change gates the
+    # start. The ONLY exposed path is the LHPC nginx stack-web proxy (TLS/mTLS/CIDR), whose own
+    # listener IS firewall-managed on the Webserver page.
+    firewall = { auth = "none" }
+    # LHPC-owned operations the proxy REFUSES (403), enforced server-side at the perimeter —
+    # the backend is loopback-only, so these paths are unreachable from any browser/LAN client.
+    # Factory reset would destroy the LHPC-managed identity; radio/tx/tuning fight the daemon's
+    # LoRa config; position bypasses LHPC's GPS policy; admin/reset can reboot/wipe device state;
+    # name is LHPC-owned. Everything else (messages, contacts, channels, trace, adverts, ws) is
+    # ordinary Companion-client traffic and passes through.
+    proxy_deny_paths = [
+      "/api/device/reset",
+      "/api/device/radio",
+      "/api/device/tx-power",
+      "/api/device/tuning",
+      "/api/device/position",
+      "/api/device/name",
+      "/api/admin/reset",
+    ]
+
+    [[stack.component.resource]]
+    key = "tcp.port.8788"
+    kind = "tcp-port"
+    mode = "exclusive"
 
     [stack.component.source]
-    path = "src/meshcore-node-manager"
-    pin_commit = "6d19a3d0a0c7f386463b14181aaa82b254ec07e4"
-    pin_tag = "6d19a3d"
-    remote = "https://github.com/makrohard/meshcore-node-manager.git"
-    branch = "meshcore-api-compat"
+    path = "src/meshcore-webui"
+    pin_commit = "94dcc3d845dd09be03896694de2190e39a020086"
+    pin_tag = "94dcc3d"
+    remote = "https://github.com/adradr/meshcore-webui.git"
+    branch = "main"
 
   [[stack.component]]
   id = "meshcore-cli"

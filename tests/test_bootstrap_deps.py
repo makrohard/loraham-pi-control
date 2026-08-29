@@ -885,7 +885,6 @@ def test_with_gui_installs_the_gui_packages(tmp_path):
     r, _cfg, apt, _um = _run(tmp_path, ["--spi-mode", "soft-cs", "--with-gui"])
     assert r.returncode == 0, r.stderr
     assert "libgtk-3-dev" in apt
-    assert "python3-tk" in apt
 
 
 def test_gui_packages_are_not_in_the_default_apt_block(tmp_path):
@@ -896,7 +895,7 @@ def test_gui_packages_are_not_in_the_default_apt_block(tmp_path):
     lines = [ln for ln in apt.splitlines() if ln.startswith("apt-get install")]
     assert len(lines) == 2, apt                      # core block + guarded GUI block
     assert "libgtk-3-dev" not in lines[0] and "python3-tk" not in lines[0]
-    assert "libgtk-3-dev" in lines[1] and "python3-tk" in lines[1]
+    assert "libgtk-3-dev" in lines[1]
 
 
 # --- --dry-run pre-flight verdicts ------------------------------------------------------------

@@ -1763,54 +1763,24 @@ def test_frozen_artifact_provenance_text_is_truthful(tmp_path):
 
 # --- live-finding fixes: optional comps in scope; starting card; dev default -----------------
 
-def test_auto_install_scope_includes_optional_components(tmp_path, monkeypatch):
+def test_auto_install_scope_includes_optional_components(tmp_path):
     # USER GOAL: every declared source lives and builds under <root>/src — optional
-    # components (meshcore-cli, node-manager, firmwares, kiss-serial) are IN scope, and
-    # the boundary's lock set therefore covers everything build()/test() touch (live
-    # finding: 'auto-install operation context does not cover src/meshcore-cli ...').
-    # meshcore-nodegui is GUI-gated (tkinter). BOTH gate states are SIMULATED via find_spec —
-    # the suite discipline (see the Item-K note in test_deps.py): never inferred from the host,
-    # so every box (GUI or headless) asserts both branches deterministically.
-    import importlib.util
-    real = importlib.util.find_spec
-    for gui in (True, False):
-        monkeypatch.setattr(
-            importlib.util, "find_spec",
-            lambda name, real=real, gui=gui:
-                ((real(name) or real("json")) if gui else None)
-                if name == "tkinter" else real(name))
-        svc = _svc(tmp_path)
-        scope = svc._auto_install_scope()
-        mc = next(w for st, w in scope if st.id == "meshcore")
-        ids = {c.id for c in mc.source}
-        assert {"meshcore-node", "meshcore-cli"} <= ids
-        assert ("meshcore-nodegui" in ids) is gui
-        all_paths = {c.source.path for _, w in scope for c in w.source}
-        assert "src/meshcore-cli" in all_paths
-        assert ("src/meshcore-node-manager" in all_paths) is gui
-
-
-@pytest.mark.needs_session
-def test_auto_install_build_context_covers_optional_paths(tmp_path, monkeypatch):
-    # The driver's build call for meshcore must NOT be refused for uncovered paths.
-    _happy_ops(monkeypatch)
-    refusals = []
-    real_err = ControllerService._auto_install_ctx_error
-    def spy(self, auto_install_ctx, source_paths):
-        r = real_err(self, auto_install_ctx, source_paths)
-        if r:
-            refusals.append(r)
-        return r
-    monkeypatch.setattr(ControllerService, "_auto_install_ctx_error", spy)
+    # components (meshcore-cli, meshcore-webui, firmwares, kiss-serial) are IN scope, so
+    # the boundary's lock set covers everything build()/test() touch (live finding:
+    # 'auto-install operation context does not cover src/meshcore-cli ...').
+    #
+    # MeshCore is now fully HEADLESS: its GUI is the browser-based meshcore-webui (no graphic
+    # dependency), which replaced the Tk Node Manager — so every MeshCore component is always
+    # in scope, on a GUI box or a headless one alike. The gui-gate mechanism itself is covered
+    # by reticulum/sideband in test_deps.py and test_status_rules.py.
     svc = _svc(tmp_path)
-    svc.auto_install(apply=True, tests=False, emit=lambda s: None)
-    assert not refusals, refusals                                # zero coverage refusals
-    st = svc.auto_install_status()
-    # `skipped` = a GUI-only stack deliberately not installed on this headless test system; it is an
-    # accepted outcome (never `success`, never a failure). Nothing may FAIL or be BLOCKED here.
-    assert all(x["status"] in ("success", "skipped") for x in st["stacks"])
-    assert any(x["status"] == "success" for x in st["stacks"])
-
+    scope = svc._auto_install_scope()
+    mc = next(w for st, w in scope if st.id == "meshcore")
+    ids = {c.id for c in mc.source}
+    assert {"meshcore-node", "meshcore-cli", "meshcore-webui"} <= ids
+    all_paths = {c.source.path for _, w in scope for c in w.source}
+    assert "src/meshcore-cli" in all_paths
+    assert "src/meshcore-webui" in all_paths
 
 def test_optional_secret_file_form(tmp_path):
     from lhpc.core import commands

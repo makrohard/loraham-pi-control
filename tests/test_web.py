@@ -678,7 +678,7 @@ def test_loopback_set_is_exactly_localhost():
     assert _LOOPBACK_HOSTS == {"127.0.0.1", "::1"}
 
 
-# --- transient green start-note (meshcore-nodegui connect hint) ---------------
+# --- transient green start-note (meshcore-webui access hint) ---------------
 
 def test_start_note_for_started_component():
     from lhpc.core.services import ControllerService, ActionResult
@@ -689,16 +689,16 @@ def test_start_note_for_started_component():
     svc = ControllerService(system=FakeSystem().system,
                             paths=Paths(runtime_root=pathlib.Path(tempfile.mkdtemp())))
     verified = ActionResult(True, "ok", results=(
-        CompResult(component="meshcore-nodegui", action="start", outcome=Outcome.VERIFIED),))
-    assert svc.start_notes(verified) == ["Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"]
+        CompResult(component="meshcore-webui", action="start", outcome=Outcome.VERIFIED),))
+    assert svc.start_notes(verified) == ["Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."]
     # already-healthy also emits the note
     healthy = ActionResult(True, "ok", results=(
-        CompResult(component="meshcore-nodegui", action="start", outcome=Outcome.ALREADY_HEALTHY),))
-    assert svc.start_notes(healthy) == ["Connect MeshCore-Node-GUI to TCP 127.0.0.1 Port 5000"]
+        CompResult(component="meshcore-webui", action="start", outcome=Outcome.ALREADY_HEALTHY),))
+    assert svc.start_notes(healthy) == ["Open the MeshCore Web UI via the LHPC Webserver page (enable its proxy for the meshcore stack)."]
     # blocked / unverified / failed -> NO note
     for bad in (Outcome.BLOCKED, Outcome.UNVERIFIED, Outcome.FAILED):
         res = ActionResult(True, "ok", results=(
-            CompResult(component="meshcore-nodegui", action="start", outcome=bad),))
+            CompResult(component="meshcore-webui", action="start", outcome=bad),))
         assert svc.start_notes(res) == []
 
 

@@ -427,6 +427,7 @@ class StackWebProxy:
     swc: object                    # config.StackWebConfig
     upstream_address: str            # "127.0.0.1:18083"
     upstream_scheme: str             # "http" | "https"
+    deny_paths: tuple = ()           # exact request paths this proxy refuses (-> 403)
 
 
 def nginx_token(stack_id: str) -> str:
@@ -609,6 +610,20 @@ def _stack_allow_deny(swc) -> str:
     return "\n        ".join(lines)
 
 
+def _stack_deny_locations(s) -> str:
+    """Exact-match `location` blocks that refuse LHPC-owned operations a proxied web-UI
+    backend exposes (factory reset, radio/GPS mutation, …). Exact match (`location = P`)
+    beats the prefix `location /`, so these win for the precise paths and nothing else is
+    affected. Enforced at LHPC's perimeter; the backend is loopback-only."""
+    paths = getattr(s, "deny_paths", ()) or ()
+    if not paths:
+        return ""
+    out = []
+    for p in paths:
+        out.append(f"        location = {p} {{ return 403; }}")
+    return "\n".join(out)
+
+
 def _stack_blocks(paths: Paths, cfg: WebserverConfig, stack_webs) -> tuple:
     """(http_prelude, server_blocks) for the per-stack web-UI proxies. ('', '') when none are
     enabled — which is what keeps a default deployment's config byte-identical."""
@@ -657,7 +672,7 @@ def _stack_blocks(paths: Paths, cfg: WebserverConfig, stack_webs) -> tuple:
         server_name _;
 {tls}
         {_stack_allow_deny(swc)}
-
+{_stack_deny_locations(s)}
         location / {{
             if ($lhpc_need_auth_{tok}) {{ return 403; }}
 

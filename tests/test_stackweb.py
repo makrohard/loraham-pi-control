@@ -556,12 +556,16 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     svc = _svc(tmp_path)
     # console_port + 1 + position among the web-UI stacks sorted BY ID, so "graywolf"
     # takes the first slot and the mesh* stacks follow it.
+    # web-UI stacks sorted BY ID: graywolf, meshcom, meshcore, meshtastic (meshcore's
+    # browser GUI joined the set with the web-UI migration).
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
     assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8446   # distinct even when none is enabled
+    assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
+    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447   # distinct even when none is enabled
     # stable after one is enabled
     svc.stack_web_configure("meshcom", mode="local", port=8445)
-    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8446
+    assert svc.stack_web_view("meshtastic")["suggested_port"] == 8447
+    assert svc.stack_web_view("meshcore")["suggested_port"] == 8446
     assert svc.stack_web_view("meshcom")["suggested_port"] == 8445
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
 

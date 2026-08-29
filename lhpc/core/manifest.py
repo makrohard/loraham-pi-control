@@ -212,8 +212,10 @@ def _check_token(cid: str, tok: str, names: set) -> None:
                            "gps_mode", "gps_fixed_args", "gps_args"):
             raise ManifestError(f"{cid}: unknown placeholder {tok!r}")
         return
+    # `{asset}/...` — a packaged-data path (build steps and run commands both resolve it via
+    # commands._asset_token, which validates each path segment). Allow it in literal tokens.
     stripped = (tok.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
-                   .replace("{controller_python}", ""))
+                   .replace("{controller_python}", "").replace("{asset}", ""))
     if "{" in stripped or "}" in stripped:
         raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
 
@@ -729,7 +731,22 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         client=raw.get("client", False),
         scheme=raw.get("scheme", ""),
         firewall=_parse_firewall_meta(raw.get("firewall")),
+        proxy_deny_paths=_parse_proxy_deny_paths(raw.get("proxy_deny_paths")),
     )
+
+
+def _parse_proxy_deny_paths(raw) -> tuple:
+    """Exact request paths a web-UI proxy must refuse. Each must be an absolute path
+    (leading '/', no whitespace) so it maps to a literal nginx `location = <path>`."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise ValueError("proxy_deny_paths must be a list of strings")
+    for x in raw:
+        if not x.startswith("/") or any(c.isspace() for c in x):
+            raise ValueError(f"proxy_deny_paths entry must be an absolute path with no "
+                             f"whitespace: {x!r}")
+    return tuple(raw)
 
 
 _FIREWALL_KEYS = {"port_param", "bind_param", "allow_param", "auth", "deny"}

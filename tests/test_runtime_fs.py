@@ -959,7 +959,7 @@ def test_no_tmp_or_root_escape_tokens_in_manifest():
 def test_python_stacks_have_in_tree_venv_build_steps():
     d = _manifest_dict()
     comps = {c["id"]: c for st in d["stack"] for c in st.get("component", [])}
-    for cid in ("meshcore-node", "meshcore-nodegui", "meshcore-cli"):
+    for cid in ("meshcore-node", "meshcore-webui", "meshcore-cli"):
         steps = comps[cid].get("build_steps", [])
         # meshcore-node prepends an lhpc-shipped patch step to the pinned upstream
         # checkout; the in-tree venv step must still exist for every python stack.
@@ -969,6 +969,10 @@ def test_python_stacks_have_in_tree_venv_build_steps():
             venv_step = next(s for s in steps if s["argv"][:3] == ["python3", "-m", "venv"])
             assert "--system-site-packages" in venv_step["argv"]
             assert not any("rpi-lgpio" in a for s in steps for a in s["argv"])
+        elif cid == "meshcore-webui":
+            # backend venv lives in backend/.venv (the frontend is prebuilt + shipped, never
+            # built on the target), so its pip is backend/.venv/bin/pip.
+            assert any(s["argv"][0] == "backend/.venv/bin/pip" for s in steps), cid
         else:
             assert steps[1]["argv"][0] == ".venv/bin/pip", cid
     # meshcom-qemu is self-sufficient from a FRESH clone: the MANAGED tools (a PlatformIO venv + the

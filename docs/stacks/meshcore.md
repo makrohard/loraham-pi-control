@@ -13,14 +13,14 @@ former standalone `meshcore-pi` node; LHPC no longer maintains a MeshCore fork o
 
 | | |
 |---|---|
-| Components | `meshcore-node` (openHop node), optional `meshcore-nodegui` (GUI), `meshcore-cli` (REPL tool) |
+| Components | `meshcore-node` (openHop node), optional `meshcore-webui` (browser GUI), `meshcore-cli` (REPL tool) |
 | Source | `openhop-core` — a managed clone of openHop Core under `<runtime>/src` (pinned commit), plus one small LHPC-shipped patch applied idempotently at build; the `.venv` is built in-tree by `lhpc build meshcore` and the `meshcore_host` host application (shipped with LHPC) is installed into it |
 | Node run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` |
 | Config | `meshcore.toml` (mode `0600` — it carries the node's private key): preset, node name, txpower, frequency/SF/BW/CR, airtime, allow-list, port, persistence DB, GPS |
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (mode `0600`) |
 | Persistence | `<runtime>/state/meshcore/companion.db` (SQLite; contacts, channels, learned routes, prefs, offline messages survive restart) |
 | Companion | TCP `:5000` |
-| Optional | `meshcore-nodegui` — Tkinter GUI (`lhpc`-started, needs a display); `meshcore-cli` — interactive REPL (run yourself) |
+| Optional | `meshcore-webui` — browser GUI (adradr/meshcore-webui) reached through the LHPC TLS/PKI proxy; `meshcore-cli` — interactive REPL (run yourself) |
 
 Daemon interface: `GET STATUS`, `SET TXMODE=MANAGED`. A future direct-SX1262 profile
 would own SPI exclusively and conflict with the daemon; it is not the default.
@@ -88,17 +88,32 @@ normalized position, and neither side logs coordinates.
 
 ## Headless systems
 
-MeshCore is fully usable without a graphical environment: `meshcore-node` and `meshcore-cli` have no
-GUI dependencies. Only the optional **Node Manager** (`meshcore-nodegui`) is a Tkinter application
-and needs the host's `python3-tk` — its venv is built without `--system-site-packages`, so the
-package must be present on the system.
+MeshCore is fully usable without a graphical environment. The retired Tk **Node Manager** needed
+an X server and `python3-tk`, so it was skipped on a headless box; the replacement
+**`meshcore-webui`** is a browser GUI with **no graphic dependency at all** — it installs and runs
+on a headless Pi and is reached from any browser (desktop or phone) through the LHPC web proxy.
+The MeshCore stack therefore has no gui-gated component: `lhpc build meshcore` builds everything on
+a headless box.
 
-`bootstrap-deps.sh` omits GUI dependencies by default. On a headless box the Node Manager is skipped
-and the rest of the stack installs, builds and runs normally. Add `--with-gui` on a machine with a
-display to include it.
+## MeshCore Web UI
 
-Because the Node Manager is optional, a box that never installed it is not a broken MeshCore:
-`lhpc build meshcore` skips it, `lhpc source-check meshcore` does not count it against the
-stack, and the stack badge reflects `meshcore-node` and the CLI. The component itself still
-reports `not-installed`, and asking for it by name is answered honestly — `lhpc build
-meshcore-nodegui` says it is not installed rather than reporting nothing to do.
+`meshcore-webui` is an ordinary **client of the MeshCore Companion TCP endpoint** (127.0.0.1:5000):
+a FastAPI/uvicorn backend that connects to the openHop-backed node and serves a prebuilt React SPA.
+LHPC keeps ownership of identity, GPS, the LoRa radio, lifecycle, PKI, the proxy and the firewall;
+the GUI never becomes a second owner of those.
+
+* **Runtime** — the Python backend runs natively (no Docker, no runtime `pip`/`npm`); the React
+  frontend is **prebuilt** and shipped with LHPC as package data (a Pi Zero cannot run the Node
+  build). `meshcore_py` is pinned for a reproducible Companion client.
+* **Exposure** — the backend binds **loopback only**; the sole public path is the LHPC nginx
+  reverse proxy (TLS, optional mTLS, CIDR gate), enabled per stack on the **Webserver** page.
+* **Security boundary** — the proxy **refuses** (`403`) the operations LHPC owns: factory reset
+  (would destroy the managed identity), radio / TX-power / tuning (the daemon owns the LoRa
+  config), position (LHPC owns the GPS policy), device name, and the device-touching admin reset.
+  Enforced server-side at the perimeter, not in JavaScript; the backend has no private-key
+  import/export endpoint. Everything else — messages, contacts, channels, TRACE, adverts — is
+  ordinary Companion-client traffic and passes through.
+* **State** — the WebUI keeps its OWN SQLite store (message history, GUI preferences, tile cache)
+  under `<runtime>/state/meshcore-webui/`. It is a cache/display layer; the authoritative MeshCore
+  identity, contacts, channels and routes live in the node, never in the WebUI database.
+

@@ -229,6 +229,11 @@ class EndpointSpec:
     scheme: str = ""             # "http"|"kiss"|"tcp"|"serial"… (http renders a link)
     # Managed-Firewall semantics; None on non-firewall-relevant endpoints (unix, external).
     firewall: FirewallMeta | None = None
+    # Exact request paths the web proxy must REFUSE (nginx `location = <path>` -> 403), for a
+    # proxied web UI whose backend exposes operations LHPC owns (e.g. a MeshCore GUI's
+    # factory-reset / radio / GPS mutations). Server-side enforcement at LHPC's perimeter, not
+    # JS: the backend is loopback-only, so the proxy is the reachable path. Empty = deny nothing.
+    proxy_deny_paths: tuple = ()
 
 
 @dataclass(frozen=True)

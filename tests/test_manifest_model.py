@@ -156,7 +156,7 @@ def test_gui_stacks_keep_their_state_out_of_a_read_only_home():
     # OPTIONAL (leading `-`), so on a fresh box that path is never made writable — the
     # env var is what actually fixes it, and the units are byte-frozen anyway.
     comps = _index(load_manifest())
-    for cid, var in (("meshcore-nodegui", "MESHCORE_NM_HOME"), ("sideband", "KIVY_HOME")):
+    for cid, var in (("sideband", "KIVY_HOME"),):
         env = dict(comps[cid].run_env or ())      # run_env is a tuple of pairs, not a dict
         assert var in env, f"{cid}: {var} missing — a read-only HOME would break startup"
         assert env[var].startswith("{runtime}/"), \

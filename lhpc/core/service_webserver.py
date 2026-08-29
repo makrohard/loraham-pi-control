@@ -282,6 +282,18 @@ class WebserverOpsMixin:
                     return (ep.address, ep.scheme)
         return None
 
+    def stack_web_deny_paths(self, stack_id: str) -> tuple:
+        """Request paths the stack's web-UI proxy must refuse (from the SAME manifest endpoint
+        stack_web_upstream reads). Empty when the stack declares none."""
+        s = self.stack(stack_id)
+        if s is None:
+            return ()
+        for comp in s.components:
+            for ep in comp.endpoints:
+                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                    return tuple(getattr(ep, "proxy_deny_paths", ()))
+        return ()
+
     def stack_web_eligible(self) -> list:
         """Stack ids that expose a web UI (derived from the manifest, never hardcoded)."""
         return [s.id for s in self.stacks() if self.stack_web_upstream(s.id) is not None]
@@ -298,7 +310,7 @@ class WebserverOpsMixin:
             up = self.stack_web_upstream(sid)
             if up is None:                       # eligibility changed under us; skip, never render half
                 continue
-            out.append(_ws.StackWebProxy(swc, up[0], up[1]))
+            out.append(_ws.StackWebProxy(swc, up[0], up[1], self.stack_web_deny_paths(sid)))
         return out
 
     def _stack_listen_scope(self, swc, listeners=None) -> str:
