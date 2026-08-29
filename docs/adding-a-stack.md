@@ -108,7 +108,7 @@ LHPC verifies the start:
 
 **Slow starters:** a component that imports a big stack before opening its port can exceed
 the default readiness window — give it a longer one with `readiness_timeout` (seconds, 0 =
-default), e.g. `meshcore-pi` uses `readiness_timeout = 45.0`.
+default), e.g. `meshcore-node` uses `readiness_timeout = 120.0`.
 
 ### Endpoints
 

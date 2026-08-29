@@ -1,7 +1,7 @@
 From 448769300cae76f5fb81dedcee3d6b92c69dac4a Mon Sep 17 00:00:00 2001
 From: makrohard <410733@gmail.com>
 Date: Sat, 29 Aug 2026 03:16:06 +0200
-Subject: [PATCH] fix: deliver PATH-embedded ACKs without dispatcher-level
+Subject: [PATCH 1/2] fix: deliver PATH-embedded ACKs without dispatcher-level
  waiters
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -117,6 +117,153 @@ index 0b9b448..842c8e4 100644
 +    assert found == ack_crc
 +    await handler._notify_ack_received(found)
 +    assert notified == [ack_crc]
+-- 
+2.43.0
+
+
+From 01cc8eb01a0fc0cf6b166a347bb5b2bbd2e63774 Mon Sep 17 00:00:00 2001
+From: makrohard <410733@gmail.com>
+Date: Sat, 29 Aug 2026 03:49:09 +0200
+Subject: [PATCH 2/2] fix: mark listener-consumed discrete ACKs
+ do-not-retransmit
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Firmware BaseChatMesh::onAckRecv suppresses client-repeat retransmission
+whenever processAck matched — including ACKs a companion tracks app-side.
+The handler only consulted dispatcher._waiting_acks, which companions never
+populate, so a client-repeat companion re-flooded ACKs addressed to itself.
+Let the ack-received listener report consumption (invoke_maybe_awaitable now
+returns the callback result) and honour either signal; capture waiter
+membership before notifying since the notify path pops the waiter.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PNqFWYfG7g4sUPSLATur78
+---
+ src/openhop_core/companion/companion_radio.py | 10 ++++---
+ src/openhop_core/node/handlers/ack.py         | 20 ++++++++++----
+ src/openhop_core/util/callbacks.py            |  8 +++---
+ tests/test_path_ack_handler.py                | 27 +++++++++++++++++++
+ 4 files changed, 54 insertions(+), 11 deletions(-)
+
+diff --git a/src/openhop_core/companion/companion_radio.py b/src/openhop_core/companion/companion_radio.py
+index c8cd054..8011ddb 100644
+--- a/src/openhop_core/companion/companion_radio.py
++++ b/src/openhop_core/companion/companion_radio.py
+@@ -445,9 +445,13 @@ class CompanionRadio(CompanionBase):
+         rssi = getattr(pkt, "rssi", getattr(pkt, "_rssi", 0))
+         await self._fire_callbacks("rx_log_data", snr, rssi, data)
+ 
+-    async def _on_ack_received(self, crc: int) -> None:
+-        """Called by dispatcher when an ACK CRC is received; fire send_confirmed if pending."""
+-        await self._try_confirm_send(crc)
++    async def _on_ack_received(self, crc: int) -> bool:
++        """Called by dispatcher when an ACK CRC is received; fire send_confirmed if pending.
++
++        Returns whether the CRC matched a pending app-side send, so the ACK
++        handler can mark the packet do-not-retransmit (firmware onAckRecv).
++        """
++        return await self._try_confirm_send(crc)
+ 
+     async def _on_raw_custom_received(self, pkt: Packet) -> None:
+         """Dispatcher RAW_CUSTOM handler: fire raw_data_received(payload, snr, rssi)."""
+diff --git a/src/openhop_core/node/handlers/ack.py b/src/openhop_core/node/handlers/ack.py
+index 055aa8c..11cc8a8 100644
+--- a/src/openhop_core/node/handlers/ack.py
++++ b/src/openhop_core/node/handlers/ack.py
+@@ -44,10 +44,18 @@ class AckHandler(BaseHandler):
+             # Firmware BaseChatMesh::onAckRecv marks the packet do-not-retransmit
+             # when the ACK matches a message this node sent (processAck != NULL),
+             # so a client repeater does not re-flood an ACK addressed to itself.
+-            # _waiting_acks holds the CRCs we are awaiting — the Core equivalent.
+-            if self.dispatcher is not None and ack_crc in self.dispatcher._waiting_acks:
++            # Two places can be awaiting it: dispatcher-level waiters
++            # (_waiting_acks) and an application listener (a companion tracks
++            # expected ACK CRCs app-side) — the listener reports whether it
++            # consumed the CRC, so check it FIRST and honour either.
++            # Capture dispatcher-waiter membership BEFORE notifying: the notify
++            # callback resolves that waiter and removes it from _waiting_acks.
++            was_waiting = (
++                self.dispatcher is not None and ack_crc in self.dispatcher._waiting_acks
++            )
++            consumed = await self._notify_ack_received(ack_crc)
++            if consumed or was_waiting:
+                 packet.mark_do_not_retransmit()
+-            await self._notify_ack_received(ack_crc)
+ 
+     async def process_discrete_ack(self, packet: Packet) -> Optional[int]:
+         """Process a discrete ACK packet and return the CRC if valid."""
+@@ -157,6 +165,8 @@ class AckHandler(BaseHandler):
+         return None
+ 
+     async def _notify_ack_received(self, crc: int):
+-        """Notify the dispatcher that an ACK was received."""
++        """Notify the registered listener; return its (truthy) result when it
++        reports having consumed the ACK."""
+         if self._ack_received_callback:
+-            await invoke_maybe_awaitable(self._ack_received_callback, crc)
++            return await invoke_maybe_awaitable(self._ack_received_callback, crc)
++        return None
+diff --git a/src/openhop_core/util/callbacks.py b/src/openhop_core/util/callbacks.py
+index d10d335..8fb91a8 100644
+--- a/src/openhop_core/util/callbacks.py
++++ b/src/openhop_core/util/callbacks.py
+@@ -6,14 +6,16 @@ import inspect
+ from typing import Any, Callable
+ 
+ 
+-async def invoke_maybe_awaitable(callback: Callable[..., Any], *args: Any) -> None:
++async def invoke_maybe_awaitable(callback: Callable[..., Any], *args: Any) -> Any:
+     """Call ``callback(*args)`` and await the result when it is awaitable.
+ 
+     True ``async def`` callbacks, sync wrappers that return a coroutine or
+     other awaitable, and callable objects with ``async def __call__`` are
+     all awaited inline. Plain sync callbacks that return ``None`` (or any
+-    non-awaitable) complete without scheduling.
++    non-awaitable) complete without scheduling. The callback's result is
++    returned so callers can act on it.
+     """
+     result = callback(*args)
+     if inspect.isawaitable(result):
+-        await result
++        return await result
++    return result
+diff --git a/tests/test_path_ack_handler.py b/tests/test_path_ack_handler.py
+index 842c8e4..f4da6a5 100644
+--- a/tests/test_path_ack_handler.py
++++ b/tests/test_path_ack_handler.py
+@@ -386,3 +386,30 @@ async def test_path_embedded_ack_notifies_listener_without_dispatcher_waiters():
+     assert found == ack_crc
+     await handler._notify_ack_received(found)
+     assert notified == [ack_crc]
++
++
++@pytest.mark.asyncio
++async def test_discrete_ack_consumed_by_listener_marks_do_not_retransmit():
++    """Companion-tracked ACKs (listener returns True) must also suppress
++    client-repeat retransmission, like firmware onAckRecv's processAck match."""
++    ack_crc = 0x0BADF00D
++    dispatcher = SimpleNamespace(
++        local_identity=LOCAL_IDENTITY,
++        contact_book=ContactStore(),
++        _waiting_acks={},  # nothing waits at dispatcher level
++    )
++    handler = AckHandler(lambda _m: None, dispatcher)
++
++    async def listener(crc):
++        return crc == ack_crc  # the companion recognises its pending send
++
++    handler.set_ack_received_callback(listener)
++    packet = Packet()
++    packet.header = 1 << 2  # PAYLOAD_TYPE_ACK, route flood
++    packet.path_len = 0
++    packet.path = bytearray()
++    packet.payload = bytearray(ack_crc.to_bytes(4, "little"))
++    packet.payload_len = 4
++    await handler(packet)
++    assert packet.is_marked_do_not_retransmit() is True, \
++        "consumed ACK must be marked do-not-retransmit"
 -- 
 2.43.0
 

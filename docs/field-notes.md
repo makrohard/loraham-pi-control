@@ -241,9 +241,9 @@ line, and BCM 6/13 are the daemon-owned LEDs (held via lgpio). A stale `Reset: 6
 assert-abort (`gpiod_line_request_reconfigure_lines 'request' failed`) whenever the LoRaHAM daemon
 runs first. Do **not** re-add Reset/Busy. (Safe on a Pi 5 too — reset is optional there.)
 
-## GPIO provider (meshcore-pi / RPi.GPIO)
+## GPIO provider (meshcore-node / RPi.GPIO)
 
-The managed **meshcore-pi (868)** node runs the daemon-socket interface (`lorahaminterface`): it reaches
+The managed **meshcore-node (868)** node reaches the radio through the LoRaHAM daemon sockets (via the openHop LoRaHAM radio adapter): it reaches
 the radio over the loraham daemon's unix sockets and never drives SPI/GPIO itself, so it needs no GPIO
 bindings and no `LoRaRF` (dropped from its venv — that also drops the transitive `RPi.GPIO`, whose sdist
 does not build on Trixie's Python). Both hardware classes keep their OS GPIO defaults.
