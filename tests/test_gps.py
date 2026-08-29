@@ -1210,23 +1210,27 @@ def _run_feed(paths, consumer, stop):
     return run(consumer, paths, stop=stop)
 
 
-def test_the_bridge_serves_meshcore_over_a_real_pty(tmp_path, fake_gpsd):
-    """AUDIT-FOUND: the manifest declared a `meshcore-gps` component and the planner
-    selected it, but the bridge RUNTIME still accepted only meshtastic/meshcom — so the
-    real `lhpc _gps-bridge meshcore` exited EXIT_CONFIG and the feed could never come up.
-
-    A declaration nothing can execute is worse than no declaration: the stack looks wired.
+def test_the_bridge_serves_meshcore_a_position_feed(tmp_path, fake_gpsd):
+    """MeshCore's consumer is the openHop host app: it needs a normalized POSITION
+    (line-JSON on a Unix server socket), not a simulated GPS chip. The bridge must
+    accept the meshcore consumer, publish the position socket, convert a fixed NMEA
+    sentence into {"fix": true, lat, lon}, and tear everything down on stop.
     """
+    import json
     import os
+    import socket as socket_mod
     import threading
     import time
     from lhpc.core.config import save_gps
-    from lhpc.core.gps import bridge_state_dir
+    from lhpc.core.gps import bridge_endpoint_path, bridge_state_dir
     from lhpc.core.gps_bridge import EXIT_OK
     from lhpc.core.paths import Paths
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     paths = Paths(runtime_root=tmp_path)
-    srv = fake_gpsd(sentences=["$GPGGA,000000.00,,,,,0,00,,,M,,M,,*66"])
+    # 52°31.2000'N 13°24.6000'E with a valid fix, then a no-fix GGA.
+    srv = fake_gpsd(sentences=[
+        "$GPRMC,000001.00,A,5231.2000,N,01324.6000,E,0.0,0.0,010124,,,A*5C",
+    ])
     save_gps(paths, source="gpsd", host="127.0.0.1", port=srv.port)
     stop = threading.Event()
     rc = {}
@@ -1234,28 +1238,71 @@ def test_the_bridge_serves_meshcore_over_a_real_pty(tmp_path, fake_gpsd):
                          daemon=True)
     t.start()
     state = os.path.join(bridge_state_dir(tmp_path, "meshcore"), "readiness.json")
-    link = os.path.join(bridge_state_dir(tmp_path, "meshcore"), "nmea0")
+    sock_path = bridge_endpoint_path(tmp_path, "meshcore")
     deadline = time.time() + _FEED_UP_S
+    while not os.path.exists(sock_path) and time.time() < deadline:
+        time.sleep(0.05)
+    assert os.path.exists(sock_path), "the position socket must be published"
+
+    client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+    client.settimeout(_FEED_UP_S)
+    client.connect(sock_path)
+    buf = b""
+    while b"\n" not in buf and time.time() < deadline:
+        buf += client.recv(4096)
+    record = json.loads(buf.split(b"\n")[0])
+    assert record["fix"] is True
+    assert abs(record["lat"] - (52 + 31.2 / 60)) < 1e-6
+    assert abs(record["lon"] - (13 + 24.6 / 60)) < 1e-6
+    client.close()
     while not os.path.exists(state) and time.time() < deadline:
         time.sleep(0.05)
-    assert os.path.islink(link), "the PTY endpoint must be published"
     assert os.path.exists(state), f"readiness must be written (waited {_FEED_UP_S}s)"
 
     stop.set()
     t.join(timeout=_FEED_UP_S)
     srv.close()
     assert rc.get("v") == EXIT_OK, "the bridge must not refuse meshcore as an unknown consumer"
-    assert not os.path.islink(link)
+    assert not os.path.exists(sock_path), "a stopped bridge must not leave a live-looking feed"
     assert not os.path.exists(state)
 
 
-def test_the_pty_the_bridge_publishes_is_the_one_the_config_names(tmp_path):
+def test_no_fix_nmea_becomes_an_explicit_no_fix_record(tmp_path):
+    """A navigation sentence WITHOUT a usable fix must reach the consumer as
+    {"fix": false} — silence would leave the old moving position advertised."""
+    import json
+    import socket as socket_mod
+    import time
+    from lhpc.core.gps_bridge import PosJsonServerOutput
+    link = str(tmp_path / "position.sock")
+    out = PosJsonServerOutput(link)
+    out.publish()
+    try:
+        # Fix first, then no-fix; a late client still learns the current state.
+        out.write(b"$GPRMC,000001.00,A,5231.2000,N,01324.6000,E,0.0,0.0,010124,,,A*5C\r\n")
+        out.write(b"$GPRMC,000002.00,V,,,,,,,010124,,,N*79\r\n")
+        client = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        client.settimeout(5.0)
+        client.connect(link)
+        buf = b""
+        deadline = time.time() + 5.0
+        while b"\n" not in buf and time.time() < deadline:
+            buf += client.recv(4096)
+        record = json.loads(buf.split(b"\n")[0])
+        assert record == {"fix": False}
+        client.close()
+    finally:
+        out.close()
+
+
+def test_the_position_socket_is_the_one_the_config_names(tmp_path):
     """The generated config must point at exactly the path the bridge creates — a mismatch
-    would leave the node opening a device that never appears."""
+    would leave the host app dialing a socket that never appears."""
     from lhpc.core.gps import CONSUMER_MESHCORE, bridge_endpoint_path, bridge_state_dir
     import os
     self_path = bridge_endpoint_path(tmp_path, CONSUMER_MESHCORE)
-    assert self_path == os.path.join(bridge_state_dir(tmp_path, CONSUMER_MESHCORE), "nmea0")
+    assert self_path == os.path.join(
+        bridge_state_dir(tmp_path, CONSUMER_MESHCORE), "position.sock")
 
 
 def test_run_refuses_when_the_source_is_off(tmp_path):
@@ -2447,7 +2494,7 @@ def test_gps_consumers_are_derived_from_the_manifest_and_gate_graywolf(tmp_path)
     # it gained a live NMEA feed: it now holds a reader open for as long as it runs, so it
     # must gate the admission/liveness machinery like every other consumer.
     assert "meshcore" in svc._gps_stacks()
-    assert "meshcore-pi" in declared
+    assert "meshcore-node" in declared
     for sid in svc._gps_stacks():
         s = svc.stack(sid)
         assert any(c.reads_position for c in s.components), sid

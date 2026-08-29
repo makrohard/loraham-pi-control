@@ -31,9 +31,11 @@ import socket
 import sys
 import threading
 import time
+from typing import ClassVar
 
 from .gps import (
     FEED_COMPONENTS,
+    OUT_POSJSON,
     OUT_PTY,
     bridge_endpoint_path,
     bridge_state_dir,
@@ -292,6 +294,170 @@ class UnixClientOutput(_Output):
 
     def close(self) -> None:
         self._drop()
+
+
+class PosJsonServerOutput(_Output):
+    """A Unix SERVER socket serving the normalized line-JSON position feed (MeshCore).
+
+    The openHop-backed MeshCore host needs a POSITION, not a simulated GPS chip: it
+    connects here and receives one JSON object per line —
+        {"fix": true, "lat": <deg>, "lon": <deg>}
+        {"fix": false}
+    This is the ONE place in the bridge that parses coordinates out of NMEA (the rest
+    of the bridge only notices that coordinates exist). Values are never logged.
+
+    Emission is state-driven and rate-limited: a record goes out on every fix-state
+    change, on meaningful movement, at least once per second while navigation data
+    flows, and immediately to a newly connected client.
+    """
+
+    _MIN_INTERVAL_S = 1.0
+    _MOVE_EPS_DEG = 1e-6
+
+    def __init__(self, link: str, paths=None):
+        super().__init__(link, paths)
+        self._server: socket.socket | None = None
+        self._accept_thread: threading.Thread | None = None
+        self._clients: list[socket.socket] = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        # Last emitted state: None = nothing sent yet; (False,) = no fix;
+        # (True, lat, lon) = fix.
+        self._state: tuple | None = None
+        self._last_emit = 0.0
+
+    def publish(self) -> None:
+        os.makedirs(os.path.dirname(self.link), exist_ok=True)
+        try:
+            os.unlink(self.link)
+        except FileNotFoundError:
+            pass
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(self.link)
+        os.chmod(self.link, 0o660)
+        server.listen(4)
+        server.settimeout(1.0)
+        self._server = server
+        self._accept_thread = threading.Thread(
+            target=self._accept_loop, name="posjson-accept", daemon=True
+        )
+        self._accept_thread.start()
+        _log(f"serving position feed on {self.link}")
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                client, _ = self._server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            client.setblocking(False)
+            with self._lock:
+                self._clients.append(client)
+                state = self._state
+            # A new consumer gets the current state immediately.
+            if state is not None:
+                self._send_to(client, self._record_for(state))
+
+    @staticmethod
+    def _record_for(state: tuple) -> bytes:
+        if state[0]:
+            body = f'{{"fix": true, "lat": {state[1]:.7f}, "lon": {state[2]:.7f}}}\n'
+        else:
+            body = '{"fix": false}\n'
+        return body.encode("ascii")
+
+    def _send_to(self, client: socket.socket, record: bytes) -> bool:
+        try:
+            client.sendall(record)
+            return True
+        except (BlockingIOError, InterruptedError):
+            return True          # kernel buffer full: drop this record, keep the client
+        except OSError:
+            return False
+
+    def _broadcast(self, state: tuple) -> None:
+        record = self._record_for(state)
+        with self._lock:
+            self._state = state
+            dead = [c for c in self._clients if not self._send_to(c, record)]
+            for c in dead:
+                self._clients.remove(c)
+                try:
+                    c.close()
+                except OSError:
+                    pass
+        self._bytes += len(record)
+        self._last_emit = time.monotonic()
+
+    @staticmethod
+    def _parse_coord(value: bytes, hemi: bytes, is_lat: bool) -> float | None:
+        """ddmm.mmmm / dddmm.mmmm + hemisphere -> signed decimal degrees."""
+        try:
+            text = value.strip().decode("ascii")
+            head = 2 if is_lat else 3
+            deg = int(text[:head])
+            minutes = float(text[head:])
+        except (ValueError, IndexError):
+            return None
+        result = deg + minutes / 60.0
+        if hemi.strip().upper() in (b"S", b"W"):
+            result = -result
+        return result
+
+    # NMEA field offsets of (lat, N/S, lon, E/W) per navigation sentence kind.
+    _COORD_FIELDS: ClassVar[dict] = {b"GGA": 2, b"RMC": 3, b"GLL": 1, b"GNS": 2}
+
+    def write(self, data: bytes) -> None:
+        line = data.rstrip(b"\r\n")
+        is_nav, has_fix = classify_sentence(line)
+        if not is_nav:
+            return
+        now = time.monotonic()
+        if has_fix:
+            idx = self._COORD_FIELDS.get(line[3:6])
+            if idx is None:
+                return
+            f = line.split(b",")
+            lat = self._parse_coord(f[idx], f[idx + 1], True)
+            lon = self._parse_coord(f[idx + 2], f[idx + 3], False)
+            if lat is None or lon is None:
+                return
+            state = (True, lat, lon)
+            prev = self._state
+            moved = (
+                prev is None or not prev[0]
+                or abs(prev[1] - lat) > self._MOVE_EPS_DEG
+                or abs(prev[2] - lon) > self._MOVE_EPS_DEG
+            )
+            if moved or now - self._last_emit >= self._MIN_INTERVAL_S:
+                self._broadcast(state)
+        else:
+            prev = self._state
+            if prev is None or prev[0] or now - self._last_emit >= self._MIN_INTERVAL_S:
+                self._broadcast((False,))
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+        if self._accept_thread is not None:
+            self._accept_thread.join(timeout=3.0)
+        with self._lock:
+            for c in self._clients:
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            self._clients.clear()
+        try:
+            os.unlink(self.link)
+        except OSError:
+            pass
 
 
 def _publish_link(paths, link: str, target: str) -> None:
@@ -726,8 +892,12 @@ def run(consumer: str, paths, stop=None) -> int:
     ready = Readiness(os.path.join(bridge_state_dir(paths.runtime_root, consumer),
                                    "readiness.json"), paths)
     kind = plan.output_kind(consumer)
-    out: _Output = (PtyOutput(link, paths) if kind == OUT_PTY
-                    else UnixClientOutput(link, paths))
+    if kind == OUT_PTY:
+        out: _Output = PtyOutput(link, paths)
+    elif kind == OUT_POSJSON:
+        out = PosJsonServerOutput(link, paths)
+    else:
+        out = UnixClientOutput(link, paths)
 
     try:
         out.publish()

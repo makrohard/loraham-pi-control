@@ -1783,7 +1783,7 @@ def test_auto_install_scope_includes_optional_components(tmp_path, monkeypatch):
         scope = svc._auto_install_scope()
         mc = next(w for st, w in scope if st.id == "meshcore")
         ids = {c.id for c in mc.source}
-        assert {"meshcore-pi", "meshcore-cli"} <= ids
+        assert {"meshcore-node", "meshcore-cli"} <= ids
         assert ("meshcore-nodegui" in ids) is gui
         all_paths = {c.source.path for _, w in scope for c in w.source}
         assert "src/meshcore-cli" in all_paths

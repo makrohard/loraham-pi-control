@@ -181,28 +181,18 @@ def test_blank_nonflag_file_override_is_skipped(tmp_path):
 
 
 def test_meshcore_preset_owns_frequency_for_all_presets(tmp_path):
-    # Blank frequency default -> the generated meshcore config sets the chosen preset and writes NO
-    # frequency override, so lorahaminterface uses that preset's frequency (eu_uk_long/medium 869.525,
-    # eu_uk_narrow 869.618 — the T-Deck's). An explicit override still writes an active line.
+    """A blank `frequency` must let the selected preset own it — writing a stale explicit
+    frequency alongside a changed preset put the daemon 93 kHz off the passband."""
+    import tomllib
     svc = _svc(tmp_path)
-    base = tmp_path / "src" / "meshcore-pi" / "examples" / "config-loraham868.toml"
-    base.parent.mkdir(parents=True)
-    base.write_text('[interface.loraham868]\npreset = "eu_uk_medium"\n'
-                    "# frequency = 869525000\n# sf = 11\n"
-                    '[device.companion]\nname = "N0CALL"\n')
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     for preset in ("eu_uk_long", "eu_uk_medium", "eu_uk_narrow"):
         res = svc.write_config_files("meshcore", overrides={"preset": preset})
         assert any(w.status == "written" for w in res), [(w.component, w.status, w.detail) for w in res]
-        out = gen.read_text()
-        assert f'preset = "{preset}"' in out                               # preset selected
-        assert not any(ln.strip().startswith("frequency ") or ln.strip().startswith("frequency=")
-                       for ln in out.splitlines())                          # NO active frequency override
-        assert "# frequency = 869525000" in out                            # commented example remains
-    svc.write_config_files("meshcore", overrides={"preset": "eu_uk_narrow", "frequency": "869618000"})
-    out = gen.read_text()
-    assert any(ln.strip() == "frequency = 869618000" for ln in out.splitlines())   # explicit override writes it
-
+        doc = tomllib.loads(gen.read_text())
+        assert doc["radio"]["preset"] == preset
+        assert "frequency" not in doc["radio"], \
+            "a blank frequency must not materialise as an explicit override"
 
 def test_start_blocks_licensed_without_call_backstop(tmp_path):
     # Direct/CLI start (authoritative) refuses a licensed stack with no callsign, carrying the
@@ -481,7 +471,7 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
     svc = _seam_svc(tmp_path, monkeypatch)
     # No operator callsign -> node_name default {callsign} resolves empty -> enforcement blocks it
     # (before any side effect / _Seam).
-    res = svc._start_impl("meshcore-pi", apply=True)
+    res = svc._start_impl("meshcore-node", apply=True)
     assert not res.ok and res.data.get("enforce_field") == "pf_node_name"
 
 
@@ -494,14 +484,14 @@ def test_direct_valid_identity_reaches_start_seam(tmp_path, monkeypatch):
 def test_direct_file_identity_uses_owner_stack_persisted_and_ephemeral(tmp_path):
     svc = _svc(tmp_path)
     svc.save_config_bundle("meshcore", values={"file_node_name": "SavedNode"}, band="868")
-    assert svc._identity_value("meshcore-pi", "868", None, None) == "SavedNode"   # owner-stack value
-    assert svc.enforce_identity("meshcore-pi", "868")[0] is True
-    assert svc._identity_value("meshcore-pi", "868", None, {"node_name": "EphNode"}) == "EphNode"
+    assert svc._identity_value("meshcore-node", "868", None, None) == "SavedNode"   # owner-stack value
+    assert svc.enforce_identity("meshcore-node", "868")[0] is True
+    assert svc._identity_value("meshcore-node", "868", None, {"node_name": "EphNode"}) == "EphNode"
 
 
 def test_direct_unknown_file_override_fails_typed(tmp_path):
     svc = _svc(tmp_path)
-    assert svc._normalize_file_overrides("meshcore-pi", {"nope": "x"})[1]          # unknown -> typed
+    assert svc._normalize_file_overrides("meshcore-node", {"nope": "x"})[1]          # unknown -> typed
     # a param from a SIBLING component is unknown to a direct component target
     assert svc._normalize_file_overrides("meshcom-qemu", {"node_name": "x"})[1]
 
@@ -622,7 +612,7 @@ def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
 def test_direct_component_daemon_params_use_owner_stack(tmp_path):
     from lhpc.core import config as cfgmod, daemon_params as dp
     svc = _svc(tmp_path)
-    assert svc._has_daemon_params("meshcom-qemu") and svc._has_daemon_params("meshcore-pi")
+    assert svc._has_daemon_params("meshcom-qemu") and svc._has_daemon_params("meshcore-node")
     nd = "9" if dp.default_value("meshcom", "433", "SF") != "9" else "8"
     assert svc.save_daemon_params("meshcom-qemu", "433", {"SF": nd}).ok
     assert cfgmod.load_stack_config(svc._paths, "meshcom").get("dp_433_SF") == nd   # OWNER stack
@@ -631,7 +621,7 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
     sf = next(r for pnl in svc.daemon_start_panels("meshcom-qemu")
               for r in pnl["rows"] if r["name"] == "SF")
     assert sf["value"] == nd                                                        # panel shows owner value
-    assert svc.save_daemon_params("meshcore-pi", "868", {"CADWAIT": "1234"}).ok
+    assert svc.save_daemon_params("meshcore-node", "868", {"CADWAIT": "1234"}).ok
     assert cfgmod.load_stack_config(svc._paths, "meshcore").get("dp_868_CADWAIT") == "1234"
 
 

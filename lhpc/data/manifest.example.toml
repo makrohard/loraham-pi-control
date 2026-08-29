@@ -2102,20 +2102,20 @@ main = "meshcom-qemu"
     branch = "dev"
 
 # =====================================================================
-# Stack: meshcore — MeshCore Pi node (daemon-backed, 868)
+# Stack: meshcore — MeshCore node (openHop Core, daemon-backed, 868)
 # =====================================================================
 [[stack]]
 id = "meshcore"
-name = "MeshCore Pi (868)"
-summary = "MeshCore Python node, daemon-backed on 868 (auto-starts the daemon). Optional Node Manager GUI and CLI."
-main = "meshcore-pi"
+name = "MeshCore (868)"
+summary = "MeshCore node, daemon-backed on 868 (auto-starts the daemon). Optional Node Manager GUI and CLI."
+main = "meshcore-node"
 
   [[stack.component]]
   id = "meshcore-gps"
   readiness = "gps-feed"
   name = "GPS feed (MeshCore)"
   kind = "service"
-  purpose = "Publishes the global position source as a serial device meshcore-pi can read."
+  purpose = "Publishes the global position source as a normalized position feed the MeshCore node consumes."
   tx_capable = false
   optional = true
   start_order = 0
@@ -2129,67 +2129,64 @@ main = "meshcore-pi"
     all_args = ["_gps-bridge", "meshcore"]
 
   [[stack.component]]
-  id = "meshcore-pi"
+  id = "meshcore-node"
   readiness = "endpoint"
-  # A Python node that imports its stack (scapy/crypto) before opening TCP 5000 can
-  # take well over the 6 s global default to become ready — scapy's import alone can approach
-  # 45 s on 512 MB / A53-class hardware, so give it a generous window so start verifies instead
-  # of tearing it down. Tune down if your Pi is faster.
+  # The node imports its crypto stack (pycryptodome/PyNaCl) and restores persisted state
+  # before opening TCP 5000; give it a generous window on 512 MB / A53-class hardware so
+  # start verifies instead of tearing it down. Tune down if your Pi is faster.
   readiness_timeout = 120.0
-  name = "MeshCore Pi (868)"
+  name = "MeshCore (868)"
   kind = "service"
   band = "868"
-  purpose = "Async MeshCore node using the daemon on 868 (lorahaminterface)."
+  purpose = "MeshCore companion node on the daemon (868) — powered by openHop Core via the LoRaHAM radio adapter."
   tx_capable = true
-  # It holds a live NMEA reader open for as long as it runs, so lifecycle planning and the
-  # resource claims must know that.
+  # It consumes the live position feed for as long as it runs, so lifecycle planning
+  # and status must know that.
   reads_position = true
   depends_on = ["loraham-daemon", "meshcore-gps"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
-  run = ".venv/bin/python meshcore.py {runtime}/config/files/meshcore-pi.toml"
+  run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
+  # Upstream openHop Core test suite, runnable on-device via `lhpc test meshcore-node`.
   test = ".venv/bin/python -m pytest tests/"
-  # The build_steps create the in-tree venv, THEN pip-install its deps. The venv interpreter appears
-  # after the FIRST step, so `bin` alone would read "built" the moment the (still-dep-less) venv exists
-  # — a build killed mid-pip would then start and die with ModuleNotFoundError. `build_marker` fixes
-  # that: it is written ONLY after the LAST step succeeds and is what `is_built` gates on.
+  # The build_steps patch the checkout, create the in-tree venv, THEN pip-install. The venv
+  # interpreter appears before the installs finish, so `bin` alone would read "built" too
+  # early — `build_marker` is written ONLY after the LAST step succeeds and gates `is_built`.
   bin = ".venv/bin/python"
   build_marker = ".venv/.lhpc-build-complete"
-  # venv + pip-install of 6 packages (scapy, pycryptodome, ...) overran the 600 s default on a
-  # Pi Zero 2W and was silently TERM-killed mid-pip; give the build room, and its pytest suite too.
+  # venv + pip installs overran the 600 s default on a Pi Zero 2W for meshcore-pi already;
+  # give the build the same room.
   build_timeout = 1800.0
   test_timeout = 900.0
-  # Self-sufficient managed clone: the venv is built IN-TREE by `lhpc build`. Upstream has
-  # no requirements file — deps enumerated from its README (an upstream requirements.txt
-  # would make this declarative).
-  # This 868 node runs the DAEMON-SOCKET interface (lorahaminterface): it reaches the radio over
-  # the loraham daemon's unix sockets and NEVER drives SPI/GPIO itself, so it needs NO GPIO
-  # bindings and NO LoRaRF (LoRaRF is only imported by the direct-SPI `lora` interface, which this
-  # deployment does not configure). Dropping LoRaRF also drops its transitive RPi.GPIO, whose sdist
-  # does not build on Trixie's Python and whose classic variant is incompatible with the Pi 5's RP1
-  # — so both hardware classes keep their OS defaults untouched. --system-site-packages is kept so
-  # the venv can reuse any system packages present; the deps below are all pure-Python.
+  # The MeshCore implementation is upstream openhop_core, pinned below, plus ONE
+  # LHPC-shipped patch (a small upstream-mergeable fix, see the patch header) applied
+  # idempotently at build time. The host application glue (LoRaHAM radio adapter, identity
+  # loading, persistence, GPS feed consumer) ships WITH lhpc as the `meshcore_host`
+  # package-data asset and is installed into the same venv — so the checkout stays an
+  # unmodified upstream tree plus a reviewable patch, never a fork.
+  # This node reaches the radio over the loraham daemon's unix sockets and NEVER drives
+  # SPI/GPIO itself: no GPIO bindings, no SPI deps. --system-site-packages keeps any system
+  # packages reusable; openhop's deps (pycryptodome, PyNaCl, pyyaml) are wheels on aarch64.
   build_steps = [
+    { argv = ["bash", "{asset}/scripts/openhop-apply-patch.sh", "{source}", "{asset}/patches/openhop-core-path-embedded-ack.patch"] },
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
-    { argv = [".venv/bin/pip", "install", "pycryptodome", "aiotools", "pyserial_asyncio",
-              "typing-extensions", "scapy==2.5.0", "pytest"], announce = "[install] Python deps (pycryptodome, scapy, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
+    { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
   ]
 
-    # meshcore-pi has no CLI flags — all settings live in the TOML. The controller
-    # generates the runtime config from the in-repo config-loraham868.toml base,
-    # updating just these keys (blank = keep the base/preset default).
+    # The host app has no CLI flags — all settings live in the generated TOML. The
+    # controller renders it from the lhpc-shipped base, updating just these keys
+    # (blank = keep the base/preset default).
     [stack.component.config_file]
-    path = "{runtime}/config/files/meshcore-pi.toml"
+    path = "{runtime}/config/files/meshcore.toml"
     fmt = "toml-update"
-    # 0600: this file carries the node's PRIVATE KEY (see `privatekey` below). It used to be
-    # world-readable, and the key was only persistent if the operator hand-edited the upstream
-    # template — which any source refresh discarded, rotating the node's on-air identity.
+    # 0600: this file carries the node's PRIVATE KEY (see `privatekey` below).
     mode = 0o600
-    base = "examples/config-loraham868.toml"
+    base = "{asset}/bases/meshcore.toml"
       [[stack.component.config_file.param]]
       name = "preset"
       key = "preset"
-      section = "interface.loraham868"
+      section = "radio"
       kind = "enum"
       choices = ["eu_uk_long", "eu_uk_medium", "eu_uk_narrow"]
       default = "eu_uk_narrow"
@@ -2197,7 +2194,7 @@ main = "meshcore-pi"
       [[stack.component.config_file.param]]
       name = "enable_tx"
       key = "enable_tx"
-      section = "interface.loraham868"
+      section = "radio"
       kind = "flag"
       default = "on"
       label = "Enable TX (off = RX-only)"
@@ -2205,65 +2202,72 @@ main = "meshcore-pi"
       name = "node_name"
       validator = "node"
       key = "name"
-      section = "device.companion"
+      section = "companion"
       kind = "str"
       default = "{callsign}"
       label = "Node name (defaults to your callsign)"
       [[stack.component.config_file.param]]
       name = "meshcore_allow"
       validator = "bind"
-      key = "wifi.allow"
-      section = "device.companion"
+      key = "allow"
+      section = "companion"
       kind = "str"
       default = "127.0.0.1"
       group = "Network exposure"
       label = "Allow-list — who may connect (127.0.0.1 = this Pi only; LAN CIDR or 0.0.0.0/0 to expose; NO auth)"
-      # The node's IDENTITY. LHPC owns it (config/secrets/meshcore_identity.key, 0600) because
-      # meshcore-pi mints a fresh random key whenever its config has none — so every config
-      # regeneration silently changed the node's public key and its contacts stopped
-      # recognising it. Controller-managed: never operator-settable, never shown.
+      # The node's IDENTITY. LHPC owns it (config/secrets/meshcore_identity.key, 0600);
+      # the host application NEVER mints a key — absence of this value is a hard startup
+      # failure, so the identity can never rotate silently. Controller-managed: never
+      # operator-settable, never shown.
       [[stack.component.config_file.param]]
       name = "privatekey"
-      key = "privatekey"
-      section = "device.companion"
+      key = "key"
+      section = "identity"
       kind = "str"
       hidden = true
       secret_file = "meshcore_identity.key"
-      # CONTROLLER-OWNED static position, written ONLY for `fixed`. A live source feeds the
-      # node through meshcore-gps instead and writes no coordinates at all — a static pair
-      # alongside a live feed would be a stale fallback for the node to revert to the moment
-      # the feed aged out. Hidden, and `omit_if_empty` REMOVES the key when there is no
-      # static position, so a stale pair can never stay on the air.
-      # LIVE position: the PTY the GPS bridge publishes. Controller-owned and hidden — the
-      # path comes from the one global plan, never from a saved or hand-edited value.
-      # `omit_if_empty` means a `fixed` or `off` source writes no device at all, which is
-      # exactly how meshcore-pi is told to stay on its static coordinates.
+      # CONTROLLER-OWNED static position, written ONLY for `fixed`. A live source renders
+      # the position-feed socket below instead and writes no coordinates at all — the host
+      # infers its GPS mode from which keys are present. `omit_if_empty` REMOVES a key
+      # when the plan provides nothing, so a stale value can never stay on the air.
       [[stack.component.config_file.param]]
-      name = "gps_device"
-      key = "gps.device"
-      section = "device.companion"
+      name = "gps_socket"
+      key = "socket"
+      section = "gps"
       kind = "str"
       hidden = true
       omit_if_empty = true
+      # `{gps_device}` is the controller-derived per-consumer feed endpoint; for the
+      # meshcore consumer it resolves to the position-feed unix socket the bridge serves.
       default = "{gps_device}"
       [[stack.component.config_file.param]]
       name = "lat"
       key = "lat"
-      section = "device.companion"
+      section = "gps"
       kind = "float"
       hidden = true
       omit_if_empty = true
       [[stack.component.config_file.param]]
       name = "lon"
       key = "lon"
-      section = "device.companion"
+      section = "gps"
       kind = "float"
       hidden = true
       omit_if_empty = true
+      # Companion state (contacts, channels, learned routes, prefs, queued messages)
+      # survives restarts here. Controller-owned path; the host fails closed on a
+      # broken database rather than mistaking it for an empty one.
+      [[stack.component.config_file.param]]
+      name = "db"
+      key = "db"
+      section = "persistence"
+      kind = "str"
+      hidden = true
+      default = "{runtime}/state/meshcore/companion.db"
       [[stack.component.config_file.param]]
       name = "txpower"
       key = "txpower"
-      section = "interface.loraham868"
+      section = "radio"
       kind = "int"
       default = "14"
       min = 0
@@ -2273,12 +2277,11 @@ main = "meshcore-pi"
       [[stack.component.config_file.param]]
       name = "frequency"
       key = "frequency"
-      section = "interface.loraham868"
+      section = "radio"
       kind = "int"
-      # Blank = let the selected RF preset own the frequency (eu_uk_narrow -> 869.618 MHz, matching
-      # the T-Deck MeshCore firmware). A non-blank value here is written as an explicit override and
-      # would clobber the preset's frequency (e.g. forcing 869.525 onto eu_uk_narrow's 869.618, which
-      # put the daemon 93 kHz off the T-Deck in a 62.5 kHz passband -> no RX either way).
+      # Blank = let the selected RF preset own the frequency (eu_uk_narrow -> 869.618 MHz,
+      # matching the T-Deck MeshCore firmware). A non-blank value here is written as an
+      # explicit override and would clobber the preset's frequency.
       default = ""
       min = 430000000
       max = 950000000
@@ -2287,7 +2290,7 @@ main = "meshcore-pi"
       [[stack.component.config_file.param]]
       name = "airtime"
       key = "airtime"
-      section = "interface.loraham868"
+      section = "radio"
       kind = "int"
       default = "10"
       min = 0
@@ -2295,19 +2298,23 @@ main = "meshcore-pi"
       label = "Duty-cycle limit %"
       advanced = true
 
+    # openHop Core release discipline (inspected 2026-08-29): `dev` is the active
+    # development branch; `main` carries the stable releases that also go to PyPI; the
+    # two are NOT equivalent. Selection policy: Development = `dev` head, Latest stable =
+    # `main`, Known working = the pin below — the exact SHA this integration was
+    # validated against (plus the shipped patch, which build_steps apply to ANY revision;
+    # the apply script fails the build on a conflict instead of running unpatched code).
     [stack.component.source]
-    path = "src/meshcore-pi"
-    pin_commit = "640978ef38694490a83c8b79a03661dc6beee1ef"
-    pin_tag = "640978e"
-    remote = "https://github.com/makrohard/meshcore-pi.git"
-    # NOT `loraham-daemon-interface`: that branch is the head of an OPEN upstream pull
-    # request (brianwiddas/meshcore-pi#4), so LHPC must not depend on a ref whose history
-    # belongs to someone else's review. `-current` carries the same commit and is ours.
-    branch = "loraham-daemon-interface-current"
+    path = "src/openhop-core"
+    pin_commit = "77f116a8dab097642d04a16c8aaf097c0dd33cc3"
+    pin_tag = "77f116a"
+    remote = "https://github.com/openhop-dev/openhop_core.git"
+    branch = "dev"
 
-    # Position: a LIVE source (gpsd/auto->gpsd/nmea) is fed to the node continuously through
-    # the meshcore-gps bridge, so its position follows the box. `fixed` writes static
-    # coordinates and starts no bridge; `off` gives neither.
+    # Position: a LIVE source (gpsd/auto->gpsd/nmea) is fed to the node continuously
+    # through the meshcore-gps bridge's position feed, so its position follows the box
+    # (and clears when the source goes stale). `fixed` writes static coordinates and
+    # starts no bridge; `off` gives neither.
     [[stack.component.param]]
     name = "use_gps"
     kind = "enum"
@@ -2317,7 +2324,7 @@ main = "meshcore-pi"
 
     [stack.component.process]
     exec_name = "python"
-    all_args = ["meshcore.py"]
+    all_args = ["meshcore_host"]
 
     [[stack.component.endpoint]]
     kind = "tcp"
@@ -2327,7 +2334,7 @@ main = "meshcore-pi"
     description = "MeshCore companion TCP"
     client = true
     scheme = "tcp"
-    # Managed Firewall: fixed port; wifi.allow is a source allow-list; no auth.
+    # Managed Firewall: fixed port; `allow` is a source allow-list; no auth.
     firewall = { allow_param = "meshcore_allow", auth = "none" }
 
     [[stack.component.resource]]
@@ -2351,7 +2358,7 @@ main = "meshcore-pi"
   purpose = "Tkinter desktop GUI (main.py); connects to the companion TCP 5000."
   tx_capable = false
   optional = true
-  depends_on = ["meshcore-pi"]
+  depends_on = ["meshcore-node"]
   # A GUI app (not a terminal TUI) — lhpc can Start/Stop it; it opens on the Pi's
   # display (DISPLAY inherited, else :0).
   run = 'env DISPLAY="${DISPLAY:-:0}" .venv/bin/python main.py'
@@ -2382,7 +2389,7 @@ main = "meshcore-pi"
     # the _tkinter extension when python3-tk is installed. Probed by MODULE (in-process
     # importlib.util.find_spec), never by a version-specific /usr/lib/python3.X/tkinter path.
     # This component is OPTIONAL: on a headless box it is skipped and the rest of the MeshCore
-    # stack (meshcore-pi + the CLI) installs, builds and runs normally.
+    # stack (meshcore-node + the CLI) installs, builds and runs normally.
     gui = true
     module = "tkinter"
     install = "sudo apt install -y python3-tk"
@@ -2404,7 +2411,7 @@ main = "meshcore-pi"
   tx_capable = true
   optional = true
   interactive = true
-  depends_on = ["meshcore-pi"]
+  depends_on = ["meshcore-node"]
   run = ".venv/bin/meshcli {host} {port} {json} {debug}"
   build_steps = [
     { argv = ["python3", "-m", "venv", ".venv"] },
@@ -2421,7 +2428,7 @@ main = "meshcore-pi"
     [stack.component.process]
     exec_name = "meshcli"
 
-    # meshcli connects to the meshcore-pi companion server (default port 5000).
+    # meshcli connects to the MeshCore companion server (default port 5000).
     [[stack.component.param]]
     name = "host"
     validator = "host"

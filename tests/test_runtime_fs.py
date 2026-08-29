@@ -959,14 +959,18 @@ def test_no_tmp_or_root_escape_tokens_in_manifest():
 def test_python_stacks_have_in_tree_venv_build_steps():
     d = _manifest_dict()
     comps = {c["id"]: c for st in d["stack"] for c in st.get("component", [])}
-    for cid in ("meshcore-pi", "meshcore-nodegui", "meshcore-cli"):
+    for cid in ("meshcore-node", "meshcore-nodegui", "meshcore-cli"):
         steps = comps[cid].get("build_steps", [])
-        assert steps and steps[0]["argv"][:3] == ["python3", "-m", "venv"], cid
-        if cid == "meshcore-pi":
+        # meshcore-node prepends an lhpc-shipped patch step to the pinned upstream
+        # checkout; the in-tree venv step must still exist for every python stack.
+        assert steps and any(s["argv"][:3] == ["python3", "-m", "venv"] for s in steps), cid
+        if cid == "meshcore-node":
             # system-site venv (OS-shipped GPIO bindings; never compiles lgpio/swig)
-            assert "--system-site-packages" in steps[0]["argv"]
-            assert not any("rpi-lgpio" in a for a in steps[1]["argv"])
-        assert steps[1]["argv"][0] == ".venv/bin/pip", cid
+            venv_step = next(s for s in steps if s["argv"][:3] == ["python3", "-m", "venv"])
+            assert "--system-site-packages" in venv_step["argv"]
+            assert not any("rpi-lgpio" in a for s in steps for a in s["argv"])
+        else:
+            assert steps[1]["argv"][0] == ".venv/bin/pip", cid
     # meshcom-qemu is self-sufficient from a FRESH clone: the MANAGED tools (a PlatformIO venv + the
     # source-built headless qemu, both INSIDE the runtime root) are provisioned first, then the workspace
     # setup scripts run before build.sh (live finding: linked trees carried a pre-built .work/).
@@ -978,13 +982,12 @@ def test_python_stacks_have_in_tree_venv_build_steps():
     q = comps["meshcom-qemu"]["build_steps"][-1]["env"]["XR_PASSWORD"]
     assert q == "@file?:{runtime}/config/secrets/xr_pw"          # OPTIONAL secret (legacy
     # `$(cat … 2>/dev/null)` semantics: absent -> HMAC disabled, never a blocked build)
-    # meshcore-pi's config BASE is the loraham-daemon-interface example SHIPPED by the pinned
-    # clone (tracked on origin/loraham-daemon-interface: [interface.loraham868] with the daemon
-    # sockets + [device.companion] port 5000). The former `{runtime}/config/files/meshcore-pi-
-    # base.toml` was an un-seeded generated-output path — nothing ever created it, so config
-    # generation failed ('No such file or directory') and the node never opened TCP 5000.
-    base = comps["meshcore-pi"]["config_file"]["base"]
-    assert base == "examples/config-loraham868.toml", base
+    # meshcore-node's config BASE is an lhpc-SHIPPED asset (package data), never a path inside
+    # the pinned upstream openhop checkout — the checkout stays a pristine upstream tree plus
+    # a reviewable patch. It must resolve through the `{asset}` mechanism, and must NOT be an
+    # un-seeded generated-output path (the old meshcore-pi-base.toml bug).
+    base = comps["meshcore-node"]["config_file"]["base"]
+    assert base == "{asset}/bases/meshcore.toml", base
     assert not base.startswith("{runtime}/config/files/"), base   # never the generated-output dir
 
 

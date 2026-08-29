@@ -27,7 +27,7 @@ def _svc(tmp_path):
 
 
 def _meshcore(svc):
-    return next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-pi")
+    return next(c for s in svc.stacks() for c in s.components if c.id == "meshcore-node")
 
 
 # --- explicit TIMED OUT terminal marker -----------------------------------------------------------

@@ -189,21 +189,21 @@ def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     # because the interpreter exists after step 1 (python -m venv), long before the pip installs
     # finish, so a build killed mid-pip would otherwise read "built" and die at start.
     svc = _svc(tmp_path)
-    mc = svc.stack("meshcore").component("meshcore-pi")
-    src = tmp_path / "src" / "meshcore-pi"
+    mc = svc.stack("meshcore").component("meshcore-node")
+    src = tmp_path / "src" / "openhop-core"
     src.mkdir(parents=True)                                      # checkout present, venv not built
     assert not svc.is_built(mc)                                  # honest: no venv yet
-    assert "meshcore-pi" in svc.unbuilt_components("meshcore")
+    assert "meshcore-node" in svc.unbuilt_components("meshcore")
     (src / "python").write_bytes(b"")                           # a bogus <src>/python must NOT count
     assert not svc.is_built(mc)                                  # exec_name is ignored
     venv_py = src / ".venv" / "bin" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_bytes(b"")
     assert not svc.is_built(mc)                                  # interpreter alone is NOT enough (marker gates)
-    assert "meshcore-pi" in svc.unbuilt_components("meshcore")
+    assert "meshcore-node" in svc.unbuilt_components("meshcore")
     (src / mc.build_marker).write_text("lhpc build complete\n")                   # completion marker -> fully built
     assert svc.is_built(mc)
-    assert "meshcore-pi" not in svc.unbuilt_components("meshcore")
+    assert "meshcore-node" not in svc.unbuilt_components("meshcore")
 
 
 def test_unbuilt_build_deps_flags_radiolib_before_daemon(tmp_path):
@@ -579,7 +579,7 @@ def test_meshcore_keeps_working_headless_only_nodegui_is_skipped(tmp_path, monke
     assert work.skipped == ("meshcore-nodegui",)
     ids = {c.id for c in work.source} | {c.id for c in work.build} | {c.id for c in work.test}
     assert "meshcore-nodegui" not in ids
-    assert "meshcore-cli" in ids or "meshcore-pi" in ids       # headless components survive
+    assert "meshcore-cli" in ids or "meshcore-node" in ids       # headless components survive
 
 
 def test_voice_stack_is_skipped_whole_when_gtk_is_absent(tmp_path):

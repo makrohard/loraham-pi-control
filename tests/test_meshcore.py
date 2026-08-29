@@ -27,6 +27,8 @@ LAT, LON = "51.4779", "-0.0015"
 # node into a test: it is that node's on-air identity, and a test file is public.
 KEY = "3459f3299360660522b94692c0ab9c23ee24eca9b849175327265d67fe04b93f"
 
+# update_toml contract tests still exercise the historical meshcore-pi template
+# shape; the LIVE base is the lhpc-shipped asset (lhpc/data/bases/meshcore.toml).
 TEMPLATE = """interfaces = ["loraham868"]
 
 [interface.loraham868]
@@ -42,22 +44,32 @@ wifi.allow = "127.0.0.1"
 """
 
 
-def _svc(tmp_path, template: str = TEMPLATE):
+def _svc(tmp_path):
     (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
-    base = tmp_path / "src" / "meshcore-pi" / "examples"
-    base.mkdir(parents=True, exist_ok=True)
-    (base / "config-loraham868.toml").write_text(template)
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
+def _legacy_config(tmp_path, key: str) -> None:
+    """A meshcore-pi-era generated config still holding the identity — the
+    migration case the adoption candidates must keep covering."""
+    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen.parent.mkdir(parents=True, exist_ok=True)
+    gen.write_text(f'[device.companion]\nprivatekey = "{key}"\n')
+
+
 def _generated(tmp_path) -> str:
-    return (tmp_path / "config" / "files" / "meshcore-pi.toml").read_text()
+    return (tmp_path / "config" / "files" / "meshcore.toml").read_text()
 
 
 def _key_in(text: str) -> str:
+    in_identity = False
     for line in text.splitlines():
-        if line.strip().startswith("privatekey"):
-            return line.split("=", 1)[1].strip().strip('"')
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_identity = stripped == "[identity]"
+            continue
+        if in_identity and stripped.startswith("key"):
+            return stripped.split("=", 1)[1].strip().strip('"')
     return ""
 
 
@@ -87,29 +99,30 @@ def test_identity_survives_losing_the_generated_config_and_the_source(tmp_path):
     svc = _svc(tmp_path)
     svc.write_config_files("meshcore")
     first = _key_in(_generated(tmp_path))
-    (tmp_path / "config" / "files" / "meshcore-pi.toml").unlink()
-    (tmp_path / "src" / "meshcore-pi" / "examples" / "config-loraham868.toml").write_text(TEMPLATE)
+    (tmp_path / "config" / "files" / "meshcore.toml").unlink()
     svc.write_config_files("meshcore")
     assert _key_in(_generated(tmp_path)) == first
 
 
 @pytest.mark.contract
 def test_existing_key_is_adopted_not_rotated(tmp_path):
-    # Pinning the identity used to mean hand-editing the upstream template. Upgrading into
-    # LHPC-owned identity must keep that node on the air, not re-mint over it.
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', f'privatekey = "{KEY}"'))
+    # An install upgrading from the meshcore-pi era may hold its identity only in that
+    # generation's config file. Migration must keep that node on the air, not re-mint.
+    svc = _svc(tmp_path)
+    _legacy_config(tmp_path, KEY)
     svc.write_config_files("meshcore")
     assert _key_in(_generated(tmp_path)) == KEY
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
 
 
 @pytest.mark.contract
-def test_adopt_prefers_the_generated_config_over_the_template(tmp_path):
+def test_adopt_prefers_the_generated_config_over_the_legacy_file(tmp_path):
     other = "11" * 32
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', f'privatekey = "{other}"'))
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    svc = _svc(tmp_path)
+    _legacy_config(tmp_path, other)
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text(f'[device.companion]\nprivatekey = "{KEY}"\n')
+    gen.write_text(f'[identity]\nkey = "{KEY}"\n')
     assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == KEY
 
 
@@ -117,18 +130,18 @@ def test_adopt_prefers_the_generated_config_over_the_template(tmp_path):
 def test_a_commented_template_key_reads_as_absent(tmp_path):
     # A commented example documents the key; it is not a key.
     svc = _svc(tmp_path)
-    base = tmp_path / "src" / "meshcore-pi" / "examples" / "config-loraham868.toml"
-    assert mi.candidate_key(svc._paths, base) == ""
+    doc = tmp_path / "documented.toml"
+    doc.write_text(TEMPLATE)
+    assert mi.candidate_key(svc._paths, doc) == ""
 
 
 @pytest.mark.safety("meshcore-identity")
 def test_a_candidate_without_a_key_falls_through_to_the_next(tmp_path):
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text('[device.companion]\nname = "x"\n')          # no privatekey at all
-    base = tmp_path / "src" / "meshcore-pi" / "examples" / "config-loraham868.toml"
-    base.write_text(TEMPLATE.replace('# privatekey = "xxxx"', f'privatekey = "{KEY}"'))
+    gen.write_text('[companion]\nname = "x"\n')                # no key at all
+    _legacy_config(tmp_path, KEY)                               # legacy file has it
     assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == KEY
 
 
@@ -136,7 +149,8 @@ def test_a_candidate_without_a_key_falls_through_to_the_next(tmp_path):
 def test_an_invalid_candidate_key_blocks_instead_of_minting(tmp_path):
     # The dangerous confusion: treating "present but malformed" as "absent" would mint a NEW
     # identity over the one the operator was trying to keep.
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', 'privatekey = "deadbeef"'))
+    svc = _svc(tmp_path)
+    _legacy_config(tmp_path, "deadbeef")
     with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
     assert not mi.secret_path(svc._paths).exists()
@@ -149,10 +163,10 @@ def test_a_malformed_toml_candidate_blocks_instead_of_minting(tmp_path):
     TOML damage; falling through would mint a new key and then regenerate the file over the
     original — losing the identity exactly when we were trying to rescue it."""
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     # Valid key present, but the document is broken further down.
-    gen.write_text(f'[device.companion]\nprivatekey = "{KEY}"\nbroken = [1,\n')
+    gen.write_text(f'[identity]\nkey = "{KEY}"\nbroken = [1,\n')
     with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
     assert not mi.secret_path(svc._paths).exists(), "must not mint over a damaged candidate"
@@ -197,7 +211,7 @@ def test_secret_and_generated_config_are_0600(tmp_path):
     svc.write_config_files("meshcore")
     assert mi.secret_path(svc._paths).stat().st_mode & 0o777 == 0o600
     assert mi.secret_path(svc._paths).parent.stat().st_mode & 0o777 == 0o700
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     assert gen.stat().st_mode & 0o777 == 0o600, "the generated file carries the private key"
 
 
@@ -261,7 +275,10 @@ def test_read_only_operations_create_no_key(tmp_path):
 def test_clean_purge_adopts_the_key_before_removing_the_source(tmp_path):
     # `clean` removes the source AND the generated config, so an identity living only in
     # those is gone unless it is copied out first. It deliberately spares config/secrets.
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', f'privatekey = "{KEY}"'))
+    svc = _svc(tmp_path)
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen.parent.mkdir(parents=True, exist_ok=True)
+    gen.write_text(f'[identity]\nkey = "{KEY}"\n')
     res = svc.clean("meshcore", apply=True, purge=True)
     assert res.ok or "running" not in (res.summary or "")
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
@@ -269,17 +286,21 @@ def test_clean_purge_adopts_the_key_before_removing_the_source(tmp_path):
 
 @pytest.mark.safety("meshcore-identity")
 def test_uninstall_adopts_the_key_before_removing_the_source(tmp_path):
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', f'privatekey = "{KEY}"'))
+    svc = _svc(tmp_path)
+    _legacy_config(tmp_path, KEY)
     svc.uninstall("meshcore", apply=True)
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
 
 
 @pytest.mark.safety("meshcore-identity")
 def test_a_destructive_op_refuses_on_an_invalid_key_rather_than_destroying_it(tmp_path):
-    svc = _svc(tmp_path, TEMPLATE.replace('# privatekey = "xxxx"', 'privatekey = "nope"'))
+    svc = _svc(tmp_path)
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen.parent.mkdir(parents=True, exist_ok=True)
+    gen.write_text('[identity]\nkey = "nope"\n')
     res = svc.clean("meshcore", apply=True, purge=True)
     assert not res.ok
-    assert (tmp_path / "src" / "meshcore-pi").is_dir(), "the source must still be there"
+    assert gen.exists(), "the file holding the (broken) identity must still be there"
 
 
 # --------------------------------------------------------------------------- update_toml
@@ -351,15 +372,19 @@ def test_fixed_position_reaches_the_generated_config(tmp_path):
     svc.write_config_files("meshcore", position=pos)
     import tomllib
     doc = tomllib.loads(_generated(tmp_path))
-    assert doc["device"]["companion"]["lat"] == pytest.approx(float(LAT))
-    assert doc["device"]["companion"]["lon"] == pytest.approx(float(LON))
+    assert doc["gps"]["lat"] == pytest.approx(float(LAT))
+    assert doc["gps"]["lon"] == pytest.approx(float(LON))
 
 
 @pytest.mark.contract
 def test_use_gps_off_omits_coordinates_and_clears_a_stale_pair(tmp_path):
-    stale = TEMPLATE.replace('name = "NOCALL"', 'name = "NOCALL"\nlat = 40.3\nlon = -3.7')
-    svc = _svc(tmp_path, stale)
+    svc = _svc(tmp_path)
+    # A previous generation left a stale pair in the generated file.
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
+    gen.parent.mkdir(parents=True, exist_ok=True)
     assert svc.set_gps(source="fixed", fixed_lat=LAT, fixed_lon=LON).ok
+    svc.write_config_files("meshcore", position={"lat": LAT, "lon": LON})
+    assert _coords(_generated(tmp_path)) != []
     svc.save_stack_config("meshcore", {"use_gps": "off"})
     pos, note = svc.meshcore_position("meshcore")
     assert (pos, note) == ({}, "")
@@ -417,20 +442,21 @@ def test_use_gps_off_runs_no_bridge_and_writes_no_device(tmp_path, fake_gpsd):
     order = [c.id for _s, c in (svc._run_order("meshcore") or ())]
     assert "meshcore-gps" not in order
     svc.write_config_files("meshcore", position={})
-    assert "gps.device" not in _generated(tmp_path)
+    assert "position.sock" not in _generated(tmp_path)
 
 
 @pytest.mark.contract
-def test_a_live_source_writes_the_bridge_pty_as_the_device(tmp_path, fake_gpsd):
-    """The node reads NMEA from a device path; it must be the bridge's PTY, never the real
-    receiver — two readers on one receiver is what the bridge exists to prevent."""
+def test_a_live_source_writes_the_bridge_position_socket(tmp_path, fake_gpsd):
+    """A live source is consumed through the bridge's position feed; the generated
+    config must point at that socket, never at the real receiver."""
     srv = fake_gpsd(json_lines=[_tpv()])
     svc = _svc(tmp_path)
     assert svc.set_gps(source="gpsd", host="127.0.0.1", port=srv.port).ok
     svc.write_config_files("meshcore", position={})
     text = _generated(tmp_path)
-    assert "gps.device" in text
+    assert "socket" in text
     assert "state/gps/meshcore" in text
+    assert "position.sock" in text
 
 
 @pytest.mark.parametrize("lat,lon", [("007.6", "51.4779"), ("51.4779", "007.6"),
@@ -449,8 +475,8 @@ def test_a_valid_fixed_position_never_produces_invalid_toml(tmp_path, lat, lon):
     assert [w.status for w in writes] == ["written"], [w.detail for w in writes]
     import tomllib
     doc = tomllib.loads(_generated(tmp_path))
-    assert doc["device"]["companion"]["lat"] == pytest.approx(float(lat))
-    assert doc["device"]["companion"]["lon"] == pytest.approx(float(lon))
+    assert doc["gps"]["lat"] == pytest.approx(float(lat))
+    assert doc["gps"]["lon"] == pytest.approx(float(lon))
 
 
 @pytest.mark.safety("meshcore-identity")
@@ -458,10 +484,10 @@ def test_an_unreadable_candidate_blocks_rather_than_minting_over_it(tmp_path):
     # REVIEW-FOUND: treating an unreadable candidate (symlinked leaf, swapped parent) as
     # "no key" falls through to minting — the exact silent rotation this module prevents.
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
     real = tmp_path / "elsewhere.toml"
-    real.write_text(f'[device.companion]\nprivatekey = "{KEY}"\n')
+    real.write_text(f'[identity]\nkey = "{KEY}"\n')
     gen.symlink_to(real)                                  # read_bytes is O_NOFOLLOW
     with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
@@ -518,7 +544,7 @@ def test_an_absent_optional_component_does_not_sink_the_stack_badge(tmp_path):
     # Live find: the whole stack rolled up "not-installed" although meshcore-pi was
     # installed and merely stopped — only the never-cloned optional GUI was missing.
     svc = _svc(tmp_path)
-    snap, ss = _snapshot(svc, {"meshcore-pi": RunState.STOPPED,
+    snap, ss = _snapshot(svc, {"meshcore-node": RunState.STOPPED,
                                "meshcore-nodegui": RunState.NOT_INSTALLED,
                                "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == "stopped"
@@ -529,7 +555,7 @@ def test_an_absent_optional_component_does_not_sink_the_stack_badge(tmp_path):
 @pytest.mark.contract
 def test_a_missing_mandatory_component_still_sinks_the_badge(tmp_path):
     svc = _svc(tmp_path)
-    snap, _ = _snapshot(svc, {"meshcore-pi": RunState.NOT_INSTALLED,
+    snap, _ = _snapshot(svc, {"meshcore-node": RunState.NOT_INSTALLED,
                               "meshcore-nodegui": RunState.NOT_INSTALLED,
                               "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == "not-installed"
@@ -540,7 +566,7 @@ def test_a_missing_mandatory_component_still_sinks_the_badge(tmp_path):
 def test_an_installed_optional_component_is_never_hidden(tmp_path, state):
     # Only NEVER-INSTALLED optionals are excused. A broken one that IS installed is news.
     svc = _svc(tmp_path)
-    snap, _ = _snapshot(svc, {"meshcore-pi": RunState.RUNNING,
+    snap, _ = _snapshot(svc, {"meshcore-node": RunState.RUNNING,
                               "meshcore-nodegui": state,
                               "meshcore-cli": RunState.STOPPED})
     assert rollup_states(snap)["meshcore"] == state.value
@@ -603,6 +629,6 @@ def test_a_linked_source_does_not_block_maintenance_on_the_base_template(tmp_pat
     # No candidate may point into the linked source tree...
     assert not [p for p in cands if "src" in p.parts], cands
     # ...but the generated {runtime} config stays scannable, so a normal upgrade still adopts.
-    assert [p.name for p in cands] == ["meshcore-pi.toml"]
+    assert [p.name for p in cands] == ["meshcore.toml"]
     # With nothing generated yet, adoption is a clean "no key here", not a refusal.
     assert mi.adopt_identity(svc._paths, cands) == ""

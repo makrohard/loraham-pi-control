@@ -16,7 +16,7 @@ def test_packaged_config_bases_are_not_unseeded_runtime_files():
     stacks = load_manifest(default_manifest_path())
     bases = {c.id: c.config_file.base
              for st in stacks for c in st.components if getattr(c, "config_file", None)}
-    assert bases.get("meshcore-pi") == "examples/config-loraham868.toml"
+    assert bases.get("meshcore-node") == "{asset}/bases/meshcore.toml"
     for cid, base in bases.items():
         assert not base.startswith("{runtime}/config/files/"), (cid, base)
 

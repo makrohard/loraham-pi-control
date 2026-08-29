@@ -1,0 +1,122 @@
+From 448769300cae76f5fb81dedcee3d6b92c69dac4a Mon Sep 17 00:00:00 2001
+From: makrohard <410733@gmail.com>
+Date: Sat, 29 Aug 2026 03:16:06 +0200
+Subject: [PATCH] fix: deliver PATH-embedded ACKs without dispatcher-level
+ waiters
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Firmware Mesh::onRecvPacket decrypts every PATH addressed to this node and
+hands its extra (the ACK a flood text message is confirmed with) to
+processAck unconditionally. process_path_ack_variants gated this on
+dispatcher._waiting_acks, which only dispatcher-level wait_for_ack sends
+populate — a companion tracks expected ACK CRCs app-side, so the delivery
+confirmation for a flood DM (the first exchange with any new contact) never
+reached companion clients. Drop the gate and return any authenticated
+embedded ACK CRC; matching stays with the notify path, exactly like
+firmware processAck, which ignores unknown CRCs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PNqFWYfG7g4sUPSLATur78
+---
+ src/openhop_core/node/handlers/ack.py | 24 +++++++++++----
+ tests/test_path_ack_handler.py        | 42 +++++++++++++++++++++++++++
+ 2 files changed, 60 insertions(+), 6 deletions(-)
+
+diff --git a/src/openhop_core/node/handlers/ack.py b/src/openhop_core/node/handlers/ack.py
+index e9a1f4a..055aa8c 100644
+--- a/src/openhop_core/node/handlers/ack.py
++++ b/src/openhop_core/node/handlers/ack.py
+@@ -83,9 +83,17 @@ class AckHandler(BaseHandler):
+         # PATH returns are encrypted as dest_hash + src_hash + MAC + ciphertext.
+         # Their outer length varies with the returned path, so do not restrict this
+         # to the 20-byte (single AES-block) form.
++        #
++        # Deliberately NOT gated on dispatcher._waiting_acks: firmware
++        # Mesh::onRecvPacket processes every PATH addressed to this node
++        # unconditionally (Mesh.cpp PAYLOAD_TYPE_PATH case: decrypt, then
++        # onPeerPathRecv with extra_type/extra). A companion never populates
++        # _waiting_acks — it tracks expected ACK CRCs app-side and relies on the
++        # ack-received listener — so gating here made the delivery confirmation
++        # for a flood text message (whose ACK rides the PATH return) invisible
++        # to companion clients.
+         if (
+-            self.dispatcher._waiting_acks
+-            and self.dispatcher.local_identity
++            self.dispatcher.local_identity
+             and self.dispatcher.contact_book
+             and len(payload) >= 2
+             and payload[0] == self.dispatcher.local_identity.get_public_key()[0]
+@@ -137,10 +145,14 @@ class AckHandler(BaseHandler):
+                 self.log("Encrypted PATH ACK extra is shorter than its CRC")
+                 return None
+ 
+-            crc = int.from_bytes(decrypted[extra_start + 1 : extra_start + 5], "little")
+-            if crc in self.dispatcher._waiting_acks:
+-                return crc
+-            return None
++            # Return the CRC of any authenticated embedded ACK. Matching it
++            # against a waiter is the notify path's job: dispatcher-level
++            # waiters resolve through _waiting_acks, and a companion matches it
++            # against its app-side expected-ACK table (firmware processAck
++            # ignores CRCs it does not know, so an unknown CRC is harmless).
++            return int.from_bytes(
++                decrypted[extra_start + 1 : extra_start + 5], "little"
++            )
+ 
+         return None
+ 
+diff --git a/tests/test_path_ack_handler.py b/tests/test_path_ack_handler.py
+index 0b9b448..842c8e4 100644
+--- a/tests/test_path_ack_handler.py
++++ b/tests/test_path_ack_handler.py
+@@ -344,3 +344,45 @@ async def test_path_handler_updates_matched_contact_sends_reciprocal_and_resolve
+         shared_secret[:16], shared_secret, bytes(reciprocal.payload[2:])
+     )
+     assert reciprocal_inner[:3] == bytes([PathUtils.encode_path_len(1, 1), 0xC3, 0xFF])
++
++
++@pytest.mark.asyncio
++async def test_path_embedded_ack_notifies_listener_without_dispatcher_waiters():
++    """Companion flow: the app (not the dispatcher) tracks expected ACK CRCs.
++
++    Firmware Mesh::onRecvPacket decrypts every PATH addressed to this node and
++    hands its extra (the embedded ACK for a flood text message) to processAck —
++    with no dispatcher-level waiting-ack precondition. The PATH-embedded ACK
++    must therefore reach the ack-received listener even when _waiting_acks is
++    empty, or a companion client never sees delivery confirmation for a flood DM.
++    """
++    contacts = ContactStore()
++    contacts.load_from(
++        [Contact(public_key=SENDER_IDENTITY.get_public_key(), name="peer")]
++    )
++    ack_crc = 0x12345678
++    dispatcher = SimpleNamespace(
++        local_identity=LOCAL_IDENTITY,
++        contact_book=contacts,
++        _waiting_acks={},  # companion: nothing waits at dispatcher level
++    )
++    handler = AckHandler(lambda _message: None, dispatcher)
++
++    notified = []
++
++    async def listener(crc):
++        notified.append(crc)
++
++    handler.set_ack_received_callback(listener)
++
++    packet = _path_return(
++        LOCAL_IDENTITY,
++        SENDER_IDENTITY,
++        path=[],
++        extra_type=PAYLOAD_TYPE_ACK,
++        extra=ack_crc.to_bytes(4, "little"),
++    )
++    found = await handler.process_path_ack_variants(packet)
++    assert found == ack_crc
++    await handler._notify_ack_received(found)
++    assert notified == [ack_crc]
+-- 
+2.43.0
+

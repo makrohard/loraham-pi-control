@@ -140,7 +140,7 @@ def test_optional_serial_kiss_requires_socat():
 
 def test_meshcore_daemon_backed_does_not_claim_direct_spi():
     comps = _index(load_manifest())
-    node = comps["meshcore-pi"]
+    node = comps["meshcore-node"]
     assert node.band == "868"
     assert "loraham-daemon" in node.depends_on       # auto-starts the daemon on 868
     # Daemon-backed: consumes the 868 socket, requires a profile, claims NO SPI.

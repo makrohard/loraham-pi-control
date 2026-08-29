@@ -237,7 +237,7 @@ def test_gui_unavailable_overlay_marks_component_not_applicable(tmp_path, monkey
     snap, ss = _meshcore_snapshot(svc)
     svc._overlay_gui_unavailable(snap)
     assert ss.components["meshcore-nodegui"].run_state is RunState.NOT_APPLICABLE
-    assert ss.components["meshcore-pi"].run_state is RunState.STOPPED     # untouched
+    assert ss.components["meshcore-node"].run_state is RunState.STOPPED     # untouched
     assert rollup_states(snap)["meshcore"] == "stopped"
 
 
@@ -383,11 +383,11 @@ def test_tx_overlay_leaves_daemon_and_unlicensed_stacks_unknown(tmp_path):
     # Neither may gain ENABLED from a licensed-stack inference.
     from lhpc.core.model import TxState
     svc, snap = _tx_snap(tmp_path)
-    for cid in ("loraham-daemon", "meshtastic", "meshcore-pi"):
+    for cid in ("loraham-daemon", "meshtastic", "meshcore-node"):
         s = _st(snap, cid)
         s.run_state, s.tx_state = RunState.RUNNING, TxState.UNKNOWN
     svc._overlay_licensed_tx_enabled(snap)
-    for cid in ("loraham-daemon", "meshtastic", "meshcore-pi"):
+    for cid in ("loraham-daemon", "meshtastic", "meshcore-node"):
         assert _st(snap, cid).tx_state is TxState.UNKNOWN, cid
 
 

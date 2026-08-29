@@ -60,7 +60,8 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"lhpc" = ["data/*.toml", "data/bases/*", "data/scripts/*"]
+"lhpc" = ["data/*.toml", "data/bases/*", "data/scripts/*", "data/patches/*",
+          "data/meshcore_host/pyproject.toml", "data/meshcore_host/meshcore_host/*.py"]
 "lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
@@ -68,6 +69,13 @@ testpaths = ["tests"]
 # An unhandled exception in a test's thread is a HARD failure, never a swallowed warning (a leaked/racy
 # test thread must be fixed, not tolerated). Complements the session-wide propagator in tests/conftest.py.
 filterwarnings = ["error::pytest.PytestUnhandledThreadExceptionWarning"]
+
+[tool.ruff]
+# The MeshCore host application shipped as package data is a SEPARATE installable
+# package (its own pyproject, installed into the stack venv, style aligned with its
+# openhop_core dependency, target Python >=3.10). It is linted as its own project,
+# not against lhpc's frozen rule set.
+extend-exclude = ["lhpc/data/meshcore_host"]
 
 [tool.ruff.lint]
 # The rule set is FROZEN EXPLICITLY so the ruff version can float without CI going red — a ruff

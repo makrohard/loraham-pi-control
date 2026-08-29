@@ -219,7 +219,9 @@ def _asset_token(tok: str) -> str:
         raise CommandError(f"unsafe packaged-asset path: {tok!r}")
     from .assets import asset_path
     p = asset_path("/".join(parts))
-    if not p.is_file():
+    # A file (script, patch, base) or a directory (a pip-installable package
+    # shipped as package data, e.g. meshcore_host) — both are read-only inputs.
+    if not (p.is_file() or p.is_dir()):
         raise CommandError(f"packaged asset not found: {tok!r}")
     return str(p)
 

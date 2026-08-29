@@ -2145,7 +2145,7 @@ def test_meshcore_power_frequency_defaults_start_clean(tmp_path):
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     comp = next(c for s in svc.stacks() if s.id == "meshcore"
-                for c in s.components if c.id == "meshcore-pi")
+                for c in s.components if c.id == "meshcore-node")
     params = {p.name: p for p in comp.config_file.params}
     assert params["txpower"].default == "14"
     assert params["frequency"].default == ""                     # blank -> preset owns the frequency

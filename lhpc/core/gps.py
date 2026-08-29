@@ -28,12 +28,17 @@ CONSUMER_MESHCOM = "meshcom"
 CONSUMER_GRAYWOLF = "graywolf"
 CONSUMER_MESHCORE = "meshcore"
 
-# How the bridge hands NMEA to a consumer.
+# How the bridge hands the position to a consumer.
 OUT_PTY = "pty"
 OUT_UNIX = "unix"
+# Normalized line-JSON position feed served on a Unix socket the consumer connects to:
+# {"fix": true, "lat": .., "lon": ..} / {"fix": false}. MeshCore's openHop host consumes
+# this instead of the old device-shaped NMEA PTY — the consumer needs a position, not a
+# simulated GPS chip, so no probe-drain complexity and no NMEA parsing on its side.
+OUT_POSJSON = "posjson"
 
 _OUTPUT_FOR = {CONSUMER_MESHTASTIC: OUT_PTY, CONSUMER_MESHCOM: OUT_UNIX,
-               CONSUMER_MESHCORE: OUT_PTY}
+               CONSUMER_MESHCORE: OUT_POSJSON}
 
 # consumer -> the manifest component that carries its production feed. THE one mapping:
 # every site that needs it derives from here. There used to be four independent copies of
@@ -397,8 +402,12 @@ def bridge_endpoint_path(runtime_root, consumer: str) -> str:
       feed that listened would publish a socket nothing ever connects to — healthy-looking
       and completely inert.
     """
-    if _OUTPUT_FOR.get(consumer, OUT_PTY) == OUT_UNIX:
+    kind = _OUTPUT_FOR.get(consumer, OUT_PTY)
+    if kind == OUT_UNIX:
         return str(os.path.join(str(runtime_root), *MESHCOM_SOURCE_REL))
+    if kind == OUT_POSJSON:
+        # A server socket WE publish in our own state dir; the consumer connects.
+        return str(os.path.join(bridge_state_dir(runtime_root, consumer), "position.sock"))
     return str(os.path.join(bridge_state_dir(runtime_root, consumer), "nmea0"))
 
 

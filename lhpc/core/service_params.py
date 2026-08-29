@@ -42,7 +42,7 @@ _BANDLESS_STACK_PARAMS = ("use_gps",)
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
 # global plan, never from saved config or a start override.
-MESHCORE_COMPONENT = "meshcore-pi"
+MESHCORE_COMPONENT = "meshcore-node"
 _POSITION_PARAMS = ("lat", "lon")
 
 
@@ -1300,6 +1300,11 @@ class ParamsConfigMixin:
         for raw, is_base in ((fc.path, False), (fc.base, True)):
             if not raw:
                 continue
+            # An lhpc-shipped asset base is OUR read-only packaged file: it never
+            # carries an identity, and resolving it against the runtime root would
+            # (correctly) refuse containment — which must not block adoption.
+            if is_base and raw.startswith("{asset}"):
+                continue
             # A LINKED source is a symlink into someone's checkout, and every runtime read is
             # descriptor-anchored (O_NOFOLLOW per component), so reading through it raises
             # PathContainmentError rather than returning "no key". `_resolve_config_dest`
@@ -1316,6 +1321,16 @@ class ParamsConfigMixin:
                 continue
             if dest.status == "ok" and dest.path is not None:
                 out.append(dest.path)
+        # LEGACY: an install upgrading from the meshcore-pi era may hold its identity
+        # only in that generation's config file, which the current manifest no longer
+        # names. candidate_key() knows its `[device.companion] privatekey` location, so
+        # keep the file as a last candidate for the rescue path.
+        try:
+            legacy = self._paths.under("config", "files", "meshcore-pi.toml")
+        except (OSError, PathContainmentError, ValueError):
+            return tuple(out)
+        if legacy.exists() and legacy not in out:
+            out.append(legacy)
         return tuple(out)
 
     def meshcore_position(self, target: str) -> tuple[dict | None, str]:

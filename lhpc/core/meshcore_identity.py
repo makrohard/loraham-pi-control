@@ -37,9 +37,12 @@ IDENTITY_FILENAME = "meshcore_identity.key"
 SEED_LEN = 32
 MESHCORE_KEY_LEN = 64
 
-# `[device.companion] privatekey` — where meshcore.py reads it from.
-_SECTION = ("device", "companion")
-_KEY = "privatekey"
+# Where a generated config carries the key: the openHop-backed host reads
+# `[identity] key`; the retired meshcore-pi generation wrote
+# `[device.companion] privatekey`, and configs written by it are still the
+# prime adoption candidates during migration.
+_KEY_LOCATIONS = ((("identity",), "key"),
+                  (("device", "companion"), "privatekey"))
 
 # meshcore-pi reserves node IDs 0x00 and 0xff (the first public-key byte), and retries
 # generation until the key avoids them. We mint to the same rule.
@@ -157,19 +160,22 @@ def candidate_key(paths: Paths, path: Path) -> str:
             f"{path} is not valid TOML ({exc}) — refusing to continue and risk minting a "
             f"new identity over a key this file may still hold; fix or remove it first"
         ) from exc
-    table: object = doc
-    for part in _SECTION:
-        if not isinstance(table, dict):
-            return ""
-        table = table.get(part)
-    if not isinstance(table, dict) or _KEY not in table:
-        return ""
-    key = normalize_key(table[_KEY])
-    if not key:
-        raise MeshCoreIdentityError(
-            f"{path} carries an invalid {_KEY} — refusing to continue and mint a new "
-            f"identity over it; fix or remove that value first")
-    return key
+    for section, key_name in _KEY_LOCATIONS:
+        table: object = doc
+        for part in section:
+            if not isinstance(table, dict):
+                table = None
+                break
+            table = table.get(part)
+        if not isinstance(table, dict) or key_name not in table:
+            continue
+        key = normalize_key(table[key_name])
+        if not key:
+            raise MeshCoreIdentityError(
+                f"{path} carries an invalid {key_name} — refusing to continue and mint a "
+                f"new identity over it; fix or remove that value first")
+        return key
+    return ""
 
 
 def _store(paths: Paths, key: str) -> str:

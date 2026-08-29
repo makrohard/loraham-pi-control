@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshcore-host"
+version = "0.1.0"
+description = "LHPC MeshCore host application: openHop Core node on the LoRaHAM daemon"
+requires-python = ">=3.10"
+# openhop_core is installed from its pinned checkout in a prior build step; declaring it
+# here would let pip resolve a floating PyPI release instead. Install with --no-deps
+# guarded by the preceding step, or rely on this empty list staying empty.
+dependencies = []
+
+[tool.setuptools]
+packages = ["meshcore_host"]

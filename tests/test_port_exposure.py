@@ -58,9 +58,9 @@ def test_kiss_run_argv_carries_bind_param(tmp_path):
 # --- meshcore drives the upstream `wifi.allow` config key ----------------------------------------
 
 def test_meshcore_allow_targets_wifi_allow_key(tmp_path):
-    comp = _svc(tmp_path).stack("meshcore").component("meshcore-pi")
+    comp = _svc(tmp_path).stack("meshcore").component("meshcore-node")
     p = next(x for x in comp.config_file.params if x.name == "meshcore_allow")
-    assert p.key == "wifi.allow" and p.section == "device.companion"
+    assert p.key == "allow" and p.section == "companion"
     assert p.validator == "bind" and p.group == "Network exposure"
 
 
