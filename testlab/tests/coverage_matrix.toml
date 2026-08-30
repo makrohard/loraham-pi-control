@@ -115,6 +115,7 @@
 "known-working" = "acceptance"
 "list" = "acceptance"
 "logs" = "acceptance"
+"meshtastic" = { limitation = "guarded passthrough to the managed Meshtastic CLI; needs the built CLI binary + a live node (neither present in the fake-hardware lab) — covered in-process by test_meshtastic_tool" }
 "self-update" = "acceptance"
 "source-check" = "acceptance"
 "stack" = "acceptance"
