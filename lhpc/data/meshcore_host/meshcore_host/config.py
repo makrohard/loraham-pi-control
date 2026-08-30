@@ -17,17 +17,17 @@ RF_PRESETS = {
     "eu_uk_long": {
         "frequency": 869525000, "bandwidth": 250000, "spreading_factor": 11,
         "coding_rate": 5, "preamble": 16, "ldro": False,
-        "txpower": 14, "txmaxpower": 14,
+        "txpower": 14, "txmaxpower": 20,
     },
     "eu_uk_medium": {
         "frequency": 869525000, "bandwidth": 250000, "spreading_factor": 10,
         "coding_rate": 5, "preamble": 16, "ldro": False,
-        "txpower": 14, "txmaxpower": 14,
+        "txpower": 14, "txmaxpower": 20,
     },
     "eu_uk_narrow": {
         "frequency": 869618000, "bandwidth": 62500, "spreading_factor": 8,
         "coding_rate": 8, "preamble": 16, "ldro": False,
-        "txpower": 14, "txmaxpower": 14,
+        "txpower": 14, "txmaxpower": 20,
     },
 }
 
@@ -64,7 +64,7 @@ class HostConfig:
     spreading_factor: int = 0
     coding_rate: int = 0
     txpower: int = 14
-    txmaxpower: int = 14
+    txmaxpower: int = 20
     preamble: int = 16
     syncword: int = 0x12
     ldro: bool = False
