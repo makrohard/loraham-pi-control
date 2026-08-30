@@ -262,6 +262,27 @@ def _sidecar_root(tmp_path):
     return root, root / "state" / "post" / "r.json"
 
 
+def test_require_all_escalates_optional_step_to_gating():
+    # The meshtastic reconvergence needs the normally-OPTIONAL node-identity step to PROVE success.
+    # require_all=True must render that step as gating (optional=False) so the launcher exits nonzero
+    # if it fails; ordinary start/poststart (require_all=False) leaves it non-gating.
+    from lhpc.core import commands
+
+    class _Op:
+        callsign = "OE1ABC"
+
+    post = [{"kind": "exec", "label": "node identity", "optional": True,
+             "argv": ["meshtastic", "--set-owner", "Joe"]}]
+    comp = _mk_comp_with_post(post)
+    lenient = commands.render_post_launcher(list(post), comp, {}, _Op(), "/rt", "/rt/src", "")
+    strict = commands.render_post_launcher(list(post), comp, {}, _Op(), "/rt", "/rt/src", "",
+                                           require_all=True)
+    assert "'optional': True" in lenient        # normal: identity failure tolerated (non-gating)
+    assert "'optional': True" not in strict      # reconvergence: identity must succeed
+    assert "'optional': False" in strict
+    compile(strict, "<launcher>", "exec")        # still valid python
+
+
 def test_tcp_send_probe_fields_are_rendered_and_param_expanded():
     code = _render([{"kind": "tcp_send", "port": 1, "data": "--setcall {param:mc_callsign}\n",
                      "probe": "--info\n", "probe_stop_on": "Call:{param:mc_callsign}",

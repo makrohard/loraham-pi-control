@@ -292,6 +292,11 @@ the selected source.
 
 ---
 
+### meshtastic
+`lhpc meshtastic <upstream args>` — a thin **guarded passthrough** to the LHPC-managed Meshtastic CLI, always targeting this box's local node. Every upstream argument works as usual (`lhpc meshtastic --help` shows the full upstream reference); only what LHPC owns is guarded: connection/transport selectors (`--host`/`--tcp`/`--serial`/`--ble`/…) are refused, LHPC-owned local settings (LoRa region, owner name/short incl. `--set-ham`, GPS mode, fixed position) are refused with a pointer to the right command, and factory-reset asks for confirmation (`--yes` skips it). Broad config imports (`--configure`/`--import-config`/`--seturl`/`--ch-set-url`/`--ch-add-url`) run, then LHPC auto-reasserts region/name/GPS via post-start convergence. Targeting a remote node with `--dest` is unrestricted. Node ops need the stack running; `--help`/`--version`/`--support`/`--test` do not. See [Meshtastic → Command line](stacks/meshtastic.md#command-line-lhpc-meshtastic).
+
+---
+
 ### web
 `lhpc web [--host H] [--port P] [--socket]` — start the local operator web console. `--socket` serves on the protected Unix socket behind nginx (production).
 

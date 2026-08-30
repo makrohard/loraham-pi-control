@@ -232,7 +232,7 @@ def test_ephemeral_start_params_override_saved_config(tmp_path, monkeypatch):
     svc.save_config("igate", {"tx_freq": "433.900"})            # saved default
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     seen = {}
-    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False):
+    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
         seen["cfg"] = dict(comp_cfg)
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
@@ -1105,7 +1105,7 @@ def test_poststart_running_component_cancels_then_reruns(tmp_path, monkeypatch):
             calls["cancel"] += 1
             return (["post-runner pid 1: cancelled"], False)
     monkeypatch.setattr(ControllerService, "_lifecycle", lambda self: _LifeStub())
-    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False):
+    def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
         calls["rerun"].append(comp.id)
         assert strict is True             # the verb must surface a scheduling failure as FAILED
         return (None, "optional post-start scheduled")
@@ -1227,7 +1227,7 @@ def test_poststart_scheduling_failure_is_a_failed_result(tmp_path, monkeypatch):
     svc = _running_meshcom_svc(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
         (False if strict else None,
          "optional post-start could NOT be scheduled: launcher write failed: disk full"))
     res = svc.poststart("meshcom", apply=True)
@@ -1245,7 +1245,7 @@ def test_poststart_success_says_scheduled_not_applied(tmp_path, monkeypatch):
     svc = _running_meshcom_svc(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
         (None, "optional post-start scheduled"))
     res = svc.poststart("meshcom", apply=True)
     assert res.ok
@@ -1260,7 +1260,7 @@ def test_poststart_required_steps_report_completion(tmp_path, monkeypatch):
     svc = _running_meshcom_svc(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
         (True, "required post-start completed"))
     res = svc.poststart("meshcom", apply=True)
     assert res.ok
@@ -1457,7 +1457,7 @@ def test_poststart_detached_scheduling_is_started_not_verified(tmp_path, monkeyp
     svc = _running_meshcom_svc(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
         (None, "optional post-start scheduled"))
     res = svc.poststart("meshcom", apply=True)
     row = next(r for r in res.results if r.component == "meshcom-qemu")
@@ -1475,7 +1475,7 @@ def test_poststart_synchronous_required_run_stays_verified(tmp_path, monkeypatch
     svc = _running_meshcom_svc(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ControllerService, "_run_post_start",
-        lambda self, life, stack, comp, cfg, band, announce=None, strict=False:
+        lambda self, life, stack, comp, cfg, band, announce=None, strict=False, require_all=False:
         (True, "required post-start completed"))
     res = svc.poststart("meshcom", apply=True)
     row = next(r for r in res.results if r.component == "meshcom-qemu")

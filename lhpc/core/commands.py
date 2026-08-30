@@ -354,7 +354,7 @@ def _gps_token_value(spec: str, gps: dict | None) -> str:
 def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                          band: str = "", binding: dict | None = None, gated: bool = False,
                          result_path: str = "", meta: dict | None = None,
-                         gps: dict | None = None) -> str:
+                         gps: dict | None = None, require_all: bool = False) -> str:
     """Serialize typed post-start steps into a self-contained Python launcher that runs them
     detached with no shell: delay / exec(argv) / tcp_wait / tcp_send. `binding` (main pid + start
     time + session/group) ties the runner to one exact main launch — it re-checks that main before
@@ -412,7 +412,10 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
                 if Path(c).exists():
                     exe = c
                     break
-            optional = bool(step.get("optional")) and not step.get("required")
+            # `require_all` (the explicit reconvergence path) treats EVERY step as gating, so an
+            # otherwise-optional step — the node-identity `--set-owner` — must also succeed for the
+            # run to pass. Ordinary start/poststart leave it False, so optional stays non-gating there.
+            optional = (bool(step.get("optional")) and not step.get("required")) and not require_all
             # The status label defaults to the ORIGINAL argv[0]'s basename, never the resolved
             # path — an operator reads "region"/"meshtastic", not a managed venv location.
             resolved.append({"kind": "exec", "argv": [exe, *argv[1:]],
@@ -422,7 +425,8 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
         elif kind in ("tcp_wait", "tcp_send"):
             d = {"kind": kind, "host": step.get("host", "127.0.0.1"),
                  "port": int(step["port"]),
-                 "optional": bool(step.get("optional")) and not step.get("required")}
+                 "optional": (bool(step.get("optional")) and not step.get("required"))
+                             and not require_all}
             if kind == "tcp_wait":
                 d["timeout"] = float(step.get("timeout", 60))
                 if step.get("label"):

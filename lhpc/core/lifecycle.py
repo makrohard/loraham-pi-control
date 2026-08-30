@@ -800,7 +800,8 @@ class Lifecycle:
 
     def run_required_post_start(self, stack: Stack, comp: Component,
                                 params: dict | None = None, band: str = "",
-                                timeout: float = 300.0, on_log_open=None) -> JobResult:
+                                timeout: float = 300.0, on_log_open=None,
+                                require_all: bool = False) -> JobResult:
         """Run a component's REQUIRED post-start steps SYNCHRONOUSLY and bounded (no
         shell): the generated Python launcher exits non-zero if any required step
         fails, so its return code is a typed pass/fail the caller gates VERIFIED on.
@@ -825,7 +826,8 @@ class Lifecycle:
             script = commands.render_post_launcher(
                 comp.post_steps, comp, params, op, runtime, src, band, binding=binding,
                 result_path=str(result), gps=self._gps_post_values(getattr(stack, 'id', '')),
-                meta={"comp": comp.id, "band": band or "", "role": "required"})
+                meta={"comp": comp.id, "band": band or "", "role": "required"},
+                require_all=require_all)
         except (commands.CommandError, validators.ValidationError) as exc:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=[f"post-start build error: {exc}"])

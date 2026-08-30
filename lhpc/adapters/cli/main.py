@@ -471,6 +471,12 @@ def build_parser() -> argparse.ArgumentParser:
     # GPS is a GLOBAL setting like `hardware`, not a per-stack parameter: every stack that
     # can use a position takes it from here, so two stacks can never disagree about where
     # position comes from. Per-stack settings only turn GPS on or off.
+    # Guarded passthrough to the managed Meshtastic CLI (parsed by _cmd_meshtastic, not here — it
+    # forwards arbitrary upstream argv). Registered only so it appears in the command list.
+    sub.add_parser("meshtastic", add_help=False,
+                   help="Run the managed Meshtastic CLI against the local node "
+                        "(forwards upstream args; try `lhpc meshtastic --help`)")
+
     p_gps = sub.add_parser("gps",
                            help="Show or set the position source shared by all stacks")
     p_gps.add_argument("--source", choices=tuple(_GPS_SOURCES),
@@ -676,7 +682,32 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _cmd_meshtastic(passthrough: list[str]) -> int:
+    """`lhpc meshtastic <upstream args>` — a thin guarded passthrough to the managed Meshtastic
+    CLI. Intercepted before the main parser so upstream flags (incl. --help) reach it verbatim."""
+    from lhpc.core import meshtastic_tool
+    from lhpc.core.paths import resolve_paths
+    svc = ControllerService()
+    return meshtastic_tool.run(
+        passthrough,
+        runtime_root=resolve_paths().runtime_root,
+        stack_running=svc.stack_running,
+        confirm=_confirm,
+        # Reassert LHPC-owned region/name/GPS after a broad local mutator by re-running the stack's
+        # post-start steps in place (no restart). require_all=True escalates the normally-optional
+        # node-identity step to gating, so `.ok` PROVES name/short were reasserted too — the wrapper
+        # must never report a false success.
+        reconverge=lambda: svc.poststart("meshtastic", apply=True, require_all=True).ok,
+    )
+
+
 def _run(argv: list[str] | None = None) -> int:
+    # `meshtastic` forwards arbitrary upstream argv (including --help/--version and its own flags),
+    # so it is intercepted BEFORE the main parser — which would otherwise claim --help or reject
+    # unknown upstream options. Everything after `meshtastic` is passed through untouched.
+    raw = sys.argv[1:] if argv is None else list(argv)
+    if raw and raw[0] == "meshtastic":
+        return _cmd_meshtastic(raw[1:])
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
     if extra:

@@ -63,3 +63,43 @@ stack's config.
 - **fixed** — the node's own fixed-position support is used; no feed runs.
 - **off** — `position.gps_mode` is set to `NOT_PRESENT` and any stored fixed position is
   cleared, so the node cannot keep beaconing a position you turned off.
+
+## Command line (`lhpc meshtastic`)
+
+`lhpc meshtastic <args>` runs the **managed** Meshtastic Python CLI against **this box's local
+node** — a thin guarded passthrough, not a reimplementation. Every upstream argument works as
+usual; try `lhpc meshtastic --help` for the full upstream reference.
+
+```text
+lhpc meshtastic --info
+lhpc meshtastic --nodes
+lhpc meshtastic --sendtext "hello"
+lhpc meshtastic --dest '!12345678' --sendtext "hi" --ack
+lhpc meshtastic --listen
+```
+
+Only what LHPC owns is guarded:
+
+- **Connection is fixed to the local node.** Transport/address selectors (`--host`, `--tcp`/`-t`,
+  `--port`/`--serial`/`-s`, `--ble`/`-b`, `--ble-scan`) are refused. To drive another Meshtastic
+  device, run a standalone Meshtastic CLI outside `lhpc meshtastic`.
+- **Region, node name, and GPS are LHPC-owned** for the local node and are refused with a pointer
+  to the right command: LoRa region → `lhpc config meshtastic region`; owner name/short (incl.
+  `--set-ham`, which sets a licensed callsign as the owner) → `lhpc config meshtastic node_name` /
+  `node_short`; GPS mode and fixed position → `lhpc gps` (see [GPS](../gps.md)). Targeting a
+  **remote** node with `--dest` is not restricted.
+- **Broad config imports self-heal.** `--configure`/`--import-config` and the channel-URL setters
+  (`--seturl`/`--ch-set-url`/`--ch-add-url`, which carry a full LoRa config incl. region) run
+  normally; LHPC then automatically re-asserts only what it owns (region/name/GPS — including the
+  node owner name) via the stack's post-start convergence, even if the command is interrupted or
+  fails partway. No prompt. The reassert is **verified**: if LHPC cannot confirm it, the command
+  exits non-zero and points you at `lhpc stack poststart meshtastic` — an import never reports
+  success while an LHPC-owned value has silently drifted. A remote `--dest` is left alone.
+- **Factory reset** (`--factory-reset`, `--factory-reset-config`, `--factory-reset-device`) warns
+  and asks for confirmation; `lhpc meshtastic --factory-reset --yes` skips the prompt. After a
+  factory reset, re-apply LHPC-managed settings with `lhpc stack poststart meshtastic`.
+
+Everything else — messages, channels, telemetry, traceroute, `--listen`, remote admin, reboot,
+etc. — passes through untouched. Node operations require the stack to be running
+(`lhpc stack start meshtastic`); `--help`/`--version`, and the node-free `--support`/`--test`
+(its own USB two-radio test), do not.

@@ -1283,7 +1283,7 @@ class LifecycleOpsMixin:
                                            f"lhpc stack stop {target}"])
 
     def _run_post_start(self, life, stack, comp, comp_cfg, band,
-                        announce=None, strict=False) -> tuple[bool | None, str]:
+                        announce=None, strict=False, require_all=False) -> tuple[bool | None, str]:
         """Run post-start steps. Returns (required_ok, summary):
           * (None, "")               — no post-start;
           * (None, "…scheduled")     — OPTIONAL steps scheduled detached (never gates);
@@ -1303,7 +1303,7 @@ class LifecycleOpsMixin:
             return None, ""
         if life.has_required_post_start(comp):
             jr = life.run_required_post_start(stack, comp, comp_cfg, band=band,
-                                              on_log_open=announce)
+                                              on_log_open=announce, require_all=require_all)
             if jr.ok:
                 return True, "required post-start completed"
             return False, f"required post-start failed (rc {jr.returncode})"
@@ -1323,13 +1323,19 @@ class LifecycleOpsMixin:
             f"optional post-start could NOT be scheduled: {sched.detail}"
 
     @invalidates_snapshot
-    def poststart(self, target: str, apply: bool = False, band: str = "") -> ActionResult:
+    def poststart(self, target: str, apply: bool = False, band: str = "",
+                  require_all: bool = False) -> ActionResult:
         """Re-run a RUNNING stack's post-start steps WITHOUT restarting it — e.g. re-apply the
         MeshCom callsign after the console-readiness retry window expired (a restart would cost
         another multi-minute QEMU boot). Reuses the exact readiness-gated senders the start path
         uses: required steps run synchronously, optional steps are re-scheduled detached. Any
         LIVE post runner is cancelled FIRST — the guest console serves one exchange per
-        connection and must never see two concurrent senders."""
+        connection and must never see two concurrent senders.
+
+        `require_all=True` escalates normally-OPTIONAL steps (e.g. the node-identity `--set-owner`) to
+        gating for THIS run, so `.ok` proves every LHPC-owned value was reasserted — used by the
+        `lhpc meshtastic` broad-mutation reconvergence, which must not report a false success. The
+        default leaves ordinary start/poststart semantics unchanged."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         order = self._run_order(target)
@@ -1346,7 +1352,7 @@ class LifecycleOpsMixin:
                                 data={"changes": len(lines)})
         try:
             with self._admission_guard("poststart", target), self._config_stable():
-                return self._poststart_impl(target, order, band)
+                return self._poststart_impl(target, order, band, require_all=require_all)
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except SourceTxnBlocked as blocked:
@@ -1357,7 +1363,8 @@ class LifecycleOpsMixin:
                                 f"guard unavailable ({exc})",
                                 next_commands=[f"lhpc status {target}"])
 
-    def _poststart_impl(self, target: str, order, band: str) -> ActionResult:
+    def _poststart_impl(self, target: str, order, band: str,
+                        require_all: bool = False) -> ActionResult:
         life = self._lifecycle()
         snap = self.build_snapshot()
         st_index = {c.id: ss.components[c.id]
@@ -1391,7 +1398,7 @@ class LifecycleOpsMixin:
             comp_cfg = dict(self.stack_config(comp.id, cfg_band))
             required_ok, summary = self._run_post_start(
                 life, stack, comp, comp_cfg, cfg_band,
-                announce=self._log_announcer(comp.id, out), strict=True)
+                announce=self._log_announcer(comp.id, out), strict=True, require_all=require_all)
             if required_ok is False:
                 record(comp, stack, Outcome.FAILED, summary)
             elif required_ok is None:
