@@ -1192,6 +1192,7 @@ main = "meshtastic"
   run = "{runtime}/build/tools/meshtasticd/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
   readiness = "endpoint"
+  start_note = "Hint: Use the meshtastic CLI through lhpc. Example: lhpc meshtastic --version"
   # THREE managed artifacts, all inside the runtime root: the server-only meshtasticd binary, the
   # browser UI that belongs to the SAME source revision, and the Meshtastic Python CLI.
   #
