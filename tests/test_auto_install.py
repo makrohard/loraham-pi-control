@@ -2299,28 +2299,31 @@ def test_sourceless_row_keeps_an_inert_version_and_never_skews_the_summary(tmp_p
 
 
 @pytest.mark.needs_session
-def test_gui_skipped_stack_is_counted_and_never_reads_as_installed(tmp_path, monkeypatch):
-    """A GUI-only stack on a headless box: accepted outcome, explicitly counted, ok=True — but the
-    row must say `skipped`, never `success`, so it can never be mistaken for installed."""
+def test_gui_optional_component_skips_without_skipping_voice(tmp_path, monkeypatch):
+    """Voice on a headless box (no GTK headers): the OPTIONAL GTK component is dropped by the GUI
+    preflight, but the stack itself INSTALLS — the terminal variant (loraham-voice-cli) makes Voice
+    a first-class headless stack, mirroring meshcore-nodegui's optional-GUI pattern."""
     _happy_ops(monkeypatch)
     svc = _svc(tmp_path)                              # FakeSystem: no GTK headers
     r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
     st = svc.auto_install_status()
     rows = {x["id"]: x for x in st["stacks"]}
-    assert rows["voice"]["status"] == "skipped"
-    assert "headless-safe default" in rows["voice"]["detail"]
-    assert rows["voice"].get("skipped_components") == ["loraham-voice"]
+    assert rows["voice"]["status"] == "success"       # installed headless via the CLI variant
     assert st["state"] == "completed" and r.ok is True
-    assert "1 skipped (GUI deps absent)" in r.summary
+    # The GTK component itself was still dropped, never built without its toolkit.
+    assert "loraham-voice" in svc.gui_unavailable_components(svc.stack("voice"))
+    assert "loraham-voice-cli" not in svc.gui_unavailable_components(svc.stack("voice"))
 
 
 @pytest.mark.needs_session
 def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
-    """A dependency that appears BETWEEN planning and execution must not turn a planned Voice skip
-    into an empty, falsely-successful install: the verdict comes from the frozen plan alone."""
+    """A dependency that appears BETWEEN planning and execution must not change the planned GUI
+    verdict: it comes from the frozen plan alone (no re-probe during execution). The planned skip
+    is now COMPONENT-level (the optional GTK app) — the voice stack itself installs headless via
+    its terminal variant."""
     _happy_ops(monkeypatch)
     svc = _svc(tmp_path)
-    # Plan first (GTK absent -> voice skipped), then make the probe claim everything is satisfied.
+    # Plan first (GTK absent -> the GTK component skipped), then forbid any re-probe.
     scope = svc._auto_install_scope()
     assert "loraham-voice" in next(w for s, w in scope if s.id == "voice").skipped
     monkeypatch.setattr(type(svc), "gui_skipped_stack",
@@ -2329,7 +2332,9 @@ def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "_auto_install_scope", lambda self: scope)
     svc.auto_install(apply=True, tests=False, emit=lambda s: None)
     rows = {x["id"]: x for x in svc.auto_install_status()["stacks"]}
-    assert rows["voice"]["status"] == "skipped"            # still skipped, from the frozen plan
+    assert rows["voice"]["status"] == "success"            # headless install via the CLI variant
+    # ...and the frozen plan's component skip stood without any execution-time re-probe
+    # (the monkeypatched gui_skipped_stack would have raised).
 
 
 def test_marker_accepts_a_binary_row_selection():

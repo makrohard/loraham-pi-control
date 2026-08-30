@@ -465,6 +465,14 @@ class Component:
                                  # interpreter already exists) can never read "built"
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
+    # Optional ONLY for the GUI-dependency preflights (build refusal, gui_skipped_stack /
+    # auto-install verdict): when its GUI toolkit is absent the component is DROPPED instead
+    # of refusing the whole stack. Everywhere else it stays a normal component — in
+    # particular it is still seeded by a default `stack start` wherever it IS buildable
+    # (unlike `optional`, which also removes it from start seeding). Voice's GTK app uses
+    # this: a headless/Lite box keeps the stack through the terminal variant, a desktop
+    # starts the GUI exactly as before.
+    gui_optional: bool = False
     # A TEST FACILITY, not an operator choice: never offered as an optional start, never
     # auto-installed. `optional` alone could not express this — it made the meshcom GPS relay
     # (which replays a synthetic NMEA file) sit on the confirm page beside the real feed.

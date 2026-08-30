@@ -372,3 +372,42 @@ def test_meshcli_wrapper_waits_for_a_transient_lease_holder(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# Voice on a headless/Lite box: terminal variant beside the GTK app
+# ---------------------------------------------------------------------------
+
+def test_voice_terminal_variant_shape():
+    """The voice stack carries a -DNO_GTK ncurses variant so a Lite box gets Voice
+    without any graphical environment: interactive like chat/nomadnet (manual
+    readiness -> never autostarted, dashboard shows the copy-paste command), GTK
+    strictly absent from its build, and both components share one pinned source
+    and the exclusive audio device."""
+    comps = _index(load_manifest())
+    gtk, cli = comps["loraham-voice"], comps["loraham-voice-cli"]
+
+    # Lite run model: operator-started in a real TTY, never a background service.
+    assert cli.interactive is True and cli.readiness == "manual"
+    # Desktop unchanged: the GTK app stays a normal lhpc-started service...
+    assert gtk.interactive is False and gtk.readiness == "process"
+    # ...but is GUI-OPTIONAL, so the GUI preflight drops it headless instead of
+    # skipping the whole stack — while a default desktop `stack start` still seeds it
+    # (plain `optional` would not).
+    assert gtk.gui_optional is True and gtk.optional is False
+
+    # The CLI build must never touch the GTK toolchain; the GTK build keeps it.
+    cli_argv = [tok for step in cli.build_steps for tok in step.get("argv", ())]
+    assert "-DNO_GTK" in cli_argv and not any("gtk" in t for t in cli_argv)
+    gtk_argv = [tok for step in gtk.build_steps for tok in step.get("argv", ())]
+    assert any("gtk" in t for t in gtk_argv)
+
+    # None of the CLI variant's requires are gui-scoped (buildable on Lite).
+    assert not any(getattr(r, "gui", False) for r in cli.requires)
+
+    # One source, one pin — two builds of the same checkout.
+    assert gtk.source.path == cli.source.path
+    assert gtk.source.pin_commit == cli.source.pin_commit
+
+    # Both grab the same exclusive audio device, so they can never run at once.
+    assert {r.key for r in cli.resources} == {"audio.default"}

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+- **Voice on headless/Lite boxes:** the same source built with `-DNO_GTK` as `loraham-voice-cli`, a pure ncurses TUI with zero graphical linkage — `lhpc stack start voice` prints the exact terminal command; codec2/ALSA moved into the standard bootstrap, GTK stays behind `--with-gui`
+- The GTK app is `gui_optional`: absent toolkit/display drops it from build/start/auto-install and status instead of failing the stack; on a desktop it runs exactly as before and the terminal variant is not offered
+- The terminal variant is a guarded fallback: direct start/restart refused (its config — incl. the callsign — belongs to the GTK component), exclusive audio enforced, offered only where the GUI cannot run; plan/preview and no-op results tell the same truth
+- Interactive components run their pre-start steps, so the printed command actually works (live-found ENOENT)
+- `bootstrap-deps.sh --dry-run` no longer rejects its own `libasound2-dev` (ALSA is not an audio server; PulseAudio stays denied)
+
 ## 0.2.3
 
 - **`lhpc meshtastic <args>` — a guarded passthrough to the managed Meshtastic CLI:** runs the pinned upstream CLI against this box's local node; everything forwards unchanged except what LHPC owns. Transport/address selectors are refused (always the local node), LHPC-owned settings (LoRa region, owner name/short incl. `--set-ham`, GPS mode, fixed position) point at the matching `lhpc` command, and factory-reset asks to confirm (`--yes` skips). A broad config import (`--configure`/`--import-config`/`--seturl`/`--ch-*-url`) runs, then LHPC auto-reasserts region/name/GPS via post-start convergence — verified, so a drift never reports success. A remote `--dest` is unrestricted; `--help`/`--version`/`--support`/`--test` need no running stack. The dashboard hints at the wrapped CLI when the stack starts

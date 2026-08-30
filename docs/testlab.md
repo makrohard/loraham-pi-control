@@ -56,7 +56,7 @@ boundary), and the lab runner refuses direct host mutators with a typed message.
 without ever reaching the live ham network. meshtastic and reticulum run against
 simulated radios (meshtastic's upstream `sim` radio via our binary; reticulum's fake
 spidev/gpiod shims); voice and sideband are GTK/Kivy GUIs that LAUNCH headless under
-Xvfb (not remotely viewable). `chat` and `nomadnet` are interactive TUIs LHPC never
+Xvfb (not remotely viewable). `chat`, `nomadnet` and voice's terminal variant are interactive TUIs LHPC never
 auto-spawns. See `grep limitation testlab/tests/coverage_matrix.toml` for every gap.
 
 ## Launch

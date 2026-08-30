@@ -577,6 +577,8 @@ class LifecycleOpsMixin:
         test_hook_runs_only_under_all_locks."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
+        if (_r := self._gui_fallback_refusal(target)) is not None:
+            return _r
         from . import reslock
         if auto_install_ctx is not None:
             order = self._run_order(target) or []
@@ -729,6 +731,31 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
 
+    def _gui_fallback_refusal(self, target: str):
+        """PREFLIGHT for a DIRECT start of voice's terminal fallback (a non-main interactive
+        component whose stack main is gui_optional): refused before ANY side effect — the
+        boot hook, feed clearing, owner stops, daemon ensure and the already-healthy
+        shortcut all come later, and none of them may run for a target whose start can only
+        ever be refused. Guards the public entry AND _start_impl_inner, so internal callers
+        (restart, boot restore) are covered too. Returns None for every other target."""
+        if self.stack(target) is not None:
+            return None
+        for stack in self.stacks():
+            for c in stack.components:
+                if c.id != target:
+                    continue
+                main = next((m for m in stack.components if m.id == stack.main), None)
+                if (c.interactive and c.id != stack.main
+                        and main is not None and main.gui_optional):
+                    return ActionResult(
+                        False,
+                        f"Cannot start '{target}': it shares {stack.main}'s configuration "
+                        f"(callsign, audio device and radio params), which only a stack "
+                        f"start generates — run: lhpc stack start {stack.id}",
+                        next_commands=[f"lhpc stack start {stack.id}"])
+                return None
+        return None
+
     def _start_impl_inner(self, target: str, apply: bool = False, params: dict | None = None,
                           stop_owners: bool = False, band: str = "",
                           daemon_overrides: dict | None = None,
@@ -739,6 +766,8 @@ class LifecycleOpsMixin:
         if order is None:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc list"])
+        if (_r := self._gui_fallback_refusal(target)) is not None:
+            return _r
         # Ownership scope of THIS public operation: recorded on every launch it causes
         # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
         # component-scoped start must never be widened into a whole-stack boot restore.
@@ -853,6 +882,20 @@ class LifecycleOpsMixin:
                         details.append(f"  [daemon] start/ensure --radio {radio or 'all bands'}"
                                        + (f", TXMODE={tx}" if tx else ""))
                 elif comp.interactive:
+                    # The PLAN obeys the same fallback policy as the apply path: where the
+                    # GUI main is usable, voice's terminal variant is not offered — neither
+                    # the CLI plan nor the web confirm page may render its command.
+                    _st = self.stack_of(comp.id)
+                    _stk = self.stack(_st) if _st else None
+                    _m = (next((c for c in _stk.components if c.id == _stk.main), None)
+                          if _stk else None)
+                    if (comp.id != getattr(_stk, "main", None)
+                            and _m is not None and _m.gui_optional
+                            and not self.gui_fallback_active(_stk)):
+                        details.append(f"  [skip] {comp.id}: {_stk.main} runs on this box — "
+                                       "the terminal variant is the fallback for boxes "
+                                       "without a graphical environment")
+                        continue
                     cmd = self.manual_start_command(comp)
                     details.append(f"  [manual] {comp.id} is interactive — the daemon is "
                                    "ensured, then run it yourself in a terminal:")
@@ -880,10 +923,23 @@ class LifecycleOpsMixin:
         # never stop owners (even with stop_owners=True), never launch/write config/apply params/
         # CONF SET/touch markers for an already-healthy target.
         if apply and self._order_already_healthy(order, radio):
+            # Only components the health predicate actually JUDGED may be reported
+            # 'already running': a non-main interactive component was satisfied by its
+            # marker (its command was presented — nothing is running under lhpc), and a
+            # GUI-skipped gui_optional component is not runnable here at all. Fabricating
+            # ALREADY_HEALTHY for either is a lie; they are simply omitted (matching
+            # _all_components_healthy, which skipped them).
+            def _judged(stack, comp):
+                if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
+                    return False
+                if comp.interactive and comp.id != stack.main:
+                    return False
+                return not (comp.gui_optional and (
+                    comp.id in self.gui_unavailable_components(stack)
+                    or (self.needs_display(comp) and not self.display_available())))
             _hres = [CompResult(component=comp.id, stack=stack.id, action="start",
                                 outcome=Outcome.ALREADY_HEALTHY, summary="already running")
-                     for stack, comp in order
-                     if comp.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)]
+                     for stack, comp in order if _judged(stack, comp)]
             return ActionResult(True, f"'{target}' already healthy — nothing to start.",
                 details=[f"  [already_healthy] {r.component}: already running" for r in _hres],
                 results=tuple(_hres), next_commands=[f"lhpc status {target}"])
@@ -1048,8 +1104,36 @@ class LifecycleOpsMixin:
                        "its sources changed since the last build — rebuild first "
                        f"(lhpc build {stack.id})")
                 continue
-            if self.needs_display(comp) and not self.display_available():
+            # A GUI component that cannot run HERE is typed-SKIPPED: either its toolkit is
+            # absent (gui_optional on a box bootstrapped without --with-gui — the same
+            # predicate that drops it from build/auto-install, so start agrees with the
+            # gates that admitted the stack) or no graphical session is running.
+            _toolkit_missing = comp.gui_optional and any(
+                getattr(r, "gui", False) for r in life.missing_requirements(comp))
+            if _toolkit_missing or (self.needs_display(comp) and not self.display_available()):
+                # Still (re)generate any config file this component OWNS before skipping:
+                # config generation needs no display, and a sibling may read the same file
+                # (voice's terminal variant runs the GTK component's loraham_voice.conf).
+                # Skipping first would hand the operator a manual command with a stale or
+                # absent config — the same three-status handling as the sibling write sites.
+                if comp.config_file:
+                    cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
+                                                 position=position)
+                    mine = [w for w in cw if w.component == comp.id]
+                    bad = next((w for w in mine if w.status in ("failed", "no-base")), None)
+                    if bad:
+                        record(comp, stack, Outcome.BLOCKED,
+                               f"config generation failed ({bad.path}: {bad.detail})")
+                        continue
+                    linked = next((w for w in mine if w.status == "linked-readonly"), None)
+                    if linked:
+                        record(comp, stack, Outcome.MANUAL_REQUIRED,
+                               f"linked source is read-only — generate {comp.id}'s config in "
+                               f"your own checkout ({linked.path})")
+                        continue
                 record(comp, stack, Outcome.SKIPPED,
+                       "GUI toolkit not installed — headless-safe default (--with-gui "
+                       "installs it on a machine with a display)" if _toolkit_missing else
                        "needs a graphical session; none is running on this box "
                        "(start it from the desktop, not over SSH)")
                 continue
@@ -1058,10 +1142,61 @@ class LifecycleOpsMixin:
                 continue
             if comp.interactive:
                 # Never auto-start an interactive TUI — the operator runs it in a terminal.
-                # But its required runtime config must be generated FIRST: if generation
-                # fails (failed/no-base/unsafe source) or the source is a read-only linked
-                # tree, DO NOT write the interactive marker and DO NOT present a manual
-                # command as ready-to-run — return a typed block/manual-required instead.
+                # ONLY voice's terminal variant is a GUI FALLBACK: a non-main interactive
+                # component whose stack MAIN is gui_optional (manifest-derived — no other
+                # stack has that shape). It shares the main's config (licensed callsign) and
+                # exclusive audio device, so it earns extra gates. Every OTHER interactive
+                # component (chat, nomadnet, meshcore-cli) keeps its long-standing behaviour.
+                _main = next((c for c in stack.components if c.id == stack.main), None)
+                _fallback = (comp.id != stack.main
+                             and _main is not None and _main.gui_optional)
+                if _fallback:
+                    # INACTIVE fallback first: where the GTK main is usable the terminal
+                    # variant is not offered AT ALL, so no gate may turn that skip into a
+                    # failure (a GTK app legitimately holding the audio device is not a
+                    # 'resource conflict' of a component that is not on offer).
+                    if not self.gui_fallback_active(stack):
+                        record(comp, stack, Outcome.SKIPPED,
+                               f"{stack.main} runs on this box and owns the shared "
+                               "configuration and audio device — the terminal variant is the "
+                               "fallback for boxes without a graphical environment")
+                        continue
+                    # EVERY readiness/blocker gate BEFORE pre-steps, marker and command.
+                    blocker = self.install_blocker(comp)
+                    if blocker:
+                        record(comp, stack, Outcome.BLOCKED, f"interactive but {blocker}")
+                        continue
+                    miss = self.start_blocking_requirements(comp)
+                    if miss:
+                        from .lifecycle import req_remediation
+                        record(comp, stack, Outcome.BLOCKED,
+                               "; ".join(req_remediation(r, bool(r.groups)
+                                                         and life.group_grant_pending(r))
+                                         for r in miss))
+                        continue
+                    # The exclusive audio claim is REAL for a terminal variant too.
+                    if self._running_conflicts(comp, cfg_band):
+                        record(comp, stack, Outcome.BLOCKED, "resource conflict")
+                        continue
+                    if not self.is_built(comp):
+                        record(comp, stack, Outcome.BLOCKED,
+                               f"not built — build it first (lhpc build {stack.id})")
+                        continue
+                    # The shared-config OWNER must have completed in THIS run: a BLOCKED
+                    # owner (config generation failed) must not yield a presented command
+                    # over an absent or stale shared config.
+                    owner = next((r for r in results if r.component == stack.main), None)
+                    if owner is None or owner.outcome not in (
+                            Outcome.SKIPPED, Outcome.ALREADY_HEALTHY,
+                            Outcome.STARTED, Outcome.VERIFIED):
+                        _why = owner.outcome.value if owner is not None else "was not visited"
+                        record(comp, stack, Outcome.BLOCKED,
+                               f"{stack.main} owns the shared configuration and did not "
+                               f"complete ({_why}) — resolve that first")
+                        continue
+                # Its OWN required runtime config (the voice fallback shares the owner's and
+                # declares none): if generation fails, or the source is a read-only linked
+                # tree, DO NOT write the marker and DO NOT present a command as ready-to-run.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
                                                  position=position)
@@ -1078,6 +1213,22 @@ class LifecycleOpsMixin:
                                f"linked source is read-only — generate {comp.id}'s config in "
                                f"your own checkout before starting it ({linked.path})")
                         continue
+                # The manual command must be genuinely READY TO RUN. An interactive
+                # component's pre_steps otherwise never execute: their only caller is
+                # `life.start`, which is exactly what this branch skips. Voice's terminal
+                # variant resolves its shared loraham_voice.conf from dirname(argv0), so
+                # without its `config/files` symlink the command we print here fails with
+                # ENOENT.
+                if comp.pre_steps:
+                    from . import commands
+                    try:
+                        commands.run_pre_steps(comp.pre_steps,
+                                               str(self._paths.runtime_root),
+                                               str(life.source_dir(comp)), cfg_band)
+                    except commands.CommandError as exc:
+                        record(comp, stack, Outcome.BLOCKED,
+                               f"interactive start blocked — pre-start setup failed: {exc}")
+                        continue
                 marked = self.mark_interactive(stack.id, cfg_band)
                 blocker = self.install_blocker(comp)
                 marker_note = ("" if marked else
@@ -1085,9 +1236,21 @@ class LifecycleOpsMixin:
                                "dashboard may not show its command block)")
                 if blocker:
                     record(comp, stack, Outcome.BLOCKED, f"interactive but {blocker}")
+                elif comp.id != stack.main:
+                    # A NON-MAIN interactive sidecar: its stack card is not command-shaped, so
+                    # for a CLI/SSH operator this summary IS the surface — include the
+                    # copy-paste command in the typed outcome. lhpc cannot restart an
+                    # operator-run TUI, so a live one keeps its old config after a
+                    # regeneration — say so instead of implying it applied.
+                    record(comp, stack, Outcome.MANUAL_REQUIRED,
+                           "interactive — run it yourself in a terminal: "
+                           f"{self.manual_start_command(comp)}"
+                           " (an already-running instance keeps its previous config "
+                           f"until you restart it){marker_note}")
                 else:
-                    # The start COMMAND is shown on the app's dashboard card (and the
-                    # interactive marker drives that) — don't duplicate it here.
+                    # Interactive MAIN (chat): the start COMMAND is shown on the app's
+                    # dashboard card (the interactive marker drives that) — don't
+                    # duplicate it here.
                     record(comp, stack, Outcome.MANUAL_REQUIRED,
                            f"interactive — start it from its card on the dashboard{marker_note}")
                 continue
@@ -1248,12 +1411,31 @@ class LifecycleOpsMixin:
                           else "cessation NOT verified — ownership retained"))
         self.clear_stale_interactive(keep=self.stack_of(target) or target)
         # ok derives ENTIRELY from typed outcomes. A MANUAL_REQUIRED for an OPTIONAL
-        # component does not block; every other non-success outcome does.
+        # component does not block; every other non-success outcome does. Two more
+        # accepted shapes joined with voice's terminal variant:
+        #   * a NON-MAIN interactive component can only ever be MANUAL_REQUIRED — its
+        #     card command is the expected outcome, and treating it as blocking would
+        #     flip a healthy desktop `start voice` (GTK VERIFIED) to ok=False. The MAIN
+        #     staying blocking preserves chat's manual-start presentation unchanged.
+        #   * a gui_optional component's display/headless SKIPPED is accepted like an
+        #     optional one — the stack is usable without it by design.
         optional_ids = {c.id for _, c in order if c.optional}
+        gui_optional_ids = {c.id for _, c in order if c.gui_optional}
+        nonmain_interactive_ids = {c.id for s, c in order
+                                   if c.interactive and c.id != s.main}
         def blocks(r):
             if r.outcome in (Outcome.MANUAL_REQUIRED, Outcome.SKIPPED) \
                     and r.component in optional_ids:
                 return False          # optional: a manual/headless skip is an accepted outcome
+            if r.outcome == Outcome.MANUAL_REQUIRED \
+                    and r.component in nonmain_interactive_ids \
+                    and (r.summary or "").startswith("interactive —"):
+                # interactive sidecar whose command WAS presented: that IS the outcome.
+                # Other MANUAL_REQUIRED shapes (e.g. linked-readonly config, where no
+                # marker/command exists) still block like any failure.
+                return False
+            if r.outcome == Outcome.SKIPPED and r.component in gui_optional_ids:
+                return False          # gui_optional: headless display-skip is accepted
             return not r.ok
         blocking = [r for r in results if blocks(r)]
         required_manual = [r.component for r in blocking if r.outcome == Outcome.MANUAL_REQUIRED]
@@ -2334,6 +2516,8 @@ class LifecycleOpsMixin:
                 file_overrides: dict | None = None) -> ActionResult:
         """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
         DIRECT call gets the same coordination as CLI/web."""
+        if (_r := self._gui_fallback_refusal(target)) is not None:
+            return _r
         from . import reslock
         if not apply:
             return self._restart_impl(target, apply=False, params=params,
@@ -2451,6 +2635,12 @@ class LifecycleOpsMixin:
         """Stop then start a target — used to apply a config change to a running stack.
         With no band given, keep the band the stack is currently running on (so a
         restart doesn't move a band-switchable stack back to its default band)."""
+        # DEFENSIVE twin of the public-entry guard: an internal/direct restart of voice's
+        # terminal fallback must refuse BEFORE stop() — the later start can only ever refuse
+        # it, and by then the component and its daemon would already be down (restart
+        # degrading to stop-only, exactly the promise this method documents).
+        if (_r := self._gui_fallback_refusal(target)) is not None:
+            return _r
         if not band:
             band = self._effective_band(self.stack_of(target) or target)
         if not apply:
@@ -2573,7 +2763,8 @@ class LifecycleOpsMixin:
             gui_skip |= set(self.gui_unavailable_components(s))
         gui_dropped: list = []
         if gui_skip:
-            refused = [(s, c) for s, c in buildable if c.id in gui_skip and not c.optional]
+            refused = [(s, c) for s, c in buildable
+                       if c.id in gui_skip and not (c.optional or c.gui_optional)]
             if refused:
                 return ActionResult(
                     False,
@@ -3822,8 +4013,17 @@ class LifecycleOpsMixin:
             if sid == keep:
                 continue
             s = self.stack(sid)
-            main = s.main_component if s else None
-            if not (main and live.get(main.id) in up):
+            # Judge the marker by the COMMAND-BEARING component: the interactive main
+            # (chat), or the stack's interactive sidecar when the main is not interactive
+            # (voice's terminal variant — its GTK main is never RUNNING on a Lite box, and
+            # judging by it dismissed a freshly presented command whenever any other stack
+            # started).
+            comp = None
+            if s is not None:
+                main = s.main_component
+                comp = main if (main and main.interactive) else next(
+                    (c for c in s.components if c.interactive), None)
+            if not (comp and live.get(comp.id) in up):
                 self.dismiss_interactive(sid)
                 cleared.append(sid)
         return cleared
@@ -4077,8 +4277,15 @@ class LifecycleOpsMixin:
         """
         life = self._lifecycle()
         s = self.stack(target)
+        # A gui_optional component whose GUI toolkit is absent can NEVER be built here —
+        # the build preflight drops it by design (voice's GTK app on a Lite box, whose
+        # shared checkout exists for the terminal variant). Counting it would wedge the
+        # web start gate in a permanent needs-build loop no build can clear.
+        gui_dropped = set(self.gui_unavailable_components(s)) if s else set()
         out = []
         for c in (s.components if s else ()):
+            if c.id in gui_dropped and (c.optional or c.gui_optional):
+                continue
             if c.source:
                 if life.source_dir(c).exists() and not self.is_built(c):
                     out.append(c.id)
@@ -4560,6 +4767,19 @@ class LifecycleOpsMixin:
                 entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
                          "multi_band": multi}
                 main_comp = s.component(s.main)
+                # The command-bearing component: the interactive MAIN (chat, nomadnet), or
+                # — when the main is a non-interactive GUI app that cannot run here — the
+                # stack's interactive sidecar (voice's terminal variant on a Lite box), so
+                # the "Interactive apps" flow serves it exactly like chat.
+                if main_comp is not None and not main_comp.interactive:
+                    _side = next((c for c in s.components if c.interactive), None)
+                    _main_unusable = (
+                        (main_comp.gui_optional and any(
+                            getattr(r, "gui", False)
+                            for r in self._lifecycle().missing_requirements(main_comp)))
+                        or (self.needs_display(main_comp) and not self.display_available()))
+                    if _side is not None and _main_unusable:
+                        main_comp = _side
 
                 # Interactive stacks (chat/voice): in the dropdown until the operator
                 # "runs" them; after that a dismissable command block is shown in the

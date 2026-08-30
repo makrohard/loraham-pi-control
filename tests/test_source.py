@@ -3072,8 +3072,12 @@ def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch):
     # config-generation step; then its config write fails -> the launch is BLOCKED.
     # voice requires DIRECT, so the fixture daemon already reports DIRECT (gate clears).
     STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    # Desktop-shaped fake: the GTK header present, so the GUI preflight keeps the GTK
+    # component (this test drives ITS config write; headless would drop it for the
+    # terminal variant).
     sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS}).system
+                                   "/tmp/loraconf868.sock": STATUS},
+                     paths={"/usr/include/gtk-3.0/gtk/gtk.h"}).system
     (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)   # source present (installed)
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
@@ -3100,7 +3104,8 @@ def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
     from lhpc.core.outcomes import Outcome
     STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"   # voice requires DIRECT -> gate clears
     sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS}).system
+                                   "/tmp/loraconf868.sock": STATUS},
+                     paths={"/usr/include/gtk-3.0/gtk/gtk.h"}).system   # desktop-shaped: keep the GTK app
     (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
     svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
@@ -3935,3 +3940,397 @@ def test_clean_prev_cleanup_still_succeeds_when_not_dirty(tmp_path):
     assert not dest.with_name(".app.prev").exists()
     assert not inst._journal_path(dest).exists()
     assert source_registry.read_record(inst.paths, "src/app").resolved_commit == v2_head
+
+
+# ---------------------------------------------------------------------------
+# Voice on Lite (audit round): the surfaces beyond the three GUI preflights
+# ---------------------------------------------------------------------------
+
+def _voice_svc(tmp_path, monkeypatch, desktop=False, patch_reqs=True):
+    """A voice-startable service. desktop=True fakes the GTK header (GUI app stays) and a
+    display; desktop=False also fakes the ABSENCE of a display, so the host running the
+    tests never leaks its own DISPLAY into the "Lite" scenario. patch_reqs=False keeps the
+    REAL missing_requirements so the GUI-unavailability predicate stays live."""
+    from conftest import real_spawn
+    from lhpc.core.services import ControllerService
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.paths import Paths
+    from lhpc.core.probes.backends import FakeSystem
+    STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
+    paths = {"/usr/include/gtk-3.0/gtk/gtk.h"} if desktop else set()
+    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
+                                   "/tmp/loraconf868.sock": STATUS},
+                     paths=paths).system
+    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
+    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
+    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
+    monkeypatch.setattr(type(svc), "display_available", staticmethod(lambda: desktop))
+    if patch_reqs:
+        monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
+    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
+        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
+    return svc
+
+
+def test_lite_voice_start_seeds_config_despite_display_skip(tmp_path, monkeypatch):
+    # F1 (audit): the display-skipped GTK component OWNS loraham_voice.conf; its config
+    # must still be generated so the terminal variant the operator is told to run never
+    # sees an absent/stale file.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    writes = []
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: writes.append(t) or [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    assert "loraham-voice" in writes, "GTK component's config must be written before the skip"
+    assert any(r.component == "loraham-voice" and r.outcome == Outcome.SKIPPED
+               for r in res.results), _outcomes(res)
+    # F3: the stack start is OK — the interactive sidecar's MANUAL_REQUIRED and the
+    # gui_optional display-skip are both accepted, and the summary carries the command.
+    assert res.ok is True, _outcomes(res)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.MANUAL_REQUIRED
+    assert "run it yourself in a terminal:" in (cli.summary or "")
+
+
+def test_lite_voice_start_blocks_when_shared_config_fails(tmp_path, monkeypatch):
+    # F1 (audit): a FAILED write of the shared config is a typed BLOCKED, never a
+    # silent skip that leaves the terminal variant with stale configuration.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "failed", "disk full")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
+               and "config generation failed" in (r.summary or "") for r in res.results), \
+        _outcomes(res)
+
+
+def test_interactive_voice_cli_start_creates_its_config_files_symlink(tmp_path, monkeypatch):
+    # LIVE-FOUND on the Pi: an interactive component never reaches `life.start`, the ONLY
+    # caller of run_pre_steps — so the CLI's config/files symlink was never created and the
+    # MANUAL_REQUIRED command handed to the operator failed with ENOENT. The app resolves
+    # loraham_voice.conf from dirname(argv0), so that symlink is what makes the command work.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    link = tmp_path / "config" / "files" / "loraham_voice_cli"
+    assert not link.is_symlink()                                   # precondition
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.MANUAL_REQUIRED, _outcomes(res)
+    assert link.is_symlink(), "the manual command's argv0 must exist after the start"
+    assert str(link) in (cli.summary or ""), cli.summary
+
+
+def test_direct_terminal_variant_start_is_refused_and_names_the_stack(tmp_path, monkeypatch):
+    # P1 (audit): loraham_voice.conf — including the LICENSED CALLSIGN — is owned by
+    # loraham-voice. A direct component start visits only the CLI and the daemon, so no
+    # config is written and upstream falls back to its compiled-in default callsign. Refuse,
+    # and leave NO side effect behind (no symlink, no marker, no config).
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    set_call(svc)
+    res = svc.start("loraham-voice-cli", apply=True)
+    assert res.ok is False
+    assert "lhpc stack start voice" in res.summary, res.summary
+    assert "run it yourself" not in res.summary
+    # PREFLIGHT: refused before the component loop — no per-component results, no
+    # daemon ensure, no already-healthy shortcut.
+    assert res.results == (), _outcomes(res)
+    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
+    assert not (tmp_path / "config" / "files" / "loraham_voice.conf").exists()
+    assert svc.interactive_band("voice") is None
+
+
+def test_direct_start_refusal_is_a_preflight_even_with_marker_and_ready_daemon(tmp_path, monkeypatch):
+    # P1 (audit): with the Voice marker present and the daemon ready, a direct CLI start
+    # used to hit the already-healthy shortcut and return SUCCESS; without it the daemon
+    # was ensured/reconfigured before the refusal. The refusal must come before any of
+    # that: no feed clearing, no daemon work, no shortcut.
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    svc.mark_interactive("voice", "433")
+    fed = []
+    monkeypatch.setattr(type(svc), "clear_daemon_feed",
+                        lambda self, *a, **kw: fed.append(a) or 0, raising=False)
+    set_call(svc)
+    res = svc.start("loraham-voice-cli", apply=True)
+    assert res.ok is False
+    assert "lhpc stack start voice" in res.summary, res.summary
+    assert "already healthy" not in res.summary.lower()
+    assert res.results == ()
+    assert fed == []                          # zero side effects
+
+
+def test_direct_start_of_other_interactive_sidecars_stays_unrefused(tmp_path, monkeypatch):
+    # P1 (audit): the fallback policy is derived from the manifest shape (non-main
+    # interactive + gui_optional MAIN) and must capture ONLY voice's terminal variant —
+    # nomadnet (reticulum) and meshcore-cli (meshcore) keep their long-standing behaviour.
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    assert svc._gui_fallback_refusal("loraham-voice-cli") is not None
+    for other in ("nomadnet", "meshcore-cli", "loraham-chat"):
+        assert svc._gui_fallback_refusal(other) is None, other
+    set_call(svc)
+    res = svc.start("nomadnet", apply=True)
+    assert "shares" not in res.summary       # never the voice refusal
+    assert any(r.component == "nomadnet" for r in res.results), \
+        "the component loop must be reached"
+
+
+def test_plan_omits_the_terminal_command_where_the_gtk_app_runs(tmp_path, monkeypatch):
+    # P2 (audit): the apply=False PLAN (CLI dry-run and the web confirm page) must obey
+    # the same fallback policy — a desktop `start voice` plan may not render the CLI
+    # command it would refuse to honour.
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=True)
+    set_call(svc)
+    res = svc.start("voice", apply=False)
+    text = "\n".join(res.details)
+    assert "loraham_voice_cli" not in text, text
+    assert "run it yourself" not in text, text
+    assert "[skip] loraham-voice-cli" in text, text
+    # A direct CLI plan is refused outright by the same preflight.
+    res2 = svc.start("loraham-voice-cli", apply=False)
+    assert res2.ok is False and "lhpc stack start voice" in res2.summary
+    # On a Lite box the plan still presents the command — that is the fallback working.
+    lite = _voice_svc(tmp_path / "lite", monkeypatch, desktop=False)
+    set_call(lite)
+    res3 = lite.start("voice", apply=False)
+    assert "run it yourself" in "\n".join(res3.details)
+
+
+def test_direct_restart_of_the_fallback_refuses_before_any_stop(tmp_path, monkeypatch):
+    # P1 (audit): restart stops BEFORE starting, so the start-side refusal used to arrive
+    # only after the component and its daemon were already taken down (marker cleared,
+    # daemon released). Both restart entries must refuse first — marker, daemon, feed and
+    # owner state untouched — and the dry-run must show the real reason, not a plan
+    # suggesting the impossible apply.
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    svc.mark_interactive("voice", "433")
+    touched = []
+    for m in ("stop", "clear_daemon_feed"):
+        monkeypatch.setattr(type(svc), m,
+                            (lambda name: lambda self, *a, **kw: touched.append(name))(m),
+                            raising=False)
+    set_call(svc)
+    for apply in (False, True):
+        res = svc.restart("loraham-voice-cli", apply=apply)
+        assert res.ok is False, (apply, res.summary)
+        assert "lhpc stack start voice" in res.summary, (apply, res.summary)
+        assert res.results == ()
+    assert touched == []                      # no stop, no feed clearing
+    assert svc.interactive_band("voice") == "433"   # marker survives
+
+
+def test_desktop_daemon_recovery_is_ok_despite_a_running_gtk_app(tmp_path, monkeypatch):
+    # P2 (audit): on a desktop with the GTK app holding the audio device, `start voice`
+    # after a daemon failure must recover the daemon and return OK — the INACTIVE fallback
+    # is SKIPPED before the resource gate, never BLOCKED into a failed result.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=True)
+    monkeypatch.setattr(type(svc), "_running_conflicts",
+                        lambda self, c, b: c.id == "loraham-voice-cli")
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.SKIPPED, _outcomes(res)
+    assert "resource conflict" not in (cli.summary or "")
+    assert res.ok is True, _outcomes(res)
+
+
+def test_second_start_noop_does_not_fabricate_already_healthy_for_the_fallback(tmp_path, monkeypatch):
+    # P2 (audit): the already-healthy shortcut used to synthesize
+    # 'loraham-voice-cli already_healthy already running' — a lie twice over: on Lite the
+    # marker only proves the command was PRESENTED, and the gui-skipped GTK app is not
+    # runnable at all. Components the health predicate skipped are omitted.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    first = svc.start("voice", apply=True)
+    assert first.ok is True, _outcomes(first)
+    assert svc.interactive_band("voice") is not None      # command presented
+    second = svc.start("voice", apply=True)
+    assert second.ok is True, _outcomes(second)
+    assert "already healthy" in second.summary
+    comps = {r.component: r.outcome for r in second.results}
+    assert "loraham-voice-cli" not in comps, comps        # marker-satisfied, not "running"
+    assert "loraham-voice" not in comps, comps            # gui-skipped, not "running"
+    assert comps.get("loraham-daemon") == Outcome.ALREADY_HEALTHY, comps
+
+
+def test_terminal_variant_not_presented_when_shared_config_fails(tmp_path, monkeypatch):
+    # P1 (audit): the CLI must not reach pre-steps, marker creation or command presentation
+    # unless the shared-config OWNER completed. A failed GTK config write previously still
+    # produced a marker and a printed command over an absent shared config.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf",
+                                        "failed", "disk full")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    gtk = next(r for r in res.results if r.component == "loraham-voice")
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert gtk.outcome == Outcome.BLOCKED, _outcomes(res)
+    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
+    assert "did not complete" in (cli.summary or ""), cli.summary
+    assert "run it yourself" not in (cli.summary or "")
+    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
+    assert svc.interactive_band("voice") is None
+
+
+def test_terminal_variant_blocked_while_a_sibling_holds_the_audio_device(tmp_path, monkeypatch):
+    # P2 (audit): both voice components claim audio.default EXCLUSIVELY. The interactive
+    # branch used to return before the resource gate, so the documented "can never run at
+    # once" guarantee was not enforced for the terminal variant.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "_running_conflicts",
+                        lambda self, c, b: c.id == "loraham-voice-cli")
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
+    assert "resource conflict" in (cli.summary or ""), cli.summary
+    assert not (tmp_path / "config" / "files" / "loraham_voice_cli").is_symlink()
+    assert svc.interactive_band("voice") is None
+
+
+def test_interactive_start_blocks_when_its_pre_steps_fail(tmp_path, monkeypatch):
+    # A pre-step failure is a typed BLOCKED — never a manual command that cannot run.
+    from lhpc.core import commands
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+
+    def _boom(steps, runtime, source, band=""):
+        raise commands.CommandError("pre-step failed: denied")
+
+    monkeypatch.setattr(commands, "run_pre_steps", _boom)
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert cli.outcome == Outcome.BLOCKED, _outcomes(res)
+    assert "pre-start setup failed" in (cli.summary or "")
+    assert "run it yourself" not in (cli.summary or "")
+
+
+def test_desktop_voice_start_stays_ok_with_interactive_sidecar(tmp_path, monkeypatch):
+    # F3 (audit) + P2 (audit): on a desktop the GTK app starts as before and the terminal
+    # variant is NOT presented at all — the GUI main is usable, owns the shared config and
+    # holds the exclusive audio device, so offering a fallback would contradict the
+    # "can never run at once" claim. Desktop behaviour is exactly pre-branch behaviour.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=True)
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    outcomes = {r.component: r.outcome for r in res.results}
+    assert outcomes.get("loraham-voice-cli") == Outcome.SKIPPED
+    cli = next(r for r in res.results if r.component == "loraham-voice-cli")
+    assert "fallback" in (cli.summary or ""), cli.summary
+    assert "run it yourself" not in (cli.summary or "")
+    assert res.ok is True, _outcomes(res)
+    assert "Run applied" in res.summary or "manual" not in res.summary.lower(), res.summary
+
+
+def test_lite_voice_unbuilt_gate_ignores_the_dropped_gtk_component(tmp_path, monkeypatch):
+    # F2 (audit): the web start gate's unbuilt_components must not count the
+    # gui-dropped GTK component (shared checkout exists, binary can never be built
+    # here) — otherwise the console loops needs-build forever.
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False, patch_reqs=False)
+    monkeypatch.setattr(type(svc), "is_built",
+                        lambda self, c: c.id != "loraham-voice")   # CLI built, GTK not
+    assert "loraham-voice" in svc.gui_unavailable_components(svc.stack("voice"))  # precondition
+    assert "loraham-voice" not in svc.unbuilt_components("voice")
+
+
+def test_lite_status_overlay_marks_unbuildable_gtk_not_applicable(tmp_path, monkeypatch):
+    # F6 (audit): with the SHARED checkout installed by the terminal variant, the
+    # stopped-but-unbuildable GTK app must read NOT_APPLICABLE on a Lite console,
+    # not present as a startable stopped app.
+    from lhpc.core.model import RunState
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False, patch_reqs=False)
+    assert "loraham-voice" in svc.gui_unavailable_components(svc.stack("voice"))  # precondition
+    snap = svc.build_snapshot()
+    ss = next(x for x in snap.stacks if x.stack.id == "voice")
+    assert ss.components["loraham-voice"].run_state is RunState.NOT_APPLICABLE
+
+
+def test_desktop_without_gtk_deps_start_voice_is_ok(tmp_path, monkeypatch):
+    # V1 (verification audit): a box WITH a display but WITHOUT the GTK dev deps
+    # (default bootstrap, no --with-gui) must start voice OK — the toolkit-missing
+    # GTK component is typed-SKIPPED by the same predicate that admitted the stack,
+    # never BLOCKED on its missing requirements or build.
+    from lhpc.core.services import ConfigWrite
+    from lhpc.core.outcomes import Outcome
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False, patch_reqs=False)
+    monkeypatch.setattr(type(svc), "display_available", staticmethod(lambda: True))
+    # REAL missing_requirements stays live (it drives the GUI predicate under test); only the
+    # terminal variant's OWN codec2/ALSA/ncurses headers are treated as present, since this
+    # host is not the Pi. Without this the CLI blocks on ITS deps, which is a different case.
+    monkeypatch.setattr(type(svc), "start_blocking_requirements",
+                        lambda self, c: [] if c.id == "loraham-voice-cli"
+                        else self._lifecycle().missing_requirements(c))
+    monkeypatch.setattr(type(svc), "write_config_files",
+                        lambda self, t, b="", overrides=None, **kw: [
+                            ConfigWrite("loraham-voice", "/rt/loraham_voice.conf", "written", "")])
+    set_call(svc)
+    res = svc.start("voice", apply=True)
+    gtk = next(r for r in res.results if r.component == "loraham-voice")
+    assert gtk.outcome == Outcome.SKIPPED and "GUI toolkit not installed" in (gtk.summary or "")
+    assert res.ok is True, _outcomes(res)
+
+
+def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch):
+    # V2 (verification audit): the interactive-marker reaper must judge voice by its
+    # RUNNING terminal sidecar, not by the GTK main (never RUNNING on Lite) — a live
+    # TUI's command block must survive another stack's start.
+    from lhpc.core.model import RunState
+    svc = _voice_svc(tmp_path, monkeypatch, desktop=False)
+    assert svc.mark_interactive("voice", "868")
+
+    class _St:                       # snapshot stub: the sidecar TUI is process-detected
+        def __init__(self, rs): self.run_state = rs
+    class _SS:
+        def __init__(self, comps): self.components = comps
+        stack = None
+    snap = type("Snap", (), {"stacks": [
+        type("X", (), {"components": {"loraham-voice": _St(RunState.NOT_APPLICABLE),
+                                      "loraham-voice-cli": _St(RunState.RUNNING)}})()]})()
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self: snap)
+    cleared = svc.clear_stale_interactive(keep="kiss")
+    assert "voice" not in cleared, "a RUNNING terminal sidecar must keep its marker"
+    # ...and with the TUI gone, the marker is reaped exactly like chat's.
+    snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
+    assert "voice" in svc.clear_stale_interactive(keep="kiss")

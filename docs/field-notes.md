@@ -35,7 +35,7 @@ Verified on 868 against two peers (SX1276 + SX127x), all directions.
 2. `sudo bash bootstrap-deps.sh --spi-mode soft-cs` → `sudo reboot`. On a **lite (headless)** image
    this is all you need: GUI-only dependencies are omitted by default, so a headless rig never pulls
    the GTK/X11/Wayland dev chain. Add `--with-gui` only on a machine that already has a display —
-   without it, the Voice stack is reported *skipped*. MeshCore is unaffected: its browser GUI
+   without it, Voice still works through its ncurses terminal variant; only the GTK app is skipped. MeshCore is unaffected: its browser GUI
    (`meshcore-webui`) has no graphical dependency and runs headless (the old Tk Node Manager that
    needed X server + `python3-tk` is retired). **`--spi-mode` is required:**
    - `soft-cs` — LoRaHAM Pi / Uputronics rigs, **single-radio AND dual Uputronics** (software CS,

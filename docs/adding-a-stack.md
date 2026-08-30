@@ -98,6 +98,13 @@ LHPC verifies the start:
 - `endpoint` — every `ready = true` endpoint came up (below);
 - `manual` — an interactive TUI the operator runs themselves.
 
+`interactive = true` marks such a TUI: LHPC generates its config and prints the exact
+launch command instead of spawning it. `gui_optional = true` on a stack's MAIN component
+marks a GUI app a headless box may live without — the build/start preflights drop it
+instead of refusing the stack. A non-main interactive component in such a stack (voice's
+ncurses variant) is treated as that GUI's **fallback**: offered only where the GUI cannot
+run, refused as a direct start target (its config belongs to the main).
+
 ```toml
   readiness = "endpoint"
   run = "build/meshcom-loraham-bridge {bind} {port} {backend} {password_file}"

@@ -507,7 +507,7 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
 [[stack]]
 id = "voice"
 name = "LoRaHAM Voice"
-summary = "Daemon-backed Codec2 voice over LoRa (GTK app). Configurable callsign, audio devices and per-band radio params."
+summary = "Daemon-backed Codec2 voice over LoRa: GTK app on a desktop, ncurses terminal UI on a headless/Lite box. Configurable callsign, audio devices and per-band radio params."
 main = "loraham-voice"
 
   [[stack.component]]
@@ -516,6 +516,11 @@ main = "loraham-voice"
   kind = "service"
   band = "433"
   bands = ["433", "868"]
+  # GUI-OPTIONAL: on a headless/Lite box (GTK dev chain absent) the GUI preflight drops
+  # this component and the stack stays fully usable through the terminal variant below.
+  # NOT plain `optional` — that would also remove it from default stack-start seeding,
+  # and a desktop must keep starting the GTK app exactly as before.
+  gui_optional = true
   purpose = "Codec2 voice over LoRa via the daemon (GTK desktop app; needs an audio device)."
   tx_capable = true
   depends_on = ["loraham-daemon"]
@@ -570,8 +575,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "d6028ff8e5b7491204678dcb14355e787952fa5c"
-    pin_tag = "d6028ff"
+    pin_commit = "143b83f25e8ce0e29ff29c9dc19080e93025b536"
+    pin_tag = "143b83f"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
@@ -708,6 +713,70 @@ main = "loraham-voice"
       default = "0"
       band_defaults = { "433" = "0", "868" = "1" }
       hidden = true
+
+  # ---------------------------------------------------------------
+  # Terminal variant: the SAME source built with -DNO_GTK — a pure ncurses
+  # CLI with zero GTK/X11 linkage, so a headless/Lite box gets Voice without
+  # pulling any graphical environment. Interactive like chat/nomadnet: lhpc
+  # builds and configures it, the operator starts it in a real terminal with
+  # the command lhpc shows. Shares loraham_voice.conf (fixed name resolved
+  # from dirname(argv0)) and the audio device with the GTK app, so both can
+  # never run at once (audio.default is exclusive).
+  # ---------------------------------------------------------------
+  [[stack.component]]
+  id = "loraham-voice-cli"
+  name = "LoRaHAM Voice (terminal)"
+  kind = "service"
+  band = "433"
+  bands = ["433", "868"]
+  purpose = "Codec2 voice over LoRa via the daemon — ncurses terminal UI (no display needed)."
+  tx_capable = true
+  depends_on = ["loraham-daemon"]
+  requires_daemon_tx = "DIRECT"
+  interactive = true
+  readiness = "manual"
+  build = "gcc -DNO_GTK -o loraham_voice_cli loraham_voice_v107.c -lcodec2 -lasound -lncurses -lpthread -lm"
+  bin = "loraham_voice_cli"
+  build_steps = [ { argv = ["gcc", "-DNO_GTK", "-o", "loraham_voice_cli", "loraham_voice_v107.c", "-lcodec2", "-lasound", "-lncurses", "-lpthread", "-lm"] } ]
+  pre_steps = [ { kind = "mkdir", path = "{runtime}/config/files" }, { kind = "symlink", src = "{source}/loraham_voice_cli", dst = "{runtime}/config/files/loraham_voice_cli" } ]
+  run_argv = ["{runtime}/config/files/loraham_voice_cli"]
+  run_cwd = "{runtime}/config/files"
+  note = "Interactive ncurses voice TUI (needs a real TTY + an audio device, NO graphical environment) — start it yourself with the command lhpc shows, locally or over SSH. Space = PTT. Configure via the Voice stack's Config page (shared loraham_voice.conf)."
+
+    [[stack.component.require]]
+    # NOT gui-scoped: this is exactly the variant a headless/Lite box builds. codec2 and
+    # ALSA are lean (no graphical chain); the core-wins merge with the GTK component's
+    # gui-scoped copies makes them part of the standard bootstrap now that Voice is a
+    # first-class headless stack.
+    check_file = "/usr/include/codec2/codec2.h"
+    install = "sudo apt install -y libcodec2-dev"
+    note = "Codec2 development headers (Voice)"
+    [[stack.component.require]]
+    check_file = "/usr/include/alsa/asoundlib.h"
+    install = "sudo apt install -y libasound2-dev"
+    note = "ALSA development headers (Voice)"
+    [[stack.component.require]]
+    check_file = "/usr/include/ncurses.h"
+    install = "sudo apt install -y libncurses-dev"
+    note = "ncurses development headers"
+
+    [stack.component.source]
+    path = "src/LoRaHAM_Voice"
+    pin_commit = "143b83f25e8ce0e29ff29c9dc19080e93025b536"
+    pin_tag = "143b83f"
+    remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
+    branch = "main"
+    local_dir = "LoRaHAM_Voice"
+    artifact = true
+
+    [stack.component.process]
+    exec_name = "loraham_voice_cli"
+
+    [[stack.component.resource]]
+    key = "audio.default"
+    kind = "audio"
+    mode = "exclusive"
+    note = "Audio capture/playback device (shared exclusively with the GTK app)."
 
 # =====================================================================
 # Stack: kiss — KISS/TCP TNC (+ optional serial PTY)

@@ -35,7 +35,7 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 | `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets | [daemon](docs/stacks/daemon.md) |
 | `chat` | 433 | APRS/chat TUI (local or over SSH) | [aprs](docs/stacks/aprs.md) |
 | `igate` | 433 | APRS iGate — **deprecated**, use `graywolf` | [aprs](docs/stacks/aprs.md) |
-| `voice` | 433 / 868 | LoRa voice GUI | [voice](docs/stacks/voice.md) |
+| `voice` | 433 / 868 | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
 | `graywolf` | via `kiss` | Graywolf APRS station (web UI, digipeater, iGate) — substitutes `igate` | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
@@ -146,12 +146,13 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 # lhpc itself + fetch/TLS tools (nginx only if you want the web console)
 sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
-sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate / voice (terminal)
+sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses terminal UI — no graphical packages)
 sudo apt install -y --no-install-recommends socat                                       # kiss
 sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
 sudo apt install -y --no-install-recommends libssl-dev libslirp0 meson ninja-build libglib2.0-dev libpixman-1-dev libslirp-dev zlib1g-dev libgcrypt20-dev   # meshcom (bridge + QEMU built headless from source)
 sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (built from source)
-sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev libx11-dev python3-dev           # only with --with-gui (Voice, Sideband)
+sudo apt install -y --no-install-recommends libgtk-3-dev libx11-dev python3-dev        # only with --with-gui (Voice GTK app, Sideband)
 
 sudo systemctl disable --now nginx.service               # keep the package, disable the ROOT service
 # small-RAM boards (<600 MB): a disk swapfile stops the meshtasticd/meshcom builds OOM-ing
@@ -273,7 +274,7 @@ lhpc build chat
 lhpc install igate
 lhpc build igate
 
-# voice — LoRa voice GUI (needs --with-gui dependencies)
+# voice — LoRa voice (terminal variant builds headless; the GTK app needs --with-gui)
 lhpc install voice
 lhpc build voice
 

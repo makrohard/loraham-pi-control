@@ -60,7 +60,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs --with-gui   # ONLY on a machine 
 
 `--dry-run` simulates the exact default apt transaction and exits 0 only when it resolves cleanly and
 pulls nothing graphical; it exits nonzero when the set is unresolved (5) or would install a
-GUI/display/audio package (6). Run it first on a fresh image.
+GUI/display package or an audio server such as PulseAudio (6; ALSA is part of the default set). Run it first on a fresh image.
 
 `--spi-mode` is **required**: `soft-cs` (software CS — LoRaHAM Pi/Uputronics rigs, single-radio AND
 dual Uputronics: daemon + meshtasticd drive CS7/CS8 as GPIOs, the kernel must not claim CE0/CE1),

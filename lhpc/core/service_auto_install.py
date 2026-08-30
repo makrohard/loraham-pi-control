@@ -1234,7 +1234,8 @@ class AutoInstallOpsMixin:
                         # would let a dependency that appeared between planning and execution turn a
                         # planned Voice skip into an empty, falsely-successful install.
                         skipped_ids = set(w.skipped)
-                        if any(c.id in skipped_ids and not c.optional for c in st.components):
+                        if any(c.id in skipped_ids and not (c.optional or c.gui_optional)
+                               for c in st.components):
                             r["status"] = "skipped"
                             r["detail"] = (f"skipped ({', '.join(w.skipped)}): " + GUI_MISSING_HINT)
                             emit(f"==== {st.id}: SKIPPED ({r['detail']}) ====")

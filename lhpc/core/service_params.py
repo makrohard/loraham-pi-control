@@ -642,12 +642,30 @@ class ParamsConfigMixin:
                 out.append(c.id)
         return tuple(out)
 
+    def gui_fallback_active(self, stack) -> bool:
+        """True when `stack`'s MAIN component cannot run on THIS box because its GUI toolkit or
+        a display is absent — the ONE condition under which an interactive terminal FALLBACK
+        sibling may be offered.
+
+        Where the GUI main IS usable it owns the shared configuration and the exclusive audio
+        device, so the fallback is never presented, marked or pre-stepped: desktop behaviour
+        stays exactly what it was before the fallback existed. Start and `_all_components_healthy`
+        both consult this, so the two can never disagree about whether the fallback exists here."""
+        main = next((c for c in stack.components if c.id == stack.main), None)
+        if main is None or not main.gui_optional:
+            return False
+        if any(getattr(r, "gui", False)
+               for r in self._lifecycle().missing_requirements(main)):
+            return True
+        return self.needs_display(main) and not self.display_available()
+
     def gui_skipped_stack(self, stack) -> bool:
         """True when a MANDATORY component of the stack is GUI-unavailable — the whole stack is then
         recorded skipped. An OPTIONAL one (meshcore-nodegui) only removes itself: MeshCore stays
         fully usable headless through its CLI."""
         skip = set(self.gui_unavailable_components(stack))
-        return any(c.id in skip and not c.optional for c in stack.components)
+        return any(c.id in skip and not (c.optional or c.gui_optional)
+                   for c in stack.components)
 
     def missing_system_deps(self, target: str) -> list[dict]:
         """Unsatisfied INSTALL-time system dependencies (e.g. -dev packages) for a stack's components,

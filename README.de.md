@@ -37,7 +37,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 | `daemon` | 433 + 868 | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit | [daemon](docs/stacks/daemon.md) |
 | `chat` | 433 | APRS-/Chat-TUI (lokal oder über SSH) | [aprs](docs/stacks/aprs.md) |
 | `igate` | 433 | APRS-iGate — **veraltet**, stattdessen `graywolf` | [aprs](docs/stacks/aprs.md) |
-| `voice` | 433 / 868 | LoRa-Sprache (GUI) | [voice](docs/stacks/voice.md) |
+| `voice` | 433 / 868 | LoRa-Sprache — GTK-App auf Desktop, ncurses-Terminal auf Lite | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS-TNC über TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
 | `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) — ersetzt `igate` | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
@@ -151,12 +151,13 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
 sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
-sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate / voice (Terminal)
+sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses-Terminal-UI — keine grafischen Pakete)
 sudo apt install -y --no-install-recommends socat                                       # kiss
 sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
 sudo apt install -y --no-install-recommends libssl-dev libslirp0 meson ninja-build libglib2.0-dev libpixman-1-dev libslirp-dev zlib1g-dev libgcrypt20-dev   # meshcom (Bridge + QEMU, headless aus dem Quellcode gebaut)
 sudo apt install -y --no-install-recommends libyaml-cpp-dev libuv1-dev libgpiod-dev libi2c-dev libusb-1.0-0-dev libulfius-dev libbluetooth-dev pkg-config   # meshtastic (aus dem Quellcode gebaut)
-sudo apt install -y --no-install-recommends libcodec2-dev libgtk-3-dev libasound2-dev libx11-dev python3-dev           # nur mit --with-gui (Voice, Sideband)
+sudo apt install -y --no-install-recommends libgtk-3-dev libx11-dev python3-dev        # nur mit --with-gui (Voice-GTK-App, Sideband)
 
 sudo systemctl disable --now nginx.service               # Paket behalten, den ROOT-Dienst abschalten
 # Boards mit wenig RAM (<600 MB): eine Swapdatei bewahrt die meshtasticd-/meshcom-Builds vor dem OOM-Kill
@@ -282,7 +283,7 @@ lhpc build chat
 lhpc install igate
 lhpc build igate
 
-# voice — LoRa-Sprache (GUI; braucht die --with-gui-Abhängigkeiten)
+# voice — LoRa-Sprache (Terminal-Variante baut headless; die GTK-App braucht --with-gui)
 lhpc install voice
 lhpc build voice
 

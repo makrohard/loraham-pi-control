@@ -412,21 +412,23 @@ def _scopes(tmp_path):
 def test_gui_scope_is_exactly_what_the_manifest_declares(tmp_path):
     core, gui = _scopes(tmp_path)
     # EXACT invariants, not a denylist: a denylist rots and proves nothing about new deps.
-    # The opt-in scope is GUI toolkits PLUS the Voice-only audio libraries (Voice is skipped by
-    # default on a headless rig, so its private deps have no business in every bootstrap).
+    # The opt-in scope is GUI toolkits only. codec2/ALSA moved to core with the Voice
+    # terminal variant (loraham-voice-cli): Voice is a first-class headless stack now, and
+    # the CLI component's un-scoped requires win the core-wins merge over the GTK
+    # component's gui-scoped copies — they are lean and pull no graphical chain.
     # python3-dev is GUI-scoped on purpose: only Sideband needs a compiler
     # (materialyoucolor has no aarch64 wheel). The node builds without one.
     # libx11-dev is Sideband's DISPLAY gate, not a build input: Kivy vendors its own SDL2, so
     # Sideband pulled no GUI apt dep at all and python3-dev was the only thing gating it — which a
     # headless build that installs python3-dev for other reasons satisfies, shipping a graphical
     # app on a headless image. See the manifest comment on the sideband require.
-    assert sorted(gui) == ["sudo apt install -y libasound2-dev",
-                           "sudo apt install -y libcodec2-dev",
-                           "sudo apt install -y libgtk-3-dev",
+    assert sorted(gui) == ["sudo apt install -y libgtk-3-dev",
                            "sudo apt install -y libx11-dev",
                            "sudo apt install -y python3-dev"]
     assert not set(core) & set(gui)                 # a command lives in exactly one scope
-    assert not any("gtk" in c or "asound" in c or "codec2" in c for c in core)
+    assert not any("gtk" in c for c in core)        # the graphical chain stays opt-in
+    assert any("codec2" in c for c in core)         # Voice CLI variant -> core wins
+    assert any("asound" in c for c in core)
     assert any("ncurses" in c for c in core)        # shared with chat -> core wins
 
 
@@ -582,14 +584,19 @@ def test_meshcore_is_fully_headless_after_the_webui_migration(tmp_path, monkeypa
     assert "meshcore-webui" in ids and "meshcore-node" in ids
 
 
-def test_voice_stack_is_skipped_whole_when_gtk_is_absent(tmp_path):
+def test_voice_stack_stays_available_when_gtk_is_absent(tmp_path):
+    # The GTK app is an OPTIONAL component since the terminal variant exists: without GTK
+    # headers only that component is skipped — the stack itself is NOT gui-skipped and
+    # installs/builds headless through loraham-voice-cli (meshcore-nodegui pattern).
     svc = _svc(tmp_path)                              # FakeSystem: no gtk headers
     st = svc.stack("voice")
-    assert svc.gui_skipped_stack(st) is True
+    assert svc.gui_skipped_stack(st) is False
+    assert svc.gui_unavailable_components(st) == ("loraham-voice",)
     scope = svc._auto_install_scope()
     assert len(scope) == len(svc.stacks())            # every stack still gets a ROW
     work = next(w for s, w in scope if s.id == "voice")
-    assert "loraham-voice" in work.skipped
+    assert "loraham-voice" in work.skipped            # the GTK component, not the stack
+    assert "loraham-voice-cli" not in work.skipped
 
 
 def _tree(root):
@@ -598,16 +605,30 @@ def _tree(root):
             for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def test_direct_build_voice_refuses_before_running_a_step(tmp_path):
+def test_direct_build_voice_drops_gtk_component_and_builds_the_terminal_variant(tmp_path):
+    # Headless `lhpc build voice` no longer refuses: the GUI preflight drops the OPTIONAL
+    # GTK component (never letting pkg-config fail mid-build) and the plan carries only the
+    # -DNO_GTK terminal variant.
+    svc = _svc(tmp_path)
+    _seed_sources(svc, tmp_path, "voice")
+    r = svc.build("voice", apply=False)
+    assert r.ok is True
+    assert any("loraham-voice-cli" in d for d in r.details)
+    assert not any("[build] loraham-voice:" in d for d in r.details)
+
+
+def test_direct_build_of_the_gtk_component_reports_no_work_not_success(tmp_path):
+    # Asking for the OPTIONAL GTK component BY NAME on a headless box yields the typed
+    # GUI no-work result (ok=True, built=0, explicitly 'skipped') — never a claimed
+    # artifact, and never a step executed.
     svc = _svc(tmp_path)
     _seed_sources(svc, tmp_path, "voice")
     before = _tree(tmp_path)
-    r = svc.build("voice", apply=True)
-    assert r.ok is False
-    assert "GUI toolkit" in r.summary
-    assert any("headless-safe default" in d for d in r.details)
-    # Refused during PREFLIGHT: not one byte of state may have been written — no build marker, no
-    # log, no lock file. (The previous `... or True` assertion could never fail.)
+    r = svc.build("loraham-voice", apply=True)
+    assert r.ok is True
+    assert r.data.get("built") == 0 and r.data.get("skipped") == ["loraham-voice"]
+    assert "GUI dependencies not installed" in r.summary
+    # Preflight decision: not one byte of state written — no marker, no log, no lock.
     assert _tree(tmp_path) == before
 
 

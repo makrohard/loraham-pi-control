@@ -204,12 +204,16 @@ _OVERLAY_RE = _re.compile(r"dtoverlay=([A-Za-z0-9_.-]+)")
 _DISABLE_UNIT_RE = _re.compile(r"systemctl\s+disable\s+(?:--now\s+)?([A-Za-z0-9@._-]+)")
 
 # Package-name patterns a HEADLESS install must never pull — GUI toolkits, X/Wayland, GPU/Mesa/LLVM,
-# audio servers, input stacks, icon themes/fonts, and whole desktop environments. Used by the
+# audio SERVERS, input stacks, icon themes/fonts, and whole desktop environments. Used by the
 # generated `--dry-run` guard. GUI-opt-in packages are installed only behind --with-gui and are
 # deliberately NOT part of that verdict.
+# NOT denied: ALSA (`libasound`). Voice's ncurses terminal variant is a first-class headless
+# component, so libasound2-dev is part of the DEFAULT transaction this guard vets — denying it
+# made the dry run reject its own declared package set. ALSA is a kernel-level sound API, not a
+# desktop audio server; PulseAudio (`libpulse`) stays denied.
 _DENY_RE = (r"^(libgtk-|libgdk-|python3-tk|tk[0-9]|libsdl|libx11|libxcb|libxext|libxrandr"
             r"|libxcursor|libxi[0-9]|libxfixes|libxss|xserver-|xwayland|x11-common|xauth"
-            r"|libwayland-|libgbm|libdrm|libegl|libgl[0-9x]|mesa-|libllvm|libpulse|libasound"
+            r"|libwayland-|libgbm|libdrm|libegl|libgl[0-9x]|mesa-|libllvm|libpulse"
             r"|libinput|libxkbcommon|adwaita-|gnome-|kde-|xfce4|lxde|cups|fonts-)")
 
 
@@ -773,8 +777,8 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         # and the OBS URL to prove curl/gpg land before the repo that uses them).
         out("# --- GUI-only dependencies (opt-in: --with-gui) ---------------------------------------------",
             "# NOT installed by default. These are the toolkit libraries the DESKTOP components need",
-            "# (voice's GTK app and Sideband's Kivy app; the MeshCore node's GUI is now the headless",
-            "# browser meshcore-webui — no X/Tk). On a headless image installing them",
+            "# (voice's GTK app — its ncurses terminal variant builds without any of this — and",
+            "# Sideband's Kivy app; the MeshCore GUI is the headless browser meshcore-webui). Installing them",
             "# would drag in the whole X11/Wayland dev chain for software that can never render, so they",
             "# are opt-in. This installs LIBRARIES ONLY — never a desktop, display manager or X/Wayland",
             "# server: it assumes the machine already has a graphical session.",

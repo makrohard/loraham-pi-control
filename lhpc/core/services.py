@@ -798,7 +798,13 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                               # of failing the snapshot (and every caller composing it).
             for c in ss.stack.components:
                 st = ss.components.get(c.id)
-                if c.id in skip and st and st.run_state is RunState.NOT_INSTALLED:
+                if c.id not in skip or not st:
+                    continue
+                # NOT_INSTALLED: the classic headless case (no checkout at all). STOPPED:
+                # the checkout exists but the GUI toolkit doesn't — voice's GTK app on a
+                # Lite box, whose SHARED source the terminal variant installed. Showing it
+                # as a startable stopped app invites a Start that can only answer SKIPPED.
+                if st.run_state in (RunState.NOT_INSTALLED, RunState.STOPPED):
                     st.run_state = RunState.NOT_APPLICABLE
 
     def _overlay_runtime_bands(self, snap) -> None:
@@ -1945,6 +1951,33 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         need = self._daemon_arbitrated_bands(radio)[0] if has_daemon else []
         for _stack, comp in order:
             if comp.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE):
+                continue
+            # A NON-MAIN interactive sidecar is never RUNNING under lhpc (the operator
+            # runs it in a terminal). Once its command HAS been presented (the
+            # interactive marker exists), it must not veto the no-side-effect
+            # already-healthy path — a second `start voice` stays a no-op. Before that
+            # first presentation the start pass MUST run (generate the shared config,
+            # write the marker, print the command) — a Lite box whose daemon is already
+            # up would otherwise short-circuit to "already healthy" and never surface
+            # the command at all. An interactive MAIN (chat) keeps the old behaviour
+            # unconditionally: its start pass regenerates config every time.
+            if comp.interactive and comp.id != _stack.main:
+                # ONLY voice's terminal fallback (stack main is gui_optional): where the GUI
+                # main is usable it is not offered and can never be marked, so it must never
+                # veto — a healthy desktop stack would otherwise re-run its start pass
+                # forever. Other interactive sidecars (nomadnet, meshcore-cli) keep their
+                # long-standing marker rule unchanged.
+                _m = next((c for c in _stack.components if c.id == _stack.main), None)
+                if (_m is not None and _m.gui_optional
+                        and not self.gui_fallback_active(_stack)):
+                    continue
+                if self.interactive_band(_stack.id) is not None:
+                    continue
+                return False
+            if comp.gui_optional and (
+                    any(getattr(r, "gui", False)
+                        for r in self._lifecycle().missing_requirements(comp))
+                    or (self.needs_display(comp) and not self.display_available())):
                 continue
             if comp.id == self.DAEMON_ID:
                 if not need or not all(self.daemon_view(b).ready for b in need):

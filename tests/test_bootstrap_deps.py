@@ -654,14 +654,17 @@ def test_dry_run_simulates_against_an_empty_status_database():
     assert "apt-get install -s" in sim and "--no-install-recommends" in sim
 
 
-def test_default_package_set_excludes_voice_only_audio_libraries():
-    # ALSA + Codec2 are Voice-only, and Voice is skipped by default on a headless rig, so they live
-    # in the explicit opt-in scope. libncurses-dev is SHARED with chat and stays in core.
+def test_default_package_set_carries_voice_cli_audio_but_never_gtk():
+    # ALSA + Codec2 joined core with the Voice terminal variant (loraham-voice-cli): Voice is a
+    # first-class headless stack now, and both libraries are lean (no graphical chain). The GTK
+    # toolchain stays strictly in the --with-gui opt-in scope — a headless/Lite image must never
+    # pull a graphical environment. libncurses-dev is SHARED with chat and stays in core.
     text = _BOOTSTRAP.read_text()
     apt_i = text.index("sudo apt-get install -y --no-install-recommends")
     core_block = text[apt_i:text.index("\n\n", apt_i)]
-    assert "libasound2-dev" not in core_block
-    assert "libcodec2-dev" not in core_block
+    assert "libasound2-dev" in core_block
+    assert "libcodec2-dev" in core_block
+    assert "libgtk-3-dev" not in core_block                      # graphical chain stays opt-in
     assert "\n    libncurses-dev" in core_block                  # shared -> core wins
 
 
@@ -937,6 +940,29 @@ def test_dry_run_fails_on_a_graphical_package(tmp_path):
     assert "would install graphical/audio packages" in r.stderr
     assert "libgtk-3-0" in r.stderr and "libx11-6" in r.stderr
     assert apt == ""
+
+
+def test_dry_run_accepts_the_alsa_dependency_it_declares(tmp_path):
+    # P1 (audit): libasound2-dev is part of the DEFAULT transaction — voice's ncurses terminal
+    # variant is a first-class headless component — so the headless guard must not reject the
+    # very package the script declares. It used to: --dry-run exited 6 naming libasound2-dev,
+    # breaking the documented fresh-image procedure. ALSA is a kernel sound API, not a desktop
+    # audio server.
+    r, apt = _dryrun(tmp_path, sim_out="Inst libcodec2-dev (1 Debian [arm64])\n"
+                                       "Inst libasound2-dev (2 Debian [arm64])\n"
+                                       "Inst libasound2 (3 Debian [arm64])\n"
+                                       "Inst libncurses-dev (4 Debian [arm64])")
+    assert r.returncode == 0, r.stderr
+    assert "dry run OK" in r.stdout
+    assert apt == ""
+
+
+def test_dry_run_still_rejects_pulseaudio(tmp_path):
+    # Permitting ALSA must not weaken the audio-SERVER denial.
+    r, _apt = _dryrun(tmp_path, sim_out="Inst libasound2-dev (1 Debian [arm64])\n"
+                                        "Inst libpulse0 (2 Debian [arm64])")
+    assert r.returncode == 6
+    assert "libpulse0" in r.stderr
 
 
 def test_dry_run_fails_when_apt_cannot_resolve(tmp_path):
