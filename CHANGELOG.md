@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
 
 - **MeshCore now runs on openHop Core:** the node is upstream [openHop Core](https://github.com/openhop-dev/openhop_core) on the LoRaHAM daemon (a reviewable patch, never a fork) with an LHPC host adapter, replacing the retired `meshcore-pi` fork
 - **Browser GUI replaces the Tk Node Manager:** `meshcore-webui` reached through the LHPC TLS/PKI proxy — no graphical dependency, runs headless; config/log links and a live noise-floor panel now populate
