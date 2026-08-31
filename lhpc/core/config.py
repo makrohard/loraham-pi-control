@@ -1512,12 +1512,13 @@ def _reject_http_with_cert_auth(paths: Paths, patch: dict, what: str,
             f"{access_mode!r}")
 
 
-def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, scheme=None,
-                         access_mode=None, allowed_cidrs=None, hold_lock=True) -> Path:
-    """Persist DESIRED web-UI proxy exposure for ONE stack into `[stackweb]` (flat scalars,
-    `<stack_id>_<field>`). Validated before any write; `None` = leave unchanged. INTENT only —
-    activation is `webserver apply`. `hold_lock=False` skips the internal config_lock — the
-    CALLER already holds it (same contract as `save_webserver_config`)."""
+def _stackweb_table_patch(paths: Paths, stack_id: str, *, mode=None, port=None, scheme=None,
+                          access_mode=None, allowed_cidrs=None, cfg=None) -> dict:
+    """THE stackweb field validation: one stack's `[stackweb]` key patch (`<sid>_<field>` flat
+    scalars), validated field-by-field; `None` = leave unchanged. Both the single-stack and the
+    bulk writer build their tables here, so there is exactly one place that knows the rules —
+    including the effective http/cert-auth rejection against the currently stored entry.
+    `cfg` is an optional pre-loaded LHPCConfig (the bulk writer loads once for N stacks)."""
     from . import validators
     sid = validators.path_component(stack_id, field="stackweb stack id")
     patch: dict = {}
@@ -1542,14 +1543,49 @@ def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, s
     if allowed_cidrs is not None:
         norm = [validators.cidr(c, field=f"stackweb.{sid}_allowed_cidrs") for c in allowed_cidrs]
         patch["allowed_cidrs"] = ",".join(dict.fromkeys(norm))
-    current = load_config(paths).stackweb.get(sid) or StackWebConfig(stack_id=sid)
+    if cfg is None:
+        cfg = load_config(paths)
+    current = cfg.stackweb.get(sid) or StackWebConfig(stack_id=sid)
     _reject_http_with_cert_auth(paths, patch, f"stackweb.{sid}", current)
-    table = {f"{sid}_{k}": v for k, v in patch.items()}
+    return {f"{sid}_{k}": v for k, v in patch.items()}
+
+
+def save_stackweb_config(paths: Paths, stack_id: str, *, mode=None, port=None, scheme=None,
+                         access_mode=None, allowed_cidrs=None, hold_lock=True) -> Path:
+    """Persist DESIRED web-UI proxy exposure for ONE stack into `[stackweb]` (flat scalars,
+    `<stack_id>_<field>`). Validated before any write; `None` = leave unchanged. INTENT only —
+    activation is `webserver apply`. `hold_lock=False` skips the internal config_lock — the
+    CALLER already holds it (same contract as `save_webserver_config`)."""
+    table = _stackweb_table_patch(paths, stack_id, mode=mode, port=port, scheme=scheme,
+                                  access_mode=access_mode, allowed_cidrs=allowed_cidrs)
     path = paths.runtime_root / "config" / "local.toml"
     if not hold_lock:
         return _write_local_tables(paths, path, {"stackweb": table})
     with config_lock(paths):
         return _write_local_tables(paths, path, {"stackweb": table})
+
+
+def save_stackweb_configs(paths: Paths, updates: dict, hold_lock=True) -> Path:
+    """Persist DESIRED web-UI proxy exposure for SEVERAL stacks in ONE locked atomic
+    `local.toml` write — the bulk-policy path: every eligible stack gets the identical policy
+    in the same transaction, so a partial save can never leave the set divergent. `updates`
+    maps stack_id -> the same keyword fields `save_stackweb_config` takes. Every entry is
+    validated (the shared `_stackweb_table_patch`) BEFORE any write; one bad entry refuses
+    the whole set. `hold_lock=False` skips the internal config_lock — the CALLER already
+    holds it (the bulk service op computes its candidates under that same lock, so the
+    validated snapshot and the written one are the same configuration)."""
+    path = paths.runtime_root / "config" / "local.toml"
+
+    def _write():
+        cfg = load_config(paths)
+        table: dict = {}
+        for sid, fields in updates.items():
+            table.update(_stackweb_table_patch(paths, sid, cfg=cfg, **fields))
+        return _write_local_tables(paths, path, {"stackweb": table})
+    if not hold_lock:
+        return _write()
+    with config_lock(paths):
+        return _write()
 
 
 def save_component_remote(paths: Paths, component_id: str, url: str) -> Path:

@@ -705,7 +705,8 @@ class WebserverOpsMixin:
             return row(port, "exposed", "warn", "LAN", "restricted_noauth")
         return row(port, "exposed", "bad", "public", "review")
 
-    def _default_stack_web_port(self, stack_id: str, console_port: int) -> int:
+    def _default_stack_web_port(self, stack_id: str, console_port: int,
+                                extra_taken=()) -> int:
         """A STABLE per-stack default port: `console_port + 1 + position`, where position is the
         stack's index among the eligible web-UI stacks sorted by id. So meshcom → 8444, meshtastic
         → 8445, deterministically and without colliding — the old 'first free above the console'
@@ -725,6 +726,7 @@ class WebserverOpsMixin:
         saved = self.config().stackweb
         taken = {int(cfg.port) for sid, cfg in saved.items()
                  if sid != stack_id and getattr(cfg, "port", 0)}
+        taken |= {int(p) for p in extra_taken}      # bulk path: candidates assigned so far
         port = min(max(console_port, 1023) + 1 + pos, 65535)
         while port in taken or port == console_port:
             if port >= 65535:
@@ -762,6 +764,23 @@ class WebserverOpsMixin:
                 missing.append("confirmation required: --confirm-phrase enable-remote")
         return missing
 
+    def _stack_web_saved_details(self, stack_id: str, saved) -> list:
+        """THE post-save presentation for one stack's web-UI proxy — the standing bypass
+        disclosure (warning + firewall remedy) and the proxy URLs. Single-stack and bulk
+        saves both render through here, so the two can never diverge in what they name."""
+        from . import webserver as _ws
+        details: list = []
+        view = self.stack_web_view(stack_id)
+        if view.get("bypassable"):
+            details.append(
+                f"  WARNING: {stack_id}'s upstream port {view['upstream_port']} is listening on all "
+                f"interfaces — it is reachable directly, bypassing this proxy's authentication.")
+            details.append("  The managed firewall can close this port (Dashboard -> Webserver "
+                           "-> Firewall), or accept the exposure.")
+        if saved.enabled:
+            details += [f"  {u}" for u in _ws.stack_ui_urls(saved)]
+        return details
+
     def stack_web_configure(self, stack_id: str, *, mode=None, port=None, scheme=None,
                             access_mode=None, cidrs=None, confirm=False,
                             confirm_public=False) -> ActionResult:
@@ -795,16 +814,7 @@ class WebserverOpsMixin:
         except (ValidationError, _config.ConfigError) as exc:
             return ActionResult(False, f"invalid web-UI config: {exc}")
         self._invalidate_config()
-        details = []
-        view = self.stack_web_view(stack_id)
-        if view.get("bypassable"):
-            details.append(
-                f"  WARNING: {stack_id}'s upstream port {view['upstream_port']} is listening on all "
-                f"interfaces — it is reachable directly, bypassing this proxy's authentication.")
-            details.append("  The managed firewall can close this port (Dashboard -> Webserver "
-                           "-> Firewall), or accept the exposure.")
-        if probe.enabled:
-            details += [f"  {u}" for u in _ws.stack_ui_urls(probe)]
+        details = self._stack_web_saved_details(stack_id, probe)
         details.append("lhpc webserver apply           # render + validate + reload nginx")
         return ActionResult(True, f"web UI proxy for '{stack_id}' saved (desired; run apply)",
                             details=details, next_commands=["lhpc webserver apply"])
@@ -818,6 +828,110 @@ class WebserverOpsMixin:
             return r
         ar = self.webserver_apply()
         return ActionResult(ar.ok, ar.summary, details=[*r.details, *ar.details],
+                            next_commands=ar.next_commands, data=ar.data)
+
+    def _stack_webs_candidates(self) -> list:
+        """THE candidate port walk for the 'Stacks WebGUIs' bulk policy — the ONE place that
+        decides, per eligible stack, which port a bulk Apply uses: the saved nonzero port
+        (kept), else the same suggested default the per-stack panel offers, candidate-aware so
+        the assigned set stays unique. The form's overview and the bulk Apply both consume
+        this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
+        Returns [(sid, port, keeps)] sorted by stack id."""
+        ws = self.config().webserver
+        cfgs = self.config().stackweb
+        out, assigned = [], []
+        for sid in sorted(self.stack_web_eligible()):
+            swc = cfgs.get(sid)
+            port = int(getattr(swc, "port", 0) or 0)
+            if not port:
+                port = self._default_stack_web_port(sid, ws.port, extra_taken=assigned)
+                assigned.append(port)
+            out.append((sid, port, bool(getattr(swc, "port", 0))))
+        return out
+
+    def stack_webs_overview(self) -> dict:
+        """READ-ONLY context for the 'Stacks WebGUIs' bulk form (the shared candidate walk)."""
+        from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
+        return {"stacks": [{"sid": sid, "port": port, "keeps": keeps}
+                           for sid, port, keeps in self._stack_webs_candidates()],
+                "modes": STACKWEB_MODES,
+                "access_modes": WEBSERVER_ACCESS_MODES, "schemes": WEBSERVER_SCHEMES}
+
+    def stack_webs_configure_apply(self, *, mode, scheme, access_mode, cidrs,
+                                   confirm=False, confirm_public=False) -> ActionResult:
+        """Apply ONE common web-UI proxy policy to EVERY eligible stack — the 'Stacks WebGUIs'
+        bulk form. Ports stay per-stack: an existing nonzero port is NEVER changed; a missing one
+        gets the same suggested default its own panel offers (candidate-aware, so the assigned
+        set stays unique). The COMPLETE candidate set is validated through the same rules as a
+        single-stack save (`plan_stack_exposure` + `_exposure_missing`, every problem collected,
+        sid-prefixed); any problem refuses the whole set and saves NOTHING. On accept the
+        per-stack patches are persisted in ONE locked atomic write (`save_stackweb_configs`),
+        the config cache is invalidated once, and `webserver_apply()` runs exactly once."""
+        from . import config as _config
+        from . import webserver as _ws
+        from .config import StackWebConfig
+        from .validators import ValidationError
+        eligible = sorted(self.stack_web_eligible())
+        if not eligible:
+            return ActionResult(False, "no stacks with a web UI to configure")
+        cidrs = list(cidrs or [])
+        # ONE config_lock spans candidate calculation, conflict validation AND the write, on a
+        # FRESHLY-loaded snapshot (audit-found TOCTOU: candidates computed from the memoized
+        # config could stamp a concurrently-edited port back to its stale value — "existing
+        # nonzero ports are never changed" must hold against the configuration AT WRITE TIME).
+        # webserver_apply stays outside the lock: it re-reads desired config itself.
+        try:
+            with _config.config_lock(self._paths):
+                self._invalidate_config()          # every read below: fresh + lock-consistent
+                ws = self.config().webserver
+                cfgs = self.config().stackweb
+                keeps_port = {}
+                candidates: dict = {}
+                for sid, port, keeps in self._stack_webs_candidates():
+                    keeps_port[sid] = keeps
+                    candidates[sid] = StackWebConfig(stack_id=sid, mode=mode, port=port,
+                                                     scheme=scheme, access_mode=access_mode,
+                                                     allowed_cidrs=tuple(cidrs))
+                # Saved enabled entries of stacks OUTSIDE the candidate set still hold their
+                # ports — the single-stack path counts every saved enabled entry, so the bulk
+                # path must too (a lingering entry for a currently-ineligible stack would
+                # otherwise collide later).
+                saved_other = {c.port for o, c in cfgs.items()
+                               if o not in candidates and c.enabled}
+                missing_all: list = []
+                for sid, probe in candidates.items():
+                    others = saved_other | {c.port for o, c in candidates.items()
+                                            if o != sid and c.enabled}
+                    plan = _ws.plan_stack_exposure(probe, ws.port, others)
+                    missing = self._exposure_missing(
+                        plan, confirm=confirm, confirm_public=confirm_public,
+                        cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
+                    missing_all += [f"{sid}: {m}" for m in missing]
+                if missing_all:
+                    return ActionResult(False, "cannot configure the stack web UIs — unmet "
+                                        "requirement(s):",
+                                        details=[f"  - {m}"
+                                                 for m in dict.fromkeys(missing_all)])
+                try:
+                    _config.save_stackweb_configs(self._paths, {
+                        sid: {"mode": mode, "port": c.port, "scheme": scheme,
+                              "access_mode": access_mode, "allowed_cidrs": cidrs}
+                        for sid, c in candidates.items()}, hold_lock=False)
+                except (ValidationError, _config.ConfigError) as exc:
+                    return ActionResult(False, f"invalid web-UI config: {exc}")
+        except _config.ConfigLockBusy as exc:
+            return ActionResult(False, f"configuration is busy — try again shortly ({exc})")
+        self._invalidate_config()
+        details = [f"  {sid}: port {c.port}" + ("" if keeps_port[sid]
+                                                else " (assigned default)")
+                   for sid, c in candidates.items()]
+        # Same post-save presentation as the single-stack path (shared helper).
+        for sid, c in candidates.items():
+            details += self._stack_web_saved_details(sid, c)
+        ar = self.webserver_apply()
+        return ActionResult(ar.ok, f"common policy saved for {len(candidates)} stack web "
+                            f"UI(s). {ar.summary}",
+                            details=[*details, *ar.details],
                             next_commands=ar.next_commands, data=ar.data)
 
     def webserver_expose(self, cidrs, *, access_mode=None, confirm=False,

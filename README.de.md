@@ -249,6 +249,11 @@ lhpc webserver start-service      # nur lokal, ohne Anmeldung — nach außen is
   Desktop aus, ganz ohne Freigabe: `ssh -L 8443:127.0.0.1:8443 <benutzer>@lhpc-zero.local`, dann
   `https://127.0.0.1:8443/` öffnen. Erste Schritte dort: die **Auto-install**-Seite, danach im
   Webserver-Panel [Stack-UIs proxyen / Konsole mit Zertifikats-Anmeldung freigeben](#fernzugriff).
+  Das Unterpanel **Stacks WebGUIs** wendet eine gemeinsame Richtlinie (Zugriff, Schema,
+  Authentifizierung, CIDRs) auf alle Stack-WebGUIs gleichzeitig an — Ports bleiben pro Stack
+  erhalten (fehlende bekommen den normalen Vorschlagswert); **LHPC WebGUI** konfiguriert
+  weiterhin nur die Konsole selbst. Einzel-Panels bleiben für Ausnahmen verfügbar;
+  Bestätigungen (enable-remote / enable-remote-danger) und Firewall-Verhalten unverändert.
 
 ### 8. Stacks per Auto-Install aufsetzen (CLI)
 

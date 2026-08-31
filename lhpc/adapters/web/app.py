@@ -986,6 +986,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                                                            .get("clients", []))
                                                           if c.get("state") == "active"]),
             "ws_console_addr": _console_addr((_ws or {}).get("desired", {}).get("port", "")),
+            # 'Stacks WebGUIs' bulk form (read-only overview; ?wsg=1 re-opens it after a POST)
+            "ws_stackwebs": service.stack_webs_overview(),
+            "wsg_open": bool(request.args.get("wsg")),
             "tasks": service.running_tasks(),
             "restored_open": restored_open,
             "hw_probe": hw_probe,
@@ -2025,6 +2028,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             flash(d, "warn" if r.ok else "err")
         # Anchor the webserver panel itself (NOT ?cfg, which opens Settings).
         return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
+
+    @app.post("/webserver/stacks")
+    def stack_webs_configure():
+        """ONE common policy for every eligible stack web UI ('Stacks WebGUIs'). Same typed-
+        confirmation contract as the per-stack form; ports stay per-stack (preserved, or the
+        suggested default where missing). Validation/persistence live in the service layer."""
+        if not _csrf_ok():
+            abort(400)
+        f = request.form
+        phrase = f.get("confirm_phrase", "").strip()
+        r = service.stack_webs_configure_apply(
+            mode=(f.get("mode") or "local"),
+            scheme=(f.get("scheme") or "https"),
+            access_mode=(f.get("access_mode") or "local-open-remote-auth"),
+            cidrs=[x.strip() for x in f.get("cidrs", "").split(",") if x.strip()],
+            confirm=phrase in ("enable-remote", "enable-remote-danger"),
+            confirm_public=(phrase == "enable-remote-danger"))
+        flash(r.summary, "ok" if r.ok else "err")
+        for d in r.details:
+            flash(d, "warn" if r.ok else "err")
+        return redirect(url_for("stacks_overview") + "?wsg=1#webserver-row")
 
     @app.route("/webserver/reset", methods=["POST"])
     def webserver_reset():

@@ -1647,3 +1647,220 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
         [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore"))])
     for p in required:
         assert f"location = {p} {{ return 403; }}" in out, f"{p} not denied in nginx config"
+
+
+# ===== 'Stacks WebGUIs' — ONE common policy for every eligible stack web UI =====
+
+def _bulk_spies(svc, monkeypatch, apply_ok=True):
+    """Count the single-write save and the single nginx apply; keep persistence REAL."""
+    from lhpc.core import config as cfgmod2
+    from lhpc.core.service_base import ActionResult
+    saves, applies = [], []
+    real = cfgmod2.save_stackweb_configs
+    monkeypatch.setattr(cfgmod2, "save_stackweb_configs",
+                        lambda paths, updates, hold_lock=True:
+                        saves.append(dict(updates)) or real(paths, updates,
+                                                            hold_lock=hold_lock))
+    monkeypatch.setattr(type(svc), "webserver_apply",
+                        lambda self: applies.append(1) or ActionResult(
+                            apply_ok, "applied" if apply_ok else "firewall gate pending",
+                            data={} if apply_ok else {"firewall_gate": "pending"}))
+    return saves, applies
+
+
+def test_bulk_targets_every_eligible_stack_preserves_ports_and_applies_once(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    eligible = sorted(svc.stack_web_eligible())
+    assert len(eligible) >= 2                                     # meaningful bulk
+    kept_sid = eligible[0]
+    cfgmod.save_stackweb_config(Paths(runtime_root=tmp_path), kept_sid, port=9000)
+    svc._invalidate_config()
+    saves, applies = _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                       access_mode="local-open-remote-auth", cidrs=[])
+    assert r.ok, r.summary
+    assert len(saves) == 1 and sorted(saves[0]) == eligible       # one write, full set
+    assert len(applies) == 1                                      # one nginx activation
+    after = load_config(Paths(runtime_root=tmp_path)).stackweb
+    ports = [after[sid].port for sid in eligible]
+    assert after[kept_sid].port == 9000                           # existing port NEVER changed
+    assert len(set(ports)) == len(ports)                          # assigned defaults unique
+    for sid in eligible:
+        c = after[sid]
+        assert (c.mode, c.scheme, c.access_mode) == ("local", "https", "local-open-remote-auth")
+        assert c.port >= 1024
+
+
+@pytest.mark.parametrize("kw,needle", [
+    # LAN without any confirmation — refused before anything is written
+    pytest.param(dict(mode="lan", scheme="https", access_mode="local-open-remote-auth",
+                      cidrs=["192.168.0.0/24"]), "enable-remote", id="no-confirmation"),
+    # http + certificate auth — technically impossible
+    pytest.param(dict(mode="local", scheme="http", access_mode="auth-everywhere", cidrs=[]),
+                 "no-auth", id="http-with-cert-auth"),
+])
+def test_bulk_failures_are_atomic(tmp_path, monkeypatch, kw, needle):
+    svc = _svc(tmp_path)
+    saves, applies = _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(**kw)
+    assert not r.ok
+    assert needle in r.summary + " ".join(r.details)
+    assert saves == [] and applies == []                          # nothing written, nothing applied
+    assert load_config(Paths(runtime_root=tmp_path)).stackweb == {}
+
+
+def test_bulk_port_conflict_refuses_the_whole_set(tmp_path, monkeypatch):
+    # A saved per-stack port equal to the console port poisons ONE candidate; the WHOLE set fails.
+    svc = _svc(tmp_path)
+    sid = sorted(svc.stack_web_eligible())[0]
+    cfgmod.save_stackweb_config(Paths(runtime_root=tmp_path), sid, port=8443)   # console's port
+    svc._invalidate_config()
+    before = load_config(Paths(runtime_root=tmp_path)).stackweb
+    saves, applies = _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                       access_mode="local-open-remote-auth", cidrs=[])
+    assert not r.ok and "console" in " ".join(r.details)
+    assert saves == [] and applies == []
+    assert load_config(Paths(runtime_root=tmp_path)).stackweb == before
+
+
+@pytest.mark.parametrize("kw,phrase,ok", [
+    pytest.param(dict(mode="local", scheme="https", access_mode="local-open-remote-auth",
+                      cidrs=[]), "", True, id="local-https-no-confirmation"),
+    pytest.param(dict(mode="lan", scheme="https", access_mode="local-open-remote-auth",
+                      cidrs=["192.168.0.0/24"]), "enable-remote", True, id="lan-normal-phrase"),
+    pytest.param(dict(mode="public", scheme="https", access_mode="local-open-remote-auth",
+                      cidrs=["0.0.0.0/0"]), "enable-remote", False, id="public-needs-danger"),
+    pytest.param(dict(mode="public", scheme="https", access_mode="local-open-remote-auth",
+                      cidrs=["0.0.0.0/0"]), "enable-remote-danger", True, id="public-danger-ok"),
+    pytest.param(dict(mode="lan", scheme="https", access_mode="no-auth",
+                      cidrs=["192.168.0.0/24"]), "enable-remote", False, id="noauth-needs-danger"),
+    pytest.param(dict(mode="lan", scheme="http", access_mode="no-auth",
+                      cidrs=["192.168.0.0/24"]), "enable-remote", False, id="http-needs-danger"),
+    pytest.param(dict(mode="lan", scheme="http", access_mode="no-auth",
+                      cidrs=["192.168.0.0/24"]), "enable-remote-danger", True, id="http-danger-ok"),
+    pytest.param(dict(mode="lan", scheme="http", access_mode="auth-everywhere",
+                      cidrs=["192.168.0.0/24"]), "enable-remote-danger", False,
+                 id="http-cert-auth-always-refused"),
+])
+def test_bulk_exposure_contract_matches_the_single_stack_rules(tmp_path, monkeypatch, kw, phrase, ok):
+    svc = _svc(tmp_path)
+    _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(
+        **kw, confirm=phrase in ("enable-remote", "enable-remote-danger"),
+        confirm_public=(phrase == "enable-remote-danger"))
+    assert r.ok is ok, (r.summary, r.details)
+
+
+def test_individual_edit_after_bulk_changes_only_that_stack(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    _bulk_spies(svc, monkeypatch)
+    assert svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                          access_mode="local-open-remote-auth", cidrs=[]).ok
+    eligible = sorted(svc.stack_web_eligible())
+    one, others = eligible[0], eligible[1:]
+    svc._invalidate_config()
+    before = load_config(Paths(runtime_root=tmp_path)).stackweb
+    assert svc.stack_web_configure(one, mode="lan", cidrs=["10.0.0.0/24"], confirm=True).ok
+    after = load_config(Paths(runtime_root=tmp_path)).stackweb
+    assert after[one].mode == "lan" and after[one].allowed_cidrs == ("10.0.0.0/24",)
+    for sid in others:
+        assert after[sid] == before[sid]                          # untouched
+
+
+def test_bulk_counts_saved_ports_of_currently_ineligible_stacks(tmp_path, monkeypatch):
+    # REVIEW-FOUND: the single-stack path counts EVERY saved enabled entry when checking port
+    # conflicts; the bulk path must too. A lingering [stackweb] entry for a stack that is not
+    # currently eligible still holds its port — a bulk candidate would otherwise collide with
+    # it the moment that stack becomes eligible again.
+    svc = _svc(tmp_path)
+    sid = sorted(svc.stack_web_eligible())[0]
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_stackweb_config(p, "ghoststack", port=9000)      # saved, NOT eligible
+    cfgmod.save_stackweb_config(p, sid, port=9000)               # eligible, same port
+    svc._invalidate_config()
+    before = load_config(p).stackweb
+    saves, applies = _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                       access_mode="local-open-remote-auth", cidrs=[])
+    assert not r.ok and "already used by another stack" in " ".join(r.details)
+    assert saves == [] and applies == []
+    assert load_config(p).stackweb == before
+
+
+def test_bulk_candidates_are_computed_under_the_config_lock(tmp_path, monkeypatch):
+    # AUDIT-FOUND (P1): candidates were computed from config read BEFORE the lock, so a
+    # per-stack port edit racing into that window was stamped back to its stale value —
+    # silently violating "existing nonzero ports are never changed". The invariant closing
+    # the race BY CONSTRUCTION: the candidate walk, the conflict validation and the write
+    # all happen while the ONE config_lock is held, on a freshly-loaded snapshot — so any
+    # lock-respecting concurrent edit lands wholly before (and is seen) or wholly after
+    # (and wins, as any later operator action would).
+    svc = _svc(tmp_path)
+    sid = sorted(svc.stack_web_eligible())[0]
+    p = Paths(runtime_root=tmp_path)
+    cfgmod.save_stackweb_config(p, sid, port=9000)
+    svc._invalidate_config()
+    real_walk = type(svc)._stack_webs_candidates
+    held = {}
+
+    def probing_walk(self):
+        try:                                   # the lock must ALREADY be held around us
+            with cfgmod.config_lock(p, timeout=0.2):
+                held["locked"] = False
+        except cfgmod.ConfigLockBusy:
+            held["locked"] = True
+        return real_walk(self)
+
+    monkeypatch.setattr(type(svc), "_stack_webs_candidates", probing_walk)
+    _bulk_spies(svc, monkeypatch)
+    r = svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                       access_mode="local-open-remote-auth", cidrs=[])
+    assert r.ok, r.summary
+    assert held.get("locked") is True, "candidate walk ran without the config lock held"
+    assert load_config(p).stackweb[sid].port == 9000   # kept port still preserved
+
+
+def test_bulk_saved_but_gated_apply_stays_truthfully_pending(tmp_path, monkeypatch):
+    # Firewall-gated activation: the save SUCCEEDED (intent persisted), the apply did not — the
+    # result must say so and the desired settings must remain pending, never rolled back.
+    svc = _svc(tmp_path)
+    saves, applies = _bulk_spies(svc, monkeypatch, apply_ok=False)
+    r = svc.stack_webs_configure_apply(mode="local", scheme="https",
+                                       access_mode="local-open-remote-auth", cidrs=[])
+    assert not r.ok and r.data.get("firewall_gate") == "pending"
+    assert len(saves) == 1 and len(applies) == 1
+    after = load_config(Paths(runtime_root=tmp_path)).stackweb
+    assert all(c.mode == "local" for c in after.values()) and after   # intent persisted
+
+
+def test_webserver_panel_renders_both_webgui_subpanels(tmp_path):
+    app, _svc_ = _app(tmp_path)
+    with app.test_client() as client:
+        html = client.get("/stacks").get_data(as_text=True)
+    assert "LHPC WebGUI" in html and "Stacks WebGUIs" in html
+    assert "Apply to all Stack WebGUIs" in html
+    # target-policy form: the bulk form carries NO port input
+    bulk = html.split("Stacks WebGUIs", 1)[1].split("</details>", 1)[0]
+    assert 'name="port"' not in bulk
+    for field in ('name="mode"', 'name="scheme"', 'name="access_mode"',
+                  'name="cidrs"', 'name="confirm_phrase"'):
+        assert field in bulk, field
+
+
+def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch):
+    app, svc = _app(tmp_path)
+    seen = {}
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(type(svc), "stack_webs_configure_apply",
+                        lambda self, **kw: seen.update(kw) or ActionResult(True, "ok"))
+    with app.test_client() as client:
+        assert client.post("/webserver/stacks", data={}).status_code == 400   # no CSRF
+        tok = _csrf(client)
+        resp = client.post("/webserver/stacks", data={
+            "_csrf": tok, "mode": "lan", "scheme": "https",
+            "access_mode": "local-open-remote-auth", "cidrs": "192.168.0.0/24",
+            "confirm_phrase": "enable-remote-danger"})
+        assert resp.status_code == 302 and "wsg=1" in resp.headers["Location"]
+    assert seen["mode"] == "lan" and seen["cidrs"] == ["192.168.0.0/24"]
+    assert seen["confirm"] is True and seen["confirm_public"] is True

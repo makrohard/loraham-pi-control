@@ -215,10 +215,11 @@ back to loopback: `lhpc webserver disable-remote && lhpc webserver apply` (then
 
 ## Stack web-UI proxies
 
-Everything above concerns the **console** listener. Two stacks ship their **own** web UIs —
-meshtasticd (`:9443`) and MeshCom (`:18083`) — which bind all interfaces with **no
-authentication**. `lhpc` can front each one with a dedicated nginx listener carrying the same
-mTLS + source-CIDR gate as the console, so you never open the raw port:
+Everything above concerns the **console** listener. Several stacks ship their **own** web UIs
+(eligibility is manifest-derived — see below); some of those upstream ports bind all interfaces,
+and their built-in protection varies from none (meshtasticd `:9443`, MeshCom `:18083`) to the
+app's own login (graywolf). `lhpc` can front each one with a dedicated nginx listener carrying
+the same mTLS + source-CIDR gate as the console, so you never rely on the raw port:
 
 ```
 lhpc webserver proxy meshtastic --mode lan --port 8445 --auth local-open-remote-auth \
@@ -231,14 +232,39 @@ lhpc webserver apply
   `--confirm-phrase enable-remote`; `public`, a `no-auth` `--access-mode`, or an `http`
   `--scheme` need `enable-remote-danger`.
 - `--port` is **required** — a stack with no port set is not proxied. The web console suggests
-  `8444` for meshcom and `8445` for meshtastic; any free port ≥ 1024 works (nginx is rootless).
+  a stable per-stack default (console port + 1 + the stack's position among the eligible ids —
+  on a fresh box: graywolf `8444`, meshcom `8445`, meshcore `8446`, meshtastic `8447`, skipping
+  ports already saved); any free port ≥ 1024 works (nginx is rootless).
 - `--access-mode` (alias `--auth`) takes the same values as the console (default
   `local-open-remote-auth`), and proxied UIs use the **same** client certificates. Pass it
   explicitly: a stack whose stored policy is already `no-auth` otherwise refuses with
   *elevated confirmation required*, and waiving that with the danger phrase would publish an
   unauthenticated stack UI to your LAN.
-- Only meshcom and meshtastic are eligible (a manifest web endpoint). kiss, meshcore and the
-  daemon speak non-HTTP protocols and cannot be proxied.
+- Eligibility is derived from the manifest (a client http/https web endpoint) — currently
+  graywolf, meshcom, meshcore and meshtastic. kiss and the daemon speak non-HTTP protocols and
+  cannot be proxied. A future stack that declares a web endpoint becomes eligible automatically,
+  but is only configured when you save its panel (or submit the bulk form below) — nothing is
+  ever exposed on its own.
+
+### One policy for all stack WebGUIs
+
+The console's **Webserver → Stacks WebGUIs** subpanel applies one common policy — access
+(local/LAN/public), scheme, access mode and allowed CIDRs — to **every** eligible stack web UI
+in a single confirmed action, instead of repeating the same settings per stack. The sibling
+**LHPC WebGUI** subpanel keeps configuring the console itself, unchanged.
+
+- **Ports stay per-stack** and are not part of the bulk form: an existing port is never changed,
+  and a stack without one gets the same suggested default its own panel offers (unique across
+  the whole set). If a unique port cannot be assigned, the bulk action fails before changing
+  anything.
+- The whole candidate set is validated first; any problem (confirmation, CIDRs, http+cert-auth,
+  a port conflict) refuses the **entire** action and saves nothing.
+- Confirmation and firewall behavior are the per-stack rules, unchanged: LAN needs
+  `enable-remote`; public/no-auth/http-remote need `enable-remote-danger`; activation is one
+  staged nginx apply behind the managed-firewall gate.
+- Each stack's own Webserver panel remains available for individual exceptions afterwards; a
+  later bulk Apply overwrites the shared fields again (there is no continuously enforced global
+  policy).
 
 Keep the native port firewalled and reach the UI through the proxy port. Firewall recipes:
 [Firewalling the Pi](firewall.md#what-actually-listens). Command details:

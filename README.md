@@ -241,6 +241,11 @@ lhpc webserver start-service      # local-only, no auth — nothing is exposed y
   without exposing anything: `ssh -L 8443:127.0.0.1:8443 <user>@lhpc-zero.local`, then open
   `https://127.0.0.1:8443/`. First steps there: the **Auto-install** page, then the Webserver
   panel to [proxy stack UIs / expose the console with cert auth](#remote-access).
+  The **Stacks WebGUIs** subpanel applies one common policy (access, scheme,
+  authentication, CIDRs) to all stack WebGUIs at once — ports stay per-stack (missing ones get
+  the normal suggested default); **LHPC WebGUI** keeps configuring the console itself. Per-stack
+  panels remain available for exceptions; confirmations (enable-remote / enable-remote-danger)
+  and firewall behavior are unchanged.
 
 ### 8. Auto-install the stacks (CLI)
 

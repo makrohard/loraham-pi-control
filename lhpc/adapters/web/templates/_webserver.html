@@ -16,10 +16,10 @@
      not reliably keyboard/AT reachable. #}
   {% if ws_console_addr %}<p class="wsopen"><a class="wsurl" href="{{ mon.posture.scheme }}://{{ ws_console_addr }}">Open {{ mon.posture.scheme }}://{{ ws_console_addr }}</a></p>{% endif %}
 
-  {# ===== Settings ===== #}
+  {# ===== LHPC WebGUI (the console's own settings — unchanged behavior) ===== #}
   <div class="ws-sub-wrap">
   <details class="advcfg" open>
-    <summary>Settings</summary>
+    <summary>LHPC WebGUI</summary>
     <section class="cfgsec">
       {% if mon.desired.scheme == 'http' %}
         <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
@@ -80,6 +80,58 @@
   {# logs link OUTSIDE the summary (a11y) but overlaid on the header — identical to the main stack rows. #}
   <div class="row-actions"><a class="logslink" href="{{ url_for('webserver_logs') }}" aria-label="webserver logs">logs</a></div>
   </div>
+
+  {# ===== Stacks WebGUIs: ONE common policy for every eligible stack web-UI proxy.
+     Target-policy form — no per-stack ports here (each stack keeps its own; a missing one
+     gets the same suggested default its per-stack panel offers). #}
+  <details class="advcfg" id="ws-stackwebs"{% if wsg_open %} open{% endif %}>
+    <summary>Stacks WebGUIs</summary>
+    <section class="cfgsec">
+      <p class="muted">Applies the selected policy to <strong>every</strong> Stack WebGUI below.
+        Ports remain individual per-stack settings: existing ports are kept, a stack without one
+        gets its normal suggested default. Each stack's own Webserver panel remains available for
+        individual exceptions.</p>
+      {% if ws_stackwebs.stacks %}
+        <p class="muted">Will affect:
+          {% for r in ws_stackwebs.stacks %}<code>{{ r.sid }}</code>
+            ({% if r.keeps %}keeps port {{ r.port }}{% else %}gets port {{ r.port }}{% endif %}){{ ", " if not loop.last }}{% endfor %}</p>
+        <form method="post" action="{{ url_for('stack_webs_configure') }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+          <table class="paramgrid dptab">
+            <tr><th>Access</th>
+              <td><select name="mode" aria-label="Access">
+                {% for m in ws_stackwebs.modes %}
+                  <option value="{{ m }}">{% if m == 'local' %}local only (loopback)
+                    {% elif m == 'lan' %}LAN (allowed CIDRs){% else %}public (0.0.0.0/0){% endif %}</option>
+                {% endfor %}
+              </select></td>
+              <td class="dphelp muted">Who may reach the proxies</td></tr>
+            <tr><th>Scheme</th>
+              <td><select name="scheme" class="schemesel" data-authsel="wsg-authsel" aria-label="Scheme">
+                {% for sch in ws_stackwebs.schemes %}<option value="{{ sch }}">{{ sch }}</option>{% endfor %}
+              </select></td>
+              <td class="dphelp muted">https keeps client-certificate auth possible</td></tr>
+            <tr><th>Access mode</th>
+              <td><select name="access_mode" id="wsg-authsel" aria-label="Access mode">
+                {% for m in ws_stackwebs.access_modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+              </select></td>
+              <td class="dphelp muted">Client-certificate (mTLS) policy — http requires no-auth</td></tr>
+            <tr><th>Allowed CIDRs</th>
+              <td><input name="cidrs" placeholder="192.168.0.0/24" autocomplete="off"></td>
+              <td class="dphelp muted">Required for LAN/public</td></tr>
+            <tr><th>Confirm</th>
+              <td><input name="confirm_phrase" autocomplete="off"></td>
+              <td class="dphelp muted">Remote needs <code>enable-remote</code> — or
+                <code>enable-remote-danger</code> for public <code>0.0.0.0/0</code>, no-auth remote,
+                or an unencrypted <code>http</code> remote listener</td></tr>
+          </table>
+          <button type="submit">Apply to all Stack WebGUIs</button>
+        </form>
+      {% else %}
+        <p class="muted">No installed stack currently exposes a web UI.</p>
+      {% endif %}
+    </section>
+  </details>
 
   {# ===== Monitor ===== #}
   <div class="ws-sub-wrap">
