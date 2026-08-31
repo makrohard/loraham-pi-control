@@ -91,6 +91,7 @@
 "POST /webserver/configure" = "sweep"
 "POST /webserver/init" = "sweep"
 "POST /webserver/reset" = "sweep"
+"POST /webserver/stacks" = "sweep"
 "POST /webserver/tls-renew" = "sweep"
 "POST /webserver/verify" = "sweep"
 "POST /welcome/dismiss" = "sweep"
@@ -174,6 +175,7 @@
 "_update.html#self_update_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#boot_restore_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#webserver_cert" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_webserver.html#stack_webs_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#webserver_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#webserver_init" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#webserver_reset" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
