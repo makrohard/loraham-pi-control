@@ -217,6 +217,7 @@ lhpc hardware loraham                     # dein Funk-Setup aus dem Katalog:
 |---|---|---|
 | `loraham` | LoRaHAM Dual-Modul (SX1278 + RFM95) | 433 → loraham, 868 → loraham |
 | `uputronics` | Uputronics dual (CE0 433 + CE1 868) | 433 → uputronics-ce0, 868 → uputronics-ce1 |
+| `uputronics-x` | Uputronics dual, crossed modules (CE0 868 + CE1 433) | 433 → uputronics-ce1, 868 → uputronics-ce0 |
 | `uputronics-433` | Uputronics 433 (CE0) | 433 → uputronics-ce0 |
 | `uputronics-868` | Uputronics 868 (CE1) | 868 → uputronics-ce1 |
 | `waveshare-433` | Waveshare SX1262 (433) | 433 → waveshare-sx1262 |
