@@ -2315,6 +2315,22 @@ def test_gui_optional_component_skips_without_skipping_voice(tmp_path, monkeypat
     assert "loraham-voice-cli" not in svc.gui_unavailable_components(svc.stack("voice"))
 
 
+def test_runtime_blockers_ignore_the_gui_dropped_voice_main(tmp_path):
+    """IMAGE-BUILD-FOUND (v0.2.4 Lite): the REAL post-provision readiness gate counted the GTK
+    headers of voice's gui_optional MAIN as a stack blocker, failing the whole Lite image with
+    'voice: BLOCKED (not startable — GTK 3 development headers ...)'. The gate must drop a
+    gui-blocked gui_optional component exactly like build and start do. (_happy_ops stubs this
+    gate, which is why the headless-voice auto-install test never caught it — this one asks the
+    real method.)"""
+    svc = _svc(tmp_path)                              # FakeSystem: no GTK headers
+    blockers = svc._auto_install_runtime_blockers(svc.stack("voice"))
+    assert not any("GTK" in b for b in blockers), blockers
+    # The terminal variant's own NON-GUI requirements still block normally on this bare box
+    # (no codec2/ALSA/ncurses headers in FakeSystem) — the exception is gui-scoped only.
+    assert any("codec2" in b.lower() or "alsa" in b.lower() or "ncurses" in b.lower()
+               for b in blockers), blockers
+
+
 @pytest.mark.needs_session
 def test_gui_skip_verdict_is_frozen_at_planning_time(tmp_path, monkeypatch):
     """A dependency that appears BETWEEN planning and execution must not change the planned GUI

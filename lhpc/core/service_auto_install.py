@@ -799,7 +799,16 @@ class AutoInstallOpsMixin:
         for c in st.components:
             if getattr(c, "optional", False):
                 continue
-            for req in self.start_blocking_requirements(c):
+            reqs = self.start_blocking_requirements(c)
+            # A gui_optional component whose GUI toolkit is absent is DROPPED by build and
+            # start (headless-safe default) — the same predicate must hold here, or a Lite
+            # box's auto-install reads voice as BLOCKED over the GTK headers it deliberately
+            # does not install (image-build-found: the v0.2.4 Lite image failed on exactly
+            # this). Non-GUI requirements of such a component still block normally.
+            if getattr(c, "gui_optional", False) and any(getattr(r, "gui", False)
+                                                         for r in reqs):
+                continue
+            for req in reqs:
                 pending = bool(req.groups) and life.group_grant_pending(req)
                 out.append(lifecycle_mod.req_remediation(req, pending))
         return out
