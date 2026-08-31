@@ -10,7 +10,7 @@ variant** for headless/Lite boxes — no graphical environment involved. Band-sw
 | Components | `loraham-voice` (GTK, desktop) · `loraham-voice-cli` (ncurses terminal) |
 | Source | `LoRaHAM_Voice` (one pinned checkout, two builds) |
 | Build | GTK: `gcc … -o loraham_voice` (codec2, GTK, ALSA) · terminal: `gcc -DNO_GTK … -o loraham_voice_cli` (codec2, ALSA, ncurses — zero GTK/X11 linkage) |
-| Config | `loraham_voice.conf` (shared by both): callsign + per-band LoRa params keyed `<band>_freq`, `<band>_sf`, `<band>_bw`, `<band>_cr`, `<band>_power`, `<band>_crc`, `<band>_preamble`, `<band>_sync`, `<band>_ldro` |
+| Config | `loraham_voice.conf` (shared by both): callsign (max 11 characters; inherits the global operator base callsign while empty) + per-band LoRa params keyed `<band>_freq`, `<band>_sf`, `<band>_bw`, `<band>_cr`, `<band>_power`, `<band>_crc`, `<band>_preamble`, `<band>_sync`, `<band>_ldro` |
 
 The app reads its config from the directory of its binary, so `lhpc` symlinks the
 binary into the runtime config dir and runs it there. Both variants claim the same
@@ -20,7 +20,8 @@ while the GTK app holds it.
 The terminal variant is a **fallback**, offered only where the GTK app cannot run (no
 toolkit, or no display). It reads the shared config the GTK component owns, so starting
 it on its own is refused: use `lhpc stack start voice`, which generates that config —
-including your callsign — first.
+including your callsign — first. With neither a local callsign nor a global one set, the
+start is refused rather than run unidentified.
 
 ## Headless / Lite systems
 

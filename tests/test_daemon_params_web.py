@@ -368,6 +368,7 @@ def test_ephemeral_invalid_value_fails_before_launch(tmp_path):
 
 def test_ephemeral_unknown_key_and_wrong_band_rejected(tmp_path):
     svc = _daemon_svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")      # meshcom identity inherits (gates first now)
     assert not svc.run_action("start", "daemon", apply=True,
                               daemon_overrides={"433": {"BOGUS": "x"}}).ok      # unknown key
     r = svc.run_action("start", "meshcom", apply=True, daemon_overrides={"868": {"CADIDLE": "40"}})
@@ -543,6 +544,7 @@ def test_bandless_component_start_ignores_daemon_overrides(tmp_path):
     # (re)launch the daemon — the override must be IGNORED, never rejected as "not part of this
     # start". Regression for the operator-reported gps-relay start failure.
     svc = _daemon_svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")      # meshcom identity inherits (gates first now)
     r = svc.run_action("start", "meshcom-gps-relay", apply=False,
                        daemon_overrides={"433": {"CADIDLE": "40"}})
     assert "not part of this start" not in (r.summary or "")

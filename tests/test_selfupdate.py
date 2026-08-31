@@ -841,9 +841,9 @@ def test_migration_honors_operator_token_and_canonical_form(tmp_path, monkeypatc
         '  [[stack.component.param]]\n  name="num"\n  kind="int"\n  default="10"\n')
     _upstream_commit(up)
     svc, man, rt = _svc(tmp_path, work)
-    cfgmod.save_operator_config(svc._paths, "DJ0CHE"); svc._invalidate_config()
+    cfgmod.save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
     # legacy: who == operator-substituted default; num == default (int, plain form)
-    cfgmod.save_stack_config(svc._paths, "s", {"who": "DJ0CHE", "num": "10"})
+    cfgmod.save_stack_config(svc._paths, "s", {"who": "XX0XXA", "num": "10"})
     assert svc.self_update_apply().ok
     stored = cfgmod.load_stack_config(svc._paths, "s")
     assert "who" not in stored and "num" not in stored          # both recognised as at-default -> migrated

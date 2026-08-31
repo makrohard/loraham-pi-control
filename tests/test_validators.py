@@ -24,8 +24,12 @@ def test_callsign_rejects_injection(bad):
 
 
 def test_callsign_accepts_real():
-    assert V.callsign("N0CALL-10") == "N0CALL-10"
+    # APRS/AX.25 rule (chat/igate/graywolf): base 3-6 + optional SSID -1..-15, uppercased.
+    assert V.callsign("XX0XXA-10") == "XX0XXA-10"
+    assert V.callsign("xx0xxa") == "XX0XXA"
     assert V.callsign("", allow_empty=True) == ""
+    with pytest.raises(ValidationError):
+        V.callsign("N0CALL-10")               # placeholder base, never a real identity
 
 
 @pytest.mark.parametrize("bad", ["433; rm", "1e9", "abc", "433/x", "99999", "0"])
@@ -56,9 +60,15 @@ def test_port_rejects_bad(bad):
 
 
 def test_node_name_rejects_injection():
+    # Node names are printable control-free UTF-8 (31 bytes, the MeshCore advert budget):
+    # shell metacharacters are LEGAL name characters (values travel as argv/file tokens,
+    # never through a shell) — only control chars and emptiness are refused.
     with pytest.raises(ValidationError):
-        V.node_name("node; rm -rf /")
+        V.node_name("node\x00rm")
+    with pytest.raises(ValidationError):
+        V.node_name("evil\nname")
     assert V.node_name("LoRaHAM Pi-1") == "LoRaHAM Pi-1"
+    assert V.node_name("node; rm -rf /"[:31]) == "node; rm -rf /"
 
 
 @pytest.mark.parametrize("bad", ["433/x", "../x", "x;y", "both;rm", "434"])
@@ -120,7 +130,7 @@ def test_validate_param_dispatch():
     with pytest.raises(ValidationError):
         V.validate_param(RunParam("p", kind="int", min=0, max=10), "11")
     # str with a named validator
-    assert V.validate_param(RunParam("call", kind="str", validator="callsign"), "N0CALL") == "N0CALL"
+    assert V.validate_param(RunParam("call", kind="str", validator="callsign"), "XX0XXA") == "XX0XXA"
     with pytest.raises(ValidationError):
         V.validate_param(FileParam("call", "CALL", kind="str", validator="callsign"), "x;rm")
 
@@ -156,7 +166,7 @@ def test_start_rejects_malicious_runparam(tmp_path):
 def test_start_allows_valid_values(tmp_path):
     comp = Component(id="c", name="c", kind=ComponentKind.SERVICE,
                      run_argv=("./app", "-c", "{operator:callsign}"))
-    life = _life(tmp_path, callsign="N0CALL-7")
+    life = _life(tmp_path, callsign="XX0XXA-7")
     res = life.start(Stack(id="s", name="s", main="c"), comp)
     assert res.ok
 
@@ -179,7 +189,7 @@ def test_voice_params_all_validate_defaults():
     comp = next(c for c in svc.stack("voice").components if c.config_file)
     op = svc.config().operator
     for p in comp.config_file.params:
-        raw = (p.default or "").replace("{callsign}", op.callsign or "N0CALL")
+        raw = (p.default or "").replace("{callsign}", op.callsign or "XX0XXA")
         V.validate_param(p, raw or "0")                       # must not raise
     names = {p.name for p in comp.config_file.params}
     assert {"preamble", "sync", "ldro"} <= names              # present, not missing

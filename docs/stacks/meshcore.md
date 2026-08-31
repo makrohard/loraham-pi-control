@@ -16,7 +16,7 @@ former standalone `meshcore-pi` node; LHPC no longer maintains a MeshCore fork o
 | Components | `meshcore-node` (openHop node), optional `meshcore-webui` (browser GUI), `meshcore-cli` (REPL tool) |
 | Source | `openhop-core` — a managed clone of openHop Core under `<runtime>/src` (pinned commit), plus one small LHPC-shipped patch applied idempotently at build; the `.venv` is built in-tree by `lhpc build meshcore` and the `meshcore_host` host application (shipped with LHPC) is installed into it |
 | Node run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` |
-| Config | `meshcore.toml` (mode `0600` — it carries the node's private key): preset, node name, txpower, frequency/SF/BW/CR, airtime, allow-list, port, persistence DB, GPS |
+| Config | `meshcore.toml` (mode `0600` — it carries the node's private key): preset, node name (the node's own, never inherited from the operator callsign — the start is refused until it is set), txpower, frequency/SF/BW/CR, airtime, allow-list, port, persistence DB, GPS |
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (mode `0600`) |
 | Persistence | `<runtime>/state/meshcore/companion.db` (SQLite; contacts, channels, learned routes, prefs, offline messages survive restart) |
 | Companion | TCP `:5000` |

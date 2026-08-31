@@ -1,6 +1,7 @@
 """§7 — required vs optional post-start, and §5 typed start aggregation."""
 
 
+import pathlib
 import pytest
 import time
 from lhpc.core.lifecycle import Lifecycle
@@ -476,33 +477,41 @@ def _meshcom_launcher(mc_callsign, saved=None):
 
 
 def test_meshcom_legacy_shell_post_start_removed():
-    _, svc = _meshcom_launcher("DJ0CHE")
+    _, svc = _meshcom_launcher("XX0XXA")
     assert svc.stack("meshcom").component("meshcom-qemu").post_start == ""
 
 
-def test_meshcom_n0call_schedules_no_setcall():
-    script, _ = _meshcom_launcher("N0CALL")
-    assert "setcall" not in script
+def test_meshcom_n0call_refuses_to_render_the_required_setcall():
+    """Same contract for the N0CALL placeholder: never silently satisfied, never sent."""
+    from lhpc.core.commands import CommandError
+    with pytest.raises(CommandError, match="would be skipped"):
+        _meshcom_launcher("N0CALL")
 
 
-def test_meshcom_empty_call_schedules_no_setcall():
-    script, _ = _meshcom_launcher("")
-    assert "setcall" not in script
+def test_meshcom_empty_call_refuses_to_render_the_required_setcall():
+    """REVIEW-FOUND: `--setcall` is REQUIRED, so a skip guard that quietly drops it would make the
+    launcher exit 0 and the run report "required post-start completed" without ever sending it.
+    Identity enforcement refuses an empty callsign long before this, so it is unreachable in a
+    normal start — but if it is ever reached it must fail loudly, not silently satisfy itself and
+    not push an empty value at the node."""
+    from lhpc.core.commands import CommandError
+    with pytest.raises(CommandError, match="would be skipped"):
+        _meshcom_launcher("")
 
 
 def test_meshcom_saved_call_schedules_retrying_setcall():
     # The shipped step uses the STEPPED schedule [[8,8],[6,15],[22,30]] = 36 attempts over a
     # ~13 min window (Zero-2W QEMU/TCG cold boot takes minutes; the old 168 s window expired
     # with zero sends and the node ran with the default callsign — live finding).
-    script, _ = _meshcom_launcher("DJ0CHE")
-    assert "setcall DJ0CHE" in script and "'repeat': 36" in script
+    script, _ = _meshcom_launcher("XX0XXA")
+    assert "setcall XX0XXA" in script and "'repeat': 36" in script
     assert "'label': 'callsign'" in script
 
 
 def test_meshcom_ephemeral_overrides_saved_and_leaves_config():
-    script, svc = _meshcom_launcher("DJ0CHE-3", saved="DJ0CHE")
-    assert "setcall DJ0CHE-3" in script                       # ephemeral wins for this launch
-    assert svc.stack_config("meshcom").get("mc_callsign") != "DJ0CHE-3"   # saved not mutated
+    script, svc = _meshcom_launcher("XX0XXA-3", saved="XX0XXA")
+    assert "setcall XX0XXA-3" in script                       # ephemeral wins for this launch
+    assert svc.stack_config("meshcom").get("mc_callsign") != "XX0XXA-3"   # saved not mutated
 
 
 def _pr(port, data="A\n"):
@@ -1871,3 +1880,167 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.UNVERIFIED
                and "running-band marker" in (r.summary or "") for r in res.results), \
         _outcomes(res)
+
+
+def _igate_with_held_required_post_start(svc, monkeypatch):
+    """Give igate a REQUIRED post step and HOLD its execution inside the real runner seam.
+
+    Returns (entered, release, seen). `seen["launcher"]` is the rendered required-post launcher
+    the runner was actually handed, so a test can prove WHICH identity the post step applied."""
+    import dataclasses
+    import threading
+
+    from lhpc.core import lifecycle as lifemod
+    from lhpc.core.jobs import JobResult, JobState
+
+    real_order = ControllerService._run_order
+
+    def order_with_required_post(self, t):
+        return [(stack, dataclasses.replace(
+            comp, post_steps=({"kind": "exec", "argv": ["true", "--setcall", "{param:call}"],
+                              "required": True},))
+            if comp.id == "loraham-igate" else comp)
+            for stack, comp in real_order(self, t)]
+
+    monkeypatch.setattr(ControllerService, "_run_order", order_with_required_post)
+    entered, release, seen = threading.Event(), threading.Event(), {}
+
+    def fake_run_job(_runner, *, name, paths, argv, **_k):
+        seen["launcher"] = pathlib.Path(argv[-1]).read_text()
+        entered.set()                      # we are INSIDE the required post-start execution
+        release.wait(30)                   # ...and stay there until the test lets go
+        return JobResult(name=name, state=JobState.SUCCEEDED, returncode=0,
+                         log_path="", tail=[])
+
+    monkeypatch.setattr(lifemod, "run_job", fake_run_job)
+    monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
+    return entered, release, seen
+
+
+@pytest.mark.needs_session
+def test_a_config_save_during_required_post_start_completes_and_keeps_its_warning(
+        tmp_path, monkeypatch):
+    """AUDIT-FOUND, the full causal race — driven through the REAL start, including its
+    successful-start cleanup.
+
+    Required post-start runs SYNCHRONOUSLY and can wait minutes for a guest console. It releases
+    config stability so a save is not locked out (that lockout was the previous finding). But the
+    start then cleared restart-required UNCONDITIONALLY on success, deleting the warning the save
+    had just written: saved configuration said B, the post step had applied A, the radio kept
+    identifying as A, and nothing told the operator. The marker must survive a launch that never
+    applied it."""
+    import threading
+
+    svc = _igate_svc(tmp_path)
+    set_call(svc, "XX0XXA")                                     # identity A
+    entered, release, seen = _igate_with_held_required_post_start(svc, monkeypatch)
+    # The main IS up once post-start begins — but not before, or the launch would be skipped as
+    # already-healthy and never reach post-start at all. Liveness therefore tracks that moment.
+    monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: entered.is_set())
+    out = {}
+
+    t = threading.Thread(target=lambda: out.update(res=svc.start("igate", apply=True)),
+                         daemon=True)
+    t.start()
+    assert entered.wait(30), "required post-start never began executing"
+    # B is saved WHILE the post step is still running on A.
+    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-9"}).ok
+    assert not release.is_set(), "the save must land DURING the post-start, not after it"
+    # The save records the divergence WHILE the launch is still running on A. If this ever stops
+    # holding, the test below proves nothing — so assert it here rather than infer it.
+    assert svc.restart_required("igate") is not None, "the save did not record the divergence"
+    release.set()
+    t.join(30)
+    assert not t.is_alive(), "start never finished"
+
+    assert out["res"].ok, _outcomes(out["res"])
+    assert "XX0XXA-9" not in seen["launcher"]      # the post step applied A...
+    assert "XX0XXA" in seen["launcher"]
+    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == "XX0XXA-9"
+    marker = svc.restart_required("igate")         # ...so the divergence MUST still be reported
+    assert marker is not None, "the mid-launch save's restart-required warning was erased"
+    assert "call" in marker.get("params", {}), marker
+
+
+@pytest.mark.needs_session
+def test_no_config_lock_is_held_while_required_post_start_runs(tmp_path, monkeypatch):
+    """The lock property on its own, through the same real start: a required post-start that waits
+    minutes must not lock Settings/`lhpc config` out for its whole duration. Concurrent and
+    sleep-free — the save must RETURN while the post step is still held."""
+    import threading
+
+    from lhpc.core import config as cfgmod
+
+    svc = _igate_svc(tmp_path)
+    set_call(svc, "XX0XXA")
+    entered, release, _seen = _igate_with_held_required_post_start(svc, monkeypatch)
+    t = threading.Thread(target=lambda: svc.start("igate", apply=True), daemon=True)
+    t.start()
+    assert entered.wait(30), "required post-start never began executing"
+    cfgmod.save_operator_config(svc._paths, "XX0XXB")           # a real EXCLUSIVE config write
+    assert not release.is_set(), "the save must land DURING the post-start, not after it"
+    release.set()
+    t.join(30)
+    assert not t.is_alive(), "start never finished"
+    assert cfgmod.load_config(svc._paths).operator.callsign == "XX0XXB"
+
+
+@pytest.mark.needs_session
+def test_the_start_waits_for_real_config_stability_after_post_start(tmp_path, monkeypatch):
+    """AUDIT-FOUND: the release used to give up re-acquiring after a timeout and CONTINUE, leaving
+    `_cfg_stable_state` claiming a shared guard the process did not hold. The start then ran its
+    state-changing success cleanup — restart-marker handling included — while an exclusive writer
+    still owned config/.lock. A caller that believes it is inside `_config_stable()` must always
+    actually be.
+
+    Deterministic, no sleeps: an exclusive writer OWNS the lock at the moment the post step
+    finishes, so the start cannot pass the re-acquire until that writer lets go."""
+    import fcntl
+    import threading
+
+    from lhpc.core.config import CONFIG_LOCK_TIMEOUT_S
+
+    svc = _igate_svc(tmp_path)
+    set_call(svc, "XX0XXA")
+    entered, release, _seen = _igate_with_held_required_post_start(svc, monkeypatch)
+    t = threading.Thread(target=lambda: svc.start("igate", apply=True), daemon=True)
+    t.start()
+    assert entered.wait(30), "required post-start never began executing"
+
+    writer = open(svc._paths.under("config", ".lock"), "a+")
+    try:
+        fcntl.flock(writer, fcntl.LOCK_EX)      # the window is genuinely open: this must succeed
+        release.set()                           # the post step finishes while the writer holds it
+        # Outlast the timeout the deleted fail-open path used, which is exactly how it went wrong:
+        # it gave up waiting and carried on as though stability had returned.
+        t.join(CONFIG_LOCK_TIMEOUT_S + 3)
+        assert t.is_alive(), "start passed the re-acquire while an exclusive writer held the lock"
+    finally:
+        fcntl.flock(writer, fcntl.LOCK_UN)
+        writer.close()
+    t.join(30)
+    assert not t.is_alive(), "start never finished once configuration stability was available"
+
+
+def test_a_required_post_start_component_is_always_last_in_its_run_order(tmp_path):
+    """REVIEW-FOUND latent hazard. A REQUIRED post-start releases config stability for its whole
+    execution (minutes on MeshCom). Everything IT consumes is frozen first — but a component
+    ordered AFTER it would regenerate its config and build its argv from values saved DURING that
+    window, so one launch would straddle two configurations.
+
+    Today no manifest does that: the required-post component is last in every stack that has one.
+    That is the property the release relies on, so assert it here rather than trust it — a future
+    manifest that orders a component after a required post-start fails HERE, at the cause."""
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    checked = []
+    for stack in svc.stacks():
+        order = svc._run_order(stack.id) or []
+        for pos, (_st, comp) in enumerate(order):
+            if any(step.get("required") for step in (comp.post_steps or ())):
+                checked.append(f"{stack.id}/{comp.id}")
+                assert pos == len(order) - 1, (
+                    f"{comp.id} has a REQUIRED post-start but is not last in {stack.id}'s run "
+                    f"order ({[c.id for _s, c in order]}) — a component after it would read "
+                    f"configuration saved during the released window")
+    assert checked, "no stack declares a required post-start — this invariant test is vacuous"

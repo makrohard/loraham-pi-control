@@ -202,7 +202,10 @@ Reconnect SSH afterwards (and start a fresh `tmux new -s lhpc` for the steps bel
 ### 6. Configure
 
 ```bash
-lhpc config operator --callsign W1ABC     # your callsign (inherited by licensed stacks)
+lhpc config operator --callsign YOURCALL  # optional; YOURCALL = your base callsign — licensed
+                                          # stacks inherit it (N0CALL-style placeholders refused)
+                                          # while their own callsign field is empty; Meshtastic/
+                                          # MeshCore instead need their own local node names
 lhpc hardware loraham                     # pick your radio setup from the catalog:
 ```
 
@@ -326,7 +329,7 @@ while sleep 60; do echo "$(date +%T) objs=$(find ~/loraham-pi-control/src -path 
 ```bash
 lhpc status                        # what's running (read-only)
 lhpc config <stack>                # list the stack's options and current values
-lhpc config chat call W1ABC       # set one option
+lhpc config chat call YOURCALL-10 # set one option (YOURCALL-10 = your callsign+SSID)
 lhpc config <stack> --band 868 <param> <value>    # per-band value on a band-switchable stack
 lhpc stack start|stop|restart <stack>             # plans + confirms; --yes to skip the prompt
 lhpc logs <target>                 # tail a component log

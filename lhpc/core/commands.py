@@ -5,7 +5,10 @@ A run/build/test command is an argv TOKEN TEMPLATE: an ordered list where each
 entry is either a literal token or a single whole placeholder. Placeholders:
 
     {param:NAME}      a run-param -> 0+ validated argv tokens (emit_param)
-    {operator:callsign}   -> one validated token
+    {operator:callsign}   -> one validated token — the GLOBAL operator identity only
+                             (standalone semantics; it never resolves a per-stack override,
+                             and it FAILS the launch when the global is unset — stack
+                             identities belong in an identity param, not this token)
     {band}            -> one token (the selected band)
     {runtime}/{source}  -> may appear INSIDE a literal token to build a path
                           (controller-derived, never user input)
@@ -94,14 +97,21 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 # A param default may reference operator identity / paths (e.g. igate
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
-                raw = (raw.replace("{callsign}", op.callsign or "N0CALL")
+                # No hidden placeholder: an EMPTY operator callsign substitutes as "" —
+                # identity enforcement refuses the start long before this renders, and a
+                # param whose validator requires a value fails typed here, never as a
+                # silently transmitted N0CALL.
+                raw = (raw.replace("{callsign}", op.callsign or "")
                           .replace("{runtime}", runtime).replace("{source}", source))
                 val = validators.validate_param(p, raw)
                 out.extend(emit_param(p, val))
                 continue
             if kind == "operator" and name == "callsign":
-                out.append(validators.callsign(op.callsign or "N0CALL",
-                                                field="callsign") or "N0CALL")
+                # Requires a genuinely configured operator identity — starts that need it
+                # are refused by identity enforcement first, so an empty value here is a
+                # typed configuration error, never a placeholder on the air.
+                out.append(validators.callsign(op.callsign, field="callsign",
+                                               allow_empty=False))
                 continue
             if inner == "band":
                 if band:
@@ -373,9 +383,9 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
     resolved = []
     for step in (steps or ()):
         # Declarative placeholder guard (no shell): skip this step entirely when the named param
-        # resolves to a placeholder value — e.g. MeshCom sends NO `--setcall` for an empty / N0CALL
-        # callsign. The raw resolved value (before validation) is compared, so an empty value that
-        # a validator would reject still cleanly skips rather than failing the render.
+        # resolves to a skip value — e.g. MeshCom sends NO `--setcall` for an empty callsign.
+        # The raw resolved value (before validation) is compared, so an empty value that a
+        # validator would reject still cleanly skips rather than failing the render.
         guard = step.get("skip_if_param")
         if guard is not None:
             gp = {p.name: p for p in comp.run_params}.get(guard)
@@ -391,8 +401,18 @@ def render_post_launcher(steps, comp, params, op, runtime: str, source: str,
             else:
                 sv = []
             graw = str((params or {}).get(guard, gp.default))
-            graw = graw.replace("{callsign}", op.callsign or "N0CALL").strip()
+            graw = graw.replace("{callsign}", op.callsign or "").strip()
             if graw in [str(v) for v in sv]:
+                # REVIEW-FOUND: skipping is right for an OPTIONAL step, but a REQUIRED one that
+                # silently vanishes makes the launcher exit 0 and the run report "required
+                # post-start completed" without ever sending it — a false guarantee. Identity
+                # enforcement already refuses an empty/placeholder callsign before launch, so
+                # this is unreachable in a normal start; if it is ever reached, fail loudly
+                # rather than either lie or push the placeholder at the node.
+                if step.get("required"):
+                    raise CommandError(
+                        f"required post-step {step.get('label') or step.get('kind')!r} would be "
+                        f"skipped: {guard!r} is {graw!r} — set a real value first")
                 continue
         kind = step.get("kind")
         if kind == "delay":

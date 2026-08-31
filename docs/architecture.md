@@ -88,9 +88,20 @@ render the returned `ActionResult`. The web adapter calls the service directly
   1. tracked defaults (`lhpc/data/defaults.toml`) + the manifest;
   2. operator overrides — `~/loraham-pi-control/config/local.toml` (callsign, remotes);
   3. secrets — `config/secrets.toml`, mode `0600` (never tracked, never in output);
-  4. per-stack settings — `config/stacks/<id>[@band].toml`, written from a stack's Settings.
+  4. per-stack settings — `config/stacks/<id>[@band].toml`, written from a stack's Settings, and
+     from the identity fields of a Start/Restart panel: an identity is configuration, so it is saved
+     before the launch, on the band the operation runs on. Every other Start/Restart parameter stays
+     ephemeral to that launch. Config editing (`lhpc config`, Settings) may CLEAR an identity — the
+     stack then cannot start until one is set again, which the launch gate enforces. A blank on the
+     Start/Restart panel is refused instead: that operation is a launch, so it must not leave a
+     mutation behind. The refusal is re-checked inside the write transaction, so a concurrent change
+     to the global callsign cannot slip past it.
 - The config file each app reads is generated from its `config_file` params
-  (`{callsign}`/`{band}`/`{runtime}`/`{source}` substituted; callsign defaults to `N0CALL`).
+  (`{callsign}`/`{band}`/`{runtime}`/`{source}` substituted; `{callsign}` resolves to the
+  effective identity — the stack's own callsign, else the inherited global base — and a
+  start with no resolvable identity is refused, never launched with a placeholder. The check is
+  "configured, not a placeholder, and encodable by the protocol that transmits it" — LHPC cannot
+  verify licensure and does not claim to).
 
 ## Probes and status
 

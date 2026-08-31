@@ -17,6 +17,7 @@ verifies it via the daemon's STATS counter — never a continuous transmission.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -135,6 +136,14 @@ class TxTestPlan:
     parameters: str
     payload: str
     expected: str = "one LoRa frame transmitted into the connected dummy load"
+
+
+# ONE conservative outer bound for a synchronous required post-start run. The inner executor is
+# already bounded — finite retry counts, bounded socket operations, bounded tcp_wait, a 120 s cap
+# per exec — so this only has to be comfortably larger than the longest supported declared
+# sequence (MeshCom's stepped ~13-minute cold-boot window). A per-manifest calculator was tried
+# and removed: it was a second, disagreeing model of the executor's timing (audit-found).
+REQUIRED_POST_TIMEOUT_S = 1800.0
 
 
 @dataclass
@@ -800,8 +809,8 @@ class Lifecycle:
 
     def run_required_post_start(self, stack: Stack, comp: Component,
                                 params: dict | None = None, band: str = "",
-                                timeout: float = 300.0, on_log_open=None,
-                                require_all: bool = False) -> JobResult:
+                                timeout: float = REQUIRED_POST_TIMEOUT_S, on_log_open=None,
+                                require_all: bool = False, while_running=None) -> JobResult:
         """Run a component's REQUIRED post-start steps SYNCHRONOUSLY and bounded (no
         shell): the generated Python launcher exits non-zero if any required step
         fails, so its return code is a typed pass/fail the caller gates VERIFIED on.
@@ -813,7 +822,11 @@ class Lifecycle:
 
         The default timeout must comfortably exceed the whole declared set (a 12 s delay plus a
         120 s per-exec cap twice over) — a shorter budget would kill the job mid-set and report a
-        failure the steps did not cause."""
+        failure the steps did not cause.
+
+        `while_running` is an optional context manager wrapped around the EXECUTION only. The start
+        path passes the config-stability release: everything config-derived is already rendered into
+        the launcher above, so a retry window lasting minutes need not lock config saves out."""
         op = self.config.operator
         runtime, src = str(self.paths.runtime_root), str(self.source_dir(comp))
         binding = self._binding_for(comp.id, band)
@@ -842,10 +855,11 @@ class Lifecycle:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=[f"post-start launcher write failed: {exc}"])
         try:
-            return run_job(self.system.runner, name=f"post-{uid}", paths=self.paths,
-                           argv=["python3", str(launcher)], cwd=src,
-                           logs_dir=self.logs_dir(), timeout=timeout,
-                           on_log_open=on_log_open)
+            with (while_running if while_running is not None else contextlib.nullcontext()):
+                return run_job(self.system.runner, name=f"post-{uid}", paths=self.paths,
+                               argv=["python3", str(launcher)], cwd=src,
+                               logs_dir=self.logs_dir(), timeout=timeout,
+                               on_log_open=on_log_open)
         except (OSError, PathContainmentError) as exc:
             return JobResult(name=f"post-{comp.id}", state=JobState.FAILED, returncode=1,
                              log_path="", tail=[f"post-start runner failed to start: {exc}"])

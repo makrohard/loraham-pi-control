@@ -156,18 +156,6 @@
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="band" value="{{ view.band }}">
 
-      {% if view.operator %}
-        <section class="cfgsec">
-          <h3>Operator</h3>
-          <table class="paramgrid">
-            <tr><th>Callsign</th>
-              <td><input type="text" name="op_callsign" value="{{ view.operator.callsign }}"
-                         placeholder="e.g. N0CALL-10" autocomplete="off"></td></tr>
-          </table>
-          <p class="muted">Used by this stack; stored locally only (never the repo).</p>
-        </section>
-      {% endif %}
-
       {% if config_groups %}
         <section class="cfgsec">
           <table class="paramgrid dptab">
@@ -193,10 +181,10 @@
                              autocomplete="off" placeholder="{{ r.default }}">
                     {% else %}
                       <input type="text" name="{{ r.field }}" value="{{ r.value }}" autocomplete="off"
-                             placeholder="{{ r.default }}">
+                             placeholder="{{ r.identity_hint or r.default }}">
                     {% endif %}
                   </td>
-                  <td class="dphelp muted">{{ r.label }}</td>
+                  <td class="dphelp muted">{{ r.label }}{% if r.identity_note %}<br><em>{{ r.identity_note }}</em>{% endif %}</td>
                 </tr>
               {% endfor %}
               {% if g.rule_after %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}

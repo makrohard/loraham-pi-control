@@ -561,11 +561,17 @@ class LifecycleOpsMixin:
               daemon_overrides: dict | None = None,
               file_overrides: dict | None = None, auto_install_ctx=None, *,
               _before_start_locked=None, _operator: bool = True,
-              position: dict | None = None, position_note: str = "") -> ActionResult:
+              position: dict | None = None, position_note: str = "",
+              _identity_prepersisted: bool = False) -> ActionResult:
         """Public, LOCKED entry — acquires the full lifecycle lock bundle (incl. owners
         when stop_owners) so a DIRECT call gets the same coordination as CLI/web.
         `daemon_overrides`/`file_overrides` are ephemeral per-start values (this launch only, never
-        persisted); None = apply the saved config, as the CLI does.
+        persisted); None = apply the saved config, as the CLI does. ONE deliberate exception: an
+        IDENTITY field submitted here is CONFIGURATION, not a launch value — it is saved to the
+        stack's config before the launch, so the running stack, the store and global-change tracking
+        can never disagree. For a LICENSED callsign an empty value clears the local override and
+        inherits the global; an UNLICENSED node identity (Meshtastic/MeshCore) never inherits, so an
+        empty value is refused and the saved node name is left untouched.
 
         `_before_start_locked` (PRIVATE, keyword-only; ordinary CLI/web callers pass None) is the
         boot-restore claim hook: invoked ONLY on the apply path, AFTER admission +
@@ -586,6 +592,8 @@ class LifecycleOpsMixin:
                 auto_install_ctx, {c.source.path for _, c in order if c.source})
             if ctx_err:
                 return ActionResult(False, f"Refusing to start '{target}': {ctx_err}")
+        if (_bref := self.band_refusal(target, band, "start")) is not None:
+            return _bref            # plan and apply take the SAME decision on an explicit band
         if not apply:
             return self._start_impl(target, apply=False, params=params,
                                     stop_owners=stop_owners, band=band,
@@ -595,8 +603,21 @@ class LifecycleOpsMixin:
         # the config-stability guard. This is config-INDEPENDENT (it validates against the manifest,
         # not stored config), so an unqualified duplicate name, a non-mapping payload, or an unknown/
         # invalid value fails TYPED here — before config-stability/lifecycle locks, daemon work, owner
-        # stops, config writes, spawn, or post-start. The canonical values feed lock planning and
+        # stops, generated-config writes, spawn, or post-start. (The identity persist above is the
+        # one deliberate exception: a submitted identity is CONFIG, saved through the validating save
+        # path before this point, and a refusal after it leaves that saved value in place.) The canonical values feed lock planning and
         # `_start_impl` (which re-validates as a defensive boundary for internal/direct callers).
+        # PERSISTED-ONLY IDENTITY, phase 1 (pure): lift the submitted identity out of the
+        # ephemeral inputs. Runs BEFORE normalization so a CLEARED (blank) file-kind identity
+        # still reaches the save as the deliberate "inherit" it is — the normalizer drops it.
+        # It is WRITTEN in phase 2 below, under task admission, on the one operation band.
+        # Skipped for the nested restart→start call: public restart() already persisted, and its
+        # preflight then MATERIALIZES the inherited global into params — saving that here would
+        # pin an inherited value as a local override.
+        _id_sub: list = []
+        if not _identity_prepersisted:
+            params, file_overrides, _id_sub = self.extract_identity_submission(
+                target, params, file_overrides)
         params, pv_err = self._normalize_run_params(target, params)
         if pv_err:
             return ActionResult(False, f"Cannot start '{target}': invalid parameter — {pv_err}",
@@ -605,85 +626,139 @@ class LifecycleOpsMixin:
         if fo_err:
             return ActionResult(False, f"Cannot start '{target}': invalid parameter — {fo_err}",
                                 next_commands=[f"lhpc status {target}"])
-        # LOCK ORDER #1: task admission is acquired OUTSIDE the config-stability guard and BEFORE any
-        # mutation (incl. clear_daemon_feed) — a start refused by a pending self-update/uninstall
-        # touches nothing. The inner _lifecycle_guard reuses this admission reentrantly.
+        # LOCK ORDER #1: task admission is acquired FIRST — outside the config-stability guard and
+        # BEFORE every mutation, the identity save included — so a start refused by a pending
+        # self-update/uninstall writes NOTHING AT ALL, configuration included (audit-found: the
+        # identity used to be written ahead of admission, so a refused start still changed config).
+        # The inner _lifecycle_guard reuses this admission reentrantly.
         try:
-            with self._admission_guard("start", target), self._config_stable():
-                # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
-                _order = self._run_order(target)
-                _radio = ""
-                # Carried down from restart, which took the snapshot before its stop — so the
-                # "started without a position" note is not lost on the way through.
-                _pos_note = position_note
-                if _order:
-                    _r, _ = self._daemon_needs(_order, params, self._config_band(target, band))
-                    _radio = _r or ""
-                try:
-                    with self._lifecycle_guard("start", target, band,
-                                               stop_owners=stop_owners, radio=_radio):
-                        # MESHCORE POSITION SNAPSHOT: the one GPS query of this start. Taken
-                        # under every lock but BEFORE the boot hook, feed clearing and any
-                        # other mutation, because it does network I/O that can legitimately
-                        # refuse the start — and only when there is something to start, so an
-                        # already-healthy no-op never touches gpsd. `position` is passed down
-                        # rather than re-queried, so a restart asks exactly once.
-                        # `_order` is None/empty for an unknown target or nothing to run —
-                        # `_start_impl` reports that properly, so take no snapshot here.
-                        if position is None and _order \
-                                and not self._order_already_healthy(_order, _radio):
-                            position, _pos_note = self.meshcore_position(target)
-                            if position is None:
-                                return ActionResult(
-                                    False, f"Cannot start '{target}': {_pos_note}",
-                                    next_commands=[f"lhpc status {target}"])
-                        # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
-                        # mutation. A refusal cancels the start with zero side effects.
-                        if _before_start_locked is not None:
-                            _hook_refusal = _before_start_locked()
-                            if _hook_refusal is not None:
-                                return _hook_refusal
-                        # Clear the RX/TX window at the start boundary (BEFORE any spawn), SCOPED
-                        # to this operation's band set — the SAME set the lock bundle covers
-                        # (never a broader recompute): a 433 client clears 433 only, an
-                        # all-active daemon start clears every arbitrated band, a non-radio
-                        # start clears nothing. Under the guard + after the hook, so a cancelled
-                        # restore attempt mutates NOTHING.
-                        for _b in sorted(self._operation_bands(target, band, _radio, "start")):
-                            self.clear_daemon_feed(_b)
-                        _res = self._start_impl(target, apply=True, params=params,
-                                                stop_owners=stop_owners, band=band,
-                                                daemon_overrides=daemon_overrides,
-                                                file_overrides=file_overrides,
-                                                position=position, position_note=_pos_note)
-                        # An OPERATOR stack start that actually brought something up
-                        # supersedes any standing stop intent. Three review-found refinements:
-                        # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
-                        # (e.g. manual_required on an interactive component, ok=False but
-                        # components launched) MUST clear — the stack is running, a stale
-                        # tombstone would skip-and-prune it at the next boot; and an INTERNAL
-                        # start (auto-install's daemon ensure, _operator=False) must not
-                        # clear an operator's tombstone its paired internal stop never rewrites.
-                        # ...and, like the stop side, only rows of the TARGET stack count
-                        # (REVIEW-FOUND round 3: the daemon's always-appended VERIFIED ensure
-                        # row cleared the target's tombstone when nothing of the target
-                        # launched at all).
-                        if (_operator and self.stack(target) is not None
-                                and (_res.ok
-                                     or any(r.action == "start" and r.outcome in
-                                            (Outcome.STARTED, Outcome.VERIFIED,
-                                             Outcome.ALREADY_HEALTHY)
-                                            and (self.stack_of(r.component) or r.stack)
-                                            == target
-                                            for r in (_res.results or ())))):
-                            self._clear_stop_intent(target)
-                        return _res
-                except SourceTxnBlocked as blocked:
-                    return ActionResult(False, f"Cannot start '{target}': {blocked}",
+            with self._admission_guard("start", target):
+                # ONE effective band for the WHOLE operation, resolved ONCE under admission and
+                # never recomputed (audit-found: planning/locks used the raw band while the inner
+                # launch resolved the running band; then the identity save and this resolution
+                # each read the mutable interactive marker, so a dismiss in the window could store
+                # the identity on 868 and launch on 433). "" only for bandless stacks, which the
+                # inner path cannot reinterpret.
+                _op_band = self.operation_band(target, band)
+                # PERSISTED-ONLY IDENTITY, phase 2: persist + judge + materialize, under admission
+                # (audit-found: writing before admission let a start refused by a pending
+                # self-update still change configuration) and BEFORE the shared guard below — the
+                # save needs the EXCLUSIVE config lock, which cannot nest under a shared one.
+                # A config write landing mid-launch is not locked out; it is REPORTED, by the
+                # restart-required marker this controller already maintains for exactly that case.
+                if _id_sub and (_id_ref := self.save_identity_submission(
+                        target, _op_band, "start", _id_sub)) is not None:
+                    return _id_ref
+                with self._config_stable():
+                    # The daemon's REQUESTED radio mode determines which bands the lock bundle covers.
+                    _order = self._run_order(target)
+                    _radio = ""
+                    # Carried down from restart, which took the snapshot before its stop — so the
+                    # "started without a position" note is not lost on the way through.
+                    _pos_note = position_note
+                    if _order:
+                        _r, _ = self._daemon_needs(_order, params, _op_band)
+                        _radio = _r or ""
+                    try:
+                        with self._lifecycle_guard("start", target, _op_band,
+                                                   stop_owners=stop_owners, radio=_radio):
+                            # IDENTITY ENFORCEMENT: FIRST refusal under the stable configuration,
+                            # BEFORE the GPS snapshot, the boot-restore hook and feed clearing —
+                            # a start with a missing/invalid identity must mutate NOTHING
+                            # (audit-found: CLI/API/boot-restore starts previously ran the hook
+                            # and cleared the feed before _start_impl_inner's check refused).
+                            # The inner check remains as the authoritative backstop for direct
+                            # internal callers.
+                            if _order:
+                                _id_ok, _id_fields, _id_msg = self.enforce_identity(
+                                    target, _op_band, params, file_overrides)
+                                if not _id_ok:
+                                    return ActionResult(
+                                        False, f"Cannot start '{target}': {_id_msg}",
+                                        data={"enforce_fields": _id_fields},
+                                        next_commands=self._identity_config_hints(target,
+                                                                                  _op_band))
+                            # MESHCORE POSITION SNAPSHOT: the one GPS query of this start. Taken
+                            # under every lock but BEFORE the boot hook, feed clearing and any
+                            # other mutation, because it does network I/O that can legitimately
+                            # refuse the start — and only when there is something to start, so an
+                            # already-healthy no-op never touches gpsd. `position` is passed down
+                            # rather than re-queried, so a restart asks exactly once.
+                            # `_order` is None/empty for an unknown target or nothing to run —
+                            # `_start_impl` reports that properly, so take no snapshot here.
+                            if position is None and _order \
+                                    and not self._order_already_healthy(_order, _radio):
+                                position, _pos_note = self.meshcore_position(target)
+                                if position is None:
+                                    return ActionResult(
+                                        False, f"Cannot start '{target}': {_pos_note}",
                                         next_commands=[f"lhpc status {target}"])
-                except reslock.ResourceBusy as busy:
-                    return ActionResult(False, f"Cannot start '{target}': {busy}",
-                                        next_commands=[f"lhpc status {target}"])
+                            # BOOT-RESTORE CLAIM HOOK: runs with EVERY lock held, before any
+                            # mutation. A refusal cancels the start with zero side effects.
+                            if _before_start_locked is not None:
+                                _hook_refusal = _before_start_locked()
+                                if _hook_refusal is not None:
+                                    return _hook_refusal
+                            # Clear the RX/TX window at the start boundary (BEFORE any spawn), SCOPED
+                            # to this operation's band set — the SAME set the lock bundle covers
+                            # (never a broader recompute): a 433 client clears 433 only, an
+                            # all-active daemon start clears every arbitrated band, a non-radio
+                            # start clears nothing. Under the guard + after the hook, so a cancelled
+                            # restore attempt mutates NOTHING.
+                            for _b in sorted(self._operation_bands(target, _op_band, _radio,
+                                                                   "start")):
+                                self.clear_daemon_feed(_b)
+                            # The IMMUTABLE resolved band travels into the applied inner
+                            # path — never the raw argument the inner hint could re-resolve
+                            # differently after a marker change.
+                            _res = self._start_impl(target, apply=True, params=params,
+                                                    stop_owners=stop_owners, band=_op_band,
+                                                    daemon_overrides=daemon_overrides,
+                                                    file_overrides=file_overrides,
+                                                    position=position, position_note=_pos_note)
+                            # TRUTHFUL RESULT: a start that SAVED an identity but relaunched
+                            # nothing (the stack was already healthy) used to report only
+                            # "nothing to start", which reads as "your identity was ignored"
+                            # (audit-found). Say what actually happened — the save is real, and
+                            # the running process still carries the old one.
+                            if _id_sub and (_m := self.restart_required(
+                                    self._owner_stack_id(target))) is not None:
+                                _res = ActionResult(
+                                    _res.ok, _res.summary,
+                                    details=[*_res.details,
+                                             "  identity saved — the running process still uses "
+                                             "the previous one; restart to apply it"],
+                                    data=_res.data, results=_res.results,
+                                    next_commands=[f"lhpc stack restart {target}",
+                                                   *_res.next_commands])
+                            # An OPERATOR stack start that actually brought something up
+                            # supersedes any standing stop intent. Three review-found refinements:
+                            # a REFUSED start (nothing launched) must NOT clear; a PARTIAL start
+                            # (e.g. manual_required on an interactive component, ok=False but
+                            # components launched) MUST clear — the stack is running, a stale
+                            # tombstone would skip-and-prune it at the next boot; and an INTERNAL
+                            # start (auto-install's daemon ensure, _operator=False) must not
+                            # clear an operator's tombstone its paired internal stop never rewrites.
+                            # ...and, like the stop side, only rows of the TARGET stack count
+                            # (REVIEW-FOUND round 3: the daemon's always-appended VERIFIED ensure
+                            # row cleared the target's tombstone when nothing of the target
+                            # launched at all).
+                            if (_operator and self.stack(target) is not None
+                                    and (_res.ok
+                                         or any(r.action == "start" and r.outcome in
+                                                (Outcome.STARTED, Outcome.VERIFIED,
+                                                 Outcome.ALREADY_HEALTHY)
+                                                and (self.stack_of(r.component) or r.stack)
+                                                == target
+                                                for r in (_res.results or ())))):
+                                self._clear_stop_intent(target)
+                            return _res
+                    except SourceTxnBlocked as blocked:
+                        return ActionResult(False, f"Cannot start '{target}': {blocked}",
+                                            next_commands=[f"lhpc status {target}"])
+                    except reslock.ResourceBusy as busy:
+                        return ActionResult(False, f"Cannot start '{target}': {busy}",
+                                            next_commands=[f"lhpc status {target}"])
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except reslock.ResourceBusy as busy:
@@ -730,6 +805,54 @@ class LifecycleOpsMixin:
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot start '{target}': configuration guard unavailable "
                                 f"({exc})", next_commands=[f"lhpc status {target}"])
+
+    def _global_operator_callsign(self) -> str:
+        """The stored global operator callsign, or "" — used to identify a transmission from a
+        target that has no identity field of its own (the daemon, kiss). Returned verbatim: it is
+        the operator's own call, not something a stack inherits, so the base-callsign rule that
+        governs INHERITANCE does not apply to identifying their own transmission."""
+        return str(self.config().operator.callsign or "").strip()
+
+    def band_refusal(self, target: str, band: str, op: str):
+        """An EXPLICITLY requested band this box cannot serve — or that this stack cannot run on —
+        is a TYPED REFUSAL, never a silent remap (audit-found: `--band 433` on 868-only hardware
+        planned and launched 868, and a daemon preview promised 433 while the launch clamped it to
+        868). Returns a refusal or None; a bandless request keeps resolving normally, and plan and
+        apply take this same decision because both go through the public entry."""
+        if not band:
+            return None
+        active = self.active_bands()
+        if active and band not in active:
+            return ActionResult(
+                False, f"Cannot {op} '{target}' on {band} MHz: this box serves "
+                f"{' and '.join(active)}.",
+                details=[f"  [blocked] {band} MHz is not served by the configured hardware"],
+                next_commands=["lhpc hardware"])
+        allowed = self.stack_bands(target)
+        if allowed and band not in allowed:
+            return ActionResult(
+                False, f"Cannot {op} '{target}' on {band} MHz: it runs on "
+                f"{' or '.join(allowed)}.", next_commands=[f"lhpc status {target}"])
+        return None
+
+    def _launch_band_hint(self, target: str, band: str) -> str:
+        """THE band an operation actually applies to, resolved ONCE and shared by identity
+        enforcement, materialization, daemon-needs planning, lock/feed scoping and the
+        launch itself: the explicit band, else the band the stack is ALREADY running on,
+        else — for a stack whose GUI fallback is ACTIVE on this box — the band its
+        interactive marker was presented on (a Voice Lite operator who started on 868 must
+        not have a bandless second start silently judged/locked on the primary 433), else
+        "" (the config resolver then falls back to the declared primary). A stale
+        interactive marker never overrides a usable desktop GTK main: the marker is only
+        consulted while `gui_fallback_active` says the fallback is what runs here."""
+        sid = self.stack_of(target) or target
+        got = band or self.running_band(sid, "")
+        if got:
+            return got
+        st = self.stack(sid)
+        if st is not None and self.gui_fallback_active(st):
+            return self.interactive_band(sid) or ""
+        return ""
 
     def _gui_fallback_refusal(self, target: str):
         """PREFLIGHT for a DIRECT start of voice's terminal fallback (a non-main interactive
@@ -811,8 +934,14 @@ class LifecycleOpsMixin:
         # client (sideband) inside a stack running on 433 used to resolve to the primary
         # (868) and OVERWRITE the running-band marker with it — the console then showed,
         # and would have configured, the wrong band for a live 433 node.
-        cfg_band = self._config_band(
-            target, band or self.running_band(self.stack_of(target) or target, ""))
+        cfg_band = self._config_band(target, self._launch_band_hint(target, band))
+        # The OPERATING band (what the radios actually do) is NOT the config-store band. The daemon
+        # has no per-band store, so `_config_band` flattens its concrete band to "" — and a start
+        # planned, locked and feed-cleared for 433 then asked the daemon for ALL active bands
+        # (audit-found: `_ensure_daemon` received radio="" for `start daemon --band 433`). The two
+        # values are equal for every client stack; they differ only for the daemon, which is exactly
+        # the case this separation exists for.
+        op_band = self.operation_band(target, band)
         # A band-switchable stack runs on ONE band. Asking for the other one while its
         # band owner is up used to be a silent no-op: every component read
         # already_healthy, the console said "Run applied", and the radio stayed put.
@@ -838,7 +967,7 @@ class LifecycleOpsMixin:
         if _dep_block is not None:
             return _dep_block
         life = self._lifecycle()
-        radio, tx = self._daemon_needs(order, params, cfg_band)
+        radio, tx = self._daemon_needs(order, params, op_band)
         # The stack whose daemon params to apply once the daemon is up (a direct component target
         # resolves to its owning stack).
         start_sid = self._owner_stack_id(target)
@@ -862,11 +991,20 @@ class LifecycleOpsMixin:
         # Only the actual APPLY is blocked — the dry-run PLAN still renders so the confirm page can
         # show the 'Stack parameters' panel where the operator supplies the call/node.
         if apply:
-            id_ok, id_field, id_msg = self.enforce_identity(target, band, params, file_over)
+            _id_band = self._launch_band_hint(target, band)
+            id_ok, id_fields, id_msg = self.enforce_identity(target, _id_band,
+                                                             params, file_over)
             if not id_ok:
                 return ActionResult(False, f"Cannot start '{target}': {id_msg}",
-                                    data={"enforce_field": id_field},
-                                    next_commands=[self._identity_config_hint(target)])
+                                    data={"enforce_fields": id_fields},
+                                    next_commands=self._identity_config_hints(target,
+                                                                              _id_band))
+            # The approved identity must actually LAUNCH: fill inherited-global identity
+            # values into the ephemeral inputs (never persisted) so argv/config-file
+            # rendering and post-steps carry what enforcement just approved — resolved on
+            # the SAME band the launch resolves to.
+            params, file_over = self._materialize_inherited_identity(target, _id_band,
+                                                                     params, file_over)
         if not apply:
             details = []
             commands = []   # copyable commands the operator must run themselves
@@ -1020,6 +1158,12 @@ class LifecycleOpsMixin:
         # dependency: the explicit target's overrides apply ONLY to the target (or every component
         # of a stack target); each dependency uses its OWN saved/default values.
         _target_is_stack = self.stack(target) is not None
+        # AUDIT-FOUND: the successful-start tail cleared restart-required UNCONDITIONALLY, so a
+        # save landing while the required post-start had released config stability had its warning
+        # deleted by the very launch that did NOT apply it — saved config said B, the radio still
+        # identified as A, and nothing said so. Remember the marker HERE, while configuration is
+        # still stable and before any release window, and clear only THIS state (see the tail).
+        _pre_marker = self.restart_required(target) if _target_is_stack else None
         def _comp_overrides(comp_id):
             if not (_target_is_stack or comp_id == target):
                 return None
@@ -1455,7 +1599,20 @@ class LifecycleOpsMixin:
         # run the saved config.
         if ok and self.stack(target) is not None:
             self._capture_start_composition(target, cfg_band)
-            self._clear_restart_required(target)
+            # Clear ONLY a marker this launch actually satisfied. Two ways it can fail to:
+            #   * CREATED or CHANGED while the required post-start ran unguarded — it describes
+            #     configuration this launch never applied;
+            #   * REVIEW-FOUND: a component of THIS stack was ALREADY_HEALTHY, so it was never
+            #     relaunched and still runs the OLD configuration. A partly-up stack (main
+            #     healthy, a sidecar down) reported ok=True and erased the warning its own
+            #     identity save had just written — the node kept transmitting the previous
+            #     callsign with nothing to say so. A DEPENDENCY left running (the shared daemon)
+            #     is not this stack's consumer and must not keep the marker alive.
+            _kept_old = any(r.outcome == Outcome.ALREADY_HEALTHY
+                            and (self.stack_of(r.component) or r.stack) == target
+                            for r in results)
+            if not _kept_old and self.restart_required(target) == _pre_marker:
+                self._clear_restart_required(target)
         if position_note:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
@@ -1484,8 +1641,14 @@ class LifecycleOpsMixin:
         if not comp.post_steps:
             return None, ""
         if life.has_required_post_start(comp):
+            # The retry window can legitimately run for minutes (MeshCom waits for a guest
+            # console). Everything it consumes — comp_cfg, the rendered launcher, the GPS plan —
+            # is materialized under the guard BEFORE the run, so the guard is released across the
+            # EXECUTION: a config save during a long post-start is accepted and reported through
+            # restart-required, exactly as a save during any other part of a launch already is.
             jr = life.run_required_post_start(stack, comp, comp_cfg, band=band,
-                                              on_log_open=announce, require_all=require_all)
+                                              on_log_open=announce, require_all=require_all,
+                                              while_running=self._config_unstable())
             if jr.ok:
                 return True, "required post-start completed"
             return False, f"required post-start failed (rc {jr.returncode})"
@@ -1532,6 +1695,23 @@ class LifecycleOpsMixin:
                      for _stack, comp in order if comp.post_steps]
             return ActionResult(True, f"Would re-run post-start for '{target}'.", details=lines,
                                 data={"changes": len(lines)})
+        # IDENTITY GATE (audit-found bypass): a post-start step can transmit/apply an
+        # identity (MeshCom --setcall, Meshtastic --set-owner), and this path previously
+        # built its payload from raw {callsign}-substituted stack_config — a legacy global
+        # that a normal start refuses could ride straight into --setcall, and a missing
+        # unlicensed identity slipped through. Enforce on the ACTUAL running band BEFORE
+        # any runner cancellation or command execution.
+        # THE one operation-band rule (explicit -> running -> active Lite marker -> primary),
+        # so a post-start judges the identity on the same band the launch used — a hand-rolled
+        # `band or running_band(...)` here missed the Voice-on-Lite case the rest of the feature
+        # handles (review-found).
+        _pid_band = self.operation_band(target, band)
+        id_ok, id_fields, id_msg = self.enforce_identity(target, _pid_band)
+        if not id_ok:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': {id_msg}",
+                                data={"enforce_fields": id_fields},
+                                next_commands=self._identity_config_hints(target,
+                                                                          _pid_band))
         try:
             with self._admission_guard("poststart", target), self._config_stable():
                 return self._poststart_impl(target, order, band, require_all=require_all)
@@ -1559,6 +1739,32 @@ class LifecycleOpsMixin:
                                       outcome=outcome, summary=summary))
             out.append(f"  [{outcome.value}] {comp.id}: {summary}")
 
+        # IDENTITY PRE-PASS (audit-found): resolve + validate EVERY identity-bearing
+        # post-start component on its actual running band UNDER this stable-config guard,
+        # BEFORE any runner cancellation or step — the public preflight is UX only, and a
+        # config change between it and this locked path must refuse with ZERO mutation
+        # (previously the live runner was already cancelled, and with several components
+        # earlier work ran before a later identity problem surfaced).
+        _id_stash: dict = {}
+        _id_problems: list = []
+        _id_fields: list = []
+        _id_band = band                     # the band the FAILING judgment used (for remedies)
+        for stack, comp in order:
+            if not comp.post_steps or st_index[comp.id].run_state != RunState.RUNNING:
+                continue
+            cfg_band = self.running_band(stack.id) if self.stack_bands(stack.id) else (band or "")
+            rows = [r for r in self.identity_resolution(comp.id, cfg_band)
+                    if r["comp"] == comp.id]
+            _id_stash[comp.id] = rows
+            if any(r["problem"] for r in rows) and not _id_problems:
+                _id_band = cfg_band          # remedies target the judged band, not the raw arg
+            _id_problems += [r["problem"] for r in rows if r["problem"]]
+            _id_fields += [r["field"] for r in rows if r["problem"]]
+        if _id_problems:
+            return ActionResult(False, f"Cannot re-run post-start for '{target}': "
+                                + "; ".join(dict.fromkeys(_id_problems)),
+                                data={"enforce_fields": _id_fields},
+                                next_commands=self._identity_config_hints(target, _id_band))
         for stack, comp in order:
             if not comp.post_steps:
                 out.append(f"  [skip] {comp.id}: no post-start steps")
@@ -1578,6 +1784,12 @@ class LifecycleOpsMixin:
                        "run a second sender against the same console")
                 continue
             comp_cfg = dict(self.stack_config(comp.id, cfg_band))
+            # The payload carries the AUTHORITATIVE effective identity from the pre-pass
+            # stash (validated under THIS guard, before any cancellation) — never the raw
+            # {callsign} substitution stack_config performs.
+            for _r in _id_stash.get(comp.id, ()):
+                if _r["effective"]:
+                    comp_cfg[_r["name"]] = _r["effective"]
             required_ok, summary = self._run_post_start(
                 life, stack, comp, comp_cfg, cfg_band,
                 announce=self._log_announcer(comp.id, out), strict=True, require_all=require_all)
@@ -1975,7 +2187,11 @@ class LifecycleOpsMixin:
         is_daemon = self._is_daemon_target(target)
         if not (is_daemon or daemon_params.is_client(self._owner_stack_id(target))):
             return []
-        radio, _tx = self._daemon_needs(self._run_order(target), params, self._config_band(target, band))
+        # The OPERATING band, not the config-store band — the same separation the launch makes
+        # (review-found: this sibling still flattened, so with no `radio` param the panels and the
+        # launch disagreed and the page offered a band the start would then reject).
+        radio, _tx = self._daemon_needs(self._run_order(target), params,
+                                        self.operation_band(target, band))
         # Always explicit served band(s), clamped to the active mode (M-1) — never a `both` panel.
         bands = self._daemon_serve_bands(radio) if (is_daemon or radio) \
             else [self._effective_daemon_band(target, band)]
@@ -2515,9 +2731,14 @@ class LifecycleOpsMixin:
                 stop_owners: bool = False, band: str = "",
                 file_overrides: dict | None = None) -> ActionResult:
         """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
-        DIRECT call gets the same coordination as CLI/web."""
+        DIRECT call gets the same coordination as CLI/web. `params`/`file_overrides` apply to this
+        launch only, EXCEPT an identity field: that is saved as stack configuration first, as in
+        `start` (empty clears a LICENSED callsign back to the global; an unlicensed node identity is
+        never inherited, so empty is refused)."""
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
+        if (_bref := self.band_refusal(target, band, "restart")) is not None:
+            return _bref            # plan and apply take the SAME decision on an explicit band
         from . import reslock
         if not apply:
             return self._restart_impl(target, apply=False, params=params,
@@ -2525,16 +2746,21 @@ class LifecycleOpsMixin:
                                       file_overrides=file_overrides)
         # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
         # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
-        # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433).
-        _rband = band
-        _sid = self.stack_of(target)
-        _stk = self.stack(_sid) if _sid else None
-        if not band and _stk is not None and _stk.main != self.DAEMON_ID and self.stack_bands(_sid):
-            _rband = self._effective_band(_sid, "") or band
+        # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433). It uses THE
+        # ONE resolver — the same explicit → running → ACTIVE-fallback-marker → primary rule as
+        # start() and the identity form (audit-found: this used `_effective_band`, which takes an
+        # interactive marker UNCONDITIONALLY, so a stopped Voice with a stale 868 marker whose GUI
+        # fallback is no longer active read the 433 identity on the panel and wrote it to the 868
+        # store — persisted config drift, and a blank 433 field cleared a deliberate 868 override).
         # Reject invalid / unqualified-duplicate params + file overrides BEFORE any lock (config-
         # independent validation) — so an unqualified duplicate name never acquires the config-
         # stability/lifecycle lock or stops the target. The preflight below re-validates (idempotent)
         # and adds identity enforcement, which needs the stable config read.
+        # PERSISTED-ONLY IDENTITY, phase 1 (pure): lift the submitted identity out of the
+        # ephemeral inputs before normalization (which drops a blank file value — the deliberate
+        # "clear and inherit"). Phase 2 writes it under admission, on the same band.
+        params, file_overrides, _id_sub = self.extract_identity_submission(
+            target, params, file_overrides)
         params, _pv = self._normalize_run_params(target, params)
         if _pv:
             return ActionResult(False, f"Cannot restart '{target}': invalid parameter — {_pv}",
@@ -2543,6 +2769,7 @@ class LifecycleOpsMixin:
         if _fo:
             return ActionResult(False, f"Cannot restart '{target}': invalid parameter — {_fo}",
                                 next_commands=[f"lhpc status {target}"])
+
         # Hold saved configuration STABLE from PREFLIGHT through the whole stop→start transition, so
         # a valid target is never stopped and then rejected by a concurrently-mutated config (LOCK
         # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _restart_impl).
@@ -2550,42 +2777,59 @@ class LifecycleOpsMixin:
         # restart refused by a pending self-update/uninstall never stops the running stack. The inner
         # _lifecycle_guard (and the nested stop's) reuse this admission reentrantly.
         try:
-            with self._admission_guard("restart", target), self._config_stable():
-                # PREFLIGHT all start inputs BEFORE lock planning, the guard, owner handling or any
-                # stop. A failed preflight is a typed failure that never acquires a lock or touches
-                # lifecycle state. Canonical values feed lock/radio planning + _restart_impl.
-                params, file_over, _pf_err = self._preflight_start_inputs(
-                    target, _rband, params, file_overrides, "restart")
-                if _pf_err is not None:
-                    return _pf_err
-                _order = self._run_order(target)
-                _radio = ""
-                if _order:
-                    _r, _ = self._daemon_needs(_order, params, self._config_band(target, _rband))
-                    _radio = _r or ""
-                try:
-                    with self._lifecycle_guard("restart", target, _rband,
-                                               stop_owners=stop_owners, radio=_radio):
-                        # MESHCORE POSITION: taken HERE — under the guard, before the stop —
-                        # and handed to the nested start, so a restart queries gpsd exactly
-                        # once and a refusal leaves the running node up rather than stopping
-                        # it and only then discovering there is no position.
-                        _position, _pos_note = self.meshcore_position(target)
-                        if _position is None:
-                            return ActionResult(
-                                False, f"Cannot restart '{target}': {_pos_note}",
-                                next_commands=[f"lhpc status {target}"])
-                        return self._restart_impl(target, apply=True, params=params,
-                                                  stop_owners=stop_owners, band=_rband,
-                                                  file_overrides=file_over,
-                                                  position=_position,
-                                                  position_note=_pos_note)
-                except SourceTxnBlocked as blocked:
-                    return ActionResult(False, f"Cannot restart '{target}': {blocked}",
-                                        next_commands=[f"lhpc status {target}"])
-                except reslock.ResourceBusy as busy:
-                    return ActionResult(False, f"Cannot restart '{target}': {busy}",
-                                        next_commands=[f"lhpc status {target}"])
+            with self._admission_guard("restart", target):
+                # ONE CONCRETE OPERATION BAND, resolved ONCE and only HERE — under admission, so the
+                # running/marker state it reads cannot change under another admitted operation before
+                # this one owns the box (audit-found: resolving before admission let a concurrently
+                # admitted start put the stack on 868 in the window, after which the identity was
+                # saved on the primary 433 while stop/preflight/launch ran on 868). `_config_band`
+                # maps the primary choice to its CONCRETE band, so "" never travels onward for a
+                # band-switchable stack and no inner frame can reinterpret it; "" survives only for a
+                # genuinely bandless stack, which nothing downstream can reinterpret either.
+                _rband = self.operation_band(target, band)
+                # PERSISTED-ONLY IDENTITY, phase 2: written under admission (a restart refused by a
+                # pending self-update must change nothing) and BEFORE the shared config guard, which
+                # the save's EXCLUSIVE config lock cannot nest under.
+                # See start(): persist + judge + materialize, then the ordinary SHARED guard.
+                if _id_sub and (_id_ref := self.save_identity_submission(
+                        target, _rband, "restart", _id_sub)) is not None:
+                    return _id_ref
+                with self._config_stable():
+                    # PREFLIGHT all start inputs BEFORE lock planning, the guard, owner handling or any
+                    # stop. A failed preflight is a typed failure that never acquires a lock or touches
+                    # lifecycle state. Canonical values feed lock/radio planning + _restart_impl.
+                    params, file_over, _pf_err = self._preflight_start_inputs(
+                        target, _rband, params, file_overrides, "restart")
+                    if _pf_err is not None:
+                        return _pf_err
+                    _order = self._run_order(target)
+                    _radio = ""
+                    if _order:
+                        _r, _ = self._daemon_needs(_order, params, _rband)
+                        _radio = _r or ""
+                    try:
+                        with self._lifecycle_guard("restart", target, _rband,
+                                                   stop_owners=stop_owners, radio=_radio):
+                            # MESHCORE POSITION: taken HERE — under the guard, before the stop —
+                            # and handed to the nested start, so a restart queries gpsd exactly
+                            # once and a refusal leaves the running node up rather than stopping
+                            # it and only then discovering there is no position.
+                            _position, _pos_note = self.meshcore_position(target)
+                            if _position is None:
+                                return ActionResult(
+                                    False, f"Cannot restart '{target}': {_pos_note}",
+                                    next_commands=[f"lhpc status {target}"])
+                            return self._restart_impl(target, apply=True, params=params,
+                                                      stop_owners=stop_owners, band=_rband,
+                                                      file_overrides=file_over,
+                                                      position=_position,
+                                                      position_note=_pos_note)
+                    except SourceTxnBlocked as blocked:
+                        return ActionResult(False, f"Cannot restart '{target}': {blocked}",
+                                            next_commands=[f"lhpc status {target}"])
+                    except reslock.ResourceBusy as busy:
+                        return ActionResult(False, f"Cannot restart '{target}': {busy}",
+                                            next_commands=[f"lhpc status {target}"])
         except AdmissionRefused as _adm:
             return ActionResult(False, _adm.reason, data={'admission_blocked': _adm.tag})
         except reslock.ResourceBusy as busy:
@@ -2642,7 +2886,13 @@ class LifecycleOpsMixin:
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
         if not band:
-            band = self._effective_band(self.stack_of(target) or target)
+            # THE ONE resolver, same as public restart(), start() and the identity form (review-found:
+            # this kept `_effective_band`, which takes an interactive marker UNCONDITIONALLY. Once the
+            # public entry stopped doing that, a stale marker made the inner launch pick 868 while the
+            # identity was saved and judged on 433 — the store/launch divergence this feature exists
+            # to eliminate, and the preflight then materialized the inherited global over a deliberate
+            # local callsign. It also split the dry-run plan from the applied band.)
+            band = self.operation_band(target, band)
         if not apply:
             res = self.start(target, apply=False, params=params, band=band,
                              file_overrides=file_overrides)
@@ -2678,6 +2928,7 @@ class LifecycleOpsMixin:
                                 next_commands=[f"lhpc status {target}"])
         time.sleep(1.0)  # let sockets/locks release before re-starting
         res = self.start(target, apply=True, params=params, stop_owners=stop_owners, band=band,
+                         _identity_prepersisted=True,
                          file_overrides=file_overrides, position=position,
                          position_note=position_note)
         # Restart's typed results are the stop results followed by the start results.
@@ -3575,13 +3826,63 @@ class LifecycleOpsMixin:
                 f"daemon started + RADIO=READY first; a stack that drives its OWN radio (e.g. meshtastic) "
                 f"is not daemon-TX-testable — verify its TX from its own app/logs instead.",
                 next_commands=[f"lhpc status {target}"])
-        op = self.config().operator
-        payload = f"LHPC TX TEST{(' DE ' + op.callsign) if op.configured else ''}"
+        # A STACK TX test identifies as the stack's EFFECTIVE identity (local override,
+        # else the inherited global for licensed stacks; the local node name for
+        # unlicensed) — never the raw global when the stack overrides it, and never a
+        # hidden placeholder. The standalone auto-install daemon TX phase keeps requiring
+        # the global operator identity: that transmission is the operator's own.
+        # A TX operation MUST identify the station. There is no unidentified payload to fall back
+        # to: an empty identity refuses the whole test, before the plan is rendered and before any
+        # frame is transmitted (audit-found: the suffix was conditional, so a box with no global
+        # callsign put a bare `LHPC TX TEST` frame on the air).
+        # Per-BAND: a band-scoped local override identifies the transmission on ITS band.
+        # The identity must be VALID, not merely present. A stack's own identity was validated
+        # when it was stored; the global fallback (daemon, kiss) was not — a 0.2.5 box can hold a
+        # placeholder or malformed global that this version refuses to inherit, and transmitting
+        # `DE N0CALL` is no better than transmitting unidentified (audit-found). Judged by the
+        # same base-callsign rule that decides whether a global is usable as an identity at all.
+        from . import validators
+        _idents = {}
+        for b in bands:
+            if self._identity_fields(target):
+                # A stack with its OWN identity is judged by THE identity gate, per band. An
+                # explicit local value that the current rules reject must REFUSE, never fall back
+                # to the global: `effective_identity` returns "" both when no local value exists
+                # and when one exists but is invalid, and treating those alike transmitted under a
+                # different callsign than the operator configured (audit-found).
+                ok, _fields, msg = self.enforce_identity(target, b)
+                if not ok:
+                    return ActionResult(
+                        False, f"Cannot TX-test '{target}': {msg}",
+                        details=["  [blocked] a TX test identifies the station on air"],
+                        next_commands=self._identity_config_hints(target, b))
+                _idents[b] = self.effective_identity(target, b)
+                continue
+            # Only a target with NO identity field of its own (the daemon, kiss) identifies with
+            # the operator's global — validated, because a 0.2.5 box can hold a placeholder there.
+            try:
+                _idents[b] = validators.callsign_base(self._global_operator_callsign(),
+                                                      field="operator callsign", allow_empty=False)
+            except validators.ValidationError as exc:
+                return ActionResult(
+                    False, f"Cannot TX-test '{target}': {exc}",
+                    details=["  [blocked] a TX test identifies the station on air"],
+                    next_commands=["lhpc config operator --callsign YOURCALL"])
+        if not all(_idents.values()):
+            return ActionResult(
+                False, f"Cannot TX-test '{target}': no station identity to transmit under.",
+                details=["  [blocked] a TX test identifies the station; set an identity first"],
+                next_commands=(self._identity_config_hints(target)
+                               or ["lhpc config operator --callsign YOURCALL"]))
+
+        def payload_for(b):
+            return f"LHPC TX TEST DE {_idents[b]}"
+
         if not apply:
             details = ["TX-CAPABLE TEST — this transmits real RF.",
                        "Ensure the antennas are on the connected DUMMY LOADS.", ""]
             for band in bands:
-                plan = life.plan_tx_test(target, band, payload)
+                plan = life.plan_tx_test(target, band, payload_for(band))
                 details += [f"  band      : {plan.band} MHz",
                             f"  parameters: {plan.parameters}",
                             f"  payload   : {plan.payload!r}",
@@ -3608,7 +3909,7 @@ class LifecycleOpsMixin:
                             "band attempt(s).", details=details,
                             data={"cancelled": True, "attempted_bands": attempted_bands})
                     attempted_bands.append(band)           # a frame may transmit even if unconfirmed
-                    res = life.run_daemon_tx_test(band, payload)
+                    res = life.run_daemon_tx_test(band, payload_for(band))
                     ok = ok and res.ok
                     details.append(f"  [{'ok' if res.ok else 'fail'}] band {res.band}: {res.detail} "
                                    f"(TXOK {res.txok_before}->{res.txok_after})")

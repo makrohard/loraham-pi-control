@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 
-_CALLS = ("DL0LAB", "DL1ABC", "OE3XYZ", "DK5HH", "DB0RES", "PA3FOO", "F4ABC", "G7XYZ")
+_CALLS = ("XX0LAB", "XX1AAA", "XX3XYZ", "XX5FOO", "XX0RES", "XX4BAR", "XX7XYZ", "XX2BAZ")
 
 
 _T0 = None

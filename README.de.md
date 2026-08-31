@@ -208,7 +208,10 @@ Danach SSH neu verbinden (und für die folgenden Schritte wieder `tmux new -s lh
 ### 6. Konfigurieren
 
 ```bash
-lhpc config operator --callsign W1ABC     # dein Rufzeichen (erben alle lizenzpflichtigen Stacks)
+lhpc config operator --callsign YOURCALL  # optional; YOURCALL = dein Basis-Rufzeichen — lizenz-
+                                          # pflichtige Stacks
+                                          # erben es, solange ihr eigenes Rufzeichen-Feld leer ist;
+                                          # Meshtastic/MeshCore brauchen stattdessen lokale Node-Namen
 lhpc hardware loraham                     # dein Funk-Setup aus dem Katalog:
 ```
 
@@ -336,7 +339,7 @@ while sleep 60; do echo "$(date +%T) objs=$(find ~/loraham-pi-control/src -path 
 ```bash
 lhpc status                        # was läuft (nur lesend)
 lhpc config <stack>                # Optionen des Stacks samt aktueller Werte
-lhpc config chat call W1ABC       # eine Option setzen
+lhpc config chat call YOURCALL-10 # eine Option setzen (YOURCALL-10 = dein Rufzeichen+SSID)
 lhpc config <stack> --band 868 <param> <wert>     # bandabhängiger Wert bei umschaltbaren Stacks
 lhpc stack start|stop|restart <stack>             # zeigt den Plan, fragt nach; --yes überspringt
 lhpc logs <ziel>                   # Komponenten-Log verfolgen

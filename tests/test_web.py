@@ -906,12 +906,12 @@ def test_confirm_save_stack_persists_config(tmp_path):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
                                 "_save": "stack", "_params": "1",
-                                "p_call": "DJ0CHE-10", "p_tx_freq": "434.500", "band": ""})
+                                "p_call": "XX0XXA-10", "p_tx_freq": "434.500", "band": ""})
     assert r.status_code == 200                              # re-rendered confirm, not started
     # persisted to the user config
     from lhpc.core.services import ControllerService as _CS
     cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] == "DJ0CHE-10" and cfg["tx_freq"] == "434.500"
+    assert cfg["call"] == "XX0XXA-10" and cfg["tx_freq"] == "434.500"
 
 
 def test_confirm_save_routes_dependency_values_to_their_stack(tmp_path, monkeypatch):
@@ -923,13 +923,13 @@ def test_confirm_save_routes_dependency_values_to_their_stack(tmp_path, monkeypa
     c = _install_igate(tmp_path)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf",
-                                "_save": "stack", "_params": "1", "p_call": "DJ0CHE-7",
+                                "_save": "stack", "_params": "1", "p_call": "XX0XXA-7",
                                 "p_loraham-kiss-tnc__tx_freq": "434.200", "band": ""})
     assert r.status_code == 200                              # re-rendered confirm, not started
     svc2 = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     assert svc2.stack_config("kiss")["tx_freq"] == "434.200"           # in KISS's own store
     assert svc2.stack_config("graywolf").get("tx_freq") is None        # never the target's
-    assert svc2.stack_config("graywolf").get("call") == "DJ0CHE-7"     # own values still saved
+    assert svc2.stack_config("graywolf").get("call") == "XX0XXA-7"     # own values still saved
 
 
 def test_confirm_save_reports_partial_dependency_save(tmp_path, monkeypatch):
@@ -951,7 +951,7 @@ def test_confirm_save_reports_partial_dependency_save(tmp_path, monkeypatch):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf",
                                 "_save": "stack", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-7",
+                                "p_call": "XX0XXA-7",
                                 "p_loraham-kiss-tnc__tx_freq": "434.200", "band": ""})
     body = r.get_data(as_text=True)
     assert r.status_code == 200                              # re-rendered, not started
@@ -967,7 +967,7 @@ def test_confirm_save_does_not_start(tmp_path):
     c = _client(tmp_path)                                    # ReadOnlyGuard
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
-                                "_save": "stack", "_params": "1", "p_call": "DJ0CHE", "band": ""})
+                                "_save": "stack", "_params": "1", "p_call": "XX0XXA", "band": ""})
     assert r.status_code == 200                              # no start attempted (no guard tripwire)
 
 
@@ -978,11 +978,11 @@ def test_confirm_save_then_start_persists_and_starts(tmp_path):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
                                 "confirmed": "yes", "_save": "all", "_save_then_start": "1",
-                                "_params": "1", "p_call": "DJ0CHE-10", "band": ""})
+                                "_params": "1", "p_call": "XX0XXA-10", "band": ""})
     assert r.status_code in (302, 303)                       # proceeded to apply (not a re-render)
     from lhpc.core.services import ControllerService as _CS
     cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] == "DJ0CHE-10"                        # saved before starting
+    assert cfg["call"] == "XX0XXA-10"                        # saved before starting
 
 
 def test_confirm_daemon_inline_save_persists(tmp_path):
@@ -1023,7 +1023,7 @@ def test_save_and_start_blocks_on_failed_stack_save(tmp_path, monkeypatch):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-10", "band": ""})
+                                "p_call": "XX0XXA-10", "band": ""})
     assert r.status_code == 200 and starts == []             # re-rendered, run_action(apply) NOT called
     assert "not started" in r.get_data(as_text=True).lower()
 
@@ -1037,7 +1037,7 @@ def test_save_and_start_blocks_on_failed_daemon_save(tmp_path, monkeypatch):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+                                "p_call": "XX0XXA-10", "dp_433_SF": "10", "band": ""})
     assert r.status_code == 200 and starts == []             # daemon save failed -> no start
 
 
@@ -1047,7 +1047,7 @@ def test_save_and_start_blocks_on_invalid_daemon_form(tmp_path, monkeypatch):
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-10", "dp_bad": "x", "band": ""})   # malformed dp_
+                                "p_call": "XX0XXA-10", "dp_bad": "x", "band": ""})   # malformed dp_
     body = r.get_data(as_text=True)
     assert r.status_code == 200 and starts == []
     assert "daemon" in body.lower()
@@ -1062,9 +1062,9 @@ def test_failed_save_and_start_rerenders_submitted_values(tmp_path, monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-99", "dp_433_SF": "9", "band": ""})
+                                "p_call": "XX0XXA-12", "dp_433_SF": "9", "band": ""})
     body = r.get_data(as_text=True)
-    assert 'value="DJ0CHE-99"' in body                       # submitted stack value preserved
+    assert 'value="XX0XXA-12"' in body                       # submitted stack value preserved
     assert 'value="9"' in body                               # submitted daemon-panel value preserved
 
 
@@ -1072,13 +1072,23 @@ def test_save_and_start_success_persists_and_starts_once(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService as _CS
     c = _install_igate(tmp_path)
     starts = _spy_starts(monkeypatch)
+    starts_params: list = []
+    from lhpc.core.services import ControllerService as _CS2
+    _prev = _CS2.run_action
+    def _capture(self, op, target, apply=False, **k):
+        if apply and op == "start":
+            starts_params.append(dict(k.get("params") or {}))
+        return _prev(self, op, target, apply=apply, **k)
+    monkeypatch.setattr(_CS2, "run_action", _capture)
     tok = _csrf(c)
     c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                             "_save": "all", "_save_then_start": "1", "_params": "1",
-                            "p_call": "DJ0CHE-7", "band": ""})
+                            "p_call": "XX0XXA-7", "band": ""})
     assert starts == ["igate"]                               # started exactly once, after saving
-    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] == "DJ0CHE-7"                         # persisted before starting
+    # Save & start persists the submitted values, identity included, then starts.
+    _s = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert _s._stored_param_value("igate", "run", "loraham-igate", "call") == "XX0XXA-7"
+    assert starts_params and starts_params[0].get("call") == "XX0XXA-7", starts_params
 
 
 def test_start_without_saving_is_ephemeral(tmp_path, monkeypatch):
@@ -1087,10 +1097,10 @@ def test_start_without_saving_is_ephemeral(tmp_path, monkeypatch):
     starts = _spy_starts(monkeypatch)
     tok = _csrf(c)
     c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
-                            "_params": "1", "p_call": "DJ0CHE-8", "band": ""})   # no _save
+                            "_params": "1", "p_call": "XX0XXA-8", "band": ""})   # no _save
     assert starts == ["igate"]                               # started
     cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] != "DJ0CHE-8"                         # ephemeral: NOT persisted
+    assert cfg["call"] != "XX0XXA-8"                         # ephemeral: NOT persisted
 
 
 # --- Area 2: Save & start short-circuits after the first failed persistence ------------------
@@ -1107,7 +1117,7 @@ def test_failed_stack_save_short_circuits_daemon_save_and_start(tmp_path, monkey
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+                                "p_call": "XX0XXA-10", "dp_433_SF": "10", "band": ""})
     assert r.status_code == 200
     assert daemon_saves == []                    # daemon save NEVER reached after stack-save failure
     assert starts == []                          # run_action(apply=True) never called
@@ -1122,15 +1132,16 @@ def test_stack_ok_then_daemon_fail_is_partial_and_non_starting(tmp_path, monkeyp
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "all", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-13", "dp_433_SF": "10", "band": ""})
+                                "p_call": "XX0XXA-13", "p_tx_freq": "434.100",
+                                "dp_433_SF": "10", "band": ""})
     assert r.status_code == 200 and starts == []               # not started
     body = r.get_data(as_text=True)
     assert "not started" in body.lower()                       # truthful report
-    assert 'value="DJ0CHE-13"' in body and 'value="10"' in body  # submitted stack + daemon visible
-    # the earlier successful stack save is RETAINED
-    cfg = ControllerService(system=FakeSystem().system,
-                            paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] == "DJ0CHE-13"
+    assert 'value="XX0XXA-13"' in body and 'value="10"' in body  # submitted stack + daemon visible
+    # the earlier successful stack save is RETAINED — identity and ordinary values alike
+    _svc2 = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert _svc2._stored_param_value("igate", "run", "loraham-igate", "tx_freq") == "434.100"
+    assert _svc2._stored_param_value("igate", "run", "loraham-igate", "call") == "XX0XXA-13"
 
 
 # --- Area 3: truthful daemon-save reporting -------------------------------------------------
@@ -1148,7 +1159,7 @@ def test_daemon_only_save_and_start_failure_no_false_stack_claim(tmp_path, monke
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
                                 "_save": "daemon", "_save_then_start": "1", "_params": "1",
-                                "p_call": "DJ0CHE-10", "dp_433_SF": "10", "band": ""})
+                                "p_call": "XX0XXA-10", "dp_433_SF": "10", "band": ""})
     body = r.get_data(as_text=True).lower()
     assert starts == []                              # not started
     assert sb_calls == []                            # _save=daemon -> NO stack save attempted
@@ -1343,10 +1354,10 @@ def test_settings_embedded_post_persists(tmp_path):                          # (
     from lhpc.core.services import ControllerService
     c = _real_app(tmp_path)
     tok = _csrf(c)
-    r = c.post("/stacks/igate/config", data={"_csrf": tok, "band": "", "c_call": "DJ0CHE-7"})
+    r = c.post("/stacks/igate/config", data={"_csrf": tok, "band": "", "c_call": "XX0XXA-7"})
     assert r.status_code in (200, 302)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.stack_config("igate").get("call") == "DJ0CHE-7"   # embedded form persists (unique->flat)
+    assert svc.stack_config("igate").get("call") == "XX0XXA-7"   # embedded form persists (unique->flat)
 
 
 @pytest.mark.parametrize("client_kind,path,status", [
@@ -2187,7 +2198,7 @@ def _manual_required_svc(tmp_path, monkeypatch, summary):
     from lhpc.core.outcomes import Outcome, CompResult
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)      # satisfies enforce_identity
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1TST"\n')
+        '[operator]\ncallsign = "XX0XXB"\n')
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     res = CompResult(component="loraham-chat", action="stop", stack="chat",
@@ -2244,7 +2255,7 @@ def test_start_notes_flash_yellow_and_long(tmp_path, monkeypatch):
     from lhpc.core.paths import Paths
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "OE1TST"\n')
+        '[operator]\ncallsign = "XX0XXB"\n')
     svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
                             paths=Paths(runtime_root=tmp_path))
     monkeypatch.setattr(type(svc), "run_action",

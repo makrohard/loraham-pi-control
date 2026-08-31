@@ -506,8 +506,6 @@ class Stack:
     summary: str = ""
     components: tuple[Component, ...] = ()
     main: str = ""               # id of the primary component (the app itself)
-    operator_box: bool = True    # show the shared Operator (callsign) box on the config
-                                 # page; false when the stack edits its callsign in its own config
     binary: BinarySpec | None = None   # optional prebuilt-binary channel declaration
 
     def component(self, component_id: str) -> Component | None:

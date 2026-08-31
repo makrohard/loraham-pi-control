@@ -271,6 +271,37 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                     st.fh = None
                     st.exclusive = False
 
+    @contextmanager
+    def _config_unstable(self):
+        """RELEASE a held SHARED config-stability guard across one long, config-INDEPENDENT step,
+        then take it back. The ONE user is the synchronous REQUIRED post-start, which can
+        legitimately retry for many minutes while a config save gives up after
+        CONFIG_LOCK_TIMEOUT_S: everything the step consumes (`comp_cfg`, the rendered launcher, the
+        GPS plan) is materialized BEFORE the release, so it runs on a frozen configuration and
+        cannot observe a mid-flight write.
+
+        NO-OP unless this thread holds the guard SHARED: with no guard there is nothing to release,
+        and the EXCLUSIVE auto-install boundary owes its callers whole-run exclusivity.
+
+        Re-acquisition BLOCKS, so this NEVER returns while `_cfg_stable_state` claims a guard the
+        process does not hold — a caller that believes it is inside `_config_stable` always is. It
+        cannot wedge: the only EXCLUSIVE holders are bounded config writes (CONFIG_LOCK_TIMEOUT_S),
+        and the one long-lived holder, the auto-install boundary, can never overlap — it takes the
+        same task-admission flock this operation holds, and takes it BEFORE config-exclusive, so no
+        holder of this lock ever waits on us."""
+        import fcntl
+
+        st = self._cfg_stable_state
+        if getattr(st, "depth", 0) == 0 or getattr(st, "exclusive", False):
+            yield
+            return
+        fh = st.fh
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_SH)
+
     def _holds_config_exclusive(self) -> bool:
         """True iff THIS thread currently holds the config-stability guard in EXCLUSIVE mode — the only
         state in which a config write may reuse the held lock (see `save_config_bundle`)."""
@@ -2416,6 +2447,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         meta: dict = {}                                                  # (stack, band, key) -> (cand, old_param)
         remaining: list = []
         for cand in candidates:
+            # IDENTITY params are never stale-default candidates. Filtered HERE, at the point of
+            # use, and not only where candidates are chosen: on the 0.2.5 -> this-version crossing
+            # the candidates are chosen by the OLD code, which has no such exclusion, so a
+            # deliberately pinned local callsign equal to the global would be deleted by the very
+            # update that ships this rule (audit-found). Dropping it here is silent and correct —
+            # the value simply stays as the operator set it.
+            if self._is_identity_candidate(cand):
+                continue
             proven = self._prove_candidate(cand, from_head)
             if proven is None:
                 remaining.append(cand)                                   # unprovable -> keep pending, never delete
@@ -2483,7 +2522,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # A run/file param whose validator marks it the stack's operator identity: a "callsign"
     # validator => LICENSED (refuse empty / N0CALL); a "node" validator => UNLICENSED (refuse only
     # empty, the default name is accepted).
-    _IDENTITY_ENFORCE: ClassVar[dict] = {"callsign": "licensed", "node": "unlicensed"}
+    _IDENTITY_ENFORCE: ClassVar[dict] = {
+        "callsign": "licensed", "callsign_voice": "licensed", "callsign_meshcom": "licensed",
+        "node": "unlicensed", "node_long": "unlicensed", "node_short": "unlicensed"}
 
     SOURCE_CHOICES = ("pinned", "dev", "stable")   # pinned = production-safe default
     # The binary CHANNEL is a fourth selector alongside the three SOURCE selectors. It is

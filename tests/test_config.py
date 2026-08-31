@@ -82,9 +82,9 @@ def test_save_operator_preserves_unrelated_keys(tmp_path):
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "local.toml").write_text(
         '[operator]\ncallsign = "OLD"\nnote = "keep"\n[web]\nport = 8770\n')
-    save_operator_config(paths, "W1ABC")
+    save_operator_config(paths, "XX0XXB")
     data = tomllib.loads((tmp_path / "config" / "local.toml").read_text())
-    assert data["operator"]["callsign"] == "W1ABC"
+    assert data["operator"]["callsign"] == "XX0XXB"
     assert data["operator"]["note"] == "keep"          # unrelated [operator] key preserved
     assert data["web"]["port"] == 8770                 # unrelated table preserved
 
@@ -94,28 +94,33 @@ def test_config_view_splits_basic_advanced_and_operator(tmp_path):
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
     view = svc.config_view("daemon")
-    assert view["operator"] is None          # daemon does not consume callsign
+    assert "operator" not in view            # the shared Operator box is gone entirely
     # The daemon's start options (radio/tx/CAD/…) are NOT on the Config page — they
     # are chosen on confirm:start. The page carries the live tuning settings instead.
     assert view["components"] == []
     assert "live_settings" in view
-    # a stack that still shows the shared Operator box (voice substitutes {callsign}).
-    assert svc.config_view("voice")["operator"] is not None
+    # The shared Operator box is GONE from every stack page (callsign-identities): the
+    # global operator callsign is edited only on its own card / `lhpc config operator`;
+    # stack pages carry the per-stack identity params instead.
+    assert "operator" not in svc.config_view("voice")
     # iGate now edits its callsign in its own config -> no shared Operator box, but its run
     # params still split into basic/advanced.
     igate = svc.config_view("igate")
-    assert igate["operator"] is None
+    assert "operator" not in igate
     params = igate["components"][0]["params"]
     assert any(p.advanced for p in params) and any(not p.advanced for p in params)
 
 
 def test_save_config_writes_operator_and_params(tmp_path):
+    # callsign-identities: a stack save can no longer carry the global callsign — the ONE
+    # authoritative mutation is set_operator_identity (atomic restart-marker handling).
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    r = svc.save_config("igate", {"tx_freq": "434.000"}, callsign="oe1abc")
+    assert svc.set_operator_identity(callsign="xx0xxb").ok
+    assert svc.config().operator.callsign == "XX0XXB"   # normalised upper
+    r = svc.save_config("igate", {"tx_freq": "434.000"})
     assert r.ok
-    assert svc.config().operator.callsign == "OE1ABC"   # global operator saved (normalised upper)
     assert svc.config_view("igate")["values"]["tx_freq"] == "434.000"
 
 
@@ -241,8 +246,8 @@ def test_run_param_default_uses_operator_callsign(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.config import save_operator_config, save_stack_config
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    save_operator_config(svc._paths, "DL1ABC"); svc._config = None
-    assert svc.stack_config("igate")["call"] == "DL1ABC"      # default substituted, not '{callsign}'
+    save_operator_config(svc._paths, "XX0XXB"); svc._config = None
+    assert svc.stack_config("igate")["call"] == "XX0XXB"      # default substituted, not '{callsign}'
     # an explicitly saved value is NOT re-substituted
     save_stack_config(svc._paths, "igate", {"call": "DK0XYZ"})
     assert svc.stack_config("igate")["call"] == "DK0XYZ"
@@ -509,8 +514,8 @@ def _snapshot(tmp_path):
 def _seed(svc, tmp_path):
     # A known-good baseline (local.toml + stacks/daemon.toml). `radio=868` is a non-default single
     # band (the daemon `radio` param no longer offers `both`).
+    assert svc.set_operator_identity(callsign="XX0XXA").ok
     r = svc.save_config_bundle("daemon", values={"radio": "868"},
-                               callsign="N0CALL",
                                remotes={"loraham-daemon": "", "radiolib": ""})
     assert r.ok
     return _snapshot(tmp_path)
@@ -529,8 +534,7 @@ def test_valid_first_remote_invalid_second_changes_nothing(tmp_path):
 def test_valid_operator_invalid_stack_setting_changes_nothing(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     before = _seed(svc, tmp_path)
-    r = svc.save_config_bundle("daemon", values={"radio": "999"},   # invalid enum
-                               callsign="N0CALL-7")
+    r = svc.save_config_bundle("daemon", values={"radio": "999"})   # invalid enum
     assert not r.ok and _snapshot(tmp_path) == before
 
 
@@ -556,7 +560,7 @@ def test_failure_after_first_replacement_restores_all(tmp_path, monkeypatch):
         return real(paths, path, text, mode)
     monkeypatch.setattr(cfgmod, "_atomic_write", flaky)
     r = svc.save_config_bundle("daemon", values={"radio": "433"},
-                               callsign="N0CALL", remotes={"loraham-daemon": "", "radiolib": ""})
+                               remotes={"loraham-daemon": "", "radiolib": ""})
     assert not r.ok
     monkeypatch.undo()
     assert _snapshot(tmp_path) == before          # both files restored
@@ -707,7 +711,7 @@ def test_save_config_bundle_refuses_symlinked_local(tmp_path):
     local.unlink()
     os.symlink(outside, local)                                     # symlinked leaf
     try:
-        r = svc.save_config_bundle("daemon", values={"radio": "868"}, callsign="N0CALL-9")
+        r = svc.set_operator_identity(callsign="XX0XXA")     # the authoritative writer
         assert not r.ok
         assert outside.read_text() == "[operator]\ncallsign='X'\n"  # never written through
     finally:
@@ -723,12 +727,12 @@ def test_local_root_scalars_and_types_survive_bundle_save(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('rootstr = "hi"\nenabled = true\nlimit = 5\nratio = 1.25\n'
                  '"quoted.key" = "q"\n[operator]\ncallsign = "OLD"\n[extra]\nflag = false\nn = 9\n')
-    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC").ok
+    assert svc.set_operator_identity(callsign="XX0XXB").ok
     d = tomllib.loads(p.read_text())
     assert d["rootstr"] == "hi" and d["enabled"] is True and d["limit"] == 5 and d["ratio"] == 1.25
     assert d["quoted.key"] == "q"                              # quoted root key stays literal
     assert d["extra"]["flag"] is False and d["extra"]["n"] == 9   # unrelated table types exact
-    assert d["operator"]["callsign"] == "DK0ABC"
+    assert d["operator"]["callsign"] == "XX0XXB"
 
 
 def test_local_control_and_multiline_strings_round_trip(tmp_path):
@@ -743,7 +747,7 @@ def test_local_unsupported_structures_block_and_preserve(tmp_path, bad):
     svc = _svc_config_bundle(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(bad)
     before = p.read_text()
-    r = svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC")
+    r = svc.set_operator_identity(callsign="XX0XXB")
     assert not r.ok and p.read_text() == before                # refused, byte-for-byte preserved
 
 
@@ -752,11 +756,11 @@ def test_operator_and_component_remote_use_safe_renderer(tmp_path):
     paths = _svc_config_bundle(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('keepme = 42\nenabled = true\n')
-    cfgmod.save_operator_config(paths, "DL1ABC")
+    cfgmod.save_operator_config(paths, "XX0XXB")
     cfgmod.save_component_remote(paths, "loraham-daemon", "https://x/y.git")
     d = tomllib.loads(p.read_text())
     assert d["keepme"] == 42 and d["enabled"] is True          # unrelated root scalars/types kept
-    assert d["operator"]["callsign"] == "DL1ABC"
+    assert d["operator"]["callsign"] == "XX0XXB"
     assert d["remotes"]["loraham-daemon"] == "https://x/y.git"
 
 
@@ -765,7 +769,7 @@ def test_operator_save_refuses_when_local_has_unsupported(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('arr = [1, 2]\n'); before = p.read_text()
     with pytest.raises(cfgmod.ConfigError):
-        cfgmod.save_operator_config(paths, "DL1ABC")
+        cfgmod.save_operator_config(paths, "XX0XXB")
     assert p.read_text() == before                              # preserved, not mutated
 
 
@@ -803,9 +807,9 @@ def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('rootn = 3\n[operator]\ncallsign = "OLD"\nlegacy = "AA00"\n'
                  'note = "portable profile"\nenabled = true\ncount = 5\n[extra]\nx = 1\n')
-    cfg.save_operator_config(paths, "DJ0CHE")
+    cfg.save_operator_config(paths, "XX0XXA")
     d = tomllib.loads(p.read_text())
-    assert d["operator"]["callsign"] == "DJ0CHE"
+    assert d["operator"]["callsign"] == "XX0XXA"
     assert d["operator"]["legacy"] == "AA00"                   # an unrelated [operator] scalar is left untouched
     assert d["operator"]["note"] == "portable profile"        # extra string preserved
     assert d["operator"]["enabled"] is True and d["operator"]["count"] == 5   # bool/int types kept
@@ -816,9 +820,9 @@ def test_bundle_operator_update_preserves_extra_operator_keys(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('[operator]\ncallsign = "OLD"\nlegacy = "AA00"\nnote = "keep"\nflag = false\n')
-    assert svc.save_config_bundle("meshcom", values={}, callsign="DK0ABC").ok
+    assert svc.set_operator_identity(callsign="XX0XXB").ok
     op = tomllib.loads(p.read_text())["operator"]
-    assert op["callsign"] == "DK0ABC" and op["note"] == "keep" and op["flag"] is False
+    assert op["callsign"] == "XX0XXB" and op["note"] == "keep" and op["flag"] is False
     assert op["legacy"] == "AA00"                               # an unrelated [operator] scalar is left untouched
 
 
@@ -828,7 +832,7 @@ def test_scalar_operator_shape_rejects_operator_save(tmp_path):
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('operator = "manual text"\n'); before = p.read_text()
     with pytest.raises(cfg.ConfigError):
-        cfg.save_operator_config(paths, "DJ0CHE")
+        cfg.save_operator_config(paths, "XX0XXA")
     assert p.read_text() == before                            # byte-for-byte preserved
 
 
@@ -1304,9 +1308,9 @@ def _svc_config_typed(tmp_path):
 def test_saved_operator_is_visible_immediately(tmp_path):
     svc = _svc_config_typed(tmp_path)
     assert svc.config().operator.callsign == ""            # primes the cache
-    r = svc.save_config_bundle("daemon", callsign="DJ0CHE-7")
+    r = svc.set_operator_identity(callsign="XX0XXA")
     assert r.ok
-    assert svc.config().operator.callsign == "DJ0CHE-7"    # NOT the stale cache
+    assert svc.config().operator.callsign == "XX0XXA"      # NOT the stale cache
 
 
 def test_saved_remote_is_visible_immediately(tmp_path):

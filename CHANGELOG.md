@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6
+
+- **Coherent identities:** an optional global base operator callsign (its own card on the Stacks page) that licensed stacks (chat, iGate, Voice, Graywolf, MeshCom) inherit while their local callsign is empty; a per-stack value overrides it and carries that stack's SSID or portable form. Per-protocol validation throughout (APRS SSID `-1`…`-15`, MeshCom `-1`…`-99`, Voice ≤11 characters, Meshtastic/MeshCore node names). Meshtastic and MeshCore never inherit a callsign — their node names are their own
+- A start, restart or post-start without a resolvable identity is refused before anything changes: the web marks the missing fields, the CLI prints the command for each. An identity entered on the Start/Restart panel is saved as configuration first, so launch and store always agree; changing the global flags running inherited stacks restart-required
+- `lhpc config` and Settings can clear an identity (the stack then cannot start until one is set), and a long required post-start — MeshCom waits minutes for its guest console — no longer blocks them: the launch keeps its frozen configuration, the save is accepted, and the running stack is flagged restart-required
+- **Upgrading:** stacks that relied on an implicit identity refuse to start until one is set, and a reboot will not bring them back on its own. A global callsign carrying an SSID is no longer inheritable (set the bare base call once; per-stack SSIDs stay local); Meshtastic's `node_name`/`node_short` and MeshCore's `name` no longer default to a generic value; a stored per-stack `call` with an explicit `-0` or a base longer than 6 characters is refused. `lhpc status` names every stack that needs one and prints the command
+- **Upgrading, one-time:** the first self-update from 0.2.5 runs its *own* migration code, so a per-stack callsign that had become equal to the global is cleared by it — the stack then inherits the same value, so nothing changes on air, but the pin is gone. Re-set it with `lhpc config <stack> <field> <value>` if you meant it as a pin; later updates keep such values
+
 ## 0.2.5
 
 - **Stacks WebGUIs:** one Webserver subpanel applies a common proxy policy (access, scheme, auth, CIDRs) to every eligible stack web UI at once — ports stay per-stack (existing kept, missing get the normal suggested default), all-or-nothing validation, one atomic save, one nginx apply; the console's own settings live under "LHPC WebGUI"

@@ -5,7 +5,11 @@
 # real operator data into the tracked dev repo.
 
 [operator]
-callsign = "N0CALL"        # <- your callsign (runtime-local only)
+# OPTIONAL base callsign (prefix, digit, then 1-3 letters; 3-6 characters total, e.g.
+# "DJ0CHE" or "G0ABC" — use your OWN call):
+# licensed stacks inherit it while their own callsign field is empty. Leave unset to
+# configure callsigns per stack.
+# callsign = "DJ0CHE"      # <- replace with YOUR base callsign (runtime-local only)
 
 [web]
 # host = "127.0.0.1"       # loopback only

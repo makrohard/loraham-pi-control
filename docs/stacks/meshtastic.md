@@ -86,7 +86,8 @@ Only what LHPC owns is guarded:
 - **Region, node name, and GPS are LHPC-owned** for the local node and are refused with a pointer
   to the right command: LoRa region → `lhpc config meshtastic region`; owner name/short (incl.
   `--set-ham`, which sets a licensed callsign as the owner) → `lhpc config meshtastic node_name` /
-  `node_short`; GPS mode and fixed position → `lhpc gps` (see [GPS](../gps.md)). Targeting a
+  `node_short` — these are the node's own names, never inherited from the operator callsign, and
+  the start is refused until both are set; GPS mode and fixed position → `lhpc gps` (see [GPS](../gps.md)). Targeting a
   **remote** node with `--dest` is not restricted.
 - **Broad config imports self-heal.** `--configure`/`--import-config` and the channel-URL setters
   (`--seturl`/`--ch-set-url`/`--ch-add-url`, which carry a full LoRa config incl. region) run

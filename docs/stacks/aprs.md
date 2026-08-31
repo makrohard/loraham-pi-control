@@ -1,8 +1,9 @@
 # Stacks: Chat & iGate (APRS, 433)
 
-Two daemon-backed APRS apps on 433 MHz. Both TX via the daemon; both take the
-operator callsign from local config (default `N0CALL`). Don't run them together —
-both retune the 433 radio.
+Two daemon-backed APRS apps on 433 MHz. Both TX via the daemon. Each has its own
+`call` setting (base 3–6 chars + optional APRS SSID `-1`…`-15`, bare = SSID 0); while
+it is empty the stack inherits the global operator base callsign, and with neither set
+the start is refused. Don't run them together — both retune the 433 radio.
 
 ## chat — `loraham-chat`
 

@@ -497,7 +497,6 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
                 summary=stack_raw.get("summary", ""),
                 components=components,
                 main=stack_raw.get("main", ""),
-                operator_box=bool(stack_raw.get("operator_box", True)),
                 binary=binary,
             )
         )

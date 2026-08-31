@@ -121,12 +121,41 @@ lhpc config <stack> --reset-daemon     # reset daemon params
 lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identity
 ```
 
-- `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it.
-- Every licensed stack inherits `operator`'s callsign by default, so `lhpc config operator --callsign W1ABC` unblocks them all; use `lhpc config <stack> <call-param> <value>` for a per-stack override.
+- `operator` is a reserved subcommand (not a stack id). `--callsign` applies only to it and
+  takes the **base** callsign only — the intersection every licensed stack accepts: the
+  digit-bearing amateur structure — prefix, digit, then 1–3 letters, 3–6 characters total
+  (e.g. `G0ABC`, `DJ0CHE`) — no SSID, no `/P`. `N0CALL` is refused as a placeholder, and its
+  four-letter suffix is not a valid base shape either. A value any licensed stack would refuse cannot be saved globally.
+- The global setting is **optional**. Licensed stacks (chat, iGate, Voice, Graywolf, MeshCom)
+  inherit it only while their own callsign field is empty; the local field stays empty while
+  inheriting. A per-stack value overrides it and may carry that stack's SSID or portable form:
+  `lhpc config chat call YOURCALL-10` · `lhpc config voice callsign YOURCALL/P` ·
+  `lhpc config meshcom mc_callsign YOURCALL-99` (`YOURCALL` = your own callsign — the
+  N0CALL placeholder is refused). APRS/AX.25 stacks take SSID `-1`…`-15` (a bare
+  callsign means SSID 0); MeshCom takes a numeric suffix `-1`…`-99` (plus the pinned firmware's one whitelisted
+  real-station exception `OE2YOTA-1`; its protocol-control identifiers are deliberately
+  not accepted as operator identities); Voice transmits at most
+  11 characters and allows `/` and `-` (portable forms).
+- **What this checks, and what it does not.** LHPC verifies that an identity is *configured,
+  not a placeholder, and encodable by the protocol that will transmit it* — the byte and
+  character limits, SSID ranges and callsign shape each stack's firmware or app actually accepts.
+  It cannot and does not verify that the callsign is licensed to you. Using your own call remains
+  yours; the gate stops a station transmitting under a value nobody chose.
+- **Non-licensed stacks never inherit the global callsign.** Meshtastic needs both local node
+  names (`lhpc config meshtastic node_name "Field Node"` + `node_short FN1`, 39/4 UTF-8
+  bytes); MeshCore needs its local node name (max 31 bytes). A start without a required
+  identity is refused and prints a command template for every missing field (replace the
+  UPPERCASE token with your value). An identity you type on a start or restart is SAVED as that
+  stack's configuration before the launch; every other start/restart parameter applies to that
+  launch only. `lhpc config` (like the Settings page) may CLEAR an identity — a licensed callsign
+  then falls back to the global one, and with no global left, or for a Meshtastic/MeshCore node
+  name that never inherits, the stack simply cannot be started until you set one again. On the
+  Start/Restart panel the same blank is refused instead, because that operation is a launch and a
+  refused launch must not change your configuration.
 - A `<param>` name shared by several components must be qualified as `<component>.<param>` — the command refuses rather than guessing.
 - `--band` selects the band for band-switchable stacks.
 
-Example: `lhpc config chat call W1ABC` then `lhpc stack start chat`.
+Example: `lhpc config chat call YOURCALL-10` (`YOURCALL-10` = your callsign+SSID) then `lhpc stack start chat`.
 
 ### hardware
 Show or set the **radio hardware setup** — which physical board(s) this box has. This fixes which

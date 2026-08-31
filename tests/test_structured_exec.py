@@ -240,7 +240,7 @@ def _mk_comp_with_post(post):
     from lhpc.core.model import Component, ComponentKind, RunParam
     return Component(id="c", name="c", kind=ComponentKind.SERVICE,
                      run_params=(RunParam(name="mc_callsign", kind="str",
-                                          validator="callsign", default="OE1ABC"),),
+                                          validator="callsign", default="XX0XXB"),),
                      post_steps=tuple(post))
 
 
@@ -248,7 +248,7 @@ def _render(post, params=None, result_path="", runtime="/rt"):
     from lhpc.core import commands
 
     class _Op:
-        callsign = "OE1ABC"
+        callsign = "XX0XXB"
     comp = _mk_comp_with_post(post)
     return commands.render_post_launcher(list(post), comp, params or {}, _Op(),
                                          runtime, "/rt/src", "", result_path=result_path)
@@ -269,7 +269,7 @@ def test_require_all_escalates_optional_step_to_gating():
     from lhpc.core import commands
 
     class _Op:
-        callsign = "OE1ABC"
+        callsign = "XX0XXB"
 
     post = [{"kind": "exec", "label": "node identity", "optional": True,
              "argv": ["meshtastic", "--set-owner", "Joe"]}]
@@ -288,7 +288,7 @@ def test_tcp_send_probe_fields_are_rendered_and_param_expanded():
                      "probe": "--info\n", "probe_stop_on": "Call:{param:mc_callsign}",
                      "stop_on": "Call:{param:mc_callsign}"}])
     assert "'probe': '--info\\n'" in code
-    assert "Call:OE1ABC" in code                                 # {param} expanded
+    assert "Call:XX0XXB" in code                                 # {param} expanded
     compile(code, "<launcher>", "exec")                          # valid python
 
 
@@ -351,7 +351,7 @@ def test_deaf_console_gets_no_payload_then_one_acked_send():
                 return ""                                        # booting: deaf
             return "Call:N0CALL Short:N0C set\n"                 # alive, wrong call
         if data.startswith("--setcall"):
-            return "Call:OE1ABC Short:OE1 set\n"                 # ACK
+            return "Call:XX0XXB Short:OE1 set\n"                 # ACK
         return ""
     port, received, stop = _serve(behavior)
     try:
@@ -374,8 +374,8 @@ def test_probe_match_skips_all_sends():
     # NVS-persisted setting already present: the probe matches -> ZERO payload sends.
     def behavior(received, data):
         if data.startswith("--info"):
-            return "Call:OE1ABC Short:OE1 set\n"                 # already ours
-        return "Call:OE1ABC Short:OE1 set\n"
+            return "Call:XX0XXB Short:OE1 set\n"                 # already ours
+        return "Call:XX0XXB Short:OE1 set\n"
     port, received, stop = _serve(behavior)
     try:
         code = _render([{"kind": "tcp_send", "port": port,
@@ -403,7 +403,7 @@ def test_acked_send_writes_result_sidecar(tmp_path):
                 return ""                                        # booting: deaf
             return "Call:N0CALL Short:N0C set\n"
         if data.startswith("--setcall"):
-            return "Call:OE1ABC Short:OE1 set\n"                 # ACK
+            return "Call:XX0XXB Short:OE1 set\n"                 # ACK
         return ""
     port, received, stop = _serve(behavior)
     root, rp = _sidecar_root(tmp_path)
@@ -427,7 +427,7 @@ def test_acked_send_writes_result_sidecar(tmp_path):
 def test_probe_match_writes_probe_matched_result(tmp_path):
     import json
     def behavior(received, data):
-        return "Call:OE1ABC Short:OE1 set\n"                     # already ours
+        return "Call:XX0XXB Short:OE1 set\n"                     # already ours
     port, received, stop = _serve(behavior)
     root, rp = _sidecar_root(tmp_path)
     try:

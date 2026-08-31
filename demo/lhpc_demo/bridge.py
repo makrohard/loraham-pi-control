@@ -24,7 +24,7 @@ def _seed(svc) -> None:
         pass
     try:
         from lhpc.core.config import save_operator_config
-        save_operator_config(svc._paths, "DL0DEMO")
+        save_operator_config(svc._paths, "DL0DEM")
     except Exception:
         pass
 

@@ -133,6 +133,17 @@ endpoints also drive the running-vs-degraded status. TCP ready endpoints must be
 
 ### Parameters & config files
 
+**Identity params.** Give the stack's identity param the validator that matches its
+protocol — that choice decides both the accepted syntax and the enforcement class:
+`callsign` (APRS/AX.25: base 3–6 + optional SSID `-1`…`-15`), `callsign_voice` (≤11 chars,
+portable forms), `callsign_meshcom` (digit-bearing, suffix `-1`…`-99`, + the firmware's `OE2YOTA-1`
+exception) are **licensed** —
+they inherit the global operator callsign via a `default = "{callsign}"` while the local
+field is empty. `node` (31 UTF-8 bytes), `node_long` (39), `node_short` (4) are
+**unlicensed local identities** — give them `default = ""` and never `{callsign}`: they
+must be deliberately configured and never inherit an amateur callsign. A start without a
+resolvable identity is refused before any lifecycle mutation.
+
 `param` entries become CLI args (start-time) or web **Settings** fields. A `config_file`
 lets LHPC generate a component's config from a base, updating just the named keys.
 

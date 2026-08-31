@@ -1756,9 +1756,12 @@ def apply_config_transaction(paths: Paths, targets: list[tuple[str, Path, str, i
 
 def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path, str, int]]) -> None:
     """MODULE-PRIVATE transaction body — assumes the config lock is ALREADY held EXCLUSIVELY by the caller.
-    NOT a general lock-bypass API: the ONLY external caller is `ControllerService.save_config_bundle`, and
-    ONLY when it holds the EXCLUSIVE config-stability guard (`_holds_config_exclusive()`, the auto-install
-    auto-install boundary). Everyone else MUST use `apply_config_transaction()`, which acquires the lock. Steps
+    NOT a general lock-bypass API: the external callers are `ControllerService.save_config_bundle`
+    (ONLY under the EXCLUSIVE config-stability guard, the auto-install boundary) and
+    `ControllerService.set_operator_identity` (which computes its affected-stack snapshot and commits
+    the [operator] patch + restart markers under its own held `config_lock` — the same critical
+    section, so snapshot and write cannot be split by a concurrent start). Everyone else MUST use
+    `apply_config_transaction()`, which acquires the lock. Steps
     (unchanged): recover/block any pending journal; journal each pre-image; atomically replace; roll back
     all on failure; remove the journal on success."""
     if recover_config_transaction(paths) == "":
@@ -1783,11 +1786,22 @@ def _apply_config_transaction_locked(paths: Paths, targets: list[tuple[str, Path
         _resolve_journal_target(paths, rec)
     _atomic_write(paths, jp, json.dumps(journal), 0o600)   # anchored write creates parents
     try:
-        for _kind, p, content, mode in targets:
-            # `content` may be a callable rendered INSIDE this lock (merge-in-transaction),
-            # so it reads the LATEST file and preserves keys owned by another writer. A raise
-            # here (e.g. an unsupported manual value) triggers the rollback below.
-            _atomic_write(paths, p, content(paths) if callable(content) else content, mode)
+        # RENDER EVERYTHING FIRST, THEN WRITE. `content` may be a callable rendered INSIDE this
+        # lock (merge-in-transaction), so it reads the LATEST file and preserves keys owned by
+        # another writer — and rendering before any write means a renderer can READ the pre-save
+        # state of a file another target is about to replace, without depending on its position in
+        # this list (review-found: the restart-marker renderer was only correct because it had been
+        # inserted at index 0, an invariant nothing enforced). It also means a renderer that raises
+        # leaves ZERO writes to roll back rather than a partial set.
+        # None WITHDRAWS a target: a decision that can only be taken with the authoritative state
+        # in hand ("is a restart marker warranted?") belongs inside the transaction, not in the
+        # pre-lock build. The journal holds its pre-image either way.
+        rendered = [(p, content(paths) if callable(content) else content, mode)
+                    for _kind, p, content, mode in targets]
+        for p, body, mode in rendered:
+            if body is None:
+                continue
+            _atomic_write(paths, p, body, mode)
     except Exception as failure:
         for rec in journal["targets"]:        # roll back everything
             p = _resolve_journal_target(paths, rec)

@@ -114,6 +114,38 @@
               {% endfor %}
             </div>
           </details>
+          {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
+          <details class="advcfg" id="operator-callsign">
+            <summary>Global operator callsign{% if operator_callsign %} <span class="pill mono">{{ operator_callsign }}</span>{% else %} <span class="pill">not set</span>{% endif %}</summary>
+            <div class="body">
+              {% if operator_callsign_legacy %}
+                <p class="depnote depnote-warn"><strong>Legacy value.</strong>
+                  <code>{{ operator_callsign }}</code> is not a bare base callsign — licensed
+                  stacks can no longer inherit it. Move the SSID/suffix to the stack(s) that
+                  need it and save your base callsign here
+                  {% if operator_callsign_suggestion %}(e.g. <code>{{ operator_callsign_suggestion }}</code>){% else %}(your bare base callsign){% endif %}.</p>
+              {% endif %}
+              <p class="muted"><strong>Optional.</strong> Your bare base amateur callsign —
+                prefix, digit, then 1–3 letters, 3–6 characters total (e.g.
+                <code>G0ABC</code>) — no SSID, no <code>/P</code>.
+                Licensed stacks (chat, iGate,
+                Voice, Graywolf, MeshCom) inherit it only while their own callsign field is empty;
+                a per-stack callsign overrides it and may carry that stack's SSID or portable
+                form. Non-licensed stacks (Meshtastic, MeshCore) never inherit it — they need
+                their own local node names.</p>
+              <form method="post" action="{{ url_for('operator_callsign_save') }}">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <table class="paramgrid dptab">
+                  <tr><th>Base callsign</th>
+                    <td><input type="text" name="callsign" value="{{ operator_callsign }}"
+                               placeholder="your base callsign (empty = unset)" autocomplete="off"></td>
+                    <td class="dphelp muted">digit-bearing base, 3–6 letters/digits;
+                      empty clears it</td></tr>
+                </table>
+                <button type="submit">Save</button>
+              </form>
+            </div>
+          </details>
           {% if network_view %}
             {% include "_network.html" %}
           {% endif %}

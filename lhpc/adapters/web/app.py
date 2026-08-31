@@ -990,6 +990,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             "ws_stackwebs": service.stack_webs_overview(),
             "wsg_open": bool(request.args.get("wsg")),
             "tasks": service.running_tasks(),
+            "operator_callsign": service.config().operator.callsign,
+            "operator_callsign_legacy": service.operator_callsign_legacy(),
+            "operator_callsign_suggestion": service.operator_callsign_correction(),
             "restored_open": restored_open,
             "hw_probe": hw_probe,
             "confirm": None,
@@ -1408,14 +1411,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return {"parse_error": None, "bands": bands, "ok": all(bands.values()) if bands else True}
 
     def _render_confirm(op: str, target: str, band: str, params: dict, file_over,
-                        source: str, frm: str, enforce_field: str = ""):
+                        source: str, frm: str, enforce_fields=()):
         """Stage-1 (and post-Save / enforcement re-render) of the confirm page."""
-        run_params = service.run_params_for(target) if op == "start" else []
+        # start AND restart carry the parameter panel: a restart identity refusal must
+        # reopen Required with the offending fields marked, exactly like a start
+        # (audit-found: restart refusals flashed and redirected, losing the contract).
+        _has_panel = op in ("start", "restart")
+        run_params = service.run_params_for(target) if _has_panel else []
         hidden_params = [p for p in run_params if p.name in _HIDE_RUN]
         stack_params = (service.stack_start_params(target, band, params, file_over)
-                        if op == "start" else None)
+                        if _has_panel else None)
         stack_param_groups = (service.stack_start_param_groups(target, band, params, file_over)
-                              if op == "start" else None)
+                              if _has_panel else None)
         # Run params covered by the savable 'Stack parameters' panel; the rest (e.g. the daemon's
         # ephemeral `debug` start flag) render as PLAIN inputs — start options, never persisted.
         # Fixture-owned params are excluded HERE too: the panel filters them, so leaving them in
@@ -1429,7 +1436,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Submitted-but-unsaved daemon-panel values (best-effort parse; a malformed field is ignored
         # for DISPLAY only) so a re-render after a failed Save/enforcement keeps the operator's edits.
         _dp_display, _ = (_parse_start_daemon_overrides(request.form) if op == "start" else (None, ""))
-        plan = service.run_action(op, target, apply=False, params=params, source=source, band=band)
+        plan = service.run_action(op, target, apply=False, params=params, source=source,
+                                  band=band, file_overrides=file_over)
+        # The whole Apply form lives under `{% elif plan.ok %}`, so a plan that fails ON THE
+        # SUBMITTED VALUES blanks the page the operator needs in order to FIX those values — a
+        # dead end reachable from "Save & start", a rejected identity, a bad frequency, a daemon
+        # parse error. Re-plan on the SAVED config in that case: the inputs render from
+        # `params`/`file_over` separately, so the operator's typed values and the marked rows are
+        # untouched, the flash still carries the real error, and a genuine blocker (one that fails
+        # with no submitted values at all) still suppresses the form exactly as before.
+        if not plan.ok and (params or file_over):
+            plan = service.run_action(op, target, apply=False, params=None, source=source,
+                                      band=band, file_overrides=None)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
         # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
         # BUILD dependencies gate the SOURCE channel only — a download needs no toolchain
@@ -1443,7 +1461,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             hidden_params=hidden_params, plain_params=plain_params,
             params=params, source=source, band=band,
             stack_params=stack_params, stack_param_groups=stack_param_groups,
-            enforce_field=enforce_field,
+            enforce_fields=list(enforce_fields or ()),
             blockers=(plan.data.get("blockers") if op == "start" else None),
             stop_deps=(plan.data.get("dependents") if op == "stop" else None),
             other_bands=(plan.data.get("other_bands") if op == "stop" else None),
@@ -1469,10 +1487,27 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op not in service.WEB_ACTIONS:
             abort(400)
         band = request.form.get("band", "")    # chosen band for a band-switchable stack
+        # ONE CONCRETE OPERATION BAND, frozen HERE — before any field is collected, rendered,
+        # saved or applied — and carried onward as the hidden `band` of the confirm form, so the
+        # render, the Save, the Save-only re-render and the Apply all address the SAME per-band
+        # config. Why this must be frozen: see `operation_band`.
+        _band_moved = False
+        _submitted_band = band
+        if op in ("start", "restart"):
+            band = service.operation_band(target, band)
+            # NOTE: when the rendered band was "" the hidden field is omitted, so a later move to a
+            # concrete band is not caught here. Unreachable: a band-switchable stack renders "" only
+            # with hardware unset, and that page carries no Apply form at all.
+            # The frozen band is HONOURED, never silently reinterpreted: if the box changed under
+            # the operator between confirm and Apply (radio mode narrowed, board swapped) so that
+            # the confirmed band no longer resolves to itself, refuse with a typed mismatch and
+            # re-render on the band that is now true — the confirmed form described the old one.
+            _band_moved = (_submitted_band and band != _submitted_band
+                           and request.form.get("confirmed") == "yes")
         # Collect run + file params (only meaningful for start). The confirm 'Stack parameters'
         # panel submits p_<name> (run) / pf_<name> (file); defaults come from the saved config.
         params, file_over, _have = (_collect_start_params(target, band)
-                                    if op == "start" else ({}, None, False))
+                                    if op in ("start", "restart") else ({}, None, False))
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
         # to 'dev' (the remote branch tip) — the confirm page preselects it, and every normal POST
         # carries the operator's explicit choice. An INVALID selector is rejected by run_action
@@ -1492,6 +1527,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
         save_mode = request.form.get("_save", "")           # "stack" | "daemon" | ""
+        # The frozen band is HONOURED, never silently reinterpreted (audit rule). If the box changed
+        # under the operator between confirm and Apply — radio mode narrowed, board swapped — so the
+        # confirmed band no longer resolves to itself, refuse with a typed mismatch and re-render on
+        # the band that is now true: the confirmed form described the old one.
+        if _band_moved:
+            flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "
+                  f"{band or 'its fixed band'} — check the values and confirm again.", "warn")
+            return _render_confirm(op, target, band, {}, None, source, frm)
         # Refuse to start an app that isn't installed or built yet — send the operator to THIS
         # stack's Install section (which has the Install/Build buttons, and repeats the reason in a
         # banner) with a warning and the CLI command, rather than spawning a doomed start.
@@ -1511,7 +1554,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # ONLY after EVERY selected persistence succeeds. Any failure (parse, stack or per-band
         # daemon write) blocks the start and re-renders the confirm with the SUBMITTED values +
         # visible errors — nothing is started, reconfigured, generated or recorded.
-        if op == "start" and save_mode in ("stack", "daemon", "all"):
+        if op in ("start", "restart") and save_mode in ("stack", "daemon", "all"):
             then_start = request.form.get("_save_then_start") == "1"
             # Validate the daemon form BEFORE the first write, so a malformed field fails closed
             # without persisting anything.
@@ -1524,8 +1567,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _saved_parts: list = []
             _failed_parts: list = []
             stack_values = _stack_save_values(target, band, params, file_over)
+            # The panel's SAVE enforces the SAME identity contract as its Apply, BEFORE the generic
+            # bundle write (audit-found: Save reached save_config_bundle directly, whose blank rule
+            # is "clear the override", so emptying a required Meshtastic/MeshCore node name DELETED
+            # it — the opposite of what the panel promises). Refusing first also keeps the Save
+            # all-or-nothing: a bad identity never lets the other panel fields persist.
+            _id_bad = (service.identity_refusal_for_values(target, band, stack_values)
+                       if save_mode in ("stack", "all") and stack_values else None)
+            if _id_bad is not None:
+                flash(_id_bad.summary, "warn")
+                return _render_confirm(op, target, band, params, file_over, source, frm,
+                                       enforce_fields=tuple(_id_bad.data.get("enforce_fields", ())))
             if save_mode in ("stack", "all") and stack_values:
-                res = service.save_config_bundle(target, values=stack_values, band=band)
+                # The panel's SAVE (and the save half of Save-and-start) carries the SAME
+                # authoritative in-transaction identity recheck as Apply — audit rule: all four
+                # panel paths behave alike, and a concurrent global clear must never leave a
+                # blank persisted here either.
+                res = service.save_config_bundle(target, values=stack_values, band=band,
+                                                 _identity_guard=True)
                 flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
                       "ok" if res.ok else "warn")
                 (_saved_parts if res.ok else _failed_parts).append(f"'{target}' config")
@@ -1534,7 +1593,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # part of the same fail-closed Save: any failed dependency save blocks the start.
             if save_mode in ("stack", "all") and stack_ok:
                 for _dsid, _dvals in _dep_save_values(target, band, params, file_over).items():
-                    _dres = service.save_config_bundle(_dsid, values=_dvals, band=band)
+                    # A dependency's identity obeys the same contract as the target's.
+                    _dbad = service.identity_refusal_for_values(_dsid, band, _dvals)
+                    if _dbad is not None:
+                        flash(_dbad.summary, "warn")
+                        return _render_confirm(
+                            op, target, band, params, file_over, source, frm,
+                            enforce_fields=tuple(_dbad.data.get("enforce_fields", ())))
+                    _dres = service.save_config_bundle(_dsid, values=_dvals, band=band,
+                                                       _identity_guard=True)
                     flash(f"{_dsid}: " + _dres.summary
                           + (" " + "; ".join(_dres.details) if _dres.details else ""),
                           "ok" if _dres.ok else "warn")
@@ -1565,17 +1632,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     flash(f"Daemon {_b} MHz: {'saved' if _bok else 'save FAILED'}",
                           "ok" if _bok else "warn")
             if not then_start:
-                # Save-only: re-render with the (now saved) config — never starts.
-                # Re-render with the SAVED values — but only the keys the start form owns.
-                # stack_config() returns the whole saved config, HMAC-managed `password_file`
-                # included; handing that back as an ephemeral start override makes the NEXT
-                # submit post it, and the start then refuses ("managed by the HMAC password
-                # flow"). start_param_fields() is already HMAC-filtered (_form_run_params).
-                fresh = service.stack_config(target, band)
-                owned = {f["key"] for f in service.start_param_fields(target, band)
-                         if f["kind"] == "run"}
+                # Save-only: re-render with the (now saved) values — never starts. Taken from
+                # start_param_fields() (HMAC-filtered AND identity-aware): stack_config()
+                # substitutes the global callsign into an empty identity field, so handing it
+                # back as a form value let a SECOND Save persist the inherited global as a
+                # local override (audit-found copy-on-save through Save-only).
                 return _render_confirm(op, target, band,
-                                       {k: v for k, v in dict(fresh).items() if k in owned},
+                                       {f["key"]: f["saved"]
+                                        for f in service.start_param_fields(target, band)
+                                        if f["kind"] == "run"},
                                        None, source, frm)
             if not (stack_ok and daemon_res["ok"]):
                 # Save & start, but a later save failed (a per-band DAEMON save after a successful/
@@ -1663,15 +1728,28 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # CALL/node enforcement (UX): block the start and RE-RENDER the confirm with the
             # 'Stack parameters' panel expanded and the offending field highlighted, so the operator
             # can supply the call/node in place. The service layer enforces this authoritatively too.
-            id_ok, id_field, id_msg = service.enforce_identity(target, band, params, file_over)
+            # UX pre-gate. `band` was frozen to the concrete operation band above, so this
+            # judges the stack on the band that will actually launch (audit-found: the raw form
+            # band judged a Voice stack active on 868 against its empty 433 settings).
+            id_ok, id_fields, id_msg = service.enforce_identity(
+                target, band, params, file_over)
             if not id_ok:
                 flash(id_msg, "warn")
                 return _render_confirm(op, target, band, params, file_over, source, frm,
-                                       enforce_field=id_field)
+                                       enforce_fields=id_fields)
         result = service.run_action(op, target, apply=True, params=params, source=source,
                                     stop_owners=stop_owners, cascade=cascade, band=band,
                                     daemon_overrides=daemon_overrides, file_overrides=file_over,
                                     purge=purge)
+        # An AUTHORITATIVE identity refusal (config changed after the UX gate, or a direct
+        # POST) gets the same Required-field UX as the pre-gate: re-render the confirm with
+        # the submitted values, the Required section open and every offending field marked —
+        # never a bare flash+redirect that loses the contract's guidance (audit-found).
+        if (not result.ok and op in ("start", "restart")
+                and result.data.get("enforce_fields")):
+            flash(result.summary, "warn")
+            return _render_confirm(op, target, band, params, file_over, source, frm,
+                                   enforce_fields=result.data["enforce_fields"])
         # An interactive/systemd START whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
         # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
         # START-ONLY: on a stop/restart, MANUAL_REQUIRED means "a foreign process is still running,
@@ -1756,10 +1834,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             for src in view["sources"]:
                 field = request.form.get("remote_" + src["id"], src["remote"])
                 remotes[src["id"]] = "" if field.strip() == src["default"] else field.strip()
+        # PLAIN CONFIG EDITING may leave a stack without an identity — the operator is allowed to
+        # clear a field, and a stopped stack may hold incomplete configuration. The protection is
+        # at the LAUNCH boundary, which refuses to start without a resolvable identity; the row
+        # here carries the problem note. Only the Start/Restart panel (a launch) refuses a clear,
+        # because an operation that is refused must not leave a mutation behind.
         result = service.save_config_bundle(
-            stack_id, values=values,
-            callsign=request.form.get("op_callsign"),
-            band=band, remotes=remotes)
+            stack_id, values=values, band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", band=band or None, cfg=stack_id)
@@ -2060,6 +2141,18 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         r = service.webserver_reset_defaults()
         flash(r.summary, "ok" if r.ok else "err")
         return _ws_back()
+
+    @app.post("/operator/callsign")
+    def operator_callsign_save():
+        """The GLOBAL operator callsign — its own deliberate card on the LHPC main card,
+        never a stack-page side effect. Empty clears it (licensed stacks then require
+        their local callsign)."""
+        if not _csrf_ok():
+            abort(400)
+        r = service.set_operator_identity(callsign=request.form.get("callsign", "").strip())
+        flash(r.summary + (" " + "; ".join(r.details) if r.details else ""),
+              "ok" if r.ok else "err")
+        return redirect(url_for("stacks_overview") + "#operator-callsign")
 
     @app.route("/webserver/verify", methods=["POST"])
     def webserver_verify():

@@ -988,7 +988,7 @@ def test_restart_is_refused_by_the_dependency_band_rule_before_its_stop(tmp_path
              200: ["/x/loraham-kiss-tnc", "--config", "c"]}
     _S868 = {"/tmp/loraconf868.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}
     svc = _band_svc(tmp_path, _D868, _S868, {"kiss": "868", "graywolf": "433"})
-    save_operator_config(svc._paths, "DJ0CHE")
+    save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
 
     res = svc.restart("graywolf", apply=True)

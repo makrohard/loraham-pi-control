@@ -385,33 +385,36 @@ def test_config_list_marks_identity(tmp_path, monkeypatch, capsys):
 
 def test_config_set_and_show(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "mc_callsign", "W1ABC-7"]) == 0
+    assert main(["config", "meshcom", "mc_callsign", "XX0XXB-7"]) == 0
     capsys.readouterr()
     assert main(["config", "meshcom", "mc_callsign"]) == 0
-    assert "W1ABC-7" in capsys.readouterr().out
+    assert "XX0XXB-7" in capsys.readouterr().out
 
 
-def test_config_set_n0call_warns(tmp_path, monkeypatch, capsys):
+def test_config_set_n0call_is_refused_at_save(tmp_path, monkeypatch, capsys):
+    # callsign-identities: the placeholder never even saves — the validator refuses it with
+    # the stack-specific accepted form, instead of saving it and warning afterwards.
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "meshcom", "mc_callsign", "N0CALL"]) == 0
+    assert main(["config", "meshcom", "mc_callsign", "N0CALL"]) == 1
     out = capsys.readouterr().out
-    assert "WARN" in out and "valid callsign is required" in out
+    assert "digit-bearing callsign" in out or "placeholder" in out
 
 
 def test_config_operator_sets_and_normalizes_callsign(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
-    assert main(["config", "operator", "--callsign", "w1abc"]) == 0     # normalizes to upper
+    assert main(["config", "operator", "--callsign", "xx0xxb"]) == 0    # normalizes to upper
     from lhpc.core.services import ControllerService
     op = ControllerService().config().operator
-    assert op.callsign == "W1ABC"
+    assert op.callsign == "XX0XXB"
 
 
 @pytest.mark.parametrize("argv,rc,msg", [
-    pytest.param(["config", "meshcom", "mc_callsign", "bad!!call"], 1, "invalid callsign",
+    pytest.param(["config", "meshcom", "mc_callsign", "bad!!call"], 1,
+                 "numeric suffix -1..-99",
                  id="test_config_set_invalid_value_rejected"),
     pytest.param(["config", "meshcom", "nosuchparam"], 1, "unknown parameter",
                  id="test_config_unknown_param"),
-    pytest.param(["config", "does-not-exist", "call", "W1ABC"], 1, "unknown stack",
+    pytest.param(["config", "does-not-exist", "call", "XX0XXB"], 1, "unknown stack",
                  id="test_config_unknown_stack"),
     pytest.param(["config", "operator", "call", "X"], 2, "only --callsign",
                  id="test_config_operator_reserved_rejects_positional"),
@@ -531,17 +534,20 @@ def test_identity_hint_points_at_a_real_command(tmp_path, monkeypatch):
     from lhpc.adapters.cli.main import build_parser
 
     def parses(hint):
-        toks = [("W1ABC" if t.startswith("<") else t) for t in shlex.split(hint)[1:]]
+        toks = [("XX0XXB" if t.startswith("<") else t) for t in shlex.split(hint)[1:]]
         build_parser().parse_args(toks)                      # must NOT SystemExit
 
     svc = ControllerService()
-    hint = svc._identity_config_hint("chat")                 # operator UNSET -> operator command
-    assert hint == "lhpc config operator --callsign <CALL>"
-    parses(hint)
-    save_operator_config(svc._paths, "DJ0CHE"); svc._invalidate_config()
-    hint2 = svc._identity_config_hint("chat")                # operator SET -> per-stack command
+    # callsign-identities: the hint leads with the LOCAL field in BOTH regimes (the operator
+    # asked for this stack); the optional global command rides along as a comment.
+    hint = svc._identity_config_hints("chat")[0]
+    assert hint.startswith("lhpc config chat ")
+    assert "lhpc config operator --callsign" in hint         # the global option, second
+    parses(hint.split("   #", 1)[0])
+    save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
+    hint2 = svc._identity_config_hints("chat")[0]
     assert hint2.startswith("lhpc config chat ")
-    parses(hint2)
+    parses(hint2.split("   #", 1)[0])
 
 
 def test_all_cli_hints_reference_real_commands():

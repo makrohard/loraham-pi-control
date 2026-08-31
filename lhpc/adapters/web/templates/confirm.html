@@ -92,7 +92,7 @@
               newest release tag, else newest tag, else main</span>
             <br>
           {% endif %}
-          {% if op == 'start' %}<input type="hidden" name="_params" value="1">{% endif %}
+          {% if op in ('start', 'restart') %}<input type="hidden" name="_params" value="1">{% endif %}
           {# Daemon radio band / TX / CAD START flags are chosen elsewhere — submitted as hidden
              inputs so the start is unchanged (never shown in the editable panels). #}
           {% for p in hidden_params|default([]) %}

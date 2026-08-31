@@ -48,16 +48,119 @@ def safe_text(value, *, max_len: int = MAX_LEN, field: str = "value") -> str:
     return s
 
 
-def callsign(value, *, field: str = "callsign", allow_empty: bool = True) -> str:
-    s = str(value).strip()
+# YOURCALL is the shell-safe replace-me token the refusal hints print — pasting a hint
+# verbatim must never yield a transmitting identity (audit-found: bare "YOURCALL" passed
+# the voice shape).
+_PLACEHOLDER_BASES = ("N0CALL", "XX0XXX", "YOURCALL")
+
+
+def _reject_placeholder(s: str, field: str) -> None:
+    base = re.split(r"[-/]", s, maxsplit=1)[0]
+    if base in _PLACEHOLDER_BASES:
+        raise ValidationError(f"{field}: {s!r} is a placeholder, not a real callsign")
+
+
+def callsign_base(value, *, field: str = "operator callsign", allow_empty: bool = True) -> str:
+    """The GLOBAL operator identity: a bare licensed base callsign, 3-6 uppercase ASCII
+    alphanumerics — no SSID, no portable suffix ('/P', '-P'), no placeholder. It is the
+    fallback every LICENSED stack inherits while its own callsign field is empty, so it
+    must stay in the one shape every licensed stack accepts."""
+    s = str(value).strip().upper()
     if not s:
         if allow_empty:
             return ""
         raise ValidationError(f"{field}: required")
-    # 1-8 alphanumerics with an optional -SSID (0-99): a bare or club call plus an
-    # APRS SSID. Slash compound/portable calls (e.g. EA4/DJ0CHE, DJ0CHE/P) are rejected.
-    if not re.fullmatch(r"[A-Za-z0-9]{1,8}(-[0-9]{1,2})?", s):
-        raise ValidationError(f"{field}: invalid callsign {s!r}")
+    # THE INTERSECTION every licensed stack accepts (audit-found dead end: a digit-less
+    # "ABCDEF" saved globally, then MeshCom refused it and both printed remedies were the
+    # same invalid string). MeshCom's firmware requires the digit-bearing amateur structure
+    # (prefix, digit(s), 1-3 suffix letters) — every real base callsign has it, so nothing
+    # legitimate is lost by requiring it here.
+    # Suffix 1-3 letters — the INTERSECTION the global must satisfy, because MeshCom's pinned
+    # firmware accepts at most three (audit-found: widening this to 4 let a global be set that
+    # MeshCom would reject, so an "inheritable" global was not actually inheritable everywhere).
+    _reject_placeholder(s, field)          # named as a placeholder, not refused on shape
+    if not re.fullmatch(r"[A-Z0-9]?[A-Z]?[0-9]+[A-Z]{1,3}", s) or not (3 <= len(s) <= 6):
+        raise ValidationError(
+            f"{field}: {s!r} — must be your bare base amateur callsign: prefix, digit, then "
+            "1-3 letters, 3-6 characters total — use your OWN call; no SSID, '/P' or '-P', "
+            "set those per stack")
+    return s
+
+
+def callsign(value, *, field: str = "callsign", allow_empty: bool = True) -> str:
+    """An APRS/AX.25 station callsign (chat, iGate, Graywolf): base of 3-6 uppercase
+    letters/digits plus an optional numeric SSID -1..-15. A bare callsign means SSID 0 —
+    an SSID is NOT required. Portable/compound forms ('/P', 'EA4/...') are not valid on
+    AX.25 addressing and are refused."""
+    s = str(value).strip().upper()
+    if not s:
+        if allow_empty:
+            return ""
+        raise ValidationError(f"{field}: required")
+    if not re.fullmatch(r"[A-Z0-9]{3,6}(-(1[0-5]|[1-9]))?", s):
+        raise ValidationError(
+            f"{field}: {s!r} — must be a base callsign of 3-6 letters/digits with an "
+            "optional APRS SSID -1..-15 (bare = SSID 0), shaped like N0CALL-10 — use your own call")
+    _reject_placeholder(s, field)
+    return s
+
+
+def callsign_voice(value, *, field: str = "voice callsign", allow_empty: bool = True) -> str:
+    """The Voice station label: 1-11 uppercase characters of letters, digits, '/' and '-'
+    (the app transmits at most 11 characters and would silently truncate more). Portable
+    and compound forms (N0CALL/P, N0CALL-P, EA0/N0CALL) are fine within that limit."""
+    s = str(value).strip().upper()
+    if not s:
+        if allow_empty:
+            return ""
+        raise ValidationError(f"{field}: required")
+    # Checked against the pinned Voice source (loraham_voice_v107.c): it copies exactly 11
+    # bytes into the transmitted header (`strncpy(h.callsign, CFG.callsign, 11)`), so 11 is
+    # the wire limit, and it upper-cases in place. It validates no charset of its own, and its
+    # config reader does `strncpy(CFG.callsign, val, 12)` into a 12-byte buffer, which leaves
+    # no room for a terminator at exactly 12 — refusing anything longer than 11 keeps that
+    # unreachable.
+    if len(s) > 11:
+        raise ValidationError(
+            f"{field}: {s!r} is {len(s)} characters — Voice transmits at most 11")
+    if not re.fullmatch(r"[A-Z0-9/-]{1,11}", s):
+        raise ValidationError(
+            f"{field}: {s!r} — letters, digits, '/' and '-' only, shaped like N0CALL/P "
+            "or EA0/N0CALL — use your own call")
+    _reject_placeholder(s, field)
+    return s
+
+
+def callsign_meshcom(value, *, field: str = "MeshCom callsign", allow_empty: bool = True) -> str:
+    """A MeshCom OPERATOR-IDENTITY callsign — the deliberate identity SUBSET of the pinned
+    firmware's own check, NOT a mirror of it: a digit-bearing amateur call (up to two prefix
+    characters, at least one digit, 1-3 suffix letters) with an optional numeric suffix
+    -1..-99 (e.g. N0CALL, N0CALL-10, N0CALL-99), plus the firmware's one whitelisted real
+    station callsign OE2YOTA-1.
+
+    Checked against the firmware source (icssw-org/MeshCom-Firmware, src/regex_functions.cpp):
+        ^[0-9A-Z]?[A-Z]?[0-9]+[A-Z][A-Z]?[A-Z]?[%-]?[0-9]?[0-9]?$
+    The call shape matches ours exactly. We are deliberately STRICTER in two places, because
+    the firmware's suffix is "optional dash, then 0-2 optional digits":
+      * a bare trailing dash ("N0CALL-") is an identity with no SSID at all — refused;
+      * "-0" is refused, because MeshCom's own documentation requires an SSID of -1..-99 and
+        -0 is indistinguishable from no SSID.
+    We also refuse every protocol-control token the firmware whitelists (*, H, HG, TEST,
+    TESTER, WLNK-1, APRS2SOTA, "BOT GATE"; it separately rejects "DE") — those are message
+    routing identifiers, not operator identities."""
+    s = str(value).strip().upper()
+    if not s:
+        if allow_empty:
+            return ""
+        raise ValidationError(f"{field}: required")
+    # The firmware's one whitelisted REAL station callsign (a 4-letter-suffix special event
+    # call) is accepted verbatim; its protocol-control tokens are not (see the docstring).
+    _reject_placeholder(s, field)
+    if s != "OE2YOTA-1" and not re.fullmatch(
+            r"[A-Z0-9]?[A-Z]?[0-9]+[A-Z]{1,3}(-[1-9][0-9]?)?", s):
+        raise ValidationError(
+            f"{field}: {s!r} — MeshCom needs a digit-bearing callsign (prefix, digit, then "
+            "1-3 letters) with an optional numeric suffix -1..-99 — use your own call")
     return s
 
 
@@ -165,39 +268,39 @@ def band(value, *, field: str = "band", allow_both: bool = True) -> str:
     return s
 
 
-def node_name(value, *, field: str = "node name") -> str:
-    s = str(value).strip()
-    if not s or len(s) > 32:
-        raise ValidationError(f"{field}: invalid length")
-    if not re.fullmatch(r"[A-Za-z0-9 ._-]+", s):
-        raise ValidationError(f"{field}: illegal character(s) in {s!r}")
+def _printable_utf8(s: str, max_bytes: int, field: str, what: str) -> str:
+    if not s:
+        raise ValidationError(f"{field}: must not be empty")
+    _reject_control(s, field)
+    n = len(s.encode("utf-8"))
+    if n > max_bytes:
+        raise ValidationError(
+            f"{field}: {s!r} is {n} UTF-8 bytes — {what} allows at most {max_bytes}")
     return s
+
+
+def node_name(value, *, field: str = "node name") -> str:
+    """A MeshCore advertised node name: 1-31 printable UTF-8 BYTES (the advert packet's
+    32-byte app-data budget minus its flags byte; longer values would be silently
+    truncated over the air). This is a LOCAL identity — it never inherits the operator
+    callsign."""
+    return _printable_utf8(str(value).strip(), 31, field, "a MeshCore advert")
+
+
+def node_long(value, *, field: str = "node name (long)") -> str:
+    """A Meshtastic OWNER LONG name: 1-39 printable UTF-8 BYTES (upstream's 40-byte
+    buffer incl. NUL; longer values would be silently truncated). LOCAL identity —
+    never inherits the operator callsign."""
+    return _printable_utf8(str(value).strip(), 39, field, "Meshtastic")
 
 
 def node_short_name(value, *, field: str = "short node name") -> str:
-    """A Meshtastic OWNER SHORT name, matching upstream `setOwner`: a non-empty value of at most
-    FOUR characters. Upstream silently TRUNCATES anything longer — which would leave the node
-    advertising an identity the operator never chose — so an overlong value is REJECTED here
-    instead. Printable Unicode is preserved (upstream imposes no ASCII/charset restriction); only
-    control characters and NUL are refused, since this value is written into a generated config
-    and echoed in status lines."""
-    s = str(value).strip()
-    if not s:
-        raise ValidationError(f"{field}: must not be empty")
-    # Control-free only — NOT the shell-metacharacter set: this value reaches the device solely
-    # as one element of a structured shell=False argv, so `#`, `/` and friends are legitimate
-    # short names and rejecting them would invent a restriction upstream does not have.
-    _reject_control(s, field)
-    if len(s) > 4:
-        raise ValidationError(
-            f"{field}: at most 4 characters (Meshtastic truncates longer names; "
-            f"got {len(s)} in {s!r})")
-    return s
+    """A Meshtastic OWNER SHORT name: 1-4 printable UTF-8 BYTES (upstream buffer is 5
+    bytes incl. NUL and silently truncates — which would leave the node advertising an
+    identity the operator never chose, so overlong values are REJECTED here)."""
+    return _printable_utf8(str(value).strip(), 4, field, "the short name")
 
 
-# Controller-derived path placeholders — expanded to fixed real paths before the value ever
-# reaches a shell/argv/config file (see commands._paths_subst / config subst). They legitimately
-# contain braces, so `path_value` tolerates ONLY these exact tokens; any other brace still fails.
 _PATH_PLACEHOLDERS = ("{runtime}", "{source}", "{band}")
 
 
@@ -273,7 +376,7 @@ def aprs_symbol(value, *, field: str = "value") -> str:
 
 
 def aprs_filter(value, *, field: str = "value") -> str:
-    """An APRS-IS server filter expression, e.g. `r/48.46/9.96/100 p/DL/DK b/DL1ABC*`.
+    """An APRS-IS server filter expression, e.g. `r/48.46/9.96/100 p/DL/DK b/N0CALL*`.
 
     The syntax is built out of `/`-separated tokens, so the generic safe-text rules (which
     forbid `/` and `*`) cannot apply. This stays a strict allow-list — letters, digits and
@@ -321,7 +424,11 @@ _NAMED = {
     "bind": bind,
     "band": band,
     "node": node_name,
+    "node_long": node_long,
     "node_short": node_short_name,
+    "callsign_base": callsign_base,
+    "callsign_voice": callsign_voice,
+    "callsign_meshcom": callsign_meshcom,
     "path": path_value,
     "aprs_symbol": aprs_symbol,
     "aprs_filter": aprs_filter,

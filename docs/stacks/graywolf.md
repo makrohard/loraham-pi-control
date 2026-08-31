@@ -67,7 +67,7 @@ interface dialling the TNC, the station callsign, and the iGate settings.
 
 | Param | Default | Notes |
 |---|---|---|
-| `call` | operator callsign | Needs an APRS SSID, e.g. `N0CALL-10`. Graywolf derives the APRS-IS passcode from it — LHPC never stores a passcode. |
+| `call` | inherits the global base callsign while empty | Optional APRS SSID `-1`…`-15` (bare = SSID 0); a local override is shaped like `G0ABC-10` (use your own call — `N0CALL` is refused as a placeholder). Graywolf derives the APRS-IS passcode from it — LHPC never stores a passcode. |
 | `tnc_host` / `tnc_port` | `127.0.0.1` / `8001` | Where `loraham-kiss-tnc` listens |
 | `use_gps` | `off` | Use the global position source. The source itself is one box-wide decision (`lhpc gps`); this only opts this station in or out |
 | `igate` | `0` | Enable APRS-IS gating |

@@ -48,9 +48,11 @@ Verified on 868 against two peers (SX1276 + SX127x), all directions.
    a conflicting existing `config.txt`. (Both take effect on the reboot.)
 3. Install lhpc (`install.sh`), then `lhpc auto-install`.
 4. Bring up the web console (see `docs/webserver.md`).
-5. **Set your callsign.** `mc_callsign` is an operator parameter applied over the MeshCom net-console
-   after the node boots. A fresh install with it unset runs as the placeholder **XX0XX** — set it in
-   the stack parameters (or `lhpc config meshcom-qemu mc_callsign <CALL-SSID>`) as part of first start.
+5. **Set your identity.** A fresh MeshCom start is REFUSED until an identity resolves:
+   set the global base callsign once (`lhpc config operator --callsign YOURCALL`) or the
+   stack's own `lhpc config meshcom mc_callsign YOURCALL-99` — `YOURCALL` is a template
+   token: replace it with your own call. The refusal itself prints the command template.
+   (Meshtastic and MeshCore likewise need their local node names.)
 
 ## Build durations & memory pressure (512 MB Zero 2 W)
 

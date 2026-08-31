@@ -275,7 +275,6 @@ id = "chat"
 name = "LoRaHAM Chat"
 summary = "Interactive daemon-backed APRS/chat client (loraham_chat) on 433."
 main = "loraham-chat"
-operator_box = false   # callsign lives in the app's own config file (CALL)
 
   [[stack.component]]
   id = "loraham-chat"
@@ -365,7 +364,6 @@ id = "igate"
 name = "igate DEPRECATED"
 summary = "DEPRECATED — known bugs, unmaintained upstream; the graywolf stack is a full substitute. APRS iGate (loraham_igate) bridging RF<->APRS-IS via the daemon on 433."
 main = "loraham-igate"
-operator_box = false   # callsign is the iGate's own -c param; position is lat/lon
 
   [[stack.component]]
   id = "loraham-igate"
@@ -400,7 +398,7 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
     exec_name = "loraham_igate"
 
     # iGate CLI config (all are start-time options -> apply_mode defaults to "restart").
-    # The iGate REQUIRES a callsign WITH an APRS SSID (e.g. N0CALL-10); defaults to the
+    # The iGate callsign may carry an optional APRS SSID -1..-15 (bare = SSID 0); defaults to the
     # operator callsign but is usually overridden with the gate's own -SSID.
     [[stack.component.param]]
     name = "call"
@@ -408,7 +406,7 @@ operator_box = false   # callsign is the iGate's own -c param; position is lat/l
     kind = "str"
     arg = "-c"
     default = "{callsign}"
-    label = "Callsign (e.g. N0CALL-10)"
+    label = "Callsign (optional SSID -1..-15, shaped like N0CALL-10 — use your own call)"
     [[stack.component.param]]
     name = "tx_freq"
     validator = "freq"
@@ -602,10 +600,10 @@ main = "loraham-voice"
       # are NOT hidden under "Advanced config" — they are shown inline with the basic ones.
       [[stack.component.config_file.param]]
       name = "callsign"
-      validator = "callsign"
+      validator = "callsign_voice"
       key = "callsign"
       default = "{callsign}"
-      label = "Callsign"
+      label = "Callsign (max 11 chars; portable forms like N0CALL/P allowed — use your own call)"
       # Per-band LoRa radio params: the file key carries {band}, so editing the 433 config writes
       # lora433_* and the 868 config writes lora868_* (one file holds both bands; active_band selects
       # which is used). Defaults match the app struct.
@@ -977,7 +975,6 @@ id = "graywolf"
 name = "Graywolf APRS"
 summary = "Graywolf APRS station (web UI on 127.0.0.1:8080, digipeater, iGate) driving the radio through the LoRaHAM KISS TNC. The modern substitute for loraham-igate."
 main = "graywolf"
-operator_box = false   # the station callsign is this stack's own param (needs an APRS SSID)
 
   [[stack.component]]
   id = "graywolf"
@@ -1117,7 +1114,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     min = 1
     max = 65535
     label = "KISS TNC port"
-    # Graywolf needs a callsign WITH an APRS SSID (e.g. N0CALL-10); it derives the APRS-IS
+    # Graywolf takes a callsign with an optional APRS SSID -1..-15 (bare = SSID 0); it derives the APRS-IS
     # passcode from this callsign itself, so no passcode is ever stored by LHPC.
     [[stack.component.param]]
     name = "call"
@@ -1125,7 +1122,7 @@ operator_box = false   # the station callsign is this stack's own param (needs a
     validator = "callsign"
     arg = "--callsign"
     default = "{callsign}"
-    label = "Station callsign (e.g. N0CALL-10)"
+    label = "Station callsign (optional SSID -1..-15, shaped like N0CALL-10 — use your own call)"
     # PERSISTED per-stack GPS switch, like meshtastic's and meshcom's. The GLOBAL source says
     # WHERE position comes from (`lhpc gps`); this says whether THIS station uses it. graywolf
     # needs no bridge component: it speaks gpsd natively and reads a serial NMEA device
@@ -1315,7 +1312,7 @@ main = "meshtastic"
   post_steps = [
     { kind = "delay", seconds = 12 },
     { kind = "exec", label = "region", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set", "lora.region", "{param:region}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
-    { kind = "exec", label = "node identity", optional = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
+    { kind = "exec", label = "node identity", required = true, argv = ["meshtastic", "--host", "127.0.0.1", "--set-owner", "{param:node_name}", "--set-owner-short", "{param:node_short}"], paths = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/meshtastic"] },
     # GPS mode is a DEVICE setting in the node database, NOT the YAML: `GPS: SerialPath:` alone
     # does nothing, because portduino defaults `position.gps_mode` to NOT_PRESENT and the YAML
     # `Config:` section cannot set it (verified on hardware — before this step meshtasticd
@@ -1358,16 +1355,16 @@ main = "meshtastic"
     label = "LoRa region (sets TX legality; required for TX)"
     [[stack.component.param]]
     name = "node_name"
-    validator = "node"
+    validator = "node_long"
     kind = "str"
-    default = "LoRaHAM Pi"
-    label = "Node name (long)"
+    default = ""
+    label = "Node name (long, max 39 bytes) — required; local, never the operator callsign"
     [[stack.component.param]]
     name = "node_short"
     validator = "node_short"
     kind = "str"
-    default = "LHPi"
-    label = "Node name (short, max 4 chars)"
+    default = ""
+    label = "Node name (short, max 4 bytes) — required"
 
     # A NORMAL managed Git source, so Meshtastic gets the ordinary pinned / stable / dev selectors
     # and the existing Check / Update / Build flows — no bespoke update path. `pinned` (the
@@ -1982,8 +1979,8 @@ main = "meshcom-qemu"
     # and killed its web UI): probe `--info` first and SKIP when the callsign is already
     # set (it persists in NVS across restarts); otherwise send until the firmware ACKs
     # ("Call:<CALL> ... set") — ONE acknowledged send, never the full blind window.
-    # probe_stop_on matches --info's DISPLAY format `...Call: <DJ0CHE-1>` (space + angle
-    # brackets); stop_on matches the setcall ACK `Call:DJ0CHE-1 Short:... set`. They DIFFER —
+    # probe_stop_on matches --info's DISPLAY format `...Call: <N0CALL-1>` (space + angle
+    # brackets); stop_on matches the setcall ACK `Call:N0CALL-1 Short:... set`. They DIFFER —
     # with the ACK pattern used for the probe too, a persisted callsign was never detected, so
     # every start re-sent --setcall, the firmware saved + auto-rebooted, and the QEMU guest
     # wedged in the bootloader (guest reset is not survivable in qemu-xtensa) — live finding.
@@ -1997,7 +1994,7 @@ main = "meshcom-qemu"
     # send ever reaches a deaf console, and one acknowledged send still ends the window
     # immediately. `lhpc stack poststart meshcom` re-runs this against a running stack if the
     # window ever expires.
-    { kind = "tcp_send", port = 12323, label = "callsign", data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
+    { kind = "tcp_send", port = 12323, label = "callsign", required = true, data = "--setcall {param:mc_callsign}\n", probe = "--info\n", probe_stop_on = "Call: <{param:mc_callsign}>", stop_on = "Call:{param:mc_callsign}", schedule = [[8, 8], [6, 15], [22, 30]], skip_if_param = "mc_callsign", skip_values = ["", "N0CALL"] },
   ]
 
     # PERSISTED per-stack GPS switch — see the same param on the Meshtastic component. The
@@ -2081,14 +2078,14 @@ main = "meshcom-qemu"
     provisioned = true
     note = "PlatformIO CLI (meshcom firmware build) — provisioned as a managed venv in the runtime root by `lhpc build`; standalone dev may instead `pipx install platformio`. Satisfied once the in-root pio exists OR `pio` is on PATH."
 
-    # MeshCom node callsign (with optional -SSID, e.g. OE1ABC-12); defaults to the
+    # MeshCom node callsign (with optional -SSID, e.g. N0CALL-12); defaults to the
     # operator callsign. Applied via the net-console after boot (see post_start).
     [[stack.component.param]]
     name = "mc_callsign"
-    validator = "callsign"
+    validator = "callsign_meshcom"
     kind = "str"
     default = "{callsign}"
-    label = "MeshCom callsign (with -SSID)"
+    label = "MeshCom callsign (optional numeric suffix -1..-99, shaped like N0CALL-99 — use your own call)"
     # Which firmware image to boot. Switching env needs that image built first
     # (apply_mode=build): rebuild with scripts/build.sh --env <env>.
     [[stack.component.param]]
@@ -2276,8 +2273,8 @@ main = "meshcore-node"
       key = "name"
       section = "companion"
       kind = "str"
-      default = "{callsign}"
-      label = "Node name (defaults to your callsign)"
+      default = ""
+      label = "Node name (max 31 bytes) — required; local, never the operator callsign"
       [[stack.component.config_file.param]]
       name = "meshcore_allow"
       validator = "bind"

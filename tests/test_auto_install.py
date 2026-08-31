@@ -355,7 +355,7 @@ def test_auto_install_mode_aggregate(tmp_path):
 
 # ---- TX phase -----------------------------------------------------------------------------
 
-def _tx_env(tmp_path, monkeypatch, callsign="OE1TST", start_ok=True, test_ok=True,
+def _tx_env(tmp_path, monkeypatch, callsign="XX0XXB", start_ok=True, test_ok=True,
             stop_ok=True):
     svc = _svc(tmp_path)
     if callsign:
@@ -1060,7 +1060,7 @@ def test_abort_path_with_reservation_clear_failure_is_typed(tmp_path, monkeypatc
 
 # --- M2 round-3: strict TX admission + early callsign refusal --------------------------------
 
-def _callsign(tmp_path, call="OE1TST"):
+def _callsign(tmp_path, call="XX0XXB"):
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "local.toml").write_text(
         f'[operator]\ncallsign = "{call}"\n')
@@ -1981,7 +1981,9 @@ def test_unsafe_marker_blocks_outermost_source_op(tmp_path):
 def test_tx_loop_cancels_between_bands(tmp_path, monkeypatch):
     from lhpc.core.config import save_operator_config
     svc = _svc(tmp_path)
-    save_operator_config(svc._paths, "N0CALL"); svc._invalidate_config()
+    # a REAL callsign: this test is about cancellation between bands, and a TX test now refuses
+    # outright under a placeholder identity rather than transmitting `DE N0CALL`
+    save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
 
     class _V:
         ready = True

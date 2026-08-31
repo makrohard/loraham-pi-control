@@ -158,10 +158,15 @@ def _config_list(svc, stack: str, band: str) -> int:
             has_identity = has_identity or r["is_identity"]
             mark = " *" if r["is_identity"] else ""
             val = r["value"] if r["value"] != "" else "(empty)"
+            # An inheriting identity field is EMPTY locally — say what it inherits instead
+            # of presenting the inherited value as though it were stored (audit-found).
+            if r["value"] == "" and r.get("identity_hint"):
+                val = f"(empty — {r['identity_hint']})"
             dflt = "" if r["value"] == r["default"] else f"   [default: {r['default'] or '(empty)'}]"
             print(f"    {r['name']}{mark} = {val}{dflt}")
     if has_identity:
-        print("\n  * identity (callsign/node) — required to start a licensed stack")
+        print("\n  * identity — required to start (a callsign for licensed stacks; a "
+              "local node name for Meshtastic/MeshCore)")
     print(f"  set a value:  lhpc config {stack} <param> <value>")
     return 0
 
@@ -280,10 +285,13 @@ def _cmd_config(svc, args) -> int:
         return 0
 
     key = f"file_{fld['key']}" if fld["kind"] == "file" else fld["key"]
+    # Plain config editing, the CLI counterpart of the Settings page: clearing an identity is
+    # allowed and WARNed about below; `lhpc stack start/restart` is what refuses to launch without
+    # one, exactly as the web Start/Restart panel does.
     res = svc.save_config_bundle(stack, values={key: args.value}, band=args.band)
     rc = _render(res)
     if res.ok and row is not None and row["is_identity"]:
-        ok, _f, msg = svc.enforce_identity(stack, args.band)
+        ok, _fields, msg = svc.enforce_identity(stack, args.band)
         if not ok:
             print(f"WARN  {msg}")
     return rc

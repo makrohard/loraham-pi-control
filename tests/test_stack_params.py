@@ -76,53 +76,58 @@ def test_licensed_refuses_empty_and_n0call(tmp_path):
     assert svc.enforce_identity("igate", params={"call": ""})[0] is False
     assert svc.enforce_identity("igate", params={"call": "N0CALL"})[0] is False
     assert svc.enforce_identity("igate", params={"call": "n0call-1"})[0] is False
-    assert svc.enforce_identity("igate", params={"call": "DJ0CHE-10"})[0] is True
+    assert svc.enforce_identity("igate", params={"call": "XX0XXA-10"})[0] is True
 
 
 def test_licensed_default_uses_operator_callsign(tmp_path):
     svc = _svc(tmp_path)
-    save_operator_config(svc._paths, "DJ0CHE"); svc._invalidate_config()
-    assert svc.enforce_identity("igate")[0] is True       # default {callsign} -> DJ0CHE
+    save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
+    assert svc.enforce_identity("igate")[0] is True       # default {callsign} -> XX0XXA
 
 
-def test_identity_hint_names_operator_command_when_operator_unset(tmp_path):
-    # Run-2 deferred finding: a licensed stack whose identity param INHERITS the operator callsign
-    # (manifest default "{callsign}") must hint the SUPPORTED one-time fix while no operator callsign
-    # is configured — `lhpc config operator --callsign <CALL>` — never the per-stack param (the old
-    # hint named `lhpc config meshcom mc_callsign <YOURCALL>`, papering over the missing operator
-    # identity stack by stack). Every licensed stack inherits, so the source fix covers them all.
+def test_identity_hint_leads_with_the_local_field(tmp_path):
+    # callsign-identities: the refusal remedy leads with the RELEVANT LOCAL field (the
+    # operator asked for THIS stack); the optional global fallback is a trailing note for
+    # licensed stacks, never the first answer. Command derived from the param model.
     svc = _svc(tmp_path)
-    for target in ("meshcom", "chat", "igate", "voice"):
-        assert svc._identity_config_hint(target) == "lhpc config operator --callsign <CALL>", target
+    for target, frag in (("meshcom", "lhpc config meshcom mc_callsign"),
+                         ("chat", "lhpc config chat call"),
+                         ("igate", "lhpc config igate call"),
+                         ("voice", "lhpc config voice callsign"),
+                         ("graywolf", "lhpc config graywolf call")):
+        hint = svc._identity_config_hints(target)[0]
+        assert hint.startswith(frag), (target, hint)
+        assert "lhpc config operator --callsign" in hint, (target, hint)   # the global option
+    # Unlicensed: local field only — no operator-command mention at all.
+    hint = svc._identity_config_hints("meshtastic")[0]
+    assert hint.startswith("lhpc config meshtastic node_name"), hint
+    assert "operator" not in hint
+    assert svc._identity_config_hints("meshcore")[0].startswith("lhpc config meshcore node_name")
 
 
-def test_identity_hint_names_stack_param_when_operator_configured(tmp_path):
-    # With the operator CONFIGURED, an identity refusal means a saved per-stack value overrides it
-    # badly — there the per-stack command is the right remedy and must remain the hint.
-    svc = set_call(_svc(tmp_path))
-    assert svc._identity_config_hint("meshcom") == "lhpc config meshcom mc_callsign <YOURCALL>"
-    # Unlicensed node identity has no operator-command equivalent — per-stack hint regardless.
-    svc2 = _svc(tmp_path / "u")
-    (tmp_path / "u" / "config" / "stacks").mkdir(parents=True, exist_ok=True)
-    assert "<NODENAME>" in svc2._identity_config_hint("meshtastic")
-
-
-def test_start_refusal_text_carries_the_operator_command(tmp_path):
-    # End-to-end: the START refusal (licensed stack, no operator callsign) must carry the exact
-    # supported command in its next_commands — what the CLI prints under "Next:".
+def test_start_refusal_text_carries_the_local_command(tmp_path):
+    # End-to-end: the START refusal carries the exact local command in next_commands.
     svc = _svc(tmp_path)
     res = svc.run_action("start", "meshcom", apply=True)
     assert not res.ok
-    assert "lhpc config operator --callsign <CALL>" in (res.next_commands or []), \
-        (res.summary, res.next_commands)
+    assert any(c.startswith("lhpc config meshcom mc_callsign")
+               for c in (res.next_commands or [])), (res.summary, res.next_commands)
 
 
-def test_unlicensed_requires_nonempty_but_accepts_default(tmp_path):
+def test_unlicensed_requires_deliberate_local_names(tmp_path):
     svc = _svc(tmp_path)
-    # meshtastic node_name default "LoRaHAM Pi" (non-empty) -> accepted even with no callsign
-    assert svc.enforce_identity("meshtastic")[0] is True
-    assert svc.enforce_identity("meshtastic", params={"node_name": ""})[0] is False
-    assert svc.enforce_identity("meshtastic", params={"node_name": "N0CALL"})[0] is True  # not licensed
+    # No generic first-start identity any more: a fresh meshtastic is REFUSED until both
+    # local names are deliberately configured — and never inherits the global callsign.
+    ok, fields, msg = svc.enforce_identity("meshtastic")
+    assert ok is False and len(fields) == 2, (fields, msg)      # long AND short marked
+    set_call(svc)                                               # a global callsign changes nothing
+    assert svc.enforce_identity("meshtastic")[0] is False
+    ok, fields, _ = svc.enforce_identity(
+        "meshtastic", params={"node_name": "Field Node", "node_short": "FN1"})
+    assert ok is True
+    # a retired generic default does not count as deliberately configured
+    assert svc.enforce_identity(
+        "meshtastic", params={"node_name": "LoRaHAM Pi", "node_short": "FN1"})[0] is False
 
 
 def test_meshcore_file_node_uses_override(tmp_path):
@@ -160,8 +165,8 @@ def test_stack_start_params_prefill_and_override(tmp_path):
 
 def test_normalize_file_overrides_validates(tmp_path):
     svc = _svc(tmp_path)
-    clean, err = svc._normalize_file_overrides("voice", {"callsign": "DJ0CHE", "sf": "9"})
-    assert not err and clean["callsign"] == "DJ0CHE" and clean["sf"] == "9"
+    clean, err = svc._normalize_file_overrides("voice", {"callsign": "XX0XXA", "sf": "9"})
+    assert not err and clean["callsign"] == "XX0XXA" and clean["sf"] == "9"
     _c, err2 = svc._normalize_file_overrides("voice", {"callsign": "bad call!"})
     assert err2                                                            # invalid -> typed error
     _u, uerr = svc._normalize_file_overrides("voice", {"unknown": "x"})
@@ -196,11 +201,11 @@ def test_meshcore_preset_owns_frequency_for_all_presets(tmp_path):
 
 def test_start_blocks_licensed_without_call_backstop(tmp_path):
     # Direct/CLI start (authoritative) refuses a licensed stack with no callsign, carrying the
-    # field to highlight; nothing is launched.
+    # field(s) to highlight; nothing is launched.
     svc = _svc(tmp_path)
     res = svc.start("igate", apply=True)
     assert not res.ok and "callsign" in res.summary.lower()
-    assert res.data.get("enforce_field") == "p_call"
+    assert res.data.get("enforce_fields") == ["p_call"]
 
 
 def test_start_licensed_with_call_passes_enforcement(tmp_path):
@@ -463,30 +468,41 @@ def _seam_svc(tmp_path, monkeypatch):
 def test_direct_licensed_component_rejects_bad_call_before_side_effects(tmp_path, monkeypatch, call):
     svc = _seam_svc(tmp_path, monkeypatch)
     res = svc._start_impl("meshcom-qemu", apply=True, params={"mc_callsign": call})  # no _Seam
-    assert not res.ok and res.data.get("enforce_field") == "p_mc_callsign"
-    assert "callsign" in res.summary.lower()
+    assert not res.ok
+    assert "callsign" in (res.summary + str(res.details)).lower()
+    if call == "":
+        # empty + no global -> identity enforcement names the field to highlight
+        assert res.data.get("enforce_fields") == ["p_mc_callsign"]
+    # a placeholder VALUE is refused by param validation itself — equally before any
+    # side effect (the seam would have raised)
 
 
 def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_path, monkeypatch):
     svc = _seam_svc(tmp_path, monkeypatch)
-    # No operator callsign -> node_name default {callsign} resolves empty -> enforcement blocks it
-    # (before any side effect / _Seam).
+    # MeshCore's node name is a REQUIRED local identity (default "", never {callsign}):
+    # a fresh config is blocked before any side effect / _Seam — with or without a global
+    # operator callsign, which unlicensed stacks never inherit.
     res = svc._start_impl("meshcore-node", apply=True)
-    assert not res.ok and res.data.get("enforce_field") == "pf_node_name"
+    assert not res.ok and res.data.get("enforce_fields") == ["pf_node_name"]
+    set_call(svc)
+    res = svc._start_impl("meshcore-node", apply=True)
+    assert not res.ok, "a global callsign must not satisfy an unlicensed node identity"
 
 
 def test_direct_valid_identity_reaches_start_seam(tmp_path, monkeypatch):
     svc = _seam_svc(tmp_path, monkeypatch)
     with pytest.raises(_Seam):                                             # enforcement passed
-        svc._start_impl("meshcom-qemu", apply=True, params={"mc_callsign": "DJ0CHE-3"})
+        svc._start_impl("meshcom-qemu", apply=True, params={"mc_callsign": "XX0XXA-3"})
 
 
 def test_direct_file_identity_uses_owner_stack_persisted_and_ephemeral(tmp_path):
     svc = _svc(tmp_path)
     svc.save_config_bundle("meshcore", values={"file_node_name": "SavedNode"}, band="868")
-    assert svc._identity_value("meshcore-node", "868", None, None) == "SavedNode"   # owner-stack value
+    rows = svc.identity_resolution("meshcore-node", "868")
+    assert rows[0]["effective"] == "SavedNode" and rows[0]["source"] == "local"
     assert svc.enforce_identity("meshcore-node", "868")[0] is True
-    assert svc._identity_value("meshcore-node", "868", None, {"node_name": "EphNode"}) == "EphNode"
+    rows = svc.identity_resolution("meshcore-node", "868", None, {"node_name": "EphNode"})
+    assert rows[0]["effective"] == "EphNode"
 
 
 def test_direct_unknown_file_override_fails_typed(tmp_path):
@@ -497,9 +513,9 @@ def test_direct_unknown_file_override_fails_typed(tmp_path):
 
 
 @pytest.mark.parametrize("params,msg", [
-    pytest.param({"call": "DJ0CHE-10", "tx_freq": "not-a-frequency"}, "invalid parameter",
+    pytest.param({"call": "XX0XXA-10", "tx_freq": "not-a-frequency"}, "invalid parameter",
                  id="test_invalid_ordinary_run_param_rejected_before_lifecycle"),
-    pytest.param({"call": "DJ0CHE-10", "nope": "x"}, "unknown parameter",
+    pytest.param({"call": "XX0XXA-10", "nope": "x"}, "unknown parameter",
                  id="test_unknown_ordinary_run_param_rejected"),
     pytest.param("not-a-dict", "must be a mapping",
                  id="test_non_mapping_run_params_rejected"),
@@ -585,14 +601,19 @@ def test_public_restart_invalid_file_override_no_lock(tmp_path, monkeypatch):
 def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     res = svc.restart("igate", apply=True, params={"call": "N0CALL"})
-    assert res.ok is False and res.data.get("enforce_field") == "p_call"
+    # N0CALL is refused as an invalid parameter VALUE by the same preflight (before any
+    # lock/stop side effect — no _Seam raised); an EMPTY override with no global falls
+    # through to identity enforcement instead.
+    assert res.ok is False and "callsign" in (res.summary + str(res.details)).lower()
+    res = svc.restart("igate", apply=True, params={"call": ""})
+    assert res.ok is False and res.data.get("enforce_fields") == ["p_call"]
 
 
 @pytest.mark.contract
 def test_public_restart_valid_reaches_lock_seam(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     with pytest.raises(_Seam):                                             # preflight passed
-        svc.restart("igate", apply=True, params={"call": "DJ0CHE-10"})
+        svc.restart("igate", apply=True, params={"call": "XX0XXA-10"})
 
 
 def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
@@ -604,7 +625,7 @@ def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
     assert svc._restart_impl("igate", apply=True, params={"nope": "x"}).ok is False
     assert svc._restart_impl("igate", apply=True, params={"call": "N0CALL"}).ok is False
     with pytest.raises(_Seam):                                             # valid -> reaches stop()
-        svc._restart_impl("igate", apply=True, params={"call": "DJ0CHE-10"})
+        svc._restart_impl("igate", apply=True, params={"call": "XX0XXA-10"})
 
 
 # --- Area 2: direct component targets use the OWNER stack for persistence --------------------
@@ -628,12 +649,12 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
 def test_direct_component_config_save_owner_scope(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("meshcom-qemu", values={"mc_callsign": "DJ0CHE-3"}).ok
+    assert svc.save_config_bundle("meshcom-qemu", values={"mc_callsign": "XX0XXA-3"}).ok
     owner_cfg = cfgmod.load_stack_config(svc._paths, "meshcom")                              # OWNER file
-    assert owner_cfg.get("__r__meshcom-qemu__mc_callsign") == "DJ0CHE-3"                     # COMPONENT-scoped key
+    assert owner_cfg.get("__r__meshcom-qemu__mc_callsign") == "XX0XXA-3"                     # COMPONENT-scoped key
     assert "mc_callsign" not in owner_cfg                                                    # not a flat key
     assert cfgmod.load_stack_config(svc._paths, "meshcom-qemu") == {}                        # NOT component file
-    assert svc.stack_config("meshcom-qemu").get("mc_callsign") == "DJ0CHE-3"                 # later read resolves
+    assert svc.stack_config("meshcom-qemu").get("mc_callsign") == "XX0XXA-3"                 # later read resolves
     # a direct component may edit ONLY its own fields — sibling/unknown/autostart/remotes rejected
     assert svc.save_config_bundle("meshcom-qemu", values={"port": "7000"}).ok is False       # sibling field
     assert svc.save_config_bundle("meshcom-qemu",
@@ -675,7 +696,7 @@ def test_config_guard_held_across_applied_start(tmp_path, monkeypatch):
     with pytest.raises(_Seam):
         svc.start("igate", apply=True)
     assert seen["exclusive"] is False                             # a save would BLOCK mid-start
-    assert seen["call"] == "DJ0CHE"                               # config read is the stable snapshot
+    assert seen["call"] == "XX0XXA"                               # config read is the stable snapshot
     assert _exclusive_available(svc._paths) is True               # released afterwards
 
 
@@ -708,7 +729,7 @@ def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, mon
                                          done.set())).start()
         time.sleep(0.3)
         assert not done.is_set()                                 # competing save BLOCKED during start
-        assert svc.stack_config("igate").get("call") == "DJ0CHE" # generation would read the stable value
+        assert svc.stack_config("igate").get("call") == "XX0XXA" # generation would read the stable value
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
@@ -721,7 +742,7 @@ def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, mo
     import threading, time
     from lhpc.core.services import ActionResult
     svc = _svc(tmp_path)
-    svc.save_config_bundle("igate", values={"call": "DJ0CHE-5"})  # valid persisted call
+    svc.save_config_bundle("igate", values={"call": "XX0XXA-5"})  # valid persisted call
     stops = []
     monkeypatch.setattr(svc, "stop",
                         lambda *a, **k: (stops.append(1), ActionResult(True, "stopped"))[1])
@@ -729,11 +750,11 @@ def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, mo
     def spy(*a, **k):
         # a competing save flipping the call to N0CALL must be BLOCKED for the whole restart, so the
         # restart's start still sees the VALID call — it never stops then rejects the target.
-        threading.Thread(target=lambda: (svc.save_config_bundle("igate", values={"call": "N0CALL"}),
+        threading.Thread(target=lambda: (svc.save_config_bundle("igate", values={"call": "XX0XXB-5"}),
                                          saved.set())).start()
         time.sleep(0.3)
         assert not saved.is_set()
-        assert svc.stack_config("igate").get("call") == "DJ0CHE-5"
+        assert svc.stack_config("igate").get("call") == "XX0XXA-5"
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
@@ -1029,11 +1050,12 @@ def test_identity_selected_component_not_masked_by_sibling(tmp_path, monkeypatch
         raise _Seam()
     monkeypatch.setattr(svc, "write_config_files", boom)
     monkeypatch.setattr(Lifecycle, "start", boom)
-    # the SELECTED licensed field (tgt.call) is N0CALL; a later same-named component (dep.call) is
-    # valid — the start must still BLOCK on tgt, before any lifecycle side effect (no _Seam).
-    res = svc.start("ids", apply=True, params={"tgt.call": "N0CALL", "dep.call": "DJ0CHE-1"})
+    # the SELECTED licensed field (tgt.call) is EMPTY (no global set); a later same-named
+    # component (dep.call) is valid — the start must still BLOCK on tgt, before any
+    # lifecycle side effect (no _Seam), never masked by the sibling's valid value.
+    res = svc.start("ids", apply=True, params={"tgt.call": "", "dep.call": "XX0XXA-1"})
     assert res.ok is False and "callsign" in res.summary.lower()
-    assert res.data.get("enforce_field") == "p_tgt__call"                        # selected component's field
+    assert "p_tgt__call" in (res.data.get("enforce_fields") or [])               # selected component's field
 
 
 def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):     # (6)
@@ -1043,7 +1065,7 @@ def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):    
         raise _Seam()
     monkeypatch.setattr(Lifecycle, "start", boom)                               # controlled non-hardware seam
     with pytest.raises(_Seam):
-        svc.start("ids", apply=True, params={"tgt.call": "DJ0CHE-5", "dep.call": "DJ0CHE-6"})
+        svc.start("ids", apply=True, params={"tgt.call": "XX0XXA-5", "dep.call": "XX0XXA-6"})
 
 
 def test_unique_name_stack_stays_bare_no_regression(tmp_path):                   # (7)
@@ -1060,12 +1082,12 @@ def test_unique_name_stack_stays_bare_no_regression(tmp_path):                  
 
 def test_config_view_identity_and_values_per_component(tmp_path):
     svc = _id_collide_svc(tmp_path)
-    svc.save_config_bundle("ids", values={"tgt.call": "N0CALL", "dep.call": "DJ0CHE-1"})
+    svc.save_config_bundle("ids", values={"tgt.call": "XX0XXA-2", "dep.call": "XX0XXA-1"})
     cv = svc.config_view("ids")
     tgt = next(c for c in cv["components"] if c["id"] == "tgt")
     dep = next(c for c in cv["components"] if c["id"] == "dep")
-    # the SELECTED licensed component's own (invalid) value is shown independently of a later valid one
-    assert tgt["values"]["call"] == "N0CALL" and dep["values"]["call"] == "DJ0CHE-1"
+    # each component's own value is shown independently of its same-named sibling
+    assert tgt["values"]["call"] == "XX0XXA-2" and dep["values"]["call"] == "XX0XXA-1"
     assert tgt["fields"]["call"] == "c_tgt__call" and dep["fields"]["call"] == "c_dep__call"
 
 
@@ -1074,8 +1096,8 @@ def test_config_unique_fields_stay_bare_and_flat(tmp_path):
     svc = _svc(tmp_path)
     for f in svc.config_param_fields("igate"):
         assert "__" not in f["field"] and "." not in f["key"]        # bare fields/keys preserved
-    assert svc.save_stack_config("igate", {"call": "DJ0CHE-9"}).ok    # canonical delegate
-    assert cfgmod.load_stack_config(svc._paths, "igate").get("call") == "DJ0CHE-9"   # flat key
+    assert svc.save_stack_config("igate", {"call": "XX0XXA-9"}).ok    # canonical delegate
+    assert cfgmod.load_stack_config(svc._paths, "igate").get("call") == "XX0XXA-9"   # flat key
 
 
 def test_save_stack_config_rejects_unqualified_dup_and_unknown(tmp_path):
