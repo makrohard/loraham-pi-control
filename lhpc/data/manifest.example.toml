@@ -2226,10 +2226,11 @@ main = "meshcore-node"
   build_timeout = 1800.0
   test_timeout = 900.0
   # The MeshCore implementation is upstream openhop_core, pinned below, plus ONE
-  # LHPC-shipped patch applied idempotently at build time. That patch bundles three logical fixes
-  # destined for TWO upstream PRs: (1) the two ACK fixes together — deliver PATH-embedded ACKs to
-  # companion clients, then suppress client-repeat retransmission of consumed ACKs (the second
-  # builds on the first) — and (2) the independent cached radio noise floor. The host application
+  # LHPC-shipped patch applied idempotently at build time. The two ACK fixes it used to carry
+  # (deliver PATH-embedded ACKs to companion clients, then suppress client-repeat retransmission
+  # of consumed ACKs) were UPSTREAMED and are in `dev` — they were dropped from the patch on the
+  # rebase to 8cdb04e. What remains is the one still-unlanded fix: the radio noise floor surfaced
+  # into STATS_TYPE_RADIO. The host application
   # glue (LoRaHAM radio adapter, identity loading, persistence, GPS feed consumer) ships WITH lhpc as
   # the `meshcore_host` package-data asset and is installed into the same venv — so the checkout
   # stays an unmodified upstream tree plus a reviewable patch, never a fork.
@@ -2375,8 +2376,8 @@ main = "meshcore-node"
     # the apply script fails the build on a conflict instead of running unpatched code).
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "77f116a8dab097642d04a16c8aaf097c0dd33cc3"
-    pin_tag = "77f116a"
+    pin_commit = "8cdb04e734fa836e3847a29c6ec4a3306382150c"
+    pin_tag = "8cdb04e"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
