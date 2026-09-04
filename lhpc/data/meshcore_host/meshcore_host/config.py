@@ -33,6 +33,12 @@ RF_PRESETS = {
 
 GPS_MODES = ("off", "fixed", "feed")
 
+# LOCKSTEP with lhpc/core/meshcore_mode.py (the controller's copy of the same rule set; this
+# package installs standalone into the stack venv, so the constants are duplicated by necessity).
+MODES = ("chat", "chat+repeater", "repeater")
+BEHAVIOURS = ("forward", "monitor", "no_tx")
+DASHBOARD_PORT = 8000
+
 
 def is_valid_lat_lon(lat: float, lon: float) -> bool:
     """One shared coordinate-validity rule for fixed config and the live feed."""
@@ -82,7 +88,23 @@ class HostConfig:
     gps_socket: str = ""
     gps_stale_s: float = 60.0
 
+    # [repeater] — `mode` selects the program; the rest is used only when it is not "chat".
+    mode: str = "chat"
+    repeater_name: str = ""
+    repeater_key: str = ""
+    repeater_behaviour: str = "forward"
+    dashboard_password: str = ""
+    repeater_state_dir: str = ""
+
     extra: dict = field(default_factory=dict)
+
+    @property
+    def repeater_on(self) -> bool:
+        return self.mode != "chat"
+
+    @property
+    def companion_on(self) -> bool:
+        return self.mode != "repeater"
 
 
 def _table(doc: dict, name: str) -> dict:
@@ -137,8 +159,8 @@ def load_config(path: str | Path) -> HostConfig:
     identity = _table(doc, "identity")
     cfg.key_file = _opt(identity, "key_file", "", str, "identity")
     cfg.key = _opt(identity, "key", "", str, "identity")
-    if bool(cfg.key_file) == bool(cfg.key):
-        raise ConfigError("[identity] exactly one of key_file or key must be set")
+    # The chat identity is checked once the role is known (below): the Companion needs
+    # exactly one of key/key_file; the pure repeater has no Companion and must carry neither.
 
     radio = _table(doc, "radio")
     preset = radio.get("preset")
@@ -202,5 +224,34 @@ def load_config(path: str | Path) -> HostConfig:
         raise ConfigError("[gps] fixed position out of range")
     if cfg.gps_mode == "feed" and not cfg.gps_socket:
         raise ConfigError("[gps] feed mode requires socket")
+
+    rep = _table(doc, "repeater")
+    cfg.mode = _opt(rep, "role", cfg.mode, str, "repeater")
+    if cfg.mode not in MODES:
+        raise ConfigError("[repeater] role must be one of: " + ", ".join(MODES))
+    cfg.repeater_name = _opt(rep, "name", "", str, "repeater").strip()
+    cfg.repeater_key = _opt(rep, "key", "", str, "repeater")
+    cfg.repeater_behaviour = _opt(rep, "behaviour", cfg.repeater_behaviour, str, "repeater")
+    cfg.dashboard_password = _opt(rep, "admin_password", "", str, "repeater")
+    cfg.repeater_state_dir = _opt(rep, "state_dir", "", str, "repeater")
+    if cfg.companion_on:
+        if bool(cfg.key_file) == bool(cfg.key):
+            raise ConfigError("[identity] exactly one of key_file or key must be set")
+    elif cfg.key or cfg.key_file:
+        raise ConfigError("[identity] key/key_file are not used in the repeater role — "
+                          "the pure repeater runs no Companion; remove them")
+    if cfg.repeater_on:
+        # The repeater is a DISTINCT MeshCore node with its own identity and login; in the chat
+        # role these rows are simply ignored (the same file feeds every role).
+        if not cfg.repeater_name or len(cfg.repeater_name.encode("utf-8")) > 31:
+            raise ConfigError("[repeater] name is required in the repeater roles (1-31 UTF-8 bytes)")
+        if not cfg.repeater_key:
+            raise ConfigError("[repeater] key is required in the repeater roles")
+        if cfg.repeater_behaviour not in BEHAVIOURS:
+            raise ConfigError("[repeater] behaviour must be one of: " + ", ".join(BEHAVIOURS))
+        if not cfg.dashboard_password:
+            raise ConfigError("[repeater] admin_password is required in the repeater roles")
+        if not cfg.repeater_state_dir:
+            raise ConfigError("[repeater] state_dir is required in the repeater roles")
 
     return cfg

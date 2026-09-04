@@ -1,0 +1,42 @@
+# openHop repeater dependency constraints — the RESOLVED closure of its runtime dependencies
+# (cherrypy, cherrypy-cors, paho-mqtt, psutil, pyserial, pyjwt, ws4py, pyyaml) PLUS its build
+# requirements (setuptools, wheel, setuptools_scm) and all their transitives, as resolved on
+# 2026-09-04 for openhop_repeater efc5616 (Python 3.13/3.14). Pins EVERY package so the build is
+# reproducible and cannot pull an uncontrolled release, complementing the source pin_commit; the
+# checkout itself is installed with --no-deps --no-build-isolation. openhop_core is deliberately
+# ABSENT: it comes from the pinned core checkout already in the venv. Regenerate deliberately when
+# the pinned openhop_repeater SHA moves.
+annotated-doc==0.0.5
+cheroot==11.1.2
+CherryPy==18.10.0
+cherrypy-cors==1.7.0
+httpagentparser==1.9.9
+jaraco.collections==5.2.1
+jaraco.context==6.1.2
+jaraco.functools==4.6.0
+jaraco.text==4.3.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+more-itertools==11.1.0
+packaging==26.3
+paho-mqtt==2.1.0
+portend==3.2.1
+psutil==7.2.2
+Pygments==2.21.0
+PyJWT==2.13.0
+pyserial==3.5
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+rich==15.0.0
+setuptools==84.0.0
+setuptools-scm==10.2.3
+shellingham==1.5.4
+six==1.17.0
+tempora==5.12.0
+typer==0.27.2
+typer-slim==0.24.0
+typing_extensions==4.16.0
+vcs-versioning==2.3.4
+wheel==0.48.0
+ws4py==0.6.0
+zc.lockfile==4.0

@@ -89,6 +89,13 @@ def test_default_build_timeout_is_hardware_realistic(tmp_path, monkeypatch):
 
 # --- completion marker: a killed build never reads "built" ----------------------------------------
 
+def _receipt(svc, comp) -> str:
+    """The exact marker content is_built expects: the static text plus the consumed-source lines
+    (meshcore-node consumes the pinned repeater checkout via build_requires since 0.2.8)."""
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    return BUILD_MARKER_TEXT + svc._consumed_source_lines(comp)
+
+
 def test_successful_build_stamps_marker_and_is_built_flips(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     comp = _meshcore(svc)
@@ -101,7 +108,7 @@ def test_successful_build_stamps_marker_and_is_built_flips(tmp_path, monkeypatch
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.SUCCEEDED,
                                                        returncode=0, log_path="", tail=[]))
-    res = svc._lifecycle().build(comp)
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
     assert res.ok
     assert (src / comp.build_marker).exists()
     assert svc.is_built(comp)
@@ -114,13 +121,13 @@ def test_rebuild_removes_stale_marker_before_running(tmp_path, monkeypatch):
     comp = _meshcore(svc)
     src = svc._lifecycle().source_dir(comp)
     (src / ".venv").mkdir(parents=True, exist_ok=True)
-    (src / comp.build_marker).write_text("lhpc build complete\n")
+    (src / comp.build_marker).write_text(_receipt(svc, comp))
     assert svc.is_built(comp)
 
     monkeypatch.setattr(lifecycle_mod, "run_job",
                         lambda runner, **kw: JobResult(name="b", state=JobState.FAILED,
                                                        returncode=1, log_path="", tail=["boom"]))
-    res = svc._lifecycle().build(comp)
+    res = svc._lifecycle().build(comp, marker_extra=svc._consumed_source_lines(comp))
     assert not res.ok
     assert not (src / comp.build_marker).exists()   # cleared up front -> is_built now False
     assert not svc.is_built(comp)
@@ -245,8 +252,8 @@ def test_is_built_missing_marker_is_not_built(tmp_path):
 
 def test_is_built_requires_exact_regular_marker_content(tmp_path):
     svc = _svc(tmp_path); comp = _meshcore(svc); m = _mk(svc, comp)
-    m.write_text("lhpc build complete\n"); assert svc.is_built(comp)           # exact -> built
-    m.write_text("lhpc build complete");   assert not svc.is_built(comp)       # missing newline
+    m.write_text(_receipt(svc, comp));      assert svc.is_built(comp)           # exact -> built
+    m.write_text(_receipt(svc, comp)[:-1]); assert not svc.is_built(comp)       # missing newline
     m.write_text("wrong\n");                assert not svc.is_built(comp)       # wrong content
     m.write_text("");                        assert not svc.is_built(comp)      # empty
 

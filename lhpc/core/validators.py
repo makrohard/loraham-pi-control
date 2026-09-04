@@ -424,6 +424,9 @@ _NAMED = {
     "bind": bind,
     "band": band,
     "node": node_name,
+    # The MeshCore node-name RULE without the identity-enforcement meaning `node` carries: the
+    # repeater's own name is required only in the repeater modes (checked by the mode helper).
+    "repeater_name": node_name,
     "node_long": node_long,
     "node_short": node_short_name,
     "callsign_base": callsign_base,

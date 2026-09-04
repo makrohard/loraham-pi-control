@@ -205,6 +205,10 @@ class Lifecycle:
         # Default spawn opens the start log through the anchored runtime-FS API; tests
         # inject their own `spawn` (the seam is preserved).
         self._spawn = spawn if spawn is not None else self._real_spawn
+        # Which of a component's DECLARED endpoints exist for the launch being stopped — the
+        # controller narrows the MeshCore node's set by its running mode (services._lifecycle),
+        # so a never-opened port cannot keep a stop from verifying. Default: all of them.
+        self.expected_endpoints = lambda comp: list(comp.endpoints)
 
     def _real_spawn(self, argv: list[str], log_path: Path,
                     cwd: str | None = None, env: dict | None = None) -> int | None:
@@ -1174,7 +1178,7 @@ class Lifecycle:
         from .probes.endpoints import tcp_endpoint_present
         from .probes.unixsock import probe_socket
         lingering = []
-        for e in comp.endpoints:
+        for e in self.expected_endpoints(comp):
             if not getattr(e, "ready", False):
                 continue
             if e.kind == "tcp":

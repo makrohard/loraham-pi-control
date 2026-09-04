@@ -36,6 +36,11 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         logging.getLogger("meshcore-host").error("Configuration error: %s", exc)
         return EXIT_CONFIG
+    if cfg.repeater_on:
+        # `chat+repeater` / `repeater`: upstream's RepeaterDaemon (hosting the Companion inside it
+        # in chat+repeater) on the SAME radio adapter — one openhop process, one argv.
+        from .repeater import run_repeater
+        return run_repeater(cfg)
     try:
         app = HostApp(cfg)
     except IdentityError as exc:

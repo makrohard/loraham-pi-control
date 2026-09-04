@@ -23,6 +23,7 @@ from typing import ClassVar
 from . import binary_install as binary_install_mod
 from . import binary_receipt as binary_receipt_mod
 from . import manifest as manifest_mod
+from . import meshcore_mode as _meshcore_mode
 from .config import (
     HW_SETUPS,
     Config,
@@ -620,7 +621,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 for cid in spec.covers:
                     binary_cover[cid] = rec
         snap = StatusProber(self._system, self._paths, confirmed,
-                            binary_cover=binary_cover).assess_stacks(self.stacks())
+                            binary_cover=binary_cover,
+                            meshcore_mode=self.meshcore_running_mode()).assess_stacks(self.stacks())
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._overlay_licensed_tx_enabled(snap)
@@ -1601,6 +1603,9 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
+        # Stop verification probes the endpoints the RUNNING launch opened (MeshCore: by mode).
+        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(
+            comp, self.meshcore_running_mode())
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
             # A provider may wrap the detached-spawn path (the one call that bypasses the
@@ -1802,6 +1807,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         target = self.gps_owner_stack(target)
         if not target:
             return set()
+        if not self._meshcore_consumes_position(target):
+            return set()
         plan = self.gps_plan(target)
         if not plan.enabled:
             return set()
@@ -1854,7 +1861,19 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if not order:
             return False
         ids = {c.id for _s, c in order}
-        return bool(ids & (self._gps_consumer_ids() | self._all_gps_feed_ids()))
+        consumers = self._gps_consumer_ids()
+        if not self._meshcore_consumes_position(self.gps_owner_stack(target)):
+            consumers = consumers - {_meshcore_mode.NODE_ID}
+        return bool(ids & (consumers | self._all_gps_feed_ids()))
+
+    def _meshcore_consumes_position(self, stack_id: str, mode: str | None = None) -> bool:
+        """False only for the MeshCore stack in repeater-only mode (the SAVED mode, which is
+        what a start renders; pass the RUNNING mode for questions about a live process).
+        `reads_position` on the node is static; the mode decides whether anything reads it."""
+        if stack_id != _meshcore_mode.STACK_ID:
+            return True
+        return _meshcore_mode.position_consumed(
+            self.meshcore_mode() if mode is None else mode)
 
     # The MeshCom fixture relay replays a CHECKED-IN synthetic NMEA file. It is a test
     # facility, never a position source, and it writes to the same UART socket as the
@@ -1919,6 +1938,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # from static manifest data plus saved autostart flags only.
             allowed_optional |= self._gps_components_for(target)
             allowed_optional -= self._gps_components_excluded(target)
+            if s.id == _meshcore_mode.STACK_ID and not _meshcore_mode.clients_available(
+                    self.meshcore_mode()):
+                # Repeater-only: no Companion on TCP 5000, so a saved webui/cli auto-start must not
+                # launch a client against nothing (same decision as status and readiness).
+                allowed_optional -= set(_meshcore_mode.CLIENT_IDS)
             seeds = [c.id for c in s.components if not c.optional]
             if s.main and s.main not in seeds:
                 seeds.append(s.main)

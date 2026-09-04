@@ -32,6 +32,7 @@ from .probes.process import probe_process
 from .probes.source import SourceProbe, probe_source
 
 _NA_SOURCE = SourceProbe(state=SourceState.NOT_APPLICABLE)
+from . import meshcore_mode as _meshcore_mode
 from . import resources as resources_mod
 from .probes.systemd import UnitState, probe_unit
 from .probes.unixsock import probe_daemon_status, probe_socket
@@ -64,10 +65,14 @@ class StatusProber:
     """Bounded, read-only status assessment for components and snapshots."""
 
     def __init__(self, system: System, paths: Paths, profiles: dict | None = None,
-                 binary_cover: dict | None = None) -> None:
+                 binary_cover: dict | None = None,
+                 meshcore_mode: str = _meshcore_mode.DEFAULT_MODE) -> None:
         self._system = system
         self._paths = paths
         self._profiles = profiles or {}
+        # The MeshCore stack's effective mode (services.meshcore_mode()): decides which of the
+        # node's DECLARED endpoints are expected, so ongoing status and start readiness agree.
+        self._meshcore_mode = _meshcore_mode.normalize(meshcore_mode)
         # {component_id: BinaryReceipt} for components currently provided by a verified
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
@@ -296,7 +301,7 @@ class StatusProber:
     ) -> tuple[list[EndpointObservation], bool, bool, bool]:
         observations: list[EndpointObservation] = []
         expected_present: list[bool] = []
-        for spec in comp.endpoints:
+        for spec in _meshcore_mode.expected_endpoints(comp, self._meshcore_mode):
             obs = EndpointObservation(spec=spec)
             if spec.kind == "tcp":
                 # Use the ONE host/family-aware matcher (not a port-only check): a listener

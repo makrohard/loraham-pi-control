@@ -2173,8 +2173,8 @@ main = "meshcom-qemu"
 # =====================================================================
 [[stack]]
 id = "meshcore"
-name = "MeshCore (868)"
-summary = "MeshCore node, daemon-backed on 868 (auto-starts the daemon). Optional web GUI (browser, via the LHPC proxy) and CLI."
+name = "MeshCore (OpenHop)"
+summary = "MeshCore on openHop, daemon-backed on 868 (auto-starts the daemon). Mode: chat node, chat + repeater, or repeater only. Optional web GUI (browser, via the LHPC proxy) and CLI."
 main = "meshcore-node"
 
   [[stack.component]]
@@ -2202,15 +2202,18 @@ main = "meshcore-node"
   # before opening TCP 5000; give it a generous window on 512 MB / A53-class hardware so
   # start verifies instead of tearing it down. Tune down if your Pi is faster.
   readiness_timeout = 120.0
-  name = "MeshCore (868)"
+  name = "MeshCore (OpenHop)"
   kind = "service"
   band = "868"
-  purpose = "MeshCore companion node on the daemon (868) — powered by openHop Core via the LoRaHAM radio adapter."
+  purpose = "The one openhop process on 868, via the LoRaHAM radio adapter: the MeshCore companion node (chat), or upstream's repeater hosting that companion inside it, or the repeater alone — selected by the `mode` setting."
   tx_capable = true
   # It consumes the live position feed for as long as it runs, so lifecycle planning
   # and status must know that.
   reads_position = true
   depends_on = ["loraham-daemon", "meshcore-gps"]
+  # The repeater program is a second pinned upstream source (LIBRARY component below): it is
+  # installed into THIS venv, so both roles import the same pinned + patched openHop Core.
+  build_requires = ["openhop-repeater-src"]
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
@@ -2242,6 +2245,13 @@ main = "meshcore-node"
     { argv = ["python3", "-m", "venv", "--system-site-packages", ".venv"] },
     { argv = [".venv/bin/pip", "install", ".", "pytest", "pytest-asyncio"], announce = "[install] openHop Core + its deps (pycryptodome, PyNaCl, …) into {source}/.venv — pip is quiet off-TTY; progress: watch {source}/.venv/lib grow" },
     { argv = [".venv/bin/pip", "install", "--no-deps", "{asset}/meshcore_host"], announce = "[install] LHPC MeshCore host application (shipped with lhpc) into {source}/.venv" },
+    # openHop REPEATER (upstream openhop_repeater, pinned in `openhop-repeater-src`): its own
+    # dependency closure — runtime AND build (setuptools/wheel/setuptools_scm) — is pinned by the
+    # constraints file FIRST, then the checkout is installed with --no-deps (its pyproject would
+    # pull a floating openhop_core from git) and --no-build-isolation (so pip cannot fetch
+    # unconstrained build requirements into a throwaway env). One venv, one core.
+    { argv = [".venv/bin/pip", "install", "-c", "{asset}/openhop-repeater-constraints.txt", "cherrypy", "cherrypy-cors", "paho-mqtt", "psutil", "pyserial", "pyjwt", "ws4py", "pyyaml", "setuptools", "wheel", "setuptools_scm"], announce = "[install] openHop repeater dependencies (pinned closure) into {source}/.venv" },
+    { argv = [".venv/bin/pip", "install", "--no-deps", "--no-build-isolation", "{runtime}/src/openhop-repeater"], announce = "[install] openHop repeater (pinned checkout) into {source}/.venv — same pinned core as the node" },
   ]
 
     # The host app has no CLI flags — all settings live in the generated TOML. The
@@ -2367,6 +2377,59 @@ main = "meshcore-node"
       max = 100
       label = "Duty-cycle limit %"
       advanced = true
+      # ----- Mode + the repeater's own settings (group "Repeater") -----------------------------
+      # `mode` selects WHICH openhop program `python -m meshcore_host` runs; the chat rows above are
+      # the same rows in every mode. The rows below are used only when the mode is not `chat`:
+      # the repeater is a DISTINCT MeshCore node (own name, own key) and its dashboard login is
+      # minted by LHPC. Both secrets are controller-managed like `privatekey` (see core/meshcore_mode.py).
+      [[stack.component.config_file.param]]
+      name = "mode"
+      key = "role"
+      section = "repeater"
+      kind = "enum"
+      choices = ["chat", "chat+repeater", "repeater"]
+      default = "chat"
+      group = "Repeater"
+      label = "Mode — chat: companion node only; chat+repeater: repeater hosting the companion; repeater: repeater only (no chat GUI/CLI)"
+      [[stack.component.config_file.param]]
+      name = "repeater_name"
+      validator = "repeater_name"
+      key = "name"
+      section = "repeater"
+      kind = "str"
+      default = ""
+      group = "Repeater"
+      label = "Repeater node name (max 31 bytes) — required in chat+repeater / repeater; its own, never the operator callsign"
+      [[stack.component.config_file.param]]
+      name = "repeater_mode"
+      key = "behaviour"
+      section = "repeater"
+      kind = "enum"
+      choices = ["forward", "monitor", "no_tx"]
+      default = "forward"
+      group = "Repeater"
+      label = "Repeater behaviour — forward: relay packets; monitor: listen and advertise, never relay; no_tx: receive only"
+      [[stack.component.config_file.param]]
+      name = "repeater_key"
+      key = "key"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      secret_file = "openhop_repeater_identity.key"
+      [[stack.component.config_file.param]]
+      name = "dashboard_password"
+      key = "admin_password"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      secret_file = "openhop_repeater_admin.txt"
+      [[stack.component.config_file.param]]
+      name = "repeater_state_dir"
+      key = "state_dir"
+      section = "repeater"
+      kind = "str"
+      hidden = true
+      default = "{runtime}/state/openhop"
 
     # openHop Core release discipline (inspected 2026-08-29): `dev` is the active
     # development branch; `main` carries the stable releases that also go to PyPI; the
@@ -2407,8 +2470,26 @@ main = "meshcore-node"
     # Managed Firewall: fixed port; `allow` is a source allow-list; no auth.
     firewall = { allow_param = "meshcore_allow", auth = "none" }
 
+    # The openHop repeater's dashboard (CherryPy, JWT login) — fixed on loopback, exists only in
+    # the repeater modes (core/meshcore_mode.py selects the expected endpoints per mode). Not a
+    # proxied page yet (`client = false`): exposure through the LHPC proxy with its deny list is
+    # the next step; until then it is reachable on the Pi only.
+    [[stack.component.endpoint]]
+    kind = "tcp"
+    address = "127.0.0.1:8000"
+    ready = true
+    role = "listener"
+    description = "openHop repeater dashboard"
+    client = false
+    scheme = "http"
+    firewall = { auth = "password" }
+
     [[stack.component.resource]]
     key = "tcp.port.5000"
+    kind = "tcp-port"
+    mode = "exclusive"
+    [[stack.component.resource]]
+    key = "tcp.port.8000"
     kind = "tcp-port"
     mode = "exclusive"
     [[stack.component.resource]]
@@ -2633,6 +2714,26 @@ main = "meshcore-node"
     pin_tag = "v1.6.3"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
+
+  # upstream openHop REPEATER — the program the node runs in the `chat+repeater` / `repeater`
+  # modes. A LIBRARY component: a pinned build-time dependency of `meshcore-node`, installed into
+  # the node's venv (see its build steps), never started on its own. Pinned on `dev` like core;
+  # `openhop_core` is NOT taken from its pyproject (git+https, floating) but from the pinned core
+  # checkout already in that venv.
+  [[stack.component]]
+  id = "openhop-repeater-src"
+  name = "openHop repeater (source)"
+  kind = "library"
+  optional = true
+  readiness = "manual"
+  purpose = "Pinned upstream openhop_repeater checkout; build-time dependency of meshcore-node (installed into its venv). Never runs by itself."
+  tx_capable = false
+    [stack.component.source]
+    path = "src/openhop-repeater"
+    remote = "https://github.com/openhop-dev/openhop_repeater.git"
+    branch = "dev"
+    pin_commit = "efc5616ec4f0bf15c951e9babcf7c6054dc48927"
+    pin_tag = "efc5616"
 
 [[stack]]
 id = "reticulum"

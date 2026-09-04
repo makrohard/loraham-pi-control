@@ -24,3 +24,13 @@ airtime = 10
 [gps]
 # Rendered from the global plan: a live source renders `socket`, a fixed source
 # renders lat/lon, off renders neither. The host infers the mode from that.
+
+[repeater]
+# Which openhop program the host runs (`role`: chat, chat+repeater or repeater). The other keys
+# are used only in the repeater roles: the repeater's OWN MeshCore identity (`name`, `key`),
+# its behaviour (forward, monitor or no_tx), the dashboard login LHPC minted (`admin_password`)
+# and its own storage directory for SQLite/RRD under the runtime root (`state_dir`).
+# NOTE for editors of this template: never write `<key> =` in a comment here — the renderer
+# updates the FIRST line carrying a declared key, commented or not.
+role = "chat"
+behaviour = "forward"

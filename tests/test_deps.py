@@ -201,7 +201,10 @@ def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
     venv_py.write_bytes(b"")
     assert not svc.is_built(mc)                                  # interpreter alone is NOT enough (marker gates)
     assert "meshcore-node" in svc.unbuilt_components("meshcore")
-    (src / mc.build_marker).write_text("lhpc build complete\n")                   # completion marker -> fully built
+    # The completion marker is a RECEIPT since build_requires (the node consumes the pinned
+    # repeater checkout too): the static text plus the consumed-source lines is_built recomputes.
+    from lhpc.core.lifecycle import BUILD_MARKER_TEXT
+    (src / mc.build_marker).write_text(BUILD_MARKER_TEXT + svc._consumed_source_lines(mc))
     assert svc.is_built(mc)
     assert "meshcore-node" not in svc.unbuilt_components("meshcore")
 

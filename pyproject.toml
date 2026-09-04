@@ -63,7 +63,8 @@ packages = [
 "lhpc" = ["data/*.toml", "data/bases/*", "data/scripts/*", "data/patches/*",
           "data/meshcore_host/pyproject.toml", "data/meshcore_host/meshcore_host/*.py",
           "data/meshcore-webui-dist/**/*",
-          "data/meshcore-webui-constraints.txt"]
+          "data/meshcore-webui-constraints.txt",
+          "data/openhop-repeater-constraints.txt"]
 "lhpc.adapters.web" = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]

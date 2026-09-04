@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from . import daemon_control, runtime_fs, validators
+from . import meshcore_mode as _meshcore_mode
 from .config import (
     ConfigError,
     _load_runtime_toml,
@@ -44,6 +45,11 @@ _BANDLESS_STACK_PARAMS = ("use_gps",)
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
 # global plan, never from saved config or a start override.
 MESHCORE_COMPONENT = "meshcore-node"
+# The repeater's controller-minted secrets (see meshcore_identity) and the rows that select the
+# node's mode — saved settings only, never per-launch overrides (see _normalize_file_overrides).
+_REPEATER_SECRETS = ("openhop_repeater_identity.key", "openhop_repeater_admin.txt")
+_IDENTITY_SECRET = "meshcore_identity.key"             # the Companion's key (meshcore_identity)
+_MESHCORE_SAVED_ONLY = ("mode", "repeater_name", "repeater_mode")
 _POSITION_PARAMS = ("lat", "lon")
 
 
@@ -1245,6 +1251,8 @@ class ParamsConfigMixin:
             merged = merge_stack_values(pth, tgt, b, setv, clear_empty=False)
             for k in rmv:
                 merged.pop(k, None)
+            if sid == _meshcore_mode.STACK_ID and (_why := self._meshcore_mode_save_refusal(merged)):
+                raise ConfigError(_why)         # rolls the whole submission back, like identity
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, cfg_band), _render_stack, 0o644))
         if (auto_set or auto_remove) and cfg_band:
@@ -1591,6 +1599,8 @@ class ParamsConfigMixin:
         # moment later, so say "no position" rather than raising out of the start path.
         if not any(c.id == MESHCORE_COMPONENT for _s, c in (self._run_order(target) or ())):
             return {}, ""                              # not a MeshCore start
+        if not self._meshcore_consumes_position(self.gps_owner_stack(target)):
+            return {}, ""                              # repeater-only: nothing reads it
         if not self.gps_enabled_for(target):
             return {}, ""                              # use_gps off — omit, never refuse
         plan = plan_from_config(self.config())
@@ -1643,10 +1653,16 @@ class ParamsConfigMixin:
         caller adopts only. An unusable existing key raises rather than being replaced.
         """
         from . import meshcore_identity
-        if name != meshcore_identity.IDENTITY_FILENAME:
-            raise ValueError(f"unknown controller secret {name!r}")
-        return meshcore_identity.ensure_identity(self._paths,
-                                                 self.meshcore_identity_candidates())
+        if name == meshcore_identity.IDENTITY_FILENAME:
+            return meshcore_identity.ensure_identity(self._paths,
+                                                     self.meshcore_identity_candidates())
+        if name == meshcore_identity.REPEATER_IDENTITY_FILENAME:
+            # The repeater is a DISTINCT MeshCore node: its own key, minted once, never adopted
+            # from anywhere (nothing before this feature could hold one).
+            return meshcore_identity.ensure_identity(self._paths, (), filename=name)
+        if name == meshcore_identity.REPEATER_ADMIN_FILENAME:
+            return meshcore_identity.ensure_password(self._paths, name)
+        raise ValueError(f"unknown controller secret {name!r}")
 
     def _gps_config_values(self, target: str) -> dict:
         """Controller-owned `{gps_*}` values for a stack's generated config.
@@ -1743,6 +1759,9 @@ class ParamsConfigMixin:
         a fresh one is taken. A snapshot that cannot be built at all is itself a blocker.
         """
         watch = self._gps_consumer_ids() | self._all_gps_feed_ids()
+        if not self._meshcore_consumes_position(_meshcore_mode.STACK_ID,
+                                                self.meshcore_running_mode()):
+            watch = watch - {_meshcore_mode.NODE_ID}     # a live repeater reads no position
         wanted = {s for s in stack_ids if s}
         if require_enabled:
             # A stack running with its switch OFF takes no position from the global setting, so
@@ -2180,8 +2199,66 @@ class ParamsConfigMixin:
                             "label": p.label or p.name,
                             "field": self._param_field(target, kind, c.id, p.name),
                             "default": str(getattr(p, "default", "") or "")})
+        from . import meshcore_mode as _mm
+        if (any(r["comp"] == _mm.NODE_ID for r in out)
+                and not _mm.chat_identity_required(self.meshcore_mode())):
+            # Repeater-only: no Companion runs, so the chat node's name is not an identity to
+            # enforce (the repeater's own name is checked by `_meshcore_mode_refusal`).
+            out = [r for r in out if not (r["comp"] == _mm.NODE_ID and r["name"] == "node_name")]
         out.sort(key=lambda r: r["enforce"] != "licensed")
         return out
+
+    def meshcore_mode(self) -> str:
+        """The MeshCore stack's SAVED (desired) mode (`meshcore_mode.MODES`), read from the node's
+        `mode` setting exactly like every other param — the mode the next start runs in. `chat`
+        (the default, the mode every box ran before the setting existed) when the stack or the
+        param is absent (a synthetic manifest). A corrupt stack config raises `ConfigError` like
+        every other read of it: the fail-closed contract, never a silent default."""
+        from . import meshcore_mode as _mm
+        hit = self._component_index().get(_mm.NODE_ID)
+        fc = getattr(hit[1], "config_file", None) if hit else None
+        if fc is None or not any(p.name == "mode" for p in fc.params):
+            return _mm.DEFAULT_MODE
+        return _mm.normalize(self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "mode"))
+
+    def meshcore_running_mode(self) -> str:
+        """The mode the node is RUNNING in: the `[repeater] role` of the GENERATED config, which
+        write_config_files renders only on the start path — so a saved-but-not-yet-restarted
+        change does not flip a healthy node's status, and a stop verifies the endpoints the
+        launch actually opened. Falls back to the saved mode when nothing was generated yet."""
+        import tomllib
+
+        from . import meshcore_mode as _mm
+        hit = self._component_index().get(_mm.NODE_ID)
+        fc = getattr(hit[1], "config_file", None) if hit else None
+        if fc is not None:
+            try:
+                dest = self._resolve_config_dest(hit[1], fc.path, for_base=False)
+                if dest.status == "ok" and dest.path is not None:
+                    raw = runtime_fs.read_bytes(self._paths, dest.path)
+                    role = (tomllib.loads(raw.decode("utf-8", "replace"))
+                            .get("repeater", {}) or {}).get("role")
+                    if role:
+                        return _mm.normalize(role)
+            except (OSError, PathContainmentError, ValueError, UnicodeError):
+                pass                       # unreadable/absent generated file: the saved mode
+        return self.meshcore_mode()
+
+    def _meshcore_mode_save_refusal(self, merged: dict) -> str:
+        """Why a MeshCore config save must be refused ("" = fine): a repeater mode needs the
+        repeater's own node name IN THE SAME saved state — a saved repeater mode without a name
+        would refuse every later start (boot restore included). Same rule the host applies."""
+        from . import meshcore_mode as _mm
+        mode, _ = self._resolve_stored(merged, "f", _mm.NODE_ID, "mode", 1)
+        if not _mm.repeater_on(mode):
+            return ""
+        name, _ = self._resolve_stored(merged, "f", _mm.NODE_ID, "repeater_name", 1)
+        try:
+            validators.node_name(name or "", field="repeater name")
+        except validators.ValidationError as exc:
+            return (f"mode '{_mm.normalize(mode)}' needs the repeater's own node name — {exc} "
+                    f"(set repeater_name in the same save, or keep mode chat)")
+        return ""
 
     def _identity_field(self, target: str) -> dict | None:
         """The PRIMARY identity field (compat: first licensed, else first node field)."""
@@ -2767,6 +2844,16 @@ class ParamsConfigMixin:
                 return {}, f"unknown file parameter {key!r}" if err.startswith("unknown") else err
             if getattr(p, "kind", "") != "flag" and str(val).strip() == "":
                 continue                # blank non-flag -> no override (base/preset default wins)
+            if _c is not None and _c.id == MESHCORE_COMPONENT and p.name in _MESHCORE_SAVED_ONLY:
+                # The mode rows are SAVED settings only (same rule as `use_gps`): readiness,
+                # status, identity enforcement and the client seeding all read the saved state,
+                # so a per-launch override would make the launch and the controller disagree.
+                # An echo of the current value (the start form posts every field) is not a change.
+                cur = self._resolved_param_value(target, "file", _c.id, p.name)
+                if str(val).strip() == str(cur).strip():
+                    continue
+                return {}, (f"{p.name} cannot be changed for a single start — it is a saved "
+                            f"setting (lhpc config {_meshcore_mode.STACK_ID} {p.name} <value>)")
             try:
                 clean[key] = validators.validate_param(p, str(val))
             except validators.ValidationError as exc:
@@ -2908,6 +2995,13 @@ class ParamsConfigMixin:
             # `_normalize_file_overrides`) takes precedence for THIS launch only.
             values = {}
             secret_error = ""
+            # The MeshCore mode this render describes, decided ONCE before the rows (the rows
+            # are in manifest order, and the identity row precedes the mode row). A per-launch
+            # override of `mode` is refused upstream, so this is the saved mode.
+            rendered_mode = ""
+            if c.id == MESHCORE_COMPONENT:
+                rendered_mode = _meshcore_mode.normalize(
+                    over.get("mode", stored.get("mode", _meshcore_mode.DEFAULT_MODE)))
             for p in fc.params:
                 if getattr(p, "secret_ref", ""):
                     # Separate trust layer: never `over`, never `stored`, never a default.
@@ -2944,8 +3038,20 @@ class ParamsConfigMixin:
                 if getattr(p, "secret_file", ""):
                     # CONTROLLER-managed secret (vs secret_ref's operator-authored
                     # secrets.toml). Same trust rule: never `over`, never `stored`, never a
-                    # default. Currently only the MeshCore node identity, which must EXIST by
-                    # generation time — this is the one call site allowed to mint it.
+                    # default. The MeshCore node identity must EXIST by generation time — this
+                    # is the one call site allowed to mint it. Each secret is resolved only when
+                    # the rendered mode runs the node that owns it: the REPEATER's key and
+                    # password only in the repeater modes, the CHAT identity only when the
+                    # Companion runs. A mode with no use for a secret neither mints it nor can be
+                    # blocked by a fault in its file — the same rule as the chat name, GPS and
+                    # the clients: what does not run does not gate the start.
+                    if c.id == MESHCORE_COMPONENT and (
+                            (p.secret_file in _REPEATER_SECRETS
+                             and not _meshcore_mode.repeater_on(rendered_mode))
+                            or (p.secret_file == _IDENTITY_SECRET
+                                and not _meshcore_mode.chat_identity_required(rendered_mode))):
+                        values[p.name] = ""            # blank -> the base is left untouched
+                        continue
                     try:
                         values[p.name] = self._controller_secret(p.secret_file)
                     except (OSError, PathContainmentError, ValueError) as exc:

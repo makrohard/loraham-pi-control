@@ -31,6 +31,11 @@ from . import runtime_fs
 from .paths import PathContainmentError, Paths
 
 IDENTITY_FILENAME = "meshcore_identity.key"
+# The openHop repeater's OWN secrets (0.2.8): a second node identity — the repeater is a distinct
+# MeshCore node — and the dashboard admin password LHPC mints (upstream would otherwise start with
+# a default and ask for a setup wizard). Same store, same 0600 rules, same minted-once contract.
+REPEATER_IDENTITY_FILENAME = "openhop_repeater_identity.key"
+REPEATER_ADMIN_FILENAME = "openhop_repeater_admin.txt"
 
 # The pinned `ed25519_wrapper.ED25519_Wrapper` accepts exactly these two, hex-encoded: a
 # 32-byte ed25519 seed, or the 64-byte Meshcore-style (a,RH) key. Any other length raises.
@@ -57,8 +62,8 @@ class MeshCoreIdentityError(ValueError):
     """
 
 
-def secret_path(paths: Paths) -> Path:
-    return paths.under("config", "secrets", IDENTITY_FILENAME)
+def secret_path(paths: Paths, filename: str = IDENTITY_FILENAME) -> Path:
+    return paths.under("config", "secrets", filename)
 
 
 def normalize_key(raw: object) -> str:
@@ -98,14 +103,17 @@ def _mint() -> str:
             return seed.hex()
 
 
-def _read_secret(paths: Paths) -> str:
-    """The stored key, or "" if there is none.
+def _read_secret(paths: Paths, filename: str = IDENTITY_FILENAME, *, normalize=None,
+                 what: str = "MeshCore identity") -> str:
+    """The stored secret, or "" if there is none.
 
     Raises `MeshCoreIdentityError` when the file exists but is unusable — including when it
     is readable by group or others, matching how `load_secrets` refuses a lax secrets.toml.
-    A stored secret is NEVER silently replaced.
+    A stored secret is NEVER silently replaced. `normalize` turns the raw text into the
+    canonical value or "" (default: a MeshCore private key).
     """
-    path = secret_path(paths)
+    normalize = normalize or normalize_key
+    path = secret_path(paths, filename)
     # Permissions FIRST: a lax secret must be refused rather than read. Checking after the
     # read would have already pulled key material out of a file we then declare untrusted.
     st = runtime_fs.stat_leaf_nofollow(paths, path)     # None = absent/unreadable/escaping
@@ -113,18 +121,18 @@ def _read_secret(paths: Paths) -> str:
         return ""                                      # nothing usable there yet
     if st.st_mode & 0o077:
         raise MeshCoreIdentityError(
-            f"MeshCore identity at {path} is readable by group/other "
+            f"{what} at {path} is readable by group/other "
             f"({st.st_mode & 0o777:#o}) — chmod 600 it")
     try:
         raw = runtime_fs.read_bytes(paths, path)
     except FileNotFoundError:
         return ""
     except (OSError, PathContainmentError) as exc:
-        raise MeshCoreIdentityError(f"unreadable MeshCore identity at {path}: {exc}") from exc
-    key = normalize_key(raw.decode("utf-8", "replace"))
+        raise MeshCoreIdentityError(f"unreadable {what} at {path}: {exc}") from exc
+    key = normalize(raw.decode("utf-8", "replace"))
     if not key:
         raise MeshCoreIdentityError(
-            f"MeshCore identity at {path} is not a valid key — refusing to replace it; "
+            f"{what} at {path} is not a valid value — refusing to replace it; "
             f"restore or remove the file deliberately")
     return key
 
@@ -178,7 +186,8 @@ def candidate_key(paths: Paths, path: Path) -> str:
     return ""
 
 
-def _store(paths: Paths, key: str) -> str:
+def _store(paths: Paths, key: str, filename: str = IDENTITY_FILENAME, *, normalize=None,
+           what: str = "MeshCore identity") -> str:
     """Persist `key`, or return the winner of a concurrent first-write race.
 
     Target-exclusive creation, not an atomic replace: `atomic_write_bytes` renames over the
@@ -188,17 +197,17 @@ def _store(paths: Paths, key: str) -> str:
     """
     runtime_fs.chmod(paths, paths.under("config", "secrets"), 0o700, create_dir=True)
     try:
-        runtime_fs.create_exclusive_bytes(paths, secret_path(paths),
+        runtime_fs.create_exclusive_bytes(paths, secret_path(paths, filename),
                                           (key + "\n").encode("ascii"), mode=0o600)
     except FileExistsError:
-        existing = _read_secret(paths)          # raises if the winner is unusable
-        if existing:
+        existing = _read_secret(paths, filename, normalize=normalize, what=what)
+        if existing:                            # raises if the winner is unusable
             return existing
         raise
     return key
 
 
-def adopt_identity(paths: Paths, candidates=()) -> str:
+def adopt_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME) -> str:
     """Adopt an existing identity so it survives an operation that replaces its file.
 
     Returns the stored key, or "" when there is nothing to adopt. NEVER mints: an operator
@@ -206,20 +215,45 @@ def adopt_identity(paths: Paths, candidates=()) -> str:
     `MeshCoreIdentityError` if a stored secret or a candidate is present but invalid — the
     caller turns that into a refusal BEFORE deleting or replacing anything.
     """
-    stored = _read_secret(paths)
+    stored = _read_secret(paths, filename)
     if stored:
         return stored
     for cand in candidates:
         key = candidate_key(paths, cand)
         if key:
-            return _store(paths, key)
+            return _store(paths, key, filename)
     return ""
 
 
-def ensure_identity(paths: Paths, candidates=()) -> str:
+def ensure_identity(paths: Paths, candidates=(), filename: str = IDENTITY_FILENAME) -> str:
     """The key to write into the generated config, minting one if none exists yet.
 
-    The ONLY place a MeshCore identity is created. Adoption is tried first, so an install
-    upgrading into this feature keeps the identity it already has on air.
+    The ONLY place a MeshCore identity is created (`filename` selects the node's or the
+    repeater's). Adoption is tried first, so an install upgrading into this feature keeps
+    the identity it already has on air.
     """
-    return adopt_identity(paths, candidates) or _store(paths, _mint())
+    return adopt_identity(paths, candidates, filename) or _store(paths, _mint(), filename)
+
+
+_PASSWORD_LEN = 24          # token_urlsafe(24) -> 32 URL-safe characters
+
+
+def _normalize_password(raw: object) -> str:
+    """The stored dashboard password, or "" when the file holds nothing usable: one line of
+    16..128 printable, non-blank ASCII characters."""
+    s = str(raw or "").strip()
+    if not (16 <= len(s) <= 128) or not s.isascii() or not s.isprintable() or " " in s:
+        return ""
+    return s
+
+
+def ensure_password(paths: Paths, filename: str) -> str:
+    """A controller-minted login secret (the openHop dashboard admin password): read the stored
+    one, else mint a random URL-safe token ONCE and persist it 0600 like the identities. Never
+    replaces a stored value; a lax or garbled file raises, exactly like a bad key."""
+    what = "dashboard password"
+    stored = _read_secret(paths, filename, normalize=_normalize_password, what=what)
+    if stored:
+        return stored
+    return _store(paths, _secrets.token_urlsafe(_PASSWORD_LEN), filename,
+                  normalize=_normalize_password, what=what)

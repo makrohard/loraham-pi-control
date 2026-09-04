@@ -1,6 +1,6 @@
-# Stack: MeshCore (868)
+# Stack: MeshCore (OpenHop)
 
-Daemon-backed MeshCore node on 868 MHz. Consumes the 868 daemon sockets, requires the
+Daemon-backed MeshCore on 868 MHz — a chat node, a repeater, or both in one process. Consumes the 868 daemon sockets, requires the
 daemon in `MANAGED` mode, claims no direct SPI.
 
 **MeshCore on LHPC is powered by [openHop Core](https://github.com/openhop-dev/openhop_core)
@@ -13,17 +13,63 @@ former standalone `meshcore-pi` node; LHPC no longer maintains a MeshCore fork o
 
 | | |
 |---|---|
-| Components | `meshcore-node` (openHop node), optional `meshcore-webui` (browser GUI), `meshcore-cli` (REPL tool) |
+| Components | `meshcore-node` (the one openhop process: chat node and/or repeater, by `mode`), optional `meshcore-webui` (browser GUI), `meshcore-cli` (REPL tool), `openhop-repeater-src` (pinned upstream repeater, build-time dependency only) |
 | Source | `openhop-core` — a managed clone of openHop Core under `<runtime>/src` (pinned commit), plus one small LHPC-shipped patch applied idempotently at build; the `.venv` is built in-tree by `lhpc build meshcore` and the `meshcore_host` host application (shipped with LHPC) is installed into it |
-| Node run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` |
+| Node run | `.venv/bin/python -m meshcore_host <runtime>/config/files/meshcore.toml` — the same command in every mode; the file's `[repeater] role` picks the program |
 | Config | `meshcore.toml` (mode `0600` — it carries the node's private key): preset, node name (the node's own, never inherited from the operator callsign — the start is refused until it is set), txpower, frequency/SF/BW/CR, airtime, allow-list, port, persistence DB, GPS |
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (mode `0600`) |
 | Persistence | `<runtime>/state/meshcore/companion.db` (SQLite; contacts, channels, learned routes, prefs, offline messages survive restart) |
-| Companion | TCP `:5000` |
+| Companion | TCP `:5000` (chat modes) |
+| Repeater dashboard | `127.0.0.1:8000` (repeater modes) — openHop's own web dashboard, reachable on the Pi; proxying it through the LHPC webserver follows |
 | Optional | `meshcore-webui` — browser GUI (adradr/meshcore-webui) reached through the LHPC TLS/PKI proxy; `meshcore-cli` — interactive REPL (run yourself) |
 
 Daemon interface: `GET STATUS`, `SET TXMODE=MANAGED`. A future direct-SX1262 profile
 would own SPI exclusively and conflict with the daemon; it is not the default.
+
+## Mode: chat, chat + repeater, repeater
+
+One openhop process runs on the radio in every mode; `mode` (Settings → Repeater, or
+`lhpc config meshcore mode …`) selects which program it is. Changing it flags the stack
+restart-required like any other setting. The default is `chat`, so an updated box keeps running
+exactly what it ran before.
+
+| Mode | Program | Chat node (TCP 5000) | Repeater (dashboard :8000) | Web UI / CLI | Position (GPS) |
+|---|---|---|---|---|---|
+| `chat` | today's Companion host (`meshcore_host`) | yes | no | available | as configured |
+| `chat+repeater` | upstream `openhop_repeater`, hosting the same Companion inside it | yes | yes | available | as configured (the Companion reads it) |
+| `repeater` | upstream `openhop_repeater` alone | no (its identity is neither required nor minted, and a damaged key cannot block the start) | yes | refused (nothing to connect to) | none — no `meshcore-gps` feed, no receiver claim, no GPS refusal |
+
+The chat rows of the Settings card (node name, allow-list, preset, TX, GPS) are the same rows in
+every mode — the chat node inside the repeater is the same node, same name, same key, so other
+MeshCore users see the same node on the air whichever mode runs. What does NOT carry across a mode
+change is the local contact list: in `chat` the Companion persists in
+`<runtime>/state/meshcore/companion.db`, in `chat+repeater` the hosted Companion persists in the
+repeater's own database under `<runtime>/state/openhop/` (upstream's schema). Each store is kept as
+it is; nothing is migrated between them. The **Repeater** rows are used only when the mode is not
+`chat`:
+
+- **Repeater node name** — required in the repeater modes (a save that selects a repeater mode
+  without one is refused, and so is a start); the repeater is a distinct MeshCore node with its
+  own identity, and like the chat node's name it never inherits the operator callsign. The mode
+  rows are saved settings only — they cannot be overridden for a single start.
+- **Repeater behaviour** — upstream's own switch: `forward` relays packets, `monitor` listens and
+  advertises without relaying, `no_tx` only receives.
+- The repeater's **identity key** and the dashboard's **admin password** are minted by LHPC into
+  `<runtime>/config/secrets/openhop_repeater_identity.key` and `…/openhop_repeater_admin.txt`
+  (mode `0600`) on first use and reused thereafter; the repeater's own storage (SQLite/RRD) lives
+  under `<runtime>/state/openhop/`, separate from the chat node's database.
+
+**Upgrading to 0.2.8:** the stack's build now also consumes the pinned repeater checkout, so an
+updated box reports the node as *not built* until it has run `lhpc install meshcore` (adopts the
+new source) and `lhpc build meshcore` once — in `chat` mode too; the runtime behaviour is unchanged
+until the mode is changed. Status reads the mode the node was *started* with, so a saved mode
+change shows as restart-required and does not flip a running node to degraded.
+
+LHPC owns the radio settings, the version and the configuration in every mode: the repeater gets
+its RF parameters, duty-cycle budget and companion from the same file, never writes configuration
+(every upstream save fails closed — it is given no config path), and its MQTT, Glass and time-sync
+integrations are off. The repeater's dashboard shows the daemon link as *ok* only while the LoRaHAM
+daemon connection is up and, with TX enabled, the MANAGED-TX handshake is complete.
 
 ## openHop Core source
 

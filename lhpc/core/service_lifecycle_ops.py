@@ -216,13 +216,43 @@ class LifecycleOpsMixin:
             time.sleep(self.ENDPOINT_VERIFY_POLL_S)
             waited += self.ENDPOINT_VERIFY_POLL_S
 
+    def _meshcore_mode_refusal(self, target: str):
+        """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
+        (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
+        and a repeater mode without the repeater's own node name. One rule set
+        (`meshcore_mode`); the host re-checks the same at startup. None = nothing to refuse."""
+        from . import meshcore_mode as _mm
+        from . import validators
+        if target not in (_mm.STACK_ID, _mm.NODE_ID, *_mm.CLIENT_IDS):
+            return None
+        mode = self.meshcore_mode()
+        if target in _mm.CLIENT_IDS and not _mm.clients_available(mode):
+            return ActionResult(
+                False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "
+                       f"there is no Companion on TCP {_mm.COMPANION_PORT} to connect to",
+                details=[f"lhpc config {_mm.STACK_ID} mode chat+repeater   # keep the repeater, "
+                         "run the chat node inside it"])
+        if target in (_mm.STACK_ID, _mm.NODE_ID) and _mm.repeater_on(mode):
+            name = self._resolved_param_value(_mm.STACK_ID, "file", _mm.NODE_ID, "repeater_name")
+            try:
+                validators.node_name(name, field="repeater name")
+            except validators.ValidationError as exc:
+                return ActionResult(
+                    False, f"Cannot start '{target}': mode '{mode}' needs the repeater's own node "
+                           f"name — {exc}",
+                    details=[f"lhpc config {_mm.STACK_ID} repeater_name <name>"])
+        return None
+
     def _ready_endpoints_present(self, comp) -> tuple[bool, list[str]]:
         """Probe a component's `ready = true` endpoints (bounded). Returns
         (all_present, evidence-lines). Only endpoints explicitly marked ready
         participate — reference/client/data endpoints never gate."""
+        from . import meshcore_mode as _mm
         from .probes.endpoints import tcp_endpoint_present
         from .probes.unixsock import probe_socket
-        ready = [e for e in comp.endpoints if e.ready]
+        # The MeshCore node's ready endpoints depend on its mode (5000 in chat modes, 8000 in
+        # repeater modes) — the SAME selection ongoing status applies.
+        ready = [e for e in _mm.expected_endpoints(comp, self.meshcore_mode()) if e.ready]
         if not ready:
             return True, []
         def snapshot() -> tuple[bool, list[str]]:
@@ -585,6 +615,8 @@ class LifecycleOpsMixin:
             return _r
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
+        if (_r := self._meshcore_mode_refusal(target)) is not None:
+            return _r
         from . import reslock
         if auto_install_ctx is not None:
             order = self._run_order(target) or []
@@ -890,6 +922,8 @@ class LifecycleOpsMixin:
             return ActionResult(False, f"Unknown stack or component '{target}'.",
                                 next_commands=["lhpc list"])
         if (_r := self._gui_fallback_refusal(target)) is not None:
+            return _r
+        if (_r := self._meshcore_mode_refusal(target)) is not None:
             return _r
         # Ownership scope of THIS public operation: recorded on every launch it causes
         # (incl. an ensured daemon), threaded EXPLICITLY — never ambient/thread-local. A
@@ -2737,6 +2771,8 @@ class LifecycleOpsMixin:
         never inherited, so empty is refused)."""
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
+        if (_r := self._meshcore_mode_refusal(target)) is not None:
+            return _r
         if (_bref := self.band_refusal(target, band, "restart")) is not None:
             return _bref            # plan and apply take the SAME decision on an explicit band
         from . import reslock
@@ -2885,6 +2921,8 @@ class LifecycleOpsMixin:
         # degrading to stop-only, exactly the promise this method documents).
         if (_r := self._gui_fallback_refusal(target)) is not None:
             return _r
+        if (_r := self._meshcore_mode_refusal(target)) is not None:
+            return _r
         if not band:
             # THE ONE resolver, same as public restart(), start() and the identity form (review-found:
             # this kept `_effective_band`, which takes an interactive marker UNCONDITIONALLY. Once the
@@ -2980,6 +3018,28 @@ class LifecycleOpsMixin:
         _is_component_target = target != "" and self.stack(target) is None
         _absent = [(s, c) for s, c in buildable
                    if c.source and not life.source_dir(c).exists()] if apply else []
+        if apply:
+            # A `build_requires` dependency is consumed by the build (pip-installed from its
+            # checkout), so its absence would surface as a bare pip "Directory does not exist"
+            # mid-build. Refuse up front with the remedy — the LIBRARY component itself has no
+            # build steps, so the missing-source preflight above never sees it.
+            # Only a dependency with NO build steps of its own (a pure checkout, e.g. the pinned
+            # openhop repeater source) is decided here: one with build steps is a `buildable`
+            # entry the missing-source preflight below already judges (optional -> skipped).
+            _by_id = {cc.id: cc for st in self.stacks() for cc in st.components}
+            _deps_absent = sorted({(s.id, d.id) for s, c in buildable
+                                   for d in (_by_id.get(x) for x in c.build_requires)
+                                   if d is not None and d.source and not d.build_steps
+                                   and not life.source_dir(d).exists()})
+            if _deps_absent:
+                return ActionResult(
+                    False,
+                    f"Refusing to build '{target}': build dependency "
+                    f"{', '.join(sorted({d for _, d in _deps_absent}))} is not installed.",
+                    details=[f"  [not-installed] {d}: no source at "
+                             f"{life.source_dir(_by_id[d])} — install the stack to adopt it"
+                             for _, d in _deps_absent],
+                    next_commands=[f"lhpc install {sid}" for sid in sorted({s for s, _ in _deps_absent})])
         if _absent:
             # A NAMED component is always refused — the operator asked for that one by name,
             # and reporting "nothing to do" would hide that it is not installed. Within a
