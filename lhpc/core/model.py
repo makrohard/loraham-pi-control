@@ -521,6 +521,56 @@ class Stack:
 
 
 @dataclass(frozen=True)
+class WebPage:
+    """ONE proxied web page: a component's client http/https endpoint as the stack web-UI proxy
+    sees it. `page_id` keys the operator's `[stackweb]` policy, the nginx block and the panels: the
+    stack's FIRST web component keeps the STACK id (so every policy saved before pages existed stays
+    valid), any further one is `<stack_id>-<component_id>`. Derived, never declared — the complete
+    set is collision-checked once at manifest load (`manifest._validate_graph`)."""
+
+    page_id: str
+    stack_id: str
+    component_id: str
+    name: str                    # the component's display name
+    label: str                   # how a list OUTSIDE the stack names the page (see web_pages)
+    address: str                 # upstream "127.0.0.1:8788"
+    scheme: str                  # upstream "http" | "https"
+    deny_paths: tuple = ()
+
+    @property
+    def primary(self) -> bool:
+        """The stack's first page — the one keyed by the stack id."""
+        return self.page_id == self.stack_id
+
+    @property
+    def anchor(self) -> str:
+        """The console anchor of this page's Webserver sub-panel."""
+        return f"#stack-webserver-{self.page_id}"
+
+
+def web_pages(stack: Stack) -> tuple:
+    """The stack's proxied web pages in manifest order — one per component that declares a
+    client http/https endpoint (its first such endpoint). Empty for a stack without a web UI.
+
+    `label` is the ONE spelling every stack-external list uses: the stack name for the first
+    page, `<stack> · <component>` for any further one (inside the stack's own panel the
+    component name alone suffices — `name`)."""
+    out: list = []
+    for comp in stack.components:
+        for ep in comp.endpoints:
+            if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
+                first = not out
+                out.append(WebPage(
+                    page_id=stack.id if first else f"{stack.id}-{comp.id}",
+                    stack_id=stack.id, component_id=comp.id, name=comp.name,
+                    label=stack.name if first else f"{stack.name} · {comp.name}",
+                    address=ep.address, scheme=ep.scheme,
+                    deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ())))
+                break
+    return tuple(out)
+
+
+@dataclass(frozen=True)
 class ControllerSpec:
     """LHPC's OWN checkout as a dedicated controller identity — NOT a Stack/Component and
     NOT a managed source. It is observable and explicitly self-updatable, but is never

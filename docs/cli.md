@@ -340,7 +340,8 @@ lhpc webserver start-service           # operator context: generate config + ena
 lhpc webserver init [--dns D ...] [--ip I ...] [--confirm-recreate]   # bootstrap PKI (CAs + server cert + CRL)
 lhpc webserver configure [--bind B] [--port P] [--access-mode M] [--dns D ...] [--ip I ...]
 lhpc webserver expose [--cidr C ...] [--access-mode M] [--confirm-phrase P]   # remote exposure (opt-in)
-lhpc webserver proxy <stack> [--mode local|lan|public] [--port P] [--scheme https|http] [--access-mode M] [--cidr C ...] [--confirm-phrase P]
+lhpc webserver proxy <page> [--mode local|lan|public] [--port P] [--scheme https|http] [--access-mode M] [--cidr C ...] [--confirm-phrase P]
+#   <page> = the stack id (its first web UI), or <stack>-<component> for a stack's further web UIs
 # --auth is an alias for --access-mode on configure / expose / proxy
 lhpc webserver disable-remote          # bind back to loopback
 lhpc webserver reset-defaults          # reset desired config to safe defaults

@@ -418,8 +418,9 @@ def _abs(paths: Paths, parts) -> str:
 
 @dataclass(frozen=True)
 class StackWebProxy:
-    """One stack's web-UI reverse proxy: the operator's LISTENER policy (`swc`) plus the UPSTREAM,
-    which is read from the manifest endpoint and is NEVER operator-settable.
+    """One proxied web PAGE's reverse proxy: the operator's LISTENER policy (`swc`, whose
+    `stack_id` is the page id — a stack's first page keeps the stack id) plus the UPSTREAM, which
+    is read from the manifest endpoint and is NEVER operator-settable.
 
     Keeping `swc.scheme` (listener) and `upstream_scheme` apart is deliberate: MeshCom's upstream is
     plain http on loopback, and that must not talk anyone into dropping TLS on the public listener."""
@@ -431,7 +432,8 @@ class StackWebProxy:
 
 
 def nginx_token(stack_id: str) -> str:
-    """A stack id reduced to `[a-z0-9_]` for use in nginx VARIABLE / `map` / `upstream` names.
+    """A page id (a stack id, or `<stack>-<component>`) reduced to `[a-z0-9_]` for use in nginx
+    VARIABLE / `map` / `upstream` names.
 
     Stack ids may contain `-`, `.`, `@` (`validators.path_component`), none of which are legal in an
     nginx variable name. Never interpolate a raw id into one. Folding is lossy by design, so callers

@@ -21,8 +21,11 @@ def _svc(tmp_path, listeners):
     return ControllerService(system=sysm, paths=Paths(runtime_root=tmp_path))
 
 
-def _status(*specs):
+def _status(*specs, component_id=""):
+    # A real ComponentStatus names its component; the pins here are raw (non-proxied) listeners,
+    # so no page lookup is expected to match.
     st = type("St", (), {})()
+    st.component_id = component_id
     st.endpoints = [EndpointObservation(spec=sp, present=True) for sp in specs]
     return st
 

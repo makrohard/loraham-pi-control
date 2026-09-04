@@ -430,7 +430,12 @@ class StackWebConfig:
     operator-settable — conflating the two would drop outside TLS because the inside hop is cleartext.
 
     `port == 0` means NOT PROXIED: no nginx block is emitted at all, which is the default and keeps a
-    fresh deployment's rendered config unchanged."""
+    fresh deployment's rendered config unchanged.
+
+    `stack_id` carries the PAGE id (`model.web_pages`): the stack id for a stack's first web
+    component — so every entry saved before a stack could have two pages stays valid — and
+    `<stack_id>-<component_id>` for any further one. The field name is kept: it is the key of
+    every saved `[stackweb]` entry."""
 
     stack_id: str
     mode: str = "local"

@@ -871,10 +871,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_component": _upd_comp,            # the behind component to deep-link to
                 "update_component_is_main": _upd_is_main,  # main -> Install section; dep -> #comp-<id>
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
-                # {} for a stack with no web UI -> the Webserver sub-section is not rendered.
-                "stack_web": service.stack_web_view(stack.id),
-                # {} unless a component declares where its self-generated UI password lives.
-                "ui_creds": service.ui_credentials(stack.id),
+                # [] for a stack with no web UI -> no Webserver sub-section; else one entry per
+                # proxied PAGE (component with a client http/https endpoint).
+                "stack_webs": service.stack_web_views(stack.id),
+                # One Password sub-section per component that declares where its self-generated
+                # UI password lives — independent of web pages.
+                "ui_creds_list": service.ui_credentials_list(stack.id),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
@@ -2086,17 +2088,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.post("/stacks/<stack_id>/webserver")
     def stack_web_configure(stack_id: str):
-        """Per-stack web-UI proxy policy. Same typed-confirmation contract as /webserver/configure."""
+        """Web-UI proxy policy for ONE proxied page of the stack (`page`; default the stack's first
+        page, whose id is the stack id). Same typed-confirmation contract as /webserver/configure."""
         if not _csrf_ok():
             abort(400)
-        if service.stack(stack_id) is None or service.stack_web_upstream(stack_id) is None:
-            abort(404)                                   # unknown stack, or it has no web UI
         f = request.form
+        page_id = (f.get("page") or stack_id).strip()
+        page = service.web_page(page_id)
+        if service.stack(stack_id) is None or page is None or page.stack_id != stack_id:
+            abort(404)                                   # unknown stack, or not one of its pages
         cidrs = [x.strip() for x in f.get("cidrs", "").split(",") if x.strip()]
         phrase = f.get("confirm_phrase", "").strip()
         # Single "Apply": save-and-apply in one action (autosave, then validate + reload).
         r = service.stack_web_configure_apply(
-            stack_id,
+            page_id,
             mode=(f.get("mode") or None),
             port=(f.get("port") or None),
             scheme=(f.get("scheme") or None),
@@ -2108,7 +2113,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for d in r.details:
             flash(d, "warn" if r.ok else "err")
         # Anchor the webserver panel itself (NOT ?cfg, which opens Settings).
-        return redirect(url_for("stacks_overview") + "#stack-webserver-" + stack_id)
+        return redirect(url_for("stacks_overview") + "#stack-webserver-" + page_id)
 
     @app.post("/webserver/stacks")
     def stack_webs_configure():

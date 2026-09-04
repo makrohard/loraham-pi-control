@@ -93,7 +93,7 @@
         individual exceptions.</p>
       {% if ws_stackwebs.stacks %}
         <p class="muted">Will affect:
-          {% for r in ws_stackwebs.stacks %}<code>{{ r.sid }}</code>
+          {% for r in ws_stackwebs.stacks %}<code>{{ r.sid }}</code> {{ r.label }}
             ({% if r.keeps %}keeps port {{ r.port }}{% else %}gets port {{ r.port }}{% endif %}){{ ", " if not loop.last }}{% endfor %}</p>
         <form method="post" action="{{ url_for('stack_webs_configure') }}">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

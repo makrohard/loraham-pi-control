@@ -4789,7 +4789,11 @@ class LifecycleOpsMixin:
         if status is None:
             return []
         from . import webserver as _ws
-        swc = self.config().stackweb.get(stack_id) if stack_id else None
+        # A status is per COMPONENT, so its web endpoint belongs to exactly one proxied page (a
+        # stack may have several): that page's saved policy — never a sibling's — decides "proxied".
+        pages = self.stack_web_pages(stack_id) if stack_id else ()
+        page = next((p for p in pages if p.component_id == status.component_id), None)
+        swc = self.config().stackweb.get(page.page_id) if page is not None else None
         try:
             snap = self._system.procfs.tcp_listeners()      # ONE /proc read for this component's pins
         except Exception:

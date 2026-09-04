@@ -651,12 +651,15 @@ class _Spec:
 
 
 class _Status:
-    def __init__(self, eps):
-        self.endpoints = eps
+    def __init__(self, eps, component_id=""):
+        self.component_id, self.endpoints = component_id, eps
 
 
 def _ifaces(svc, sid):
-    st = _Status([_Obs(_Spec("127.0.0.1:18083", "http", "MeshCom web UI"))])
+    # A status is per component: name the component behind the stack's web page, as the real
+    # snapshot does.
+    cid = svc.stack_web_pages(sid)[0].component_id
+    st = _Status([_Obs(_Spec("127.0.0.1:18083", "http", "MeshCom web UI"))], cid)
     return svc._client_interfaces(st, sid)
 
 
@@ -822,7 +825,8 @@ def test_dashboard_not_proxied_web_ui_shows_direct_address_and_name_link(tmp_pat
              "posture": {"auth": "open", "iface": "loopback", "sec_level": "ok", "scheme": "https",
                          "auth_level": "ok", "iface_level": "ok", "scheme_level": "ok",
                          "run": "lhpc-web", "run_level": "ok"}},
-            {"kind": "stack", "name": "MeshCom (QEMU)", "sid": "meshcom", "enabled": False,
+            {"kind": "stack", "name": "MeshCom (QEMU)", "sid": "meshcom", "pid": "meshcom",
+             "anchor": "#stack-webserver-meshcom", "enabled": False,
              "posture": None, "port": None, "direct_port": "18083", "direct_scheme": "http",
              "logs_component": None}]
     monkeypatch.setattr(ControllerService, "dashboard_webservers", lambda self, **k: rows)

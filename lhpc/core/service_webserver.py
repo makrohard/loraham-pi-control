@@ -341,49 +341,63 @@ class WebserverOpsMixin:
 
     # ---- per-stack web-UI reverse proxies -------------------------------------------------
 
-    def stack_web_upstream(self, stack_id: str):
-        """(address, scheme) of a stack's web UI from the MANIFEST, or None when it has none.
+    def stack_web_pages(self, stack_id: str) -> tuple:
+        """The stack's proxied web PAGES (`model.web_pages`): one per component that declares a
+        client http/https endpoint, in manifest order. The first keeps the stack id as its page id;
+        any further one is `<stack_id>-<component_id>`. Empty for a stack without a web UI."""
+        from .model import web_pages
+        s = self.stack(stack_id)
+        return web_pages(s) if s is not None else ()
+
+    def web_pages(self) -> list:
+        """Every proxied page on the box, in MANIFEST order (stacks, then each stack's pages) —
+        the order every rendered/persisted list keeps (nginx blocks, the applied snapshot the
+        pending-apply marker is compared against). Port POSITIONS are a separate rule:
+        `_page_positions`."""
+        return [p for s in self.stacks() for p in self.stack_web_pages(s.id)]
+
+    def _page_positions(self) -> list:
+        """Page ids in port-suggestion order: the stacks' first pages sorted by id, THEN any
+        further pages sorted by id — so a second page appearing in one stack never shifts another
+        stack's suggested port (graywolf 8444, meshcom 8445, meshcore 8446, meshtastic 8447)."""
+        pages = self.web_pages()
+        return (sorted(p.page_id for p in pages if p.primary)
+                + sorted(p.page_id for p in pages if not p.primary))
+
+    def web_page(self, page_id: str):
+        """The `WebPage` a page id names (a stack id names that stack's first page), or None."""
+        return next((p for p in self.web_pages() if p.page_id == page_id), None)
+
+    def stack_web_upstream(self, page_id: str):
+        """(address, scheme) of a proxied page's web UI from the MANIFEST, or None when the id
+        names no page. A stack id names the stack's first page.
 
         The upstream is evidence, never operator input: an `EndpointSpec` with `client=true` and an
         http/https scheme. This is what keeps `upstream_scheme` independent of the listener scheme."""
-        s = self.stack(stack_id)
-        if s is None:
-            return None
-        for comp in s.components:
-            for ep in comp.endpoints:
-                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
-                    return (ep.address, ep.scheme)
-        return None
+        p = self.web_page(page_id)
+        return (p.address, p.scheme) if p is not None else None
 
-    def stack_web_deny_paths(self, stack_id: str) -> tuple:
-        """Request paths the stack's web-UI proxy must refuse (from the SAME manifest endpoint
-        stack_web_upstream reads). Empty when the stack declares none."""
-        s = self.stack(stack_id)
-        if s is None:
-            return ()
-        for comp in s.components:
-            for ep in comp.endpoints:
-                if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
-                    return tuple(getattr(ep, "proxy_deny_paths", ()))
-        return ()
+    def stack_web_deny_paths(self, page_id: str) -> tuple:
+        """Request paths the page's proxy must refuse (from the SAME manifest endpoint
+        stack_web_upstream reads). Empty when the page declares none."""
+        p = self.web_page(page_id)
+        return tuple(p.deny_paths) if p is not None else ()
 
     def stack_web_eligible(self) -> list:
-        """Stack ids that expose a web UI (derived from the manifest, never hardcoded)."""
-        return [s.id for s in self.stacks() if self.stack_web_upstream(s.id) is not None]
+        """Page ids that can be proxied (derived from the manifest, never hardcoded), in
+        manifest order."""
+        return [p.page_id for p in self.web_pages()]
 
     def _stack_web_proxies(self) -> list:
-        """The `StackWebProxy` list for nginx rendering — only stacks with a port set (enabled)."""
+        """The `StackWebProxy` list for nginx rendering — only pages with a port set (enabled),
+        in manifest order."""
         from . import webserver as _ws
         cfgs = self.config().stackweb
         out = []
-        for sid in self.stack_web_eligible():
-            swc = cfgs.get(sid)
-            if swc is None or not swc.enabled:
-                continue
-            up = self.stack_web_upstream(sid)
-            if up is None:                       # eligibility changed under us; skip, never render half
-                continue
-            out.append(_ws.StackWebProxy(swc, up[0], up[1], self.stack_web_deny_paths(sid)))
+        for p in self.web_pages():
+            swc = cfgs.get(p.page_id)
+            if swc is not None and swc.enabled:
+                out.append(_ws.StackWebProxy(swc, p.address, p.scheme, p.deny_paths))
         return out
 
     def _stack_listen_scope(self, swc, listeners=None) -> str:
@@ -400,17 +414,29 @@ class WebserverOpsMixin:
             return "absent"
         return _ws.listener_scope(self._system, swc.port, listeners)
 
-    def ui_credentials(self, stack_id: str) -> dict:
+    def ui_credentials_list(self, stack_id: str) -> list:
+        """`ui_credentials` for EVERY component of the stack that declares a password file, each
+        naming its component — the stack's Password sub-sections. Independent of web pages: a
+        backend that mints the login for a sibling's UI still gets its section."""
+        st = self.stack(stack_id)
+        return [{"component_id": c.id, "name": c.name, **self.ui_credentials(stack_id, c.id)}
+                for c in (st.components if st else ()) if c.ui_password_file]
+
+    def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
         """Where a stack's SELF-GENERATED web-UI password lives, and how to read it.
 
         Some apps mint their own credential on first start (graywolf does). LHPC stores the
         file but must never surface the value: a rendered page is copied into chats and
         screenshots, and a log is world-readable for longer than anyone expects. So this
         returns the account name and a copyable command the operator runs ON THE BOX — the
-        secret stays on the box. `{}` when no component declares one.
+        secret stays on the box. `{}` when no component declares one. With `component_id`,
+        ONLY that component's file counts — a proxied page must show the login of the component
+        behind it, never a sibling's.
         """
         st = self.stack(stack_id)
         for c in (st.components if st else ()):
+            if component_id and c.id != component_id:
+                continue
             if not c.ui_password_file:
                 continue
             path = self._paths.runtime_root / c.ui_password_file
@@ -419,10 +445,26 @@ class WebserverOpsMixin:
                     "command": f"cat {path}"}
         return {}
 
-    def stack_web_view(self, stack_id: str, listeners=None, fw_status=None,
+    def stack_web_views(self, stack_id: str, listeners=None, fw_status=None,
+                        applied=None) -> list:
+        """One `stack_web_view` per proxied page of the stack, in manifest order — the stack's
+        Webserver sub-panels. `[]` for a stack without a web UI. The shared reads (/proc
+        listeners, the applied snapshot) happen ONCE for all pages."""
+        from . import webserver as _ws
+        pages = self.stack_web_pages(stack_id)
+        if not pages:
+            return []
+        listeners = self._listeners(listeners)
+        if applied is None:
+            applied = _ws.read_applied(self._paths)
+        return [self.stack_web_view(p.page_id, listeners=listeners, fw_status=fw_status,
+                                    applied=applied) for p in pages]
+
+    def stack_web_view(self, page_id: str, listeners=None, fw_status=None,
                        applied=None) -> dict:
-        """READ-ONLY view for the stack's Webserver panel. Includes the raw-port warning, which is
-        evidence from THIS host (/proc/net/tcp), not a hardcoded per-stack fact.
+        """READ-ONLY view for ONE proxied page's Webserver panel (a stack id names the stack's
+        first page). Includes the raw-port warning, which is evidence from THIS host
+        (/proc/net/tcp), not a hardcoded per-stack fact.
 
         The security pill follows the SAME desired-vs-applied rule as the console (`posture_for`):
         a saved mode/scheme/auth/CIDR change does not reach nginx until Apply, so a LIVE proxy
@@ -436,15 +478,15 @@ class WebserverOpsMixin:
             WEBSERVER_SCHEMES,
             StackWebConfig,
         )
-        up = self.stack_web_upstream(stack_id)
-        if up is None:
+        page = self.web_page(page_id)
+        if page is None:
             return {}
-        address, upstream_scheme = up
-        swc = self.config().stackweb.get(stack_id) or StackWebConfig(stack_id=stack_id)
+        address, upstream_scheme = page.address, page.scheme
+        swc = self.config().stackweb.get(page_id) or StackWebConfig(stack_id=page_id)
         ws = self.config().webserver
         used = {c.port for sid, c in self.config().stackweb.items()
-                if sid != stack_id and c.enabled}
-        suggested = swc.port or self._default_stack_web_port(stack_id, ws.port)
+                if sid != page_id and c.enabled}
+        suggested = swc.port or self._default_stack_web_port(page_id, ws.port)
         try:
             upstream_port = int(str(address).rsplit(":", 1)[1])
         except (IndexError, ValueError):
@@ -454,7 +496,7 @@ class WebserverOpsMixin:
                  if upstream_port else "absent")
         if applied is None:
             applied = _ws.read_applied(self._paths)
-        ap = _ws.applied_proxy(applied, stack_id)
+        ap = _ws.applied_proxy(applied, page_id)
         # WHICH PORT does this proxy actually listen on? The desired port only becomes real at
         # Apply; until then the running nginx still holds the applied one, so probe both or a
         # saved port move hides a live listener behind a freshly-saved "local" intent.
@@ -472,7 +514,10 @@ class WebserverOpsMixin:
                      if listen_scope == "exposed" else None)
         plan = _ws.plan_stack_exposure(swc, ws.port, used)
         return {
-            "stack_id": stack_id, "cfg": swc, "upstream_address": address,
+            # The page and the component behind it (`page_id` is the key of every saved policy).
+            "page_id": page_id, "stack": page.stack_id, "component_id": page.component_id,
+            "name": page.name, "label": page.label, "primary": page.primary,
+            "cfg": swc, "upstream_address": address,
             "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
             "upstream_scope": scope, "suggested_port": suggested,
             "modes": STACKWEB_MODES, "access_modes": WEBSERVER_ACCESS_MODES,
@@ -563,8 +608,8 @@ class WebserverOpsMixin:
             mst = ss.components.get(stk.main_component.id)
             if mst is None or mst.run_state not in up:      # not started -> no rows (per the operator)
                 continue
-            if self.stack_web_upstream(stk.id) is not None:
-                rows.append(self._dashboard_web_row(stk, snap, fw_status))
+            for page in self.stack_web_pages(stk.id):          # one row per proxied page
+                rows.append(self._dashboard_web_row(stk, page, snap, fw_status))
             for comp in stk.components:                      # every OTHER open port (no-auth tcp)
                 for ep in comp.endpoints:
                     if self._is_raw_endpoint(ep):
@@ -594,21 +639,19 @@ class WebserverOpsMixin:
         meta = getattr(ep, "firewall", None)
         return meta is not None and getattr(meta, "auth", "") == "none"
 
-    def _dashboard_web_row(self, stk, listeners=None, fw_status=None) -> dict:
-        """The web-UI (http/https) box row: proxied port + posture, or the DIRECT listen address when
-        the reverse proxy is not enabled (the adapter reattaches the reached host, like the console)."""
-        v = self.stack_web_view(stk.id, listeners=listeners, fw_status=fw_status) or {}
+    def _dashboard_web_row(self, stk, page, listeners=None, fw_status=None) -> dict:
+        """The web-UI (http/https) box row for ONE proxied page: proxied port + posture, or the
+        DIRECT listen address when the reverse proxy is not enabled (the adapter reattaches the
+        reached host, like the console). A stack's further pages carry the component's name."""
+        v = self.stack_web_view(page.page_id, listeners=listeners, fw_status=fw_status) or {}
         swc = v.get("cfg")
         enabled = bool(swc and swc.enabled)
-        from .webserver import listener_scope
-        web_ep = next((ep for c in stk.components for ep in c.endpoints
-                       if getattr(ep, "client", False) and ep.scheme in ("http", "https")), None)
-        direct_port = web_ep.address.rsplit(":", 1)[-1] if (web_ep and ":" in web_ep.address) else ""
-        # Live bind scope of the DIRECT (un-proxied) web port — the adapter links to the request host
-        # only when it is genuinely exposed, else 127.0.0.1 (a loopback-only web UI must not be a dead
-        # remote link). The proxied path keys off posture (also live), so this is only the direct case.
-        direct_scope = (listener_scope(self._system, int(direct_port), listeners)
-                        if str(direct_port).isdigit() else "absent")
+        # The DIRECT (un-proxied) web port and its live bind scope — the view already derived both
+        # from the same address and listener snapshot (`upstream_port`/`upstream_scope`). The adapter
+        # links to the request host only when it is genuinely exposed, else 127.0.0.1 (a loopback-only
+        # web UI must not be a dead remote link); the proxied path keys off posture instead.
+        direct_port = str(v.get("upstream_port") or "")
+        direct_scope = v.get("upstream_scope", "absent")
         # The port a browser can actually REACH. After a saved-but-unapplied port move the running
         # nginx still holds the old one, so `live_port` is what the address must name — advertising
         # the desired port would hand out a socket nobody listens on. Desired config is untouched
@@ -618,14 +661,15 @@ class WebserverOpsMixin:
         port = None
         if enabled:
             port = (v.get("live_port") or swc.port) if listen_scope != "absent" else swc.port
-        return {"kind": "stack", "name": stk.name, "sid": stk.id, "enabled": enabled,
+        return {"kind": "stack", "name": page.label, "sid": stk.id, "pid": page.page_id,
+                "anchor": page.anchor, "enabled": enabled,
                 "posture": v.get("posture") if enabled else None,
                 "port": port,
                 # The proxy's LIVE listen scope (exposed|loopback|absent) — the adapter links to the
                 # proxy socket only where it actually listens, so an enabled-but-local-only or inactive
                 # proxy never renders a dead request-host link.
                 "listen_scope": listen_scope,
-                "direct_port": direct_port, "direct_scheme": web_ep.scheme if web_ep else "",
+                "direct_port": direct_port, "direct_scheme": page.scheme,
                 "direct_scope": direct_scope}
 
     def _endpoint_bind_host(self, stk_id: str, comp, ep) -> str | None:
@@ -746,6 +790,7 @@ class WebserverOpsMixin:
 
         def row(port_shown, live_scope, level, label, warn_reason):
             return {"kind": "port", "name": stk.name, "sid": stk.id, "port": str(port_shown),
+                    "anchor": f"#stack-webserver-{stk.id}",
                     "scheme": ep.scheme or "tcp", "live_scope": live_scope,
                     "exposure": {"level": level, "label": label},
                     "warn_reason": warn_reason,
@@ -778,12 +823,14 @@ class WebserverOpsMixin:
             return row(port, "exposed", "warn", "LAN", "restricted_noauth")
         return row(port, "exposed", "bad", "public", "review")
 
-    def _default_stack_web_port(self, stack_id: str, console_port: int,
+    def _default_stack_web_port(self, page_id: str, console_port: int,
                                 extra_taken=()) -> int:
-        """A STABLE per-stack default port: `console_port + 1 + position`, where position is the
-        stack's index among the eligible web-UI stacks sorted by id. So meshcom → 8444, meshtastic
-        → 8445, deterministically and without colliding — the old 'first free above the console'
-        gave every not-yet-enabled stack the SAME port (8444), so accepting two suggestions collided.
+        """A STABLE per-page default port: `console_port + 1 + position`, where position is the
+        page's index in `_page_positions()` — the stacks' first pages sorted by id, then any
+        further pages (so a stack growing a second page shifts nobody else). So graywolf → 8444,
+        meshcom → 8445, meshcore → 8446, meshtastic → 8447, deterministically and without
+        colliding — the old 'first free above the console' gave every not-yet-enabled stack the
+        SAME port (8444), so accepting two suggestions collided.
 
         A default is only ever WRITTEN when the operator saves the panel; an untouched stack keeps
         no port key, so a fresh deployment's rendered nginx stays unchanged.
@@ -794,11 +841,11 @@ class WebserverOpsMixin:
         refused at Apply ("already used by another stack's web UI"), i.e. a one-click default that
         cannot be accepted. So ports already claimed by another stack are skipped: the positional
         value is the starting point, not the answer."""
-        eligible = sorted(self.stack_web_eligible())
-        pos = eligible.index(stack_id) if stack_id in eligible else 0
+        positions = self._page_positions()
+        pos = positions.index(page_id) if page_id in positions else 0
         saved = self.config().stackweb
         taken = {int(cfg.port) for sid, cfg in saved.items()
-                 if sid != stack_id and getattr(cfg, "port", 0)}
+                 if sid != page_id and getattr(cfg, "port", 0)}
         taken |= {int(p) for p in extra_taken}      # bulk path: candidates assigned so far
         port = min(max(console_port, 1023) + 1 + pos, 65535)
         while port in taken or port == console_port:
@@ -837,16 +884,16 @@ class WebserverOpsMixin:
                 missing.append("confirmation required: --confirm-phrase enable-remote")
         return missing
 
-    def _stack_web_saved_details(self, stack_id: str, saved) -> list:
+    def _stack_web_saved_details(self, page_id: str, saved) -> list:
         """THE post-save presentation for one stack's web-UI proxy — the standing bypass
         disclosure (warning + firewall remedy) and the proxy URLs. Single-stack and bulk
         saves both render through here, so the two can never diverge in what they name."""
         from . import webserver as _ws
         details: list = []
-        view = self.stack_web_view(stack_id)
+        view = self.stack_web_view(page_id)
         if view.get("bypassable"):
             details.append(
-                f"  WARNING: {stack_id}'s upstream port {view['upstream_port']} is listening on all "
+                f"  WARNING: {page_id}'s upstream port {view['upstream_port']} is listening on all "
                 f"interfaces — it is reachable directly, bypassing this proxy's authentication.")
             details.append("  The managed firewall can close this port (Dashboard -> Webserver "
                            "-> Firewall), or accept the exposure.")
@@ -854,22 +901,25 @@ class WebserverOpsMixin:
             details += [f"  {u}" for u in _ws.stack_ui_urls(saved)]
         return details
 
-    def stack_web_configure(self, stack_id: str, *, mode=None, port=None, scheme=None,
+    def stack_web_configure(self, page_id: str, *, mode=None, port=None, scheme=None,
                             access_mode=None, cidrs=None, confirm=False,
                             confirm_public=False) -> ActionResult:
-        """Persist ONE stack's web-UI proxy policy. Mirrors `webserver_expose`'s two-level
-        confirmation. Writes INTENT only — activation is `lhpc webserver apply`."""
+        """Persist ONE proxied page's web-UI proxy policy (a stack id names the stack's first
+        page). Mirrors `webserver_expose`'s two-level confirmation. Writes INTENT only —
+        activation is `lhpc webserver apply`."""
         from . import config as _config
         from . import webserver as _ws
         from .config import StackWebConfig
         from .validators import ValidationError
-        if self.stack_web_upstream(stack_id) is None:
-            return ActionResult(False, f"stack '{stack_id}' has no web UI to proxy")
+        if self.web_page(page_id) is None:
+            return ActionResult(False, f"'{page_id}' names no web UI to proxy",
+                                details=["proxied pages: " + (", ".join(self.stack_web_eligible())
+                                                              or "none")])
         ws = self.config().webserver
-        current = self.config().stackweb.get(stack_id) or StackWebConfig(stack_id=stack_id)
-        used = {c.port for sid, c in self.config().stackweb.items() if sid != stack_id and c.enabled}
+        current = self.config().stackweb.get(page_id) or StackWebConfig(stack_id=page_id)
+        used = {c.port for sid, c in self.config().stackweb.items() if sid != page_id and c.enabled}
         probe = StackWebConfig(
-            stack_id=stack_id,
+            stack_id=page_id,
             mode=current.mode if mode is None else mode,
             port=current.port if port is None else int(port),
             scheme=current.scheme if scheme is None else scheme,
@@ -879,24 +929,24 @@ class WebserverOpsMixin:
         missing = self._exposure_missing(plan, confirm=confirm, confirm_public=confirm_public,
                                          cidr_flag="--cidr <net>  (e.g. --cidr 192.168.0.0/24)")
         if missing:
-            return ActionResult(False, f"cannot configure '{stack_id}' web UI — unmet "
+            return ActionResult(False, f"cannot configure '{page_id}' web UI — unmet "
                                 "requirement(s):", details=[f"  - {m}" for m in missing])
         try:
-            _config.save_stackweb_config(self._paths, stack_id, mode=mode, port=port, scheme=scheme,
+            _config.save_stackweb_config(self._paths, page_id, mode=mode, port=port, scheme=scheme,
                                          access_mode=access_mode, allowed_cidrs=cidrs)
         except (ValidationError, _config.ConfigError) as exc:
             return ActionResult(False, f"invalid web-UI config: {exc}")
         self._invalidate_config()
-        details = self._stack_web_saved_details(stack_id, probe)
+        details = self._stack_web_saved_details(page_id, probe)
         details.append("lhpc webserver apply           # render + validate + reload nginx")
-        return ActionResult(True, f"web UI proxy for '{stack_id}' saved (desired; run apply)",
+        return ActionResult(True, f"web UI proxy for '{page_id}' saved (desired; run apply)",
                             details=details, next_commands=["lhpc webserver apply"])
 
-    def stack_web_configure_apply(self, stack_id: str, **kwargs) -> ActionResult:
-        """Unified per-stack Settings action (the single 'Apply' button): save this proxy's policy (with
+    def stack_web_configure_apply(self, page_id: str, **kwargs) -> ActionResult:
+        """Unified per-page Settings action (the single 'Apply' button): save this proxy's policy (with
         its two-level typed confirmation) then apply (staged validate + reload). Save-only failures (incl.
         a needed confirmation) short-circuit — nothing is applied."""
-        r = self.stack_web_configure(stack_id, **kwargs)
+        r = self.stack_web_configure(page_id, **kwargs)
         if not r.ok:
             return r
         ar = self.webserver_apply()
@@ -909,11 +959,12 @@ class WebserverOpsMixin:
         (kept), else the same suggested default the per-stack panel offers, candidate-aware so
         the assigned set stays unique. The form's overview and the bulk Apply both consume
         this, so the listed suggestions are STRUCTURALLY the exact ports an Apply assigns.
-        Returns [(sid, port, keeps)] sorted by stack id."""
+        Returns [(page_id, port, keeps)] in `_page_positions()` order (stacks' first pages
+        first)."""
         ws = self.config().webserver
         cfgs = self.config().stackweb
         out, assigned = [], []
-        for sid in sorted(self.stack_web_eligible()):
+        for sid in self._page_positions():
             swc = cfgs.get(sid)
             port = int(getattr(swc, "port", 0) or 0)
             if not port:
@@ -925,7 +976,8 @@ class WebserverOpsMixin:
     def stack_webs_overview(self) -> dict:
         """READ-ONLY context for the 'Stacks WebGUIs' bulk form (the shared candidate walk)."""
         from .config import STACKWEB_MODES, WEBSERVER_ACCESS_MODES, WEBSERVER_SCHEMES
-        return {"stacks": [{"sid": sid, "port": port, "keeps": keeps}
+        pages = {p.page_id: p for p in self.web_pages()}
+        return {"stacks": [{"sid": sid, "port": port, "keeps": keeps, "label": pages[sid].label}
                            for sid, port, keeps in self._stack_webs_candidates()],
                 "modes": STACKWEB_MODES,
                 "access_modes": WEBSERVER_ACCESS_MODES, "schemes": WEBSERVER_SCHEMES}
@@ -944,7 +996,7 @@ class WebserverOpsMixin:
         from . import webserver as _ws
         from .config import StackWebConfig
         from .validators import ValidationError
-        eligible = sorted(self.stack_web_eligible())
+        eligible = self.stack_web_eligible()
         if not eligible:
             return ActionResult(False, "no stacks with a web UI to configure")
         cidrs = list(cidrs or [])

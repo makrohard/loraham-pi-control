@@ -401,6 +401,34 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
                 f"{c.source.path!r} but declare different source specs "
                 "(pin/tag/branch/remote/strategy/artifact must be identical)")
 
+    # PROXY PAGE IDS: one proxied web page per component with a client http/https endpoint; a
+    # stack's first page keeps the stack id, further ones are `<stack_id>-<component_id>`
+    # (`model.web_pages`). Stack ids and component ids are each unique, but a DERIVED id can still
+    # collide with a stack id (stack `foo-bar` — with OR without a web UI — vs stack `foo` +
+    # component `bar`), and two ids that FOLD to one nginx identifier (`two-b` vs `two_b`, see
+    # `webserver.nginx_token`) would hand one UI the other's access policy at apply time. So the
+    # complete derived set is checked once, here — against every stack id and by nginx token —
+    # never at proxy time.
+    from .model import web_pages
+    from .webserver import nginx_token  # imports only pki/config/paths: cycle-free
+    seen_pages: dict[str, str] = {s.id: f"stack {s.id!r}" for s in stacks}
+    tokens: dict[str, str] = {}
+    for s in stacks:
+        for page in web_pages(s):
+            owner = f"{s.id}/{page.component_id}"
+            if not page.primary:                        # a first page IS its stack id
+                if page.page_id in seen_pages:
+                    raise ManifestError(
+                        f"proxy page id {page.page_id!r} is derived for {owner} but already "
+                        f"names {seen_pages[page.page_id]} — rename one")
+                seen_pages[page.page_id] = owner
+            tok = nginx_token(page.page_id)
+            if tokens.get(tok, page.page_id) != page.page_id:
+                raise ManifestError(
+                    f"proxy page ids {tokens[tok]!r} and {page.page_id!r} both fold to the nginx "
+                    f"identifier {tok!r} — rename one before both can be proxied")
+            tokens[tok] = page.page_id
+
 
 _BINARY_KEYS = frozenset({"index_url", "covers", "publish_roots", "proof_paths",
                           "clone_required", "probes"})

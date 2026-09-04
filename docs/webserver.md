@@ -231,30 +231,35 @@ lhpc webserver apply
   ranges pass) or `public` (`0.0.0.0/0`, elevated). Any non-`local` mode needs
   `--confirm-phrase enable-remote`; `public`, a `no-auth` `--access-mode`, or an `http`
   `--scheme` need `enable-remote-danger`.
-- `--port` is **required** — a stack with no port set is not proxied. The web console suggests
-  a stable per-stack default (console port + 1 + the stack's position among the eligible ids —
-  on a fresh box: graywolf `8444`, meshcom `8445`, meshcore `8446`, meshtastic `8447`, skipping
-  ports already saved); any free port ≥ 1024 works (nginx is rootless).
+- `--port` is **required** — a page with no port set is not proxied. The web console suggests
+  a stable per-page default (console port + 1 + the page's position: the stacks' first pages
+  sorted by id, then any further pages — on a fresh box: graywolf `8444`, meshcom `8445`,
+  meshcore `8446`, meshtastic `8447`, skipping ports already saved); any free port ≥ 1024 works
+  (nginx is rootless).
 - `--access-mode` (alias `--auth`) takes the same values as the console (default
   `local-open-remote-auth`), and proxied UIs use the **same** client certificates. Pass it
   explicitly: a stack whose stored policy is already `no-auth` otherwise refuses with
   *elevated confirmation required*, and waiving that with the danger phrase would publish an
   unauthenticated stack UI to your LAN.
-- Eligibility is derived from the manifest (a client http/https web endpoint) — currently
-  graywolf, meshcom, meshcore and meshtastic. kiss and the daemon speak non-HTTP protocols and
-  cannot be proxied. A future stack that declares a web endpoint becomes eligible automatically,
-  but is only configured when you save its panel (or submit the bulk form below) — nothing is
-  ever exposed on its own.
+- Eligibility is derived from the manifest: every **component** that declares a client
+  http/https web endpoint is its own proxied **page**, with its own port, policy and nginx
+  listener. A stack's first page is addressed by the stack id (`lhpc webserver proxy meshcore`);
+  any further page of the same stack by `<stack>-<component>`, and the stack's Webserver panel
+  shows one sub-panel per page. Currently graywolf, meshcom, meshcore and meshtastic, one page
+  each. kiss and the daemon speak non-HTTP protocols and cannot be proxied. A future stack, or a
+  new web component in an existing one, becomes eligible automatically, but is only configured
+  when you save its panel (or submit the bulk form below) — nothing is ever exposed on its own.
 
 ### One policy for all stack WebGUIs
 
 The console's **Webserver → Stacks WebGUIs** subpanel applies one common policy — access
-(local/LAN/public), scheme, access mode and allowed CIDRs — to **every** eligible stack web UI
-in a single confirmed action, instead of repeating the same settings per stack. The sibling
+(local/LAN/public), scheme, access mode and allowed CIDRs — to **every** eligible page (each
+proxied stack web UI) in a single confirmed action, instead of repeating the same settings per
+page. The sibling
 **LHPC WebGUI** subpanel keeps configuring the console itself, unchanged.
 
-- **Ports stay per-stack** and are not part of the bulk form: an existing port is never changed,
-  and a stack without one gets the same suggested default its own panel offers (unique across
+- **Ports stay per-page** and are not part of the bulk form: an existing port is never changed,
+  and a page without one gets the same suggested default its own panel offers (unique across
   the whole set). If a unique port cannot be assigned, the bulk action fails before changing
   anything.
 - The whole candidate set is validated first; any problem (confirmation, CIDRs, http+cert-auth,

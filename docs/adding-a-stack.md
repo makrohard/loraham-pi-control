@@ -131,6 +131,15 @@ endpoints also drive the running-vs-degraded status. TCP ready endpoints must be
     description = "MeshCom firmware client port."
 ```
 
+A `client = true` endpoint with `scheme = "http"` or `"https"` makes the component a proxied
+web **page**: it gets its own port and policy in the console's Webserver panel and in
+`lhpc webserver proxy`, fronted by nginx with the console's TLS/mTLS gate
+([webserver.md](webserver.md#stack-web-ui-proxies)). Optional `proxy_deny_paths` lists exact
+request paths the proxy refuses. A stack's first such component is addressed by the stack id;
+any further one by `<stack>-<component>`. The derived page ids must be unique across the whole
+manifest — checked at load, like component ids. A loopback `address` is what keeps the raw port
+off the network; every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
+
 ### Parameters & config files
 
 **Identity params.** Give the stack's identity param the validator that matches its

@@ -638,7 +638,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Per-stack web-UI reverse proxy exposure (mirrors `expose`'s two-level confirmation).
     p_ws_proxy = ws_sub.add_parser("proxy",
                                    help="Configure a stack's web-UI reverse proxy (intent; run apply)")
-    p_ws_proxy.add_argument("stack", help="Stack id whose web UI to proxy")
+    p_ws_proxy.add_argument("stack", metavar="page",
+                            help="The web UI to proxy: the stack id, or <stack>-<component> for a "
+                                 "stack's further web UIs")
     p_ws_proxy.add_argument("--mode", choices=_STACKWEB_MODES,
                             help="local = loopback only; lan = listen, only --cidr passes; "
                                  "public = 0.0.0.0/0 (elevated)")
