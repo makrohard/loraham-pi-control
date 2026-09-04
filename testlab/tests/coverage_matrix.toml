@@ -250,7 +250,7 @@
 "meshcore#restart" = { limitation = "pending" }
 "meshcore#start" = "acceptance"
 "meshcore#stop" = "acceptance"
-"meshcore#ui" = { limitation = "meshcore GUI is Tkinter (desktop), not web" }
+"meshcore#ui" = { limitation = "meshcore-webui is a browser GUI behind the LHPC proxy; browser-lane coverage pending" }
 "meshtastic#configure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
 "meshtastic#data" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
 "meshtastic#failure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }

@@ -418,11 +418,14 @@ lhpc webserver proxy meshcom    --mode lan --port 8446 --auth local-open-remote-
 lhpc webserver apply
 ```
 
-MeshCore hat keine Web-UI zum Proxyen — der entfernte Node Manager spricht den Node direkt auf
-TCP 5000 an; die erlaubten Quellbereiche stehen in der Konfiguration des Stacks. Headless brauchst
-du ihn gar nicht: Der interaktive REPL-Client `meshcore-cli` läuft direkt in deiner SSH-Sitzung
-auf dem Pi (die Startzeile zeigt die Karte des Stacks im Dashboard; Details unter
-[meshcore](docs/stacks/meshcore.md)).
+Die Browser-Oberfläche von MeshCore (`meshcore-webui`, optional) wird genauso proxied —
+`lhpc webserver proxy meshcore …` — ihr Backend lauscht ohnehin nur auf Loopback, also braucht
+sie keinen eigenen offenen Port (die optionale Komponente `meshcore-webui` vorher bauen und
+starten, sonst hat der Proxy kein Ziel); der Companion-Port TCP 5000 bleibt auf Loopback, sofern
+du in der Konfiguration des Stacks keine Quellbereiche erlaubst. Headless brauchst du die GUI gar
+nicht: Der interaktive REPL-Client `meshcore-cli` läuft
+direkt in deiner SSH-Sitzung auf dem Pi (die Startzeile zeigt die Karte des Stacks im Dashboard;
+Details unter [meshcore](docs/stacks/meshcore.md)).
 
 Ports jenseits von Loopback zu öffnen verlangt eine Firewall ([`docs/firewall.md`](docs/firewall.md));
 Details samt Browser-Runbook für Client-Zertifikate: [`docs/webserver.md`](docs/webserver.md).

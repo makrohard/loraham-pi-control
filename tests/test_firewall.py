@@ -1195,6 +1195,19 @@ def _svc_gate_pending(tmp_path, monkeypatch, fw):
 
 
 @pytest.mark.contract
+def test_apply_pending_reads_false_when_the_marker_path_escapes_the_root(tmp_path, monkeypatch):
+    # The marker lives under `Paths.under()`, which raises PathContainmentError (not OSError) on a
+    # symlinked state dir; the sibling readers already treat that as "no marker" — so must this
+    # one, or `lhpc firewall` dies after printing its status.
+    from lhpc.core.paths import PathContainmentError
+    svc = _svc_gate_pending(tmp_path, monkeypatch, {"config_ok": True, "live_ok": False})
+    def _escape():
+        raise PathContainmentError("path escapes runtime root via symlink")
+    monkeypatch.setattr(svc, "_ws_apply_pending_path", _escape)
+    assert svc.webserver_apply_pending() is False
+
+
+@pytest.mark.contract
 def test_gate_refusal_is_recorded_and_completed_once_firewall_verified(tmp_path, monkeypatch):
     # Live-found: the refusal was a one-off flash; after the operator's firewall step nothing
     # completed the apply and the Firewall panel said nothing about it.

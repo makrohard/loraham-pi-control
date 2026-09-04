@@ -165,7 +165,7 @@ class WebserverOpsMixin:
         """True while an Apply refused by the firewall gate has not completed since."""
         try:
             return self._ws_apply_pending_path().is_file()
-        except OSError:
+        except (OSError, PathContainmentError):
             return False
 
     def _ws_policy_now(self) -> dict:

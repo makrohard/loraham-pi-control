@@ -781,3 +781,21 @@ def test_a_missing_webserver_action_is_a_usage_error(capsys):
     err = capsys.readouterr().err
     assert rc == 2
     assert err.startswith("usage: lhpc webserver")
+
+
+@pytest.mark.contract
+def test_firewall_cli_points_at_the_deferred_webserver_apply(tmp_path, monkeypatch, capsys):
+    # The console's Firewall panel shows the deferred Webserver apply; a CLI operator standing
+    # after the sudo step must be told the same thing — and only while one is actually pending.
+    from lhpc.core.services import ControllerService
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["bootstrap", "--yes"]) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: False)
+    assert main(["firewall"]) == 0
+    assert "lhpc webserver apply" not in capsys.readouterr().out
+    monkeypatch.setattr(ControllerService, "webserver_apply_pending", lambda self: True)
+    assert main(["firewall"]) == 0
+    out = capsys.readouterr().out
+    assert "Next:\n  lhpc webserver apply" in out            # bare command under Next:, as everywhere
+    assert "the running console completes it automatically" in out

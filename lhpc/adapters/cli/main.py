@@ -1099,6 +1099,13 @@ def _run(argv: list[str] | None = None) -> int:
                       "\n  lhpc firewall --script | less        # writes it and shows what it does")
             print(f"\nApply:\n  sudo bash {paths['firewall-apply.sh']}"
                   f"\n  sudo systemctl start lhpc-firewall-check.service")
+        if svc.webserver_apply_pending():
+            # The Webserver Apply the firewall gate deferred (the console's Firewall panel shows the
+            # same box). Only the RUNNING console's watchdog completes it, so say so — and keep
+            # `Next:` to the bare command, as every other `Next:` in this CLI.
+            print("\nA Webserver Apply is still waiting for this firewall step — once the firewall "
+                  "is verified,\nthe running console completes it automatically. To finish it now:"
+                  "\n\nNext:\n  lhpc webserver apply")
         return 0
     if args.command == "build":
         return _apply_flow(lambda a: svc.build(args.target, apply=a), yes=args.yes)
