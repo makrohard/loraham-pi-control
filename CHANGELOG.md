@@ -2,6 +2,7 @@
 
 ## 0.2.7
 
+- AP fallback: the 10-minute retry of the preferred Wi-Fi no longer takes the AP down while a client is connected to it (`iw` station table; a missing `iw` defers the automatic retry, the console's Retry still works), and a disarmed `lhpc-ap` profile is re-armed by the network watchdog. `iw` joins the default bootstrap
 - A webserver Apply that the firewall gate refused is remembered and completes automatically once the firewall is verified — no second click after the sudo step. The Firewall panel shows it while it is owed, the dashboard "(pending Apply)" badge links to the Webserver panel. Only the policy that was deferred is activated; a later webserver or proxy edit needs its own Apply
 
 ## 0.2.6

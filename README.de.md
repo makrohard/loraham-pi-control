@@ -149,7 +149,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 <!-- test:deps-manual:start -->
 ```bash
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
-sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx ca-certificates curl zstd
+sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx iw ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
 sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate / voice (Terminal)
 sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses-Terminal-UI — keine grafischen Pakete)

@@ -6,6 +6,7 @@ watchdog tick, and the web flow (hidden-unless-supported + dedicated confirm).""
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from lhpc.core import deps as deps_mod
@@ -38,7 +39,7 @@ def _fake_nmcli(svc, replies):
 
     def run(argv, timeout=None):
         calls.append(list(argv))
-        if argv and argv[0] == "nmcli":
+        if argv and os.path.basename(argv[0]) in ("nmcli", "iw"):
             key = " ".join(argv[1:])
             for k, (rc, out, err) in replies.items():
                 if k in key:
@@ -63,6 +64,7 @@ def _std_replies(conns=AP_ROW + CL_ROW, active="AP-UUID-1:lhpc-ap:802-11-wireles
         "connection show --active": (0, active, ""),
         "general permissions": (0, perms, ""),
         "IP4.ADDRESS device show": (0, addr, ""),
+        "station dump": (0, "", ""),                   # idle AP: no associated station
     }
 
 
@@ -438,6 +440,76 @@ def test_watchdog_tick_retries_preferred_on_ap_and_respects_interval(tmp_path,
     assert len([c for c in calls if "up" in c and "CL-UUID-2" in c]) == 1
     assert svc.network_retry_now().ok                      # force ignores the interval
     assert len([c for c in calls if "up" in c and "CL-UUID-2" in c]) == 2
+
+
+def _prefer_homenet(svc, monkeypatch):
+    svc._net_preferred_path().write_text(json.dumps({"uuid": "CL-UUID-2",
+                                                     "ssid": "HomeNet"}))
+    monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
+
+
+def _ups(calls):
+    return [c for c in calls if "up" in c and "CL-UUID-2" in c]
+
+
+def test_watchdog_defers_retry_while_a_client_is_on_the_ap(tmp_path, monkeypatch):
+    # Single radio: the attempt takes the AP down, never under a connected client.
+    svc = _svc(tmp_path)
+    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""),
+                              "station dump": (0, "Station aa:bb:cc:dd:ee:ff (on wlan0)\n"
+                                                  "\tinactive time:\t10 ms\n", "")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()                    # retry due (no stamp yet)
+    assert ok and "client is connected" in msg
+    assert not _ups(calls) and not svc._net_retry_path().exists()   # stamp untouched
+    assert [c[1:] for c in calls if os.path.basename(c[0]) == "iw"] == [
+        ["dev", "wlan0", "station", "dump"]]
+    assert svc.network_retry_now().ok                      # explicit Retry still acts
+    assert len(_ups(calls)) == 1
+
+
+def test_watchdog_defers_retry_when_the_station_table_is_unreadable(tmp_path, monkeypatch):
+    # Fail-safe: no iw / a failing iw is not "no client".
+    svc = _svc(tmp_path)
+    calls = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", ""),
+                              "station dump": (127, "", "iw: not found")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()
+    assert ok and "retry deferred" in msg
+    assert not _ups(calls) and not svc._net_retry_path().exists()
+
+
+def test_watchdog_rearms_a_disarmed_ap_profile(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    disarmed = "AP-UUID-1:lhpc-ap:802-11-wireless:no:0\n" + CL_ROW
+    calls = _fake_nmcli(svc, {**_std_replies(conns=disarmed), "connection modify": (0, "", ""),
+                              "connection up": (0, "activated\n", "")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()
+    assert ok and "reconnected" in msg                     # repaired, then the retry ran
+    rearm = [c for c in calls if c[:3] == ["nmcli", "connection", "modify"]
+             and "AP-UUID-1" in c]
+    assert rearm == [["nmcli", "connection", "modify", "AP-UUID-1",
+                      "connection.autoconnect", "yes", "connection.autoconnect-priority", "0"]]
+    # already armed: no modify of the AP
+    calls2 = _fake_nmcli(svc, {**_std_replies(), "connection modify": (0, "", "")})
+    svc._net_apply_preference(svc._nm_connections(), "CL-UUID-2")
+    assert not [c for c in calls2 if "modify" in c and "AP-UUID-1" in c]
+
+
+def test_watchdog_blocks_the_retry_when_the_ap_rearm_fails(tmp_path, monkeypatch):
+    # Without the way home a failed attempt strands the box: no automatic retry.
+    svc = _svc(tmp_path)
+    disarmed = "AP-UUID-1:lhpc-ap:802-11-wireless:no:0\n" + CL_ROW
+    calls = _fake_nmcli(svc, {**_std_replies(conns=disarmed),
+                              "connection modify": (1, "", "Error: not authorized"),
+                              "connection up": (0, "activated\n", "")})
+    _prefer_homenet(svc, monkeypatch)
+    ok, msg = svc._network_watch_tick()
+    assert ok and "reconciliation failed" in msg
+    assert not _ups(calls) and not svc._net_retry_path().exists()
 
 
 def test_watchdog_reads_preference_fresh_and_skips_without_one(tmp_path, monkeypatch):

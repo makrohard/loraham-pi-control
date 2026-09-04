@@ -126,6 +126,14 @@ class SelfUpdateOpsMixin:
                  # operation depends on it. Preinstalled on Raspberry Pi OS trixie.
                  "purpose": "managed firewall — closes stack ports lhpc cannot gate "
                             "(meshtasticd 4403/9443); the feature is unavailable without it"},
+                {"what": "iw", "required": False,
+                 "satisfied": have_cmd("iw", "/usr/sbin/iw", "/sbin/iw"),
+                 "install": "sudo apt install -y iw",
+                 # OPTIONAL: the AP watchdog retries the preferred Wi-Fi only when the AP
+                 # provably has no associated station (iw station dump). Without it the
+                 # automatic retry stays deferred; the console's Retry still works.
+                 "purpose": "AP client detection — the automatic preferred-Wi-Fi retry runs "
+                            "only while no client is connected to the box's AP"},
                 {"what": "systemd (systemctl, loginctl)", "required": False,
                  "satisfied": (have_cmd("systemctl", "/usr/bin/systemctl", "/bin/systemctl")
                                and have_cmd("loginctl", "/usr/bin/loginctl", "/bin/loginctl")),

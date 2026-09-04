@@ -815,7 +815,19 @@ class NetworkOpsMixin:
         """Drive NM to the one-preferred invariant; returns human-readable problems."""
         problems = []
         for c in conns:
-            if not c["type"].startswith("802-11-wireless") or c["name"] == self.AP_PROFILE:
+            if not c["type"].startswith("802-11-wireless"):
+                continue
+            if c["name"] == self.AP_PROFILE:
+                # The AP is the way home: keep it armed (autoconnect=yes, priority 0) so a
+                # disarmed profile — however it got that way — is repaired on every pass
+                # instead of leaving the box unreachable after its next power cycle.
+                if c["autoconnect"] and c.get("priority") == "0":
+                    continue
+                rc, _out, err = self._nmcli(
+                    ["connection", "modify", c["uuid"],
+                     "connection.autoconnect", "yes", "connection.autoconnect-priority", "0"])
+                if rc != 0:
+                    problems.append(f"{c['name']}: {err.strip()[:120]}")
                 continue
             want_on = bool(preferred_uuid) and c["uuid"] == preferred_uuid
             in_shape = (c["autoconnect"] and c.get("priority") == "10") if want_on \
@@ -850,6 +862,22 @@ class NetworkOpsMixin:
                 self._safe_unlink(self._net_preferred_path())
             self._net_view_invalidate()
             return ActionResult(True, f"forgot '{target['name']}'")
+
+    def _ap_idle(self, device: str) -> bool:
+        """True ONLY when the AP provably has no associated station: `iw dev <dev> station
+        dump` succeeded and printed nothing. Any station, a missing `iw`, or any failure is
+        False — the automatic retry then stays deferred rather than tearing the AP down under
+        a connected client (fail-safe by design)."""
+        import shutil
+        # PATH first, then the sbin locations: a shell-started `lhpc web` can have a PATH
+        # without /usr/sbin (live-found: the ssh user's PATH lacks it, the user unit's has it).
+        exe = shutil.which("iw") or "/usr/sbin/iw"
+        try:
+            r = self._system.runner.run([exe, "dev", device, "station", "dump"], 10.0)
+        except Exception:
+            return False
+        return (getattr(r, "returncode", 1) == 0
+                and not (getattr(r, "stdout", "") or "").strip())
 
     def network_retry_now(self) -> ActionResult:
         ok, msg = self._network_watch_tick(force=True)
@@ -906,7 +934,11 @@ class NetworkOpsMixin:
                                                 for c in conns):
                     self._safe_unlink(self._net_preferred_path())   # profile vanished
                     pref = {}
-                self._net_apply_preference(conns, pref.get("uuid", ""))
+                problems = self._net_apply_preference(conns, pref.get("uuid", ""))
+                if not force and problems:
+                    # An unarmed AP must never be torn down by a retry: without the way home
+                    # a failed attempt strands the box.
+                    return (True, "network profile reconciliation failed — retry deferred")
                 if not pref.get("uuid"):
                     return (True, "no preferred network")
                 act = self._nm_active()
@@ -940,6 +972,12 @@ class NetworkOpsMixin:
                 if not force and last is not None \
                         and now_up - last < self.NET_RETRY_INTERVAL_S:
                     return (True, "retry interval not elapsed")
+                # Single radio: the attempt takes the AP down. Never do that under a connected
+                # client, and never on a guess — the stamp stays untouched, so the next minute
+                # re-checks and the retry runs as soon as the AP is provably idle.
+                if not force and not self._ap_idle(act.get("device") or "wlan0"):
+                    return (True, "a client is connected to the AP (or its station table "
+                                  "is unreadable) — retry deferred")
                 try:
                     runtime_fs.atomic_write(self._paths, self._net_retry_path(),
                                             json.dumps({"attempt_uptime": now_up,

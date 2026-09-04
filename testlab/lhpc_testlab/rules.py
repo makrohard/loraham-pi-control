@@ -17,7 +17,7 @@ DENY_BASENAMES = frozenset({
 })
 
 # Simulated entirely — the real binaries are NEVER reached through the lab runner.
-SIMULATED_BASENAMES = frozenset({"nmcli", "busctl", "systemctl", "journalctl"})
+SIMULATED_BASENAMES = frozenset({"nmcli", "iw", "busctl", "systemctl", "journalctl"})
 
 # Power-trigger detection for the spawn guard: EXACT match against the argv
 # service_maintenance composes (single source of truth — power_trigger_argv). A unit

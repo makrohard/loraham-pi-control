@@ -34,6 +34,7 @@ class LabRunner:
             return CommandResult(1, "", f"testlab: refused host-mutating command: "
                                         f"{detail}")
         handler = {"nmcli": nm.simulate,
+                   "iw": nm.simulate_iw,
                    "busctl": sysd.simulate_busctl,
                    "systemctl": sysd.simulate_systemctl,
                    "journalctl": sysd.simulate_journalctl}[detail]

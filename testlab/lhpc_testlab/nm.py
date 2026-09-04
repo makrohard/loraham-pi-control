@@ -66,6 +66,14 @@ def _save(paths, st: dict) -> None:
     runtime_fs.atomic_write(paths, _path(paths), json.dumps(st, indent=1), 0o600)
 
 
+def simulate_iw(paths, argv: list[str]) -> CommandResult:
+    """`iw dev <dev> station dump`: the simulated AP never has an associated station, so the
+    watchdog's preferred-network retry is allowed exactly as on an idle real box."""
+    if argv[1:2] == ["dev"] and argv[3:5] == ["station", "dump"]:
+        return _ok("")
+    return _err(1, "testlab: iw simulates only `dev <dev> station dump`")
+
+
 def _ok(out: str = "") -> CommandResult:
     return CommandResult(0, out, "")
 
