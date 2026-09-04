@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+
+- A webserver Apply that the firewall gate refused is remembered and completes automatically once the firewall is verified — no second click after the sudo step. The Firewall panel shows it while it is owed, the dashboard "(pending Apply)" badge links to the Webserver panel. Only the policy that was deferred is activated; a later webserver or proxy edit needs its own Apply
+
 ## 0.2.6
 
 - **Coherent identities:** an optional global base operator callsign (its own card on the Stacks page) that licensed stacks (chat, iGate, Voice, Graywolf, MeshCom) inherit while their local callsign is empty; a per-stack value overrides it and carries that stack's SSID or portable form. Per-protocol validation throughout (APRS SSID `-1`…`-15`, MeshCom `-1`…`-99`, Voice ≤11 characters, Meshtastic/MeshCore node names). Meshtastic and MeshCore never inherit a callsign — their node names are their own

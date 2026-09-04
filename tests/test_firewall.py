@@ -1181,6 +1181,84 @@ def test_webserver_apply_blocked_by_pending_firewall(tmp_path, monkeypatch):
     assert (r.data or {}).get("firewall_gate") == "pending"
 
 
+def _svc_gate_pending(tmp_path, monkeypatch, fw):
+    """An exposing console config whose Apply the firewall gate refuses (fw = mutable status)."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    cfgmod.save_webserver_config(svc._paths, bind="0.0.0.0", port=8443,
+                                 remote_exposed=True, allowed_cidrs=["192.168.178.0/24"])
+    svc._invalidate_config()
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status", lambda: dict(fw))
+    monkeypatch.setattr("lhpc.core.webserver.nginx_installed", lambda system: True)
+    return svc
+
+
+@pytest.mark.contract
+def test_gate_refusal_is_recorded_and_completed_once_firewall_verified(tmp_path, monkeypatch):
+    # Live-found: the refusal was a one-off flash; after the operator's firewall step nothing
+    # completed the apply and the Firewall panel said nothing about it.
+    from lhpc.core.service_base import ActionResult
+    fw = {"config_ok": True, "live_ok": False}
+    svc = _svc_gate_pending(tmp_path, monkeypatch, fw)
+    assert not svc.webserver_apply_pending()
+    r = svc.webserver_apply()
+    assert not r.ok and (r.data or {}).get("firewall_gate") == "pending"
+    assert svc.webserver_apply_pending()                              # recorded by the refusal
+    assert svc.firewall_settings_view()["webserver_apply_pending"]    # surfaced where they look
+    # Firewall still unverified: the watchdog does nothing, the marker stays.
+    assert svc.webserver_apply_complete_pending() is None
+    assert svc.webserver_apply_pending()
+    # Firewall verified: the watchdog runs the apply the operator already confirmed — the real
+    # webserver_apply, with only the post-gate activation stubbed.
+    fw["live_ok"] = True
+    calls = []
+    monkeypatch.setattr(svc, "_webserver_apply_after_gate",
+                        lambda cfg: (calls.append(1), ActionResult(True, "applied"))[1])
+    assert svc.webserver_apply_complete_pending().ok
+    assert calls == [1] and not svc.webserver_apply_pending()         # cleared on gate pass
+    assert not svc.firewall_settings_view()["webserver_apply_pending"]
+    assert svc.webserver_apply_complete_pending() is None             # nothing owed: no apply
+    assert calls == [1]
+
+
+def test_gate_pending_marker_cleared_once_the_gate_lets_an_apply_run(tmp_path, monkeypatch):
+    # The marker records the DEFERRAL only. An apply the gate lets through discharges it even
+    # when that apply then fails (operator's click or the watchdog alike): the failure is shown
+    # in the Webserver panel, and the watchdog must not re-run it unasked.
+    from lhpc.core.service_base import ActionResult
+    fw = {"config_ok": True, "live_ok": False}
+    svc = _svc_gate_pending(tmp_path, monkeypatch, fw)
+    assert not svc.webserver_apply().ok and svc.webserver_apply_pending()
+    fw["live_ok"] = True
+    monkeypatch.setattr(svc, "_webserver_apply_after_gate",
+                        lambda cfg: ActionResult(False, "nginx reload failed"))
+    assert not svc.webserver_apply().ok                               # operator's own apply
+    assert not svc.webserver_apply_pending()
+    assert svc.webserver_apply_complete_pending() is None             # no background retry
+
+
+@pytest.mark.contract
+@pytest.mark.safety("firewall-fail-closed")
+def test_gate_pending_completion_never_applies_a_changed_policy(tmp_path, monkeypatch):
+    # Audit P1: a save-only edit after the refusal (here the console's auth policy, which the
+    # firewall intent does not see) must not be activated by the deferred Apply. The marker is
+    # discharged and the new config waits for its own explicit Apply.
+    from lhpc.core.service_base import ActionResult
+    fw = {"config_ok": True, "live_ok": False}
+    svc = _svc_gate_pending(tmp_path, monkeypatch, fw)
+    assert not svc.webserver_apply().ok and svc.webserver_apply_pending()
+    assert svc.webserver_configure(access_mode="no-auth").ok          # save-only path
+    svc._invalidate_config()
+    fw["live_ok"] = True
+    calls = []
+    monkeypatch.setattr(svc, "_webserver_apply_after_gate",
+                        lambda cfg: (calls.append(1), ActionResult(True, "applied"))[1])
+    assert svc.webserver_apply_complete_pending() is None
+    assert calls == [] and not svc.webserver_apply_pending()
+    assert svc.webserver_apply_complete_pending() is None             # stays discharged
+
+
 def test_prospective_ports_exclude_loopback_backends(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)

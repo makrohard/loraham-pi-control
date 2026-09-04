@@ -147,6 +147,79 @@ class WebserverOpsMixin:
         except Exception:
             pass
 
+    # ---- Apply deferred by the firewall gate ---------------------------------------------------
+    # The gate only DEFERS an activation the operator already confirmed. Without a record of that,
+    # the refusal was a one-off flash: after the firewall step nothing completed the apply and
+    # nothing at the firewall panel said it was still owed (live-found 2026-09-04). Same contract
+    # as the network join's console apply: a marker, completed by the watchdog once verified.
+    # The marker records the DEFERRAL only: it is cleared as soon as the gate lets an apply run
+    # (whatever that apply's outcome — a later failure is shown in the Webserver panel, and must
+    # not be retried unasked in the background). It names the POLICY whose Apply was deferred:
+    # a save-only edit made meanwhile (e.g. `webserver configure --access-mode no-auth`, which the
+    # firewall intent does not see) must not ride along — it needs its own Apply (audit P1).
+
+    def _ws_apply_pending_path(self):
+        return self._paths.under("state", "webserver-apply-pending.json")
+
+    def webserver_apply_pending(self) -> bool:
+        """True while an Apply refused by the firewall gate has not completed since."""
+        try:
+            return self._ws_apply_pending_path().is_file()
+        except OSError:
+            return False
+
+    def _ws_policy_now(self) -> dict:
+        """The desired console + proxy policy, non-secret, in the applied-snapshot vocabulary."""
+        from . import webserver as _ws
+        snap = _ws.applied_snapshot_of(self.config().webserver, self._stack_web_proxies())
+        snap.pop("at", None)
+        return snap
+
+    def _ws_apply_pending_set(self) -> None:
+        import json
+
+        from . import runtime_fs
+        try:
+            runtime_fs.atomic_write(self._paths, self._ws_apply_pending_path(),
+                                    json.dumps({"policy": self._ws_policy_now()}), 0o600)
+        except (OSError, PathContainmentError):
+            pass                                       # fail-soft: the refusal itself still shows
+
+    def _ws_apply_pending_policy(self) -> dict | None:
+        """The deferred policy, or None when the marker is missing or unreadable."""
+        import json
+
+        from . import runtime_fs
+        try:
+            rec = json.loads(runtime_fs.read_text_regular(
+                self._paths, self._ws_apply_pending_path(), max_bytes=1 << 16) or "")
+        except (OSError, ValueError, PathContainmentError):
+            return None
+        return rec.get("policy") if isinstance(rec, dict) else None
+
+    def _ws_apply_pending_clear(self) -> None:
+        try:
+            self._ws_apply_pending_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def webserver_apply_complete_pending(self):
+        """Watchdog completion of a gate-deferred Apply: once the firewall is verified against the
+        CURRENT intent, run the apply the operator already confirmed. Returns that ActionResult,
+        or None when nothing is pending or the firewall is not ready yet. Completes ONLY the
+        policy that was deferred: if the desired config changed since, the marker is discharged
+        and that config waits for its own Apply. The apply itself clears the marker once the
+        gate lets it run."""
+        if not self.webserver_apply_pending():
+            return None
+        if self._ws_apply_pending_policy() != self._ws_policy_now():
+            self._ws_apply_pending_clear()
+            return None
+        st = self.firewall_status()
+        if not (st.get("config_ok") and st.get("live_ok")):
+            return None
+        return self.webserver_apply()
+
     def webserver_verify(self) -> ActionResult:
         """Explicit verification: assemble + persist the effective-evidence checklist.
 
@@ -1260,8 +1333,10 @@ class WebserverOpsMixin:
         allowed, gate_msg, gate_cmds = self.firewall_gate_activation(
             self._prospective_nginx_ports())
         if not allowed:
+            self._ws_apply_pending_set()              # completed by the watchdog once verified
             return ActionResult(False, gate_msg, next_commands=gate_cmds,
                                 data={"firewall_gate": "pending"})
+        self._ws_apply_pending_clear()                # gate passed: the deferral is discharged
         # An ALLOWED gate can still carry a warning (exposure reduced, but the firewall scripts
         # could not be regenerated). Attaching it HERE — once, around the whole operation — is what
         # keeps it on every later outcome without touching a dozen return statements.

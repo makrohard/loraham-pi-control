@@ -155,7 +155,9 @@ fake a fresh result.
 
 Because a valid current-boot receipt is required before `lhpc` binds a remote listener, exposing
 the console/proxy is gated: if you change the webserver exposure but have not applied the firewall,
-the webserver Apply is refused with *Firewall changes pending* and the exact command to run. At
+the webserver Apply is refused with *Firewall changes pending* and the exact command to run. That
+refused Apply is remembered and completes automatically once Config and Live are verified; a later
+webserver or proxy edit needs its own Apply. At
 boot, nginx will not bind a remote port until the firewall is verified — on failure it starts
 **loopback-only** (recover over an SSH tunnel), and you re-apply.
 

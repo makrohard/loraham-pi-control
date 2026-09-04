@@ -1089,6 +1089,10 @@ class FirewallOpsMixin:
             "cleanup_cmd": (f"sudo bash {scripts['firewall-cleanup.sh']}"
                             if st.get("transitional") else ""),
             "installed": st.get("installed"),
+            # A Webserver Apply the gate deferred: shown HERE because this is where the operator
+            # is after running the firewall command; the watchdog completes it once verified.
+            "webserver_apply_pending": self.webserver_apply_pending(),
+            "webserver_apply_cmd": "lhpc webserver apply",
         }
 
     def firewall_configure(self, *, mode=None, allow_endpoints=None, ssh_ports=None,

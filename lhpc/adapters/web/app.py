@@ -2418,16 +2418,25 @@ def run_server(host: str = "127.0.0.1", port: int = 8770, socket: bool = False) 
             while True:
                 try:
                     svc = ControllerService()
-                    if not svc.network_supported():
-                        interval_s = 300.0          # non-AP box: probe rarely, exit never
-                    else:
-                        interval_s = 60.0
+                    try:                            # an Apply the firewall gate deferred
+                        svc.webserver_apply_complete_pending()
+                    except Exception:
+                        pass
+                    ap_box = svc.network_supported()
+                    # non-AP box: probe rarely, exit never — unless an Apply is still owed
+                    interval_s = 60.0 if (ap_box or svc.webserver_apply_pending()) else 300.0
+                    if ap_box:
                         svc._network_watch_tick()
                 except Exception:
                     pass
                 deadline = time.monotonic() + interval_s
                 while time.monotonic() < deadline:
                     time.sleep(min(30.0, max(0.1, deadline - time.monotonic())))
+                    try:                        # a fresh deferred Apply: do not wait out 300 s
+                        if interval_s > 60.0 and ControllerService().webserver_apply_pending():
+                            break
+                    except Exception:
+                        pass
 
         threading.Thread(target=_network_watch_loop, name="lhpc-network-watch",
                          daemon=True).start()

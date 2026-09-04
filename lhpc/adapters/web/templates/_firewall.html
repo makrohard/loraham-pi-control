@@ -110,6 +110,12 @@
               preserved until you complete the move, then run cleanup:</p>
             {{ cmdbox('fw-cleanup-cmd', firewall_view.cleanup_cmd) }}
           {% endif %}
+          {% if firewall_view.webserver_apply_pending %}
+            <p class="depnote depnote-warn">A Webserver Apply is still waiting for this firewall step —
+              once the status above is green it completes automatically. To finish it now,
+              click Apply in the Webserver section or run:</p>
+            {{ cmdbox('ws-apply-cmd', firewall_view.webserver_apply_cmd) }}
+          {% endif %}
           <details class="fwextra">
             <summary>Other commands (optional — not part of setup)</summary>
             <p class="muted">Re-run the live verification now (it also runs automatically on a timer):</p>
