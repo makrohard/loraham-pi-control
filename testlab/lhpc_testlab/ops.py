@@ -128,6 +128,24 @@ def check(svc) -> ActionResult:
 # ---- reset / scenario / inject -----------------------------------------------------------
 
 
+def _seed_node_identities(svc) -> tuple[list[str], ActionResult | None]:
+    """Save a lab value into each unlicensed identity field (`node_short` gets a short one),
+    keyed by the product's own `_identity_bundle_key`. Returns ("<stack>.<key>" names, the
+    failed save result or None) — a failed save fails the reset, never a silent skip."""
+    seeded: list[str] = []
+    for st in svc.stacks():
+        values = {svc._identity_bundle_key(st.id, rec):
+                  ("LAB" if rec["validator"] == "node_short" else "LHPC Lab")
+                  for rec in svc._identity_fields(st.id) if rec["enforce"] != "licensed"}
+        if not values:
+            continue
+        res = svc.save_stack_config(st.id, values)
+        if not res.ok:
+            return seeded, res
+        seeded += [f"{st.id}.{k}" for k in values]
+    return seeded, None
+
+
 def reset(svc) -> ActionResult:
     if not is_active(svc):
         return _refusal(svc)
@@ -171,6 +189,15 @@ def reset(svc) -> ActionResult:
                             details=details)
     svc._invalidate_config()
     details.append(f"  callsign: {_CALLSIGN}")
+    # Node identities NEVER inherit the callsign (identity rule since 0.2.6): a start without
+    # them is refused. Seed every node field the product enforces, asked from the product
+    # itself, so a lane can start any stack and a new identity field seeds itself.
+    seeded, failed = _seed_node_identities(svc)
+    if failed is not None:
+        return ActionResult(False, f"Reset failed seeding a node identity ({failed.summary}).",
+                            details=details + failed.details[:6])
+    if seeded:
+        details.append("  node identities: " + ", ".join(seeded))
     # SAFETY (UI default only): seed graywolf's stored config to the local APRS-IS sink so the
     # UI reads 127.0.0.1. The HARD guarantee is the manifest-overlay swap below, which renders
     # graywolf-provision.py with a LITERAL --igate-server 127.0.0.1 regardless of this config.
