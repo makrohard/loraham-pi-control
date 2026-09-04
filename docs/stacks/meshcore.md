@@ -101,7 +101,8 @@ daemon connection is up and, with TX enabled, the MANAGED-TX handshake is comple
 ## openHop Core source
 
 The `meshcore-node` source is upstream openHop Core, pinned to a known-working commit, plus
-one small LHPC-shipped patch (a focused, upstream-mergeable ACK-delivery fix; see
+one small LHPC-shipped patch (the radio noise floor surfaced into the companion's radio stats —
+the ACK fixes it used to carry were merged upstream at the `8cdb04e` rebase; see
 `lhpc/data/patches/`). The patch is applied idempotently by a build step — a refreshed
 checkout is patched, a rebuilt one is left as-is, and a genuine conflict fails the build
 rather than running unpatched code. The source therefore stays a pristine upstream tree plus

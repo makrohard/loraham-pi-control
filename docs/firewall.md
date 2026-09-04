@@ -31,10 +31,11 @@ nftables.
 | 9443 | meshtasticd web UI | all interfaces | **none** | **deny-default** (reach it via the `:8445` proxy) |
 | 8001 | KISS/TCP TNC | loopback default | source allow-list | direct-access row |
 | 5000 | MeshCore companion | loopback default | source allow-list | direct-access row |
+| 8000 | openHop repeater dashboard (MeshCore repeater modes) | loopback hardcoded | password (JWT) | already safe (reach it via its `meshcore-meshcore-node` proxy page) |
 | 7000 | MeshCom bridge | loopback default | password<sup>†</sup> | direct-access row |
 | 18083/12323 | MeshCom QEMU | loopback hardcoded | — | already safe |
 | 8443 | lhpc console (nginx) | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
-| 8444/8445 | stack proxies | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
+| 8444–8447 (+1 per further page, e.g. 8448) | stack proxy pages | loopback until exposed | mTLS | proxy ingress (auto-allowed when exposed) |
 
 <sup>†</sup> **unless the stack is installed from the [binary channel](../README.md#binary-channel-prebuilt)**:
 the published MeshCom firmware is built without a mesh password, so the bridge runs open and the
@@ -175,7 +176,7 @@ tunnel: `ssh -N -L 8443:127.0.0.1:8443 pi@raspberrypi.local`.
 `ip saddr 192.168.0.0/24 tcp dport 8443 accept`.
 
 **Public internet** — forward only 8443 at your router; expose with `--cidr 0.0.0.0/0
---confirm-phrase enable-remote-danger`. Never forward 4403/9443/8001/5000/7000.
+--confirm-phrase enable-remote-danger`. Never forward 4403/9443/8001/5000/7000/8000.
 
 **Pi Wi-Fi AP + phone** — enable AP mode with the interface and CIDR (e.g. `wlan0`,
 `10.42.0.0/24`), in the Firewall panel or with

@@ -42,7 +42,7 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 | `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) — ersetzt `igate` | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
-| `meshcore` | 868 | MeshCore-Pi-Node (TCP 5000) | [meshcore](docs/stacks/meshcore.md) |
+| `meshcore` | 868 | MeshCore auf openHop — Chat-Node (TCP 5000) und/oder Repeater (Dashboard :8000), per `mode` | [meshcore](docs/stacks/meshcore.md) |
 | `reticulum` | 433 / 868 | Reticulum-Node, steuert das Funkmodul direkt über SPI | [reticulum](docs/stacks/reticulum.md) |
 
 Daemon-gestützte Stacks starten den Daemon automatisch; Meshtastic steuert das Funkgerät selbst und
@@ -253,8 +253,9 @@ lhpc webserver start-service      # nur lokal, ohne Anmeldung — nach außen is
   `https://127.0.0.1:8443/` öffnen. Erste Schritte dort: die **Auto-install**-Seite, danach im
   Webserver-Panel [Stack-UIs proxyen / Konsole mit Zertifikats-Anmeldung freigeben](#fernzugriff).
   Das Unterpanel **Stacks WebGUIs** wendet eine gemeinsame Richtlinie (Zugriff, Schema,
-  Authentifizierung, CIDRs) auf alle Stack-WebGUIs gleichzeitig an — Ports bleiben pro Stack
-  erhalten (fehlende bekommen den normalen Vorschlagswert); **LHPC WebGUI** konfiguriert
+  Authentifizierung, CIDRs) auf alle Stack-WebGUIs gleichzeitig an — Ports bleiben pro Seite
+  erhalten (fehlende bekommen den normalen Vorschlagswert; ein Stack mit zwei Web-UIs hat zwei);
+  **LHPC WebGUI** konfiguriert
   weiterhin nur die Konsole selbst. Einzel-Panels bleiben für Ausnahmen verfügbar;
   Bestätigungen (enable-remote / enable-remote-danger) und Firewall-Verhalten unverändert.
 
@@ -308,7 +309,7 @@ lhpc install meshtastic
 lhpc install meshcom
 #   stattdessen aus Quellen:  lhpc install meshcom --source pinned && lhpc build meshcom
 
-# meshcore — MeshCore-Pi-Node
+# meshcore — MeshCore auf openHop (Chat-Node, Repeater oder beides)
 lhpc install meshcore
 lhpc build meshcore
 ```
@@ -425,7 +426,9 @@ starten, sonst hat der Proxy kein Ziel); der Companion-Port TCP 5000 bleibt auf 
 du in der Konfiguration des Stacks keine Quellbereiche erlaubst. Headless brauchst du die GUI gar
 nicht: Der interaktive REPL-Client `meshcore-cli` läuft
 direkt in deiner SSH-Sitzung auf dem Pi (die Startzeile zeigt die Karte des Stacks im Dashboard;
-Details unter [meshcore](docs/stacks/meshcore.md)).
+Details unter [meshcore](docs/stacks/meshcore.md)). Der Stack hat eine zweite Seite, das
+openHop-Repeater-Dashboard auf Loopback `:8000`, bedient in den Repeater-Modi: `lhpc webserver proxy
+meshcore-meshcore-node …` (Login `admin`, Passwort im Abschnitt „Password" der Stack-Seite).
 
 Ports jenseits von Loopback zu öffnen verlangt eine Firewall ([`docs/firewall.md`](docs/firewall.md));
 Details samt Browser-Runbook für Client-Zertifikate: [`docs/webserver.md`](docs/webserver.md).

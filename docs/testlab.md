@@ -29,7 +29,7 @@ the console once its background build finishes.
 To run a stack: in the console go to **Apps**, pick a stack (e.g. graywolf), and click
 **Start** (or **Install → Build → Start** if you got there before its background install
 finished); its web UI appears on its own forwarded port (graywolf 8080, meshcom 18083,
-meshcore 5000, meshtastic 9080 — see below). Switch fault scenarios and inject traffic from the **Test Lab** panel (top
+meshcore's Web UI 8788 (its Companion TCP is 5000), meshtastic 9080 — see below). Switch fault scenarios and inject traffic from the **Test Lab** panel (top
 banner link). If the tab ever doesn't open, use the **Ports** tab → port **8770** → the
 globe icon.
 
@@ -66,8 +66,8 @@ auto-spawns. See `grep limitation testlab/tests/coverage_matrix.toml` for every 
 on x86 that compiles meshcom's qemu-xtensa (a few minutes). Enable prebuilds in Settings →
 Codespaces to bake all of that so later creations are instant; the console starts
 automatically on port **8770** (forwarded privately — only you can open it). Stack UIs:
-graywolf on **8080**, meshcom on **18083**, meshcore on **5000**, stackweb proxies on
-**8444–8446**. meshtastic's UI is on **9080**, a plain-HTTP socat bridge `start.sh` runs in
+graywolf on **8080**, meshcom on **18083**, meshcore's Web UI on **8788** (Companion TCP on
+**5000**), stackweb proxy pages on **8444–8447**. meshtastic's UI is on **9080**, a plain-HTTP socat bridge `start.sh` runs in
 front of meshtasticd's self-signed HTTPS on **:9443** (a Codespace's forwarding proxy 502s
 on the self-signed TLS, so open **:9080**, not :9443). A restarted codespace re-runs the
 idempotent start script (which also re-establishes the bridge).

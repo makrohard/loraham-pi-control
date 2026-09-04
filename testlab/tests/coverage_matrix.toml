@@ -252,7 +252,7 @@
 "meshcore#restart" = { limitation = "pending" }
 "meshcore#start" = "acceptance"
 "meshcore#stop" = "acceptance"
-"meshcore#ui" = { limitation = "meshcore-webui is a browser GUI behind the LHPC proxy; browser-lane coverage pending" }
+"meshcore#ui" = { limitation = "meshcore-webui (page meshcore) and, in the repeater modes, the openHop repeater dashboard (page meshcore-meshcore-node, regex deny list) are browser GUIs behind the LHPC proxy; browser-lane coverage pending" }
 "meshtastic#configure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
 "meshtastic#data" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
 "meshtastic#failure" = { limitation = "runs with upstream's Module:sim radio in the lab image (built + API/UI up); acceptance-covered where claimed, otherwise pending" }
