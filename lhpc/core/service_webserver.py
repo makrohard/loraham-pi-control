@@ -342,12 +342,38 @@ class WebserverOpsMixin:
     # ---- per-stack web-UI reverse proxies -------------------------------------------------
 
     def stack_web_pages(self, stack_id: str) -> tuple:
-        """The stack's proxied web PAGES (`model.web_pages`): one per component that declares a
-        client http/https endpoint, in manifest order. The first keeps the stack id as its page id;
-        any further one is `<stack_id>-<component_id>`. Empty for a stack without a web UI."""
+        """The stack's proxied web PAGES (`model.web_pages`): one per component that declares
+        a client http/https endpoint, in manifest order (main last). The first keeps the stack
+        id as its page id; any further one is `<stack_id>-<component_id>`. Empty for a stack
+        without a web UI.
+
+        A page exists in EVERY mode, like every stack's page exists while the stack is stopped:
+        the operator configures the MeshCore repeater dashboard's proxy before switching the
+        mode, and in `chat` nginx answers 502 for it exactly as for any stopped upstream. The
+        panel says when the upstream is served (`page_mode_note`)."""
         from .model import web_pages
         s = self.stack(stack_id)
-        return web_pages(s) if s is not None else ()
+        return tuple(web_pages(s)) if s is not None else ()
+
+    def page_mode_note(self, page) -> str:
+        """One sentence when the page's upstream is NOT served in the saved MeshCore mode (the
+        repeater dashboard in `chat`, the Web UI in `repeater`); "" for every other page."""
+        from . import meshcore_mode as _mm
+        if page.stack_id != _mm.STACK_ID:
+            return ""
+        comp = self.stack(page.stack_id).component(page.component_id)
+
+        def served(mode: str) -> bool:
+            if page.component_id in _mm.CLIENT_IDS:
+                return _mm.clients_available(mode)              # the Web UI needs the Companion
+            return any(e.address == page.address for e in _mm.expected_endpoints(comp, mode))
+
+        mode = self.meshcore_mode_display()
+        if not mode or served(mode):
+            return ""
+        modes = " and ".join(m for m in _mm.MODES if served(m))
+        return (f"Not served in the current mode ({mode}): this upstream runs in the {modes} "
+                f"modes — change it with the Mode switch on the stack page, then restart the stack.")
 
     def web_pages(self) -> list:
         """Every proxied page on the box, in MANIFEST order (stacks, then each stack's pages) —
@@ -419,8 +445,12 @@ class WebserverOpsMixin:
         naming its component — the stack's Password sub-sections. Independent of web pages: a
         backend that mints the login for a sibling's UI still gets its section."""
         st = self.stack(stack_id)
-        return [{"component_id": c.id, "name": c.name, **self.ui_credentials(stack_id, c.id)}
-                for c in (st.components if st else ()) if c.ui_password_file]
+        out = []
+        for c in (st.components if st else ()):
+            creds = self.ui_credentials(stack_id, c.id) if c.ui_password_file else {}
+            if creds:                                   # {} = no login in the current mode
+                out.append({"component_id": c.id, "name": c.name, **creds})
+        return out
 
     def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
         """Where a stack's SELF-GENERATED web-UI password lives, and how to read it.
@@ -440,9 +470,13 @@ class WebserverOpsMixin:
             if not c.ui_password_file:
                 continue
             path = self._paths.runtime_root / c.ui_password_file
+            # `exists` lets the panel say "not created yet" instead of offering a `cat` of a
+            # file that a first start (of a repeater mode, for the MeshCore repeater) will mint.
             return {"user": c.ui_user or "admin",
                     "path": str(path),
-                    "command": f"cat {path}"}
+                    "command": f"cat {path}",
+                    "exists": path.is_file(),
+                    "note": c.ui_password_note}
         return {}
 
     def stack_web_views(self, stack_id: str, listeners=None, fw_status=None,
@@ -517,6 +551,7 @@ class WebserverOpsMixin:
             # The page and the component behind it (`page_id` is the key of every saved policy).
             "page_id": page_id, "stack": page.stack_id, "component_id": page.component_id,
             "name": page.name, "label": page.label, "primary": page.primary,
+            "mode_note": self.page_mode_note(page),
             "cfg": swc, "upstream_address": address,
             "upstream_scheme": upstream_scheme, "upstream_port": upstream_port,
             "upstream_scope": scope, "suggested_port": suggested,
@@ -663,6 +698,7 @@ class WebserverOpsMixin:
             port = (v.get("live_port") or swc.port) if listen_scope != "absent" else swc.port
         return {"kind": "stack", "name": page.label, "sid": stk.id, "pid": page.page_id,
                 "anchor": page.anchor, "enabled": enabled,
+                "mode_note": v.get("mode_note", ""),      # "" unless the mode hides the upstream
                 "posture": v.get("posture") if enabled else None,
                 "port": port,
                 # The proxy's LIVE listen scope (exposed|loopback|absent) — the adapter links to the

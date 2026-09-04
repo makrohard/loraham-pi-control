@@ -20,7 +20,7 @@ former standalone `meshcore-pi` node; LHPC no longer maintains a MeshCore fork o
 | Identity | `<runtime>/config/secrets/meshcore_identity.key` (mode `0600`) |
 | Persistence | `<runtime>/state/meshcore/companion.db` (SQLite; contacts, channels, learned routes, prefs, offline messages survive restart) |
 | Companion | TCP `:5000` (chat modes) |
-| Repeater dashboard | `127.0.0.1:8000` (repeater modes) — openHop's own web dashboard, reachable on the Pi; proxying it through the LHPC webserver follows |
+| Repeater dashboard | `127.0.0.1:8000` (repeater modes) — openHop's own web dashboard, a proxied page of this stack (`meshcore-meshcore-node` in the Webserver panel and `lhpc webserver proxy`); login `admin` + the password LHPC minted (stack page → Password) |
 | Optional | `meshcore-webui` — browser GUI (adradr/meshcore-webui) reached through the LHPC TLS/PKI proxy; `meshcore-cli` — interactive REPL (run yourself) |
 
 Daemon interface: `GET STATUS`, `SET TXMODE=MANAGED`. A future direct-SX1262 profile
@@ -28,8 +28,12 @@ would own SPI exclusively and conflict with the daemon; it is not the default.
 
 ## Mode: chat, chat + repeater, repeater
 
-One openhop process runs on the radio in every mode; `mode` (Settings → Repeater, or
-`lhpc config meshcore mode …`) selects which program it is. Changing it flags the stack
+One openhop process runs on the radio in every mode; `mode` (the Mode switch at the top of the
+stack's page, the same row under Settings → Repeater, or `lhpc config meshcore mode …`) selects
+which program it is. The Apps row carries a `mode:` pill and `lhpc status meshcore` prints the
+saved mode — and, while the stack runs with another one, the running mode with "restart to apply".
+On the start-confirm panel the Repeater rows come first and show the saved values; the mode is
+changed before a start (a mode change decides which identities exist), never per start. Changing it flags the stack
 restart-required like any other setting. The default is `chat`, so an updated box keeps running
 exactly what it ran before.
 
@@ -59,6 +63,28 @@ it is; nothing is migrated between them. The **Repeater** rows are used only whe
   (mode `0600`) on first use and reused thereafter; the repeater's own storage (SQLite/RRD) lives
   under `<runtime>/state/openhop/`, separate from the chat node's database.
 
+## Repeater dashboard
+
+openHop's dashboard (statistics, neighbours, packets, logs, policy view) listens on
+`127.0.0.1:8000` in the repeater modes and is reached like every stack web UI: through the LHPC
+proxy, as the page `meshcore-meshcore-node` (the stack's first page `meshcore` stays the MeshCore
+Web UI, so nothing saved for it moves). The login is `admin` with the password LHPC minted into
+`<runtime>/config/secrets/openhop_repeater_admin.txt`. LHPC owns the repeater's configuration,
+identities, radio settings and version, so the proxy refuses every dashboard route that would
+change them — setup wizard, config import/export, web/MQTT/duty-cycle/advert-rate settings, the
+policy editor, transport keys, region and flood policy, radio and CAD settings, repeater mode and
+restart, the mesh CLI, identities and key export, API-token minting, the hosted companion's name
+and position, password change, OTA updates and channel switches, and the companion-frame
+websocket. A refused path is refused for reading too, so the dashboard's Policy, transport-key,
+region and identity (Companions / Room Servers) pages do not load through the proxy — those
+settings are LHPC's. Statistics, packets, neighbours, logs, the login, the packet stream and the
+operational actions of a logged-in admin (send advert or text, ping, discovery, purge) pass.
+The page exists in every mode, like every stack's page exists while its stack is stopped, so the
+proxy can be configured before the mode is switched; its panel says when the upstream is not
+served in the saved mode. In `chat` the proxy answers 502 for it (a saved LAN policy opens the
+page's port in `chat` too), and the Password section says the admin password is not minted yet.
+The stack body carries the Mode switch (the same saved setting as the row under Settings → Repeater).
+
 **Upgrading to 0.2.8:** the stack's build now also consumes the pinned repeater checkout, so an
 updated box reports the node as *not built* until it has run `lhpc install meshcore` (adopts the
 new source) and `lhpc build meshcore` once — in `chat` mode too; the runtime behaviour is unchanged
@@ -67,7 +93,8 @@ change shows as restart-required and does not flip a running node to degraded.
 
 LHPC owns the radio settings, the version and the configuration in every mode: the repeater gets
 its RF parameters, duty-cycle budget and companion from the same file, never writes configuration
-(every upstream save fails closed — it is given no config path), and its MQTT, Glass and time-sync
+(it is given no config path, so an upstream save aims at `/etc/openhop_repeater/config.yaml`, which
+the rootless unit cannot create; the routes that would save are denied at the proxy), and its MQTT, Glass and time-sync
 integrations are off. The repeater's dashboard shows the daemon link as *ok* only while the LoRaHAM
 daemon connection is up and, with TX enabled, the MANAGED-TX handshake is complete.
 

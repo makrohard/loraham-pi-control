@@ -34,6 +34,7 @@ from flask import (
 )
 
 from lhpc.core import config as _config
+from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import validators
 from lhpc.core.outcomes import manual_required_only
 from lhpc.core.services import ControllerService
@@ -877,6 +878,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 # One Password sub-section per component that declares where its self-generated
                 # UI password lives — independent of web pages.
                 "ui_creds_list": service.ui_credentials_list(stack.id),
+                # The MeshCore stack's Mode switch on the stack body and its pill on the Apps row
+                # ("" elsewhere): the saved mode, the choices, and the mode the running launch was
+                # generated with (shown only while the stack runs and differs from the saved one).
+                "meshcore_mode": (service.meshcore_mode_display()
+                                  if stack.id == _meshcore_mode.STACK_ID else ""),
+                "meshcore_modes": list(_meshcore_mode.MODES),
+                "meshcore_running_mode": (service.meshcore_running_mode()
+                                          if stack.id == _meshcore_mode.STACK_ID else ""),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
@@ -1676,7 +1685,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             changed = {f"autostart_{o['id']}":
                        ("on" if request.form.get(f"opt_start_{o['id']}") == "on" else "")
                        for o in opts
-                       if (request.form.get(f"opt_start_{o['id']}") == "on")
+                       if o.get("startable", True)      # listed-only rows have no checkbox
+                       and (request.form.get(f"opt_start_{o['id']}") == "on")
                        != o["autostart"]}
             if changed:
                 saved = service.save_config_bundle(target, values=changed)
@@ -1825,6 +1835,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             values[f"file_{f['key']}" if f["kind"] == "file" else f["key"]] = v
         # Auto-start toggles for the stack's optional components.
         for opt in view["optional"]:
+            if not opt.get("startable", True):
+                continue                       # listed as run-on-demand: no auto-start key
             values[f"autostart_{opt['id']}"] = (
                 "on" if request.form.get("c_autostart_" + opt["id"]) else "")
         # Per-component GitHub remote overrides as a COMPLETE map (blank reverts to
@@ -1958,6 +1970,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         result = service.reset_daemon_params(stack_id, band)
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, band)
+
+    @app.post("/stacks/<stack_id>/mode")
+    def stack_mode_save(stack_id: str):
+        """The MeshCore stack's Mode, saved from the stack body: the SAME saved setting as the
+        Settings card's row, through the same config API and the same save-time rules (a repeater
+        mode needs the saved repeater name; a change is restart-required). Never a start value."""
+        if stack_id != _meshcore_mode.STACK_ID or service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")})
+        flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
+              "ok" if result.ok else "warn")
+        return redirect(url_for("stacks_overview", open=stack_id) + "#stack-mode-" + stack_id)
 
     @app.post("/stacks/<stack_id>/config/reset")
     def stack_config_reset(stack_id: str):

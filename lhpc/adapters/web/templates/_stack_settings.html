@@ -160,7 +160,9 @@
         <section class="cfgsec">
           <table class="paramgrid dptab">
             {% for g in config_groups %}
-              {% if g.rule_before %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
+              {# A rule before EVERY heading but the first (visual separation of the groups); the
+                 service's rule flags still bracket the dependency components at the end. #}
+              {% if g.rule_before or not loop.first %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
               <tr class="spgroup"><th colspan="3">{{ g.name }}</th></tr>
               {% for r in g.rows %}
                 <tr class="{% if r.advanced %}advrow{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
@@ -218,8 +220,9 @@
                 <th>{{ opt.name }}
                   <span class="badge badge-{{ 'running' if opt.running else 'stopped' }}">{{ 'running' if opt.running else 'stopped' }}</span>
                 </th>
-                <td><label><input type="checkbox" name="c_autostart_{{ opt.id }}" value="on"
-                     {% if opt.autostart %}checked{% endif %}> auto-start</label></td>
+                <td>{% if opt.startable %}<label><input type="checkbox" name="c_autostart_{{ opt.id }}" value="on"
+                     {% if opt.autostart %}checked{% endif %}> auto-start</label>
+                    {% else %}<span class="muted">run on demand in a terminal (its launch line is shown on the Dashboard); not spawned by the controller</span>{% endif %}</td>
               </tr>
             {% endfor %}
           </table>

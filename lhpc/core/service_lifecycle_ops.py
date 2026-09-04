@@ -216,6 +216,16 @@ class LifecycleOpsMixin:
             time.sleep(self.ENDPOINT_VERIFY_POLL_S)
             waited += self.ENDPOINT_VERIFY_POLL_S
 
+    def _meshcore_node_live(self) -> bool:
+        """Is the MeshCore node process up (RUNNING/DEGRADED in the current snapshot)?"""
+        from . import meshcore_mode as _mm
+        snap = self._snapshot_or_none()
+        for ss in (snap.stacks if snap is not None else ()):
+            if ss.stack.id == _mm.STACK_ID:
+                st = ss.components.get(_mm.NODE_ID)
+                return getattr(st, "run_state", None) in (RunState.RUNNING, RunState.DEGRADED)
+        return False
+
     def _meshcore_mode_refusal(self, target: str):
         """What the MeshCore mode rules out, refused BEFORE any mutation: a Companion client
         (webui / cli) while the stack runs repeater-only — there is no TCP 5000 to connect to —
@@ -226,6 +236,10 @@ class LifecycleOpsMixin:
         if target not in (_mm.STACK_ID, _mm.NODE_ID, *_mm.CLIENT_IDS):
             return None
         mode = self.meshcore_mode()
+        if target in _mm.CLIENT_IDS and self._meshcore_node_live():
+            # TCP 5000 exists per the launch that is RUNNING, not per a saved-but-not-restarted
+            # mode (status and stop verification judge by the same running mode).
+            mode = self.meshcore_running_mode()
         if target in _mm.CLIENT_IDS and not _mm.clients_available(mode):
             return ActionResult(
                 False, f"Cannot start '{target}': the MeshCore stack is in repeater-only mode — "
@@ -5377,8 +5391,9 @@ class LifecycleOpsMixin:
         return daemon_control.read_socket_line(self._system, band)
 
     def optional_start_components(self, target: str) -> list:
-        """Optional, non-interactive SERVICE components of a stack (e.g. KISS Serial) with their
-        saved auto-start choice — rendered as checkboxes on the Confirm:start page. File-only read.
+        """The stack's LISTED optional components (`_optional_listed`) with their saved auto-start
+        choice — a checkbox on the Confirm:start page where the controller can start them with
+        the stack (`startable`), a "run on demand" note otherwise (the MeshCore CLI). File-only read.
 
         Excludes position feeds and `test_fixture` components, the SAME rule the Settings auto-start
         list already applies. A GPS feed runs only when the resolved position plan needs it, and
@@ -5389,9 +5404,11 @@ class LifecycleOpsMixin:
         if s is None:
             return []
         cfg = load_stack_config(self._paths, target)
+        # A per-start CHECKBOX only for what the controller can spawn: an interactive service
+        # (nomadnet) keeps its Settings auto-start tick and is planned with its launch line, but
+        # "Start X" here would promise a spawn — it is listed with the run-on-demand note instead.
         return [{"id": c.id, "name": c.name,
-                 "autostart": cfg.get(f"autostart_{c.id}") == "on"}
-                for c in s.components
-                if c.optional and c.kind == ComponentKind.SERVICE
-                and not getattr(c, "interactive", False)
-                and not self._never_operator_autostart(c)]
+                 "autostart": cfg.get(f"autostart_{c.id}") == "on",
+                 "startable": (not self._never_operator_autostart(c)
+                               and not getattr(c, "interactive", False))}
+                for c in s.components if self._optional_listed(c)]

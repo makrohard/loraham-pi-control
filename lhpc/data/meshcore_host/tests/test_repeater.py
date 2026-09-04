@@ -119,3 +119,18 @@ def test_the_daemon_gets_no_config_path_and_the_radio_hooks(monkeypatch):
     assert host.daemon.radio_status == "ok"
     host.radio.on_link_state(False, False)
     assert host.daemon.radio_status == "degraded"
+
+
+def test_the_radio_speaks_upstreams_attribute_names_for_tx_power():
+    """openhop_repeater caches `radio.tx_power` for the hosted Companion's self-info and
+    openhop_core resolves `max_tx_power_dbm`; the adapter's own spellings are txpower/txmaxpower."""
+    from meshcore_host.loraham_radio import LoRaHAMRadio
+    import inspect
+    sig = inspect.signature(LoRaHAMRadio.__init__)
+    kw = {"frequency": 869618000, "spreading_factor": 8, "bandwidth": 62500, "coding_rate": 8,
+          "preamble_length": 16, "syncword": 0x12, "txpower": 17, "txmaxpower": 20}
+    kw = {k: v for k, v in kw.items() if k in sig.parameters}
+    radio = LoRaHAMRadio(data_socket="/tmp/x.sock", config_socket="/tmp/y.sock", **kw) \
+        if "data_socket" in sig.parameters else LoRaHAMRadio(**kw)
+    assert radio.tx_power == radio.txpower == 17
+    assert radio.max_tx_power_dbm == radio.txmaxpower == 20

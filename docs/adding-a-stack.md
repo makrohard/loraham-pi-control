@@ -134,10 +134,13 @@ endpoints also drive the running-vs-degraded status. TCP ready endpoints must be
 A `client = true` endpoint with `scheme = "http"` or `"https"` makes the component a proxied
 web **page**: it gets its own port and policy in the console's Webserver panel and in
 `lhpc webserver proxy`, fronted by nginx with the console's TLS/mTLS gate
-([webserver.md](webserver.md#stack-web-ui-proxies)). Optional `proxy_deny_paths` lists exact
-request paths the proxy refuses. A stack's first such component is addressed by the stack id;
-any further one by `<stack>-<component>`. The derived page ids must be unique across the whole
-manifest — checked at load, like component ids. A loopback `address` is what keeps the raw port
+([webserver.md](webserver.md#stack-web-ui-proxies)). Optional `proxy_deny_paths` lists
+request paths the proxy refuses — spelling-tolerant: `/api/x` also refuses `/api/x/…`, `/api-x`
+and `/api.x` (see [webserver.md](webserver.md)). A stack's first such component is addressed by the stack id;
+any further one by `<stack>-<component>`. "First" is manifest order with the stack's `main`
+component sorted last, so a dedicated web component keeps the stack id even when the main
+component later grows a dashboard of its own. The derived page ids must be unique across the
+whole manifest — checked at load, like component ids. A loopback `address` is what keeps the raw port
 off the network; every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
 
 ### Parameters & config files

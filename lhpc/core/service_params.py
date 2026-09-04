@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from . import daemon_control, runtime_fs, validators
+from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
 from .config import (
     ConfigError,
@@ -47,8 +48,9 @@ _BANDLESS_STACK_PARAMS = ("use_gps",)
 MESHCORE_COMPONENT = "meshcore-node"
 # The repeater's controller-minted secrets (see meshcore_identity) and the rows that select the
 # node's mode — saved settings only, never per-launch overrides (see _normalize_file_overrides).
-_REPEATER_SECRETS = ("openhop_repeater_identity.key", "openhop_repeater_admin.txt")
-_IDENTITY_SECRET = "meshcore_identity.key"             # the Companion's key (meshcore_identity)
+_REPEATER_SECRETS = (_meshcore_identity.REPEATER_IDENTITY_FILENAME,
+                     _meshcore_identity.REPEATER_ADMIN_FILENAME)
+_IDENTITY_SECRET = _meshcore_identity.IDENTITY_FILENAME      # the Companion's key
 _MESHCORE_SAVED_ONLY = ("mode", "repeater_name", "repeater_mode")
 _POSITION_PARAMS = ("lat", "lon")
 
@@ -844,10 +846,10 @@ class ParamsConfigMixin:
         # fixture on the confirm page.
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
                      "autostart": stored.get(f"autostart_{c.id}") == "on",
-                     "running": live.get(c.id) in up}
-                    for c in members if c.optional
-                    and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
-                    and not self._never_operator_autostart(c)]
+                     "running": live.get(c.id) in up,
+                     # False -> listed, but run on demand (no auto-start control)
+                     "startable": not self._never_operator_autostart(c)}
+                    for c in members if self._optional_listed(c)]
         main = s.main_component if s else None
         # The GLOBAL operator callsign is edited ONLY on its own card (LHPC main card) and
         # via `lhpc config operator` — never through a stack page, which made a stack look
@@ -2242,7 +2244,17 @@ class ParamsConfigMixin:
                         return _mm.normalize(role)
             except (OSError, PathContainmentError, ValueError, UnicodeError):
                 pass                       # unreadable/absent generated file: the saved mode
-        return self.meshcore_mode()
+        return self.meshcore_mode_display() or _mm.DEFAULT_MODE
+
+    def meshcore_mode_display(self) -> str:
+        """The SAVED mode for read-only surfaces (status, the console, stop verification): ""
+        when the stack config cannot be read. Those surfaces must keep working for every stack
+        with one broken MeshCore file; the START path reads `meshcore_mode()` itself and fails
+        closed on the same file."""
+        try:
+            return self.meshcore_mode()
+        except ConfigError:
+            return ""
 
     def _meshcore_mode_save_refusal(self, merged: dict) -> str:
         """Why a MeshCore config save must be refused ("" = fine): a repeater mode needs the
@@ -2655,7 +2667,14 @@ class ParamsConfigMixin:
                 field = self._param_field(target, kind, c.id, p.name)
                 cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
                 is_id = idrec is not None
-                locked = kind == "run" and p.name == self.GPS_PARAM
+                # SAVED-ONLY rows render as a pill, never as an input: the GPS switch, and the
+                # MeshCore mode rows. A mode change re-classifies which identities exist (the chat
+                # name is no identity in `repeater`), so it is made BEFORE a start — the Mode
+                # switch on the stack page or Settings → Repeater — never inside the start's
+                # persist-and-launch transaction (`_normalize_file_overrides` refuses it there).
+                locked = ((kind == "run" and p.name == self.GPS_PARAM)
+                          or (kind == "file" and c.id == MESHCORE_COMPONENT
+                              and p.name in _MESHCORE_SAVED_ONLY))
                 # The switch is stored per STACK (bandless), so the hint must name the stack even
                 # when the param is declared on a component (`meshcom-qemu` -> `meshcom`). It
                 # points at the WEB path — the operator reading it is already in the web console.
@@ -2663,6 +2682,9 @@ class ParamsConfigMixin:
                 _owner_name = (self.stack(_owner).name if self.stack(_owner) else _owner)
                 hint = (f"saved setting — change it under Apps → {_owner_name} → "
                         "Settings") if locked else ""
+                if locked and kind == "file":
+                    hint = (f"saved setting — change it with the Mode switch on the "
+                            f"{_owner_name} page or under its Settings → Repeater, then start")
                 id_hint, id_note = self._identity_note(idrec, cur)
                 rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
                                             c.name, key, c.id, locked, hint,
@@ -2747,7 +2769,9 @@ class ParamsConfigMixin:
                                  file_over: dict | None = None) -> list[dict]:
         """The Start-confirm panel rows GROUPED for display: a first 'Required' group with the
         identity (CALL/node) field(s) on top, then one group per component (header = component name)
-        with that component's remaining params. [] when the stack has no editable params."""
+        with that component's remaining params — rows that carry a manifest `group` (the Settings
+        card's sub-heading, e.g. MeshCore's "Repeater") follow under "<component> — <group>", so
+        both surfaces show the same headings. [] when the stack has no editable params."""
         rows = self.stack_start_params(target, band, params, file_over)
         groups: list[dict] = []
         required = [r for r in rows if r["is_identity"]]
@@ -2758,10 +2782,16 @@ class ParamsConfigMixin:
         for r in rows:
             if r["is_identity"] or r.get("dep_stack"):
                 continue
-            if r["comp_name"] not in by_comp:
-                by_comp[r["comp_name"]] = []
-                order.append(r["comp_name"])
-            by_comp[r["comp_name"]].append(r)
+            header = r["comp_name"] + (f" — {r['group']}" if r.get("group") else "")
+            if header not in by_comp:
+                by_comp[header] = []
+                order.append(header)
+            by_comp[header].append(r)
+        # Right after Required: the group holding saved-only rows (MeshCore's "Repeater", where
+        # the Mode lives), then the other named groups, then the plain rows — the operator sees
+        # the mode before the long tail of chat rows.
+        order.sort(key=lambda h: (0 if " — " in h and any(r["locked"] for r in by_comp[h])
+                                  else 1 if " — " in h else 2))
         for name in order:
             groups.append({"header": name, "rows": by_comp[name]})
         # Dependency stacks the run order pulls up render AFTER the target's own groups, one
@@ -2815,6 +2845,7 @@ class ParamsConfigMixin:
         # into a failed start, and the row still had to appear or the setting was invisible.
         return {"field": field, "name": p.name, "key": key, "component": component,
                 "kind": p.kind, "comp_name": comp_name,
+                "group": getattr(p, "group", "") or "",      # the Settings card's sub-heading
                 "locked": bool(locked), "locked_hint": locked_hint,
                 "choices": list(p.choices), "label": p.label or p.name,
                 "value": "" if value is None else str(value),
@@ -2848,10 +2879,7 @@ class ParamsConfigMixin:
                 # The mode rows are SAVED settings only (same rule as `use_gps`): readiness,
                 # status, identity enforcement and the client seeding all read the saved state,
                 # so a per-launch override would make the launch and the controller disagree.
-                # An echo of the current value (the start form posts every field) is not a change.
-                cur = self._resolved_param_value(target, "file", _c.id, p.name)
-                if str(val).strip() == str(cur).strip():
-                    continue
+                # No surface posts them for a launch (the confirm page shows them as pills).
                 return {}, (f"{p.name} cannot be changed for a single start — it is a saved "
                             f"setting (lhpc config {_meshcore_mode.STACK_ID} {p.name} <value>)")
             try:
@@ -2995,13 +3023,13 @@ class ParamsConfigMixin:
             # `_normalize_file_overrides`) takes precedence for THIS launch only.
             values = {}
             secret_error = ""
-            # The MeshCore mode this render describes, decided ONCE before the rows (the rows
-            # are in manifest order, and the identity row precedes the mode row). A per-launch
-            # override of `mode` is refused upstream, so this is the saved mode.
+            # The MeshCore mode this render describes — the SAVED mode (a per-launch override of
+            # it is refused by `_normalize_file_overrides`), decided ONCE before the rows because
+            # the identity row precedes the mode row in manifest order.
             rendered_mode = ""
             if c.id == MESHCORE_COMPONENT:
                 rendered_mode = _meshcore_mode.normalize(
-                    over.get("mode", stored.get("mode", _meshcore_mode.DEFAULT_MODE)))
+                    stored.get("mode", _meshcore_mode.DEFAULT_MODE))
             for p in fc.params:
                 if getattr(p, "secret_ref", ""):
                     # Separate trust layer: never `over`, never `stored`, never a default.

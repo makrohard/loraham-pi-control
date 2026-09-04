@@ -78,6 +78,7 @@
 "POST /stacks/<sid>/hmac/<action>/recover" = "sweep"
 "POST /stacks/<stack_id>/config" = "sweep"
 "POST /stacks/<stack_id>/config/reset" = "sweep"
+"POST /stacks/<stack_id>/mode" = "sweep"
 "POST /stacks/<stack_id>/daemon-params" = "sweep"
 "POST /stacks/<stack_id>/daemon-params/apply" = "sweep"
 "POST /stacks/<stack_id>/daemon-params/reset" = "sweep"
@@ -171,6 +172,7 @@
 "_stack_settings.html#radio_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_stack_settings.html#stack_config_reset" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_stack_settings.html#stack_config_save" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"_stack_body.html#stack_mode_save" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_stackweb.html#stack_web_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_update.html#self_update_apply" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_update.html#self_update_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }

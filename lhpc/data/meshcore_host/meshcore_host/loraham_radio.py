@@ -278,6 +278,17 @@ class LoRaHAMRadio(_LoRaRadioBase):
     # openHop LoRaRadio contract
     # ------------------------------------------------------------------
 
+    # Upstream's spellings: openhop_repeater caches `radio.tx_power` for the hosted Companion's
+    # self-info and openhop_core's radio_capabilities resolves `max_tx_power_dbm` — without them
+    # the dashboard and the Web UI report 14 / 22 dBm whatever LHPC configured.
+    @property
+    def tx_power(self) -> int:
+        return self.txpower
+
+    @property
+    def max_tx_power_dbm(self) -> int:
+        return self.txmaxpower
+
     def begin(self) -> None:
         """Start the persistent daemon connection manager. Requires a running loop."""
         if self._running:

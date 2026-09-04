@@ -2613,3 +2613,30 @@ def test_fetched_stack_shows_its_version_and_an_update_when_the_pin_moves(tmp_pa
     i = body.index('id="stackrow-graywolf"')
     row = body[i:]
     assert ">Update<" in row, "the Package line must offer Update on a pin mismatch"
+
+
+
+def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_path):
+    """One route, one key: the stack body's Mode form writes the Settings row's setting through
+    the config API (CSRF-enforced, MeshCore-only, refusals reported as flashes, never a start)."""
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    c = _real_app(tmp_path)
+    tok = _csrf(c)
+    assert c.post("/stacks/meshcore/mode", data={"mode": "repeater"}).status_code == 400   # CSRF
+    assert c.post("/stacks/graywolf/mode", data={"_csrf": tok, "mode": "chat"}).status_code == 404
+    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
+    # a repeater mode without a saved repeater name is refused (the save-time rule), mode stays
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater"})
+    assert r.status_code in (302, 303) and "#stack-mode-meshcore" in r.headers["Location"]
+    assert svc.meshcore_mode() == "chat"
+    assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
+    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater"})
+    assert r.status_code in (302, 303)
+    svc._invalidate_config()
+    assert svc.meshcore_mode() == "chat+repeater"
+    body = c.get("/stacks/meshcore/body").get_data(as_text=True)
+    assert 'id="stack-mode-meshcore"' in body and 'option value="chat+repeater" selected' in body
+    assert "stack-webserver-meshcore-meshcore-node" in body
+    page = c.get("/stacks").get_data(as_text=True)
+    assert "mode: chat+repeater" in page                                    # the Apps-row pill

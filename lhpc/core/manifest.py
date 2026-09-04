@@ -649,6 +649,7 @@ def _parse_component(raw: dict) -> Component:
         release_repo=raw.get("release_repo", ""),
         ui_user=raw.get("ui_user", ""),
         ui_password_file=raw.get("ui_password_file", ""),
+        ui_password_note=str(raw.get("ui_password_note", "") or ""),
         post_start=raw.get("post_start", ""),
         run_argv=tuple(str(t) for t in raw.get("run_argv", [])),
         run_cwd=raw.get("run_cwd", ""),

@@ -157,6 +157,7 @@
   <span class="col-status"><span class="badge badge-{{ g.state }}">{{ g.state }}</span></span>
 {% endif %}
 <span class="col-extra">
+  {% if g.meshcore_mode %}<span class="pill" title="MeshCore mode (saved){% if g.running and g.meshcore_running_mode != g.meshcore_mode %}; the running launch uses {{ g.meshcore_running_mode }} — restart to apply{% endif %}">mode: {{ g.meshcore_mode }}{% if g.running and g.meshcore_running_mode != g.meshcore_mode %} · running {{ g.meshcore_running_mode }}{% endif %}</span>{% endif %}
   {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
 </span>
 {% endmacro %}

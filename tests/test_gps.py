@@ -2530,11 +2530,15 @@ def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
     assert "meshcom-gps-relay" not in order
     # The deliberate path is untouched: naming the fixture directly still runs it.
     assert svc.run_action("start", "meshcom-gps-relay", apply=False).ok is True
-    # And the predicate is THE shared rule: everything it excludes is absent from both
-    # operator-facing lists, for every stack.
+    # And the predicate is THE shared rule: nothing it excludes gets an auto-start control on
+    # either operator-facing list, for every stack (a one-shot client may be LISTED as run on
+    # demand; a feed or fixture is not listed at all).
     for s in svc.stacks():
         excluded = {c.id for c in s.components if svc._never_operator_autostart(c)}
-        assert not ({o["id"] for o in svc.optional_start_components(s.id)} & excluded), s.id
+        listed = svc.optional_start_components(s.id)
+        assert not ({o["id"] for o in listed if o["startable"]} & excluded), s.id
+        assert not ({o["id"] for o in listed} & {c.id for c in s.components
+                                                 if c.test_fixture or c.id in svc._all_gps_feed_ids()}), s.id
 
 
 def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_path,

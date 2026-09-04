@@ -5,14 +5,18 @@ r"""The repeater roles: upstream openhop_repeater's RepeaterDaemon on the LoRaHA
                                             (chat+repeater only: the SAME chat node as the chat role)
 
 LHPC's TOML is the ONLY configuration: this module translates it into the in-memory dict upstream
-expects and injects the radio. Upstream never gets a config path (`config_path = None`), so nothing
-it does — dashboard saves, JWT-secret persistence, node-name sync — can write a file: every save
-fails closed. Storage, GPS, MQTT and Glass are pinned by LHPC below; the dashboard binds loopback.
+expects and injects the radio. Upstream gets no config path (`config_path = None`): for a save it
+then falls back to /etc/openhop_repeater/config.yaml (or $OPENHOP_REPEATER_CONFIG, which this
+process clears), a path the rootless unit cannot create — and every dashboard route that would
+save is denied at LHPC's proxy anyway. Storage, GPS, MQTT and Glass are pinned by LHPC below; the
+dashboard binds loopback.
 
 Exit codes mirror `__main__`: 2 unusable configuration, 3 identity unusable, 1 anything else.
 """
 
 from __future__ import annotations
+
+import os
 
 import asyncio
 import logging
@@ -133,8 +137,13 @@ class _Host:
                 host._after_initialize(self)
 
         daemon = LhpcRepeaterDaemon(self.conf, radio=self.radio)
-        # EXPLICIT: upstream falls back to /etc/openhop_repeater/config.yaml when the attribute is
-        # missing. None makes every save (dashboard, JWT secret, node-name sync) fail closed.
+        # EXPLICIT: with the attribute missing OR None upstream falls back to
+        # /etc/openhop_repeater/config.yaml (after $OPENHOP_REPEATER_CONFIG / $PYMC_REPEATER_CONFIG,
+        # cleared here so an inherited environment cannot point a save at a writable file). The
+        # rootless unit cannot create that directory, so a save fails — and the proxy denies every
+        # route that would try. LHPC's TOML stays the only configuration.
+        for var in ("OPENHOP_REPEATER_CONFIG", "PYMC_REPEATER_CONFIG"):
+            os.environ.pop(var, None)
         daemon.config_path = None
         daemon.radio_status = "degraded"                   # until the link reports otherwise
         self.radio.on_link_state = lambda connected, tx_ready: setattr(

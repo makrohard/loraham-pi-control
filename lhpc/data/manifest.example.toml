@@ -1031,6 +1031,7 @@ main = "graywolf"
   # the value, which must not travel through a rendered page, a log or a screenshot.
   ui_user = "admin"
   ui_password_file = "state/graywolf/graywolf-admin.txt"
+  ui_password_note = "graywolf generates this password itself on first start. LHPC owns the account: it signs in on every start to apply the settings, so if you change the password in the app's own UI, write the new one into that file or the next start will fail."
   run_argv = ["{runtime}/build/tools/graywolf/usr/bin/graywolf", "-config", "{runtime}/state/graywolf/graywolf.db", "-http", "127.0.0.1:8080"]
   # `-http` is deliberately NOT a param: LHPC never merges a user value into a longer token
   # (host:port is ONE argv token), and the UI is password-authenticated operator surface that
@@ -2214,6 +2215,12 @@ main = "meshcore-node"
   # The repeater program is a second pinned upstream source (LIBRARY component below): it is
   # installed into THIS venv, so both roles import the same pinned + patched openHop Core.
   build_requires = ["openhop-repeater-src"]
+  # The repeater dashboard's login: `admin` + the password LHPC mints into this 0600 file on the
+  # first repeater-mode config generation (see the `dashboard_password` param). Shown on the
+  # stack page's Password section, never rendered as a value.
+  ui_user = "admin"
+  ui_password_file = "config/secrets/openhop_repeater_admin.txt"
+  ui_password_note = "LHPC mints this password when a repeater mode first starts and hands it to the repeater on every start; the dashboard's own password change is refused at the proxy. To change it, edit that file (16–128 printable ASCII characters, no spaces) and restart the stack."
   requires_daemon_tx = "MANAGED"
   start_order = 1
   run = ".venv/bin/python -m meshcore_host {runtime}/config/files/meshcore.toml"
@@ -2471,18 +2478,64 @@ main = "meshcore-node"
     firewall = { allow_param = "meshcore_allow", auth = "none" }
 
     # The openHop repeater's dashboard (CherryPy, JWT login) — fixed on loopback, exists only in
-    # the repeater modes (core/meshcore_mode.py selects the expected endpoints per mode). Not a
-    # proxied page yet (`client = false`): exposure through the LHPC proxy with its deny list is
-    # the next step; until then it is reachable on the Pi only.
+    # the repeater modes (core/meshcore_mode.py selects the expected endpoints per mode). A
+    # proxied web PAGE of this stack: page id `meshcore-meshcore-node` (the stack's first page,
+    # `meshcore`, stays the MeshCore Web UI — model.web_pages sorts the main component's page
+    # last), reached through the LHPC TLS/mTLS proxy like every stack UI; the login is the admin
+    # password LHPC minted (ui_password_file above).
+    #
+    # DENY LIST — the invariant: every dashboard route that MUTATES UPSTREAM CONFIGURATION is
+    # refused at LHPC's perimeter (upstream gets no config path, so a save aims at
+    # /etc/openhop_repeater/config.yaml, which the rootless unit cannot create — but the
+    # in-memory mutation before it would still change the running repeater and vanish on
+    # restart). Classified from a full inventory of the 129 exposed methods at the pinned
+    # openhop_repeater efc5616 (repeater/web/{api,auth,companion,update}_endpoints.py):
+    #   config/setup/import/export (setup wizard, config import/export, web/mqtt/duty-cycle/advert
+    #   rate-limit config, policy editor, transport keys, default region, flood policy),
+    #   radio/CAD (update_radio_config, save_cad_settings, cad_* calibration),
+    #   repeater mode + restart (set_mode, set_duty_cycle, restart_service), the mesh CLI,
+    #   identities (create/update/delete/list, vanity keys, identity export),
+    #   the hosted companion's LHPC-owned name/position, the password stored in config,
+    #   OTA/channel switch (update install/check/set_channel), and the companion-frame websocket
+    #   (a binary bridge INTO the Companion, i.e. a write path to the mesh).
+    # Also denied: API-token minting (/api/auth/tokens — a second credential accepted on every
+    # /api route). Allowed: statistics, packets, neighbours, logs, hardware, noise floor,
+    # login/verify/refresh, /ws/packets (read-only stream), and the OPERATIONAL actions of a
+    # logged-in admin (send advert/text, ping, discovery, ACL, room messages, purge) — the scope
+    # here is configuration, identities and LHPC-owned state, not everything a repeater does.
+    # A path denied for writes is denied for reads too (one nginx location per path, no method
+    # split): the Policy, transport-key, region and identity pages of the dashboard do not load
+    # through the proxy; LHPC owns those settings. Each entry renders as a spelling-tolerant
+    # regex location (webserver.deny_location_regex): punctuation variants, trailing slash and
+    # positional sub-paths are refused with it.
     [[stack.component.endpoint]]
     kind = "tcp"
     address = "127.0.0.1:8000"
     ready = true
     role = "listener"
     description = "openHop repeater dashboard"
-    client = false
+    client = true
     scheme = "http"
     firewall = { auth = "password" }
+    proxy_deny_paths = [
+      "/api/setup_wizard", "/api/config_import", "/api/config_export",
+      "/api/update_web_config", "/api/update_mqtt_config", "/api/update_duty_cycle_config",
+      "/api/update_advert_rate_limit_config", "/api/set_duty_cycle", "/api/set_mode",
+      "/api/restart_service",
+      "/api/policy", "/api/policy_groups", "/api/policy_group_entries",
+      "/api/transport_keys", "/api/transport_key", "/api/default_region",
+      "/api/unscoped_flood_policy",
+      "/api/update_radio_config", "/api/save_cad_settings",
+      "/api/cad_calibration_start", "/api/cad_calibration_stop", "/api/cad_manual_check",
+      "/api/cli",
+      "/api/identities", "/api/identity", "/api/create_identity", "/api/update_identity",
+      "/api/delete_identity", "/api/generate_vanity_key", "/api/identity_export",
+      "/api/companion/set_advert_name", "/api/companion/set_advert_location",
+      "/api/update/install", "/api/update/check", "/api/update/set_channel",
+      "/api/auth/tokens",
+      "/auth/change_password",
+      "/ws/companion_frame",
+    ]
 
     [[stack.component.resource]]
     key = "tcp.port.5000"

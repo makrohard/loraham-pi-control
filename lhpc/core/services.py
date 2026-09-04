@@ -903,6 +903,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             if stack_id and ss.stack.id != stack_id:
                 continue
             details.append(f"[{ss.stack.id}] {ss.stack.name}  ({rollup[ss.stack.id]})")
+            if ss.stack.id == _meshcore_mode.STACK_ID:
+                # The ONE mode decision, as saved — and, while the stack runs with another one,
+                # the mode the running launch was generated with (a change is restart-required).
+                saved, live = self.meshcore_mode_display(), self.meshcore_running_mode()
+                line = f"  mode: {saved or '(unreadable stack config)'}"
+                if saved and live != saved and rollup[ss.stack.id] in ("running", "degraded"):
+                    line += f"  (running: {live} — restart to apply)"
+                details.append(line)
             for comp in ss.stack.components:
                 st = ss.components[comp.id]
                 details.extend(_render_component(comp, st))
@@ -1604,8 +1612,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _lifecycle(self) -> Lifecycle:
         lc = Lifecycle(self._paths, self.stacks(), self.config(), self._system)
         # Stop verification probes the endpoints the RUNNING launch opened (MeshCore: by mode).
-        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(
-            comp, self.meshcore_running_mode())
+        running = self.meshcore_running_mode()           # once per operation, not per poll
+        lc.expected_endpoints = lambda comp: _meshcore_mode.expected_endpoints(comp, running)
         wrap = getattr(self._ext, "wrap_spawn", None) if self._ext else None
         if wrap is not None:
             # A provider may wrap the detached-spawn path (the one call that bypasses the
@@ -1880,18 +1888,35 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # production feed.
     _FIXTURE_FEEDS: ClassVar[dict] = {"meshcom": "meshcom-gps-relay"}
 
+    def _optional_listed(self, c) -> bool:
+        """Optional components the Settings card and the confirm page LIST: what an operator can
+        run — services and one-shots — never a library/firmware (nothing to run) nor a position
+        feed/fixture (the plan admits the feed; the fixture runs only by name). Whether the row
+        gets an auto-start control is `_never_operator_autostart` (a one-shot/interactive client
+        such as the MeshCore CLI is listed as "run on demand")."""
+        from .model import ComponentKind
+        return (bool(c.optional) and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
+                and not c.test_fixture and c.id not in self._all_gps_feed_ids())
+
     def _never_operator_autostart(self, c) -> bool:
         """Components that are NOT an operator start/auto-start choice, whose saved
         `autostart_<id>` flag is therefore ignored: production GPS feeds (the resolved position
-        plan is their only admitter) and `test_fixture` components (run deliberately, by name).
+        plan is their only admitter), `test_fixture` components (run deliberately, by name), and
+        anything that is not a SERVICE — a library or firmware never runs, and a one-shot client
+        (the MeshCore CLI, a REPL in the operator's terminal) is run on demand, by name, never
+        "with the stack". An INTERACTIVE service (nomadnet) stays a choice: the start plans it
+        and prints its launch line (MANUAL_REQUIRED) instead of spawning it, as before.
 
         THE single predicate for that rule — it was encoded separately in the Settings optional
         list, the confirm-page checkbox list and the run-order admission, and the copies drifted:
         the run order ignored stale feed ticks but still honored a stale FIXTURE tick, silently
         replaying a synthetic position on every start, after both UIs that could show or clear
-        the flag were removed.
+        the flag were removed; later the Settings list offered the CLI an auto-start tick the
+        confirm page (rightly) never showed, and a saved tick seeded the REPL into the start.
         """
-        return c.test_fixture or c.id in self._all_gps_feed_ids()
+        from .model import ComponentKind
+        return (c.test_fixture or c.id in self._all_gps_feed_ids()
+                or c.kind != ComponentKind.SERVICE)
 
     def _gps_components_excluded(self, target: str) -> set:
         """Feed components that must not run under the current plan.

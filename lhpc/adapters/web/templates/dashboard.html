@@ -353,13 +353,15 @@
             {# Enabled proxy: the scheme pill is a LIVE link only where the proxy actually listens
                (w.addr set by the adapter from listen_scope + viewer). Loopback-remote / absent → no
                dead proxy URL; link to this stack's Webserver Settings (Apply if the proxy is down). #}
-            {% if w.addr %}{{ webserver_pills(w.posture, w.addr, link=true) }}
+            {% if w.addr %}{{ webserver_pills(w.posture, w.addr, link=true) }}{% if w.mode_note %} <span class="pill" title="{{ w.mode_note }}">not served in this mode</span>{% endif %}
             {% else %}{{ webserver_pills(w.posture, '', link=false) }} <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="Open it on the Pi, or Apply/expose it in this stack's Settings">{{ 'proxy not active — Apply' if w.listen_scope == 'absent' else 'local only' }}</a>{% endif %}
           {% elif w.direct_port %}
             {# Not-proxied web UI. Link the DIRECT listener only where it's up for this viewer
                (w.direct_addr set by the adapter); ABSENT is its own state (down, not local-only). #}
             {% if w.direct_addr %}
               <span class="pill pill-{{ 'ok' if w.direct_scheme == 'https' else 'warn' }}"><a class="wsurl" href="{{ w.direct_scheme }}://{{ w.direct_addr }}">{{ w.direct_scheme }}://{{ w.direct_addr }}</a></span> <span class="pill">not proxied</span>
+            {% elif w.mode_note %}
+              <a class="pill wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="{{ w.mode_note }}">not served in this mode</a> <span class="pill">not proxied</span>
             {% elif w.direct_scope == 'absent' %}
               <a class="pill pill-warn wsurl" href="{{ url_for('stacks_overview', open=w.sid) ~ w.anchor }}" title="The web-UI listener is not running — check its logs or restart it.">listener absent</a> <span class="pill">not proxied</span>
             {% else %}

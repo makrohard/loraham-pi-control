@@ -1,6 +1,6 @@
 """Proxied web page per COMPONENT (0.2.8): a stack may carry several web UIs, each its own page
 with its own `[stackweb]` policy, port, nginx block, panel and credentials. The stack's first web
-component keeps the STACK id as its page id — so every policy saved before pages existed is still
+component (manifest order, the stack's `main` sorted last) keeps the STACK id as its page id — so every policy saved before pages existed is still
 valid and the four shipped stacks render byte-identical (test_stackweb.py) — and any further one is
 `<stack_id>-<component_id>`, collision-checked at manifest load."""
 from __future__ import annotations
@@ -39,7 +39,7 @@ readiness = "endpoint"
 [[stack]]
 id = "two"
 name = "Two Pages"
-main = "a"
+main = "b"
 [[stack.component]]
 id = "a"
 name = "Chat GUI"
@@ -96,7 +96,7 @@ readiness = "endpoint"
 [[stack]]
 id = "foo"
 name = "Foo"
-main = "x"
+main = "bar"
 [[stack.component]]
 id = "x"
 name = "X"
@@ -260,8 +260,8 @@ def test_each_page_keeps_its_own_policy_key_and_nginx_block(tmp_path):
                                         stack_webs=proxies)
     assert "upstream lhpc_ui_two {" in cfg and "upstream lhpc_ui_two_b {" in cfg
     assert "listen 127.0.0.1:8445" in cfg and "listen 127.0.0.1:8446" in cfg
-    assert "location = /api/update { return 403; }" in cfg      # the second page's own deny list
-    assert cfg.count("location = /ws/frame { return 403; }") == 1
+    assert f"location ~ {webserver.deny_location_regex('/api/update')} {{ return 403; }}" in cfg
+    assert cfg.count(f"location ~ {webserver.deny_location_regex('/ws/frame')} {{ return 403; }}") == 1
 
 
 def test_an_unknown_page_id_is_refused_and_the_valid_ids_are_named(tmp_path):
@@ -365,3 +365,51 @@ def test_cli_proxy_names_the_valid_page_ids_on_an_unknown_one(tmp_path, monkeypa
     assert main(["webserver", "proxy", "nope", "--port", "8450"]) != 0
     out = capsys.readouterr().out
     assert "names no web UI" in out and "proxied pages:" in out and "meshcore" in out
+
+
+_MAIN_FIRST = '''
+[[stack]]
+id = "mf"
+name = "Main First"
+main = "m"
+[[stack.component]]
+id = "m"
+name = "Main"
+kind = "service"
+run = "true"
+readiness = "endpoint"
+  [[stack.component.endpoint]]
+  kind = "tcp"
+  address = "127.0.0.1:18900"
+  ready = true
+  role = "listener"
+  client = true
+  scheme = "http"
+  description = "Main dashboard"
+[[stack.component]]
+id = "w"
+name = "Web UI"
+kind = "service"
+run = "true"
+readiness = "endpoint"
+depends_on = ["m"]
+  [[stack.component.endpoint]]
+  kind = "tcp"
+  address = "127.0.0.1:18901"
+  ready = true
+  role = "listener"
+  client = true
+  scheme = "http"
+'''
+
+
+def test_a_main_component_declared_first_still_yields_the_stack_id_to_the_web_component(tmp_path):
+    # The rule under test: the stack's MAIN component's page sorts LAST, so a dedicated web
+    # component keeps the stack id even when main is declared before it and grew a web UI.
+    from lhpc.core.model import web_pages
+    m = tmp_path / "mf.toml"
+    m.write_text(_MAIN_FIRST)
+    st = {s.id: s for s in load_manifest(m)}["mf"]
+    pages = web_pages(st)
+    assert [(p.page_id, p.component_id) for p in pages] == [("mf", "w"), ("mf-m", "m")]
+    assert pages[1].name == "Main" and pages[1].label == "Main First · Main"

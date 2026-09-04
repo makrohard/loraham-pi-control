@@ -37,6 +37,11 @@
         Webserver → Firewall), or accept the exposure.</p>
     {% endif %}
 
+    {# The upstream of this page is not served in the saved MeshCore mode: the proxy can be
+       configured now (it answers 502 until the mode brings the upstream up, like any stopped
+       stack's page), and the operator learns where the mode lives. #}
+    {% if sw.mode_note %}<p class="depnote depnote-warn">{{ sw.mode_note }}</p>{% endif %}
+
     {# ===== Settings ===== #}
     <details class="advcfg" open>
       <summary>Settings</summary>

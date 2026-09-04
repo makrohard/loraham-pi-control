@@ -612,17 +612,37 @@ def _stack_allow_deny(swc) -> str:
     return "\n        ".join(lines)
 
 
+def deny_location_regex(path: str) -> str:
+    """The nginx location regex that refuses `path` however a backend might spell it.
+
+    An exact `location = P` was bypassable in two ways (audit-found, reproduced against the
+    pinned openHop dashboard): CherryPy folds every punctuation character of a path segment to
+    `_` before the attribute lookup (`/api/set-mode` reaches `set_mode`), and it binds extra
+    path segments to positional handler arguments (`/api/config_export/true` exports secrets).
+    So each non-alphanumeric character of the declared path matches ANY punctuation, and an
+    optional sub-path (or trailing slash) is refused with it. A regex location beats the plain
+    `location /` prefix, so nothing else is affected."""
+    base = path.rstrip("/") or "/"
+    pat = "".join(ch if (ch.isalnum() and ch.isascii()) or ch == "/" else "[^A-Za-z0-9/]"
+                  for ch in base)
+    return f"^{pat}(/.*)?$"
+
+
 def _stack_deny_locations(s) -> str:
-    """Exact-match `location` blocks that refuse LHPC-owned operations a proxied web-UI
-    backend exposes (factory reset, radio/GPS mutation, …). Exact match (`location = P`)
-    beats the prefix `location /`, so these win for the precise paths and nothing else is
-    affected. Enforced at LHPC's perimeter; the backend is loopback-only."""
+    """`location ~` blocks that refuse LHPC-owned operations a proxied web-UI backend exposes
+    (factory reset, radio/GPS mutation, configuration, …) — one per declared deny path (a
+    trailing-slash duplicate folds into its base), in the spelling-tolerant form of
+    `deny_location_regex`. Enforced at LHPC's perimeter; the backend is loopback-only."""
     paths = getattr(s, "deny_paths", ()) or ()
     if not paths:
         return ""
-    out = []
+    out, seen = [], set()
     for p in paths:
-        out.append(f"        location = {p} {{ return 403; }}")
+        base = p.rstrip("/") or "/"
+        if base in seen:
+            continue
+        seen.add(base)
+        out.append(f"        location ~ {deny_location_regex(base)} {{ return 403; }}")
     return "\n".join(out)
 
 

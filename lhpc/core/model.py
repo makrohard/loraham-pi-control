@@ -425,6 +425,7 @@ class Component:
     release_repo: str = ""
     ui_user: str = ""             # the account name to log in with (e.g. "admin")
     ui_password_file: str = ""    # runtime-root-relative path holding the password, one line
+    ui_password_note: str = ""    # who owns that password and how to change it (shown as-is)
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None
     note: str = ""
@@ -549,21 +550,35 @@ class WebPage:
 
 
 def web_pages(stack: Stack) -> tuple:
-    """The stack's proxied web pages in manifest order — one per component that declares a
-    client http/https endpoint (its first such endpoint). Empty for a stack without a web UI.
+    """The stack's proxied web pages — one per component that declares a client http/https
+    endpoint (its first such endpoint). Empty for a stack without a web UI.
+
+    ORDER decides which page keeps the stack id: the components in manifest order, except that
+    the stack's MAIN component comes LAST. A stack's "web UI" is the dedicated web component it
+    ships (meshcore-webui), and it existed — with every saved `meshcore_*` proxy setting — before
+    the main component grew a dashboard of its own; putting main last keeps that identity stable
+    whenever a main component gains a web endpoint later. For every stack whose only web page IS
+    its main component (graywolf, meshtastic, meshcom) nothing changes.
 
     `label` is the ONE spelling every stack-external list uses: the stack name for the first
     page, `<stack> · <component>` for any further one (inside the stack's own panel the
     component name alone suffices — `name`)."""
     out: list = []
-    for comp in stack.components:
+    ordered = ([c for c in stack.components if c.id != stack.main]
+               + [c for c in stack.components if c.id == stack.main])
+    for comp in ordered:
         for ep in comp.endpoints:
             if getattr(ep, "client", False) and ep.scheme in ("http", "https"):
                 first = not out
+                # A main component usually carries the stack's own name; naming its page after
+                # it would read "MeshCore · MeshCore". Its endpoint description says what the
+                # page IS ("openHop repeater dashboard") — use that when the names coincide.
+                shown = (comp.name if comp.name != stack.name
+                         else (getattr(ep, "description", "") or comp.id))
                 out.append(WebPage(
                     page_id=stack.id if first else f"{stack.id}-{comp.id}",
-                    stack_id=stack.id, component_id=comp.id, name=comp.name,
-                    label=stack.name if first else f"{stack.name} · {comp.name}",
+                    stack_id=stack.id, component_id=comp.id, name=shown,
+                    label=stack.name if first else f"{stack.name} · {shown}",
                     address=ep.address, scheme=ep.scheme,
                     deny_paths=tuple(getattr(ep, "proxy_deny_paths", ()) or ())))
                 break

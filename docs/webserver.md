@@ -245,8 +245,9 @@ lhpc webserver apply
   http/https web endpoint is its own proxied **page**, with its own port, policy and nginx
   listener. A stack's first page is addressed by the stack id (`lhpc webserver proxy meshcore`);
   any further page of the same stack by `<stack>-<component>`, and the stack's Webserver panel
-  shows one sub-panel per page. Currently graywolf, meshcom, meshcore and meshtastic, one page
-  each. kiss and the daemon speak non-HTTP protocols and cannot be proxied. A future stack, or a
+  shows one sub-panel per page. Currently graywolf, meshcom and meshtastic (one page each) and
+  meshcore (two: `meshcore` = the MeshCore Web UI, `meshcore-meshcore-node` = the openHop repeater
+  dashboard). kiss and the daemon speak non-HTTP protocols and cannot be proxied. A future stack, or a
   new web component in an existing one, becomes eligible automatically, but is only configured
   when you save its panel (or submit the bulk form below) — nothing is ever exposed on its own.
 
