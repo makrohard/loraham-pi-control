@@ -15,9 +15,13 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 
 | `--source` | Web label | Meaning | Production-safe? |
 |---|---|---|---|
-| `pinned` *(default)* | Known working | The newest operator-confirmed known-working composition entry for the stack; else the manifest pin (clearly labelled `fallback`). `HEAD ==` the expected commit is verified either way. | ✅ (immutable) |
+| `pinned` | Known working | The newest operator-confirmed known-working composition entry for the stack; else the manifest pin (clearly labelled `fallback`). `HEAD ==` the expected commit is verified either way. | ✅ (immutable) |
 | `dev` | Development | The configured development branch tip. Never silently another ref — an unobtainable branch is a typed "selector unavailable". Explicit opt-in. | ❌ mutable |
 | `stable` | Latest stable | Git-only: newest version-shaped tag ("release"), else newest tag, else the default-branch HEAD. The exact resolved commit is recorded. Explicit opt-in. | ❌ mutable |
+
+Without `--source`, a named stack installs from `binary` where one is published for this platform,
+else `dev`; the all-stacks form (`auto-install`, and so the image builder) uses `dev` for every source
+stack. `pinned` is the known-working line you choose explicitly.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates

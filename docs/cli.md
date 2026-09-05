@@ -166,8 +166,8 @@ lhpc hardware loraham        # LoRaHAM dual-module (SX1278 + RFM95) — serves 4
 lhpc hardware uputronics     # Uputronics dual (CE0 433 + CE1 868)
 lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
-lhpc hardware waveshare-433  # Waveshare SX1262 (433)
-lhpc hardware waveshare-868  # Waveshare SX1262 (868, on-air-untested)
+lhpc hardware waveshare-433  # Waveshare SX1262 (433, on-air-untested)
+lhpc hardware waveshare-868  # Waveshare SX1262 (868)
 ```
 
 - Only **legit** board combinations are offered (illegal ones — e.g. Waveshare + Uputronics — are

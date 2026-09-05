@@ -28,9 +28,9 @@ def test_status_unknown_stack_exits_one(capsys):
 
 
 @pytest.mark.contract
-def test_explain_shows_direct_default(capsys):
+def test_explain_shows_the_managed_tx_requirement(capsys):
     assert main(["explain", "meshcom"]) == 0
-    assert "DIRECT" in capsys.readouterr().out
+    assert "requirement = MANAGED" in capsys.readouterr().out
 
 
 def test_status_versions_exits_zero(capsys):

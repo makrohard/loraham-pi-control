@@ -59,4 +59,5 @@ final receipt only once all are held.
 ## SX1262 on 433
 
 Hardware-verified on 868 (TX and RX against an SX1276 peer). The 433 path is
-code-complete but has not been run on hardware. See `docs/test-matrix.md`.
+code-complete but has not been run on hardware. See the SX1262 notes in
+`docs/field-notes.md` and `docs/stacks/reticulum.md`.

@@ -1631,12 +1631,12 @@ main = "meshtastic"
   run_argv = ["lhpc", "meshtastic", "--help"]
 
 # =====================================================================
-# Stack: meshcom — MeshCom firmware in QEMU (433 DIRECT)
+# Stack: meshcom — MeshCom firmware in QEMU (433 MANAGED)
 # =====================================================================
 [[stack]]
 id = "meshcom"
 name = "MeshCom (QEMU)"
-summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon DIRECT. Order: daemon -> bridge -> GPS -> QEMU."
+summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED. Order: daemon -> bridge -> GPS -> QEMU."
 main = "meshcom-qemu"
 
   # Prebuilt-binary channel: replaces the qemu-from-source + firmware + bridge builds.

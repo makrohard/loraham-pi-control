@@ -82,7 +82,7 @@ damage the module, so the combination is not left open.
 |---|---|---|---|
 | `loraham` | 433 + 868 | SX1278 / SX1276 | RESET wired |
 | `uputronics` (and `-433`/`-868`) | 433 / 868 | SX127x | **no RESET line** — soft reset |
-| `waveshare-433` / `waveshare-868` | 433 / 868 | SX1262 | **868 verified on hardware** (both directions vs SX1276, driver `bfb97b9`); 433 untested — the tested board is 868-only. DIO2 RF switch; the driver probes for a TCXO on DIO3 and falls back to the crystal |
+| `waveshare-433` / `waveshare-868` | 433 / 868 | SX1262 | **868 verified on hardware** (both directions vs SX1276, the pinned `rns-lora-interface` driver); 433 untested — the tested board is 868-only. DIO2 RF switch; the driver probes for a TCXO on DIO3 and falls back to the crystal |
 
 > **SX1262 (Waveshare): hardware-verified on 868**, TX and RX against an SX1276
 > peer. **On 433 it is code-complete but untested** — treat the first bring-up on

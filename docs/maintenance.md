@@ -29,36 +29,34 @@ known open work. Tick the per-release / per-pin-bump boxes as you go.
   case `@pytest.mark.contract` (and `@pytest.mark.safety("id")` if it guards a safety invariant), keep
   `-m contract` green and < 30 s, and tag only isolation-robust cases.
 
-## Recurring: upstream & pin tracking (the biggest burden)
-`lhpc/data/manifest.example.toml` pins ~7 upstreams; each is a stream: `loraham_daemon`, `RadioLib`,
-`meshtastic`/meshtasticd, `meshcore`, `loraham-kiss-tnc`, `meshcom-firmware`+`meshcom-qemu`,
-`meshcom-loraham-bridge`.
-- On an upstream release: bump `pin_commit`/`pin_tag` → rebuild → smoke the stack → refresh the
-  known-working profile → run the pinned-source validation before pushing (a pin must be reachable on
-  its declared branch or CI reddens).
-- Watch for upstream **build-system** breakage, not just releases: **meshtasticd is built from source**
-  (OBS binary repo is gone) and **meshcom-qemu builds qemu-system-xtensa from source** — a toolchain
-  change upstream can break the recipe silently.
+## Recurring: pins (the biggest burden)
+`lhpc/data/manifest.example.toml` pins every managed source (`pin_commit` + `pin_tag`); CI validates
+each pin against its live branch on every push, and the `lhpc-binaries` builder compiles **exactly
+the pin**, never "latest". To move one:
 
-## Recurring: binary channel (`lhpc-binaries` repo) — recompiling a stack
-The builder rebuilds *exactly* the manifest pin (it does not track "latest"). To ship a newer
-`daemon`/`meshtastic`/`meshcom`:
-1. Bump the stack's `pin_commit`/`pin_tag` in `manifest.example.toml` (meshcom: also confirm the QEMU
-   overlay patch still applies — `apply-overlay.sh` fails closed if it drifted).
-2. Commit + push this repo; note the commit SHA.
-3. `lhpc-binaries` → Actions → **build-binary** → `stack`, `lhpc_ref = <that SHA>`, `source_commit` blank,
-   `smoke_test=true` (CLI: `gh workflow run build.yml -f stack=… -f lhpc_ref=… -f smoke_test=true`). It
-   runtime-tests + smoke-gates, then publishes the content-addressed asset + regenerates `index.json`/`SHA256SUMS`.
-4. On the Pi: `lhpc install <stack> --source binary` fetches the new `index.json` (no on-box build;
-   `update --source binary` is deliberately conservative and won't cross a pin bump).
+1. **Bump** `pin_commit`/`pin_tag`. Every component sharing that source gets the identical SHA
+   (`tests/test_pin_consistency.py`); meshcom: `apply-overlay.sh` must still apply (it fails closed).
+2. **Validate locally** before pushing — the pin must be reachable on its declared branch:
+   `python tools/manifest_pin.py --list` names the sources; CI's job (`ci.yml`, "Validate EVERY
+   pinned source") is the reference recipe.
+3. **Commit + push**; note the SHA.
+4. **Binary-covered stack** (`daemon`, `meshtastic`, `meshcom`): `lhpc-binaries` → Actions →
+   **build-binary** → `stack`, `lhpc_ref = <that SHA>`, `source_commit` blank, `smoke_test = true`.
+   The pins-must-match gate rejects a binary whose `components` ≠ the manifest pins, so the pin lands
+   FIRST; the meshcom firmware is not bit-reproducible (a new sha per build is expected). Until the
+   binary is published, installs of that stack refuse the binary and offer source.
+5. **Images**: tag `loraham-images` only after every moved binary is published — a stale index blocks
+   the binary stacks and the image build dies.
+6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source), smoke,
+   then `lhpc known-working <stack>`. The full pass is the [release test matrix](test-matrix.md).
 
-Bump the pin **before** publishing — the pins-must-match gate rejects a binary whose `components` ≠ the
-manifest pins. meshcom firmware isn't bit-reproducible (new sha each build — expected); keep consumption
-(fetch → verify sha → extract → source-fallback) in lockstep with any `lib_index` change; Actions are
-SHA-pinned and the container digest-pinned. Builder internals: [lhpc-binaries README](https://github.com/makrohard/lhpc-binaries#updating-a-binary).
+Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are built
+from source, so a toolchain change upstream breaks the recipe silently. Builder internals:
+[lhpc-binaries README](https://github.com/makrohard/lhpc-binaries#updating-a-binary).
 
 ## Per-release
 - [ ] Version bump (`pyproject.toml` **and** `lhpc/version.py` — a test pins them equal and requires the matching `CHANGELOG.md` heading) + tag
+- [ ] Run the [release test matrix](test-matrix.md) on the box and commit its result table
 - [ ] Refresh known-working pins to the run-proven set
 - [ ] **From-zero acceptance** on fresh hardware — `bootstrap-deps → install.sh → auto-install` on a
       freshly flashed Pi Zero 2W (~4 h) and Pi 5 (~44 min). This is the real net for the install path
@@ -89,7 +87,8 @@ SHA-pinned and the container digest-pinned. Builder internals: [lhpc-binaries RE
 ## Docs to keep in sync (some are test-enforced)
 `docs/`: architecture, cli (enforced — add a CLI verb → update `cli.md` or `test_cli` reddens),
 deployment(+migration), firewall, hardening-0.1, operations, provenance, stacks/, webserver,
-wifi-access-point, adding-a-stack (update when the manifest/source model changes). The main `README.md`
+wifi-access-point, adding-a-stack (update when the manifest/source model changes), test-matrix
+(the result table per release). The main `README.md`
 is guarded by `test_readme_not_drifted`; `tests/README.md` documents the test tiers and safety areas.
 
 ## Known open follow-ups (the actual backlog)
