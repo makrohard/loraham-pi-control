@@ -147,8 +147,9 @@
 <span class="col-name"><span class="ss-name">{{ g.stack.name }}</span></span>
 {% if g.main %}{% set comp, st = g.main %}
   <span class="col-status"><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></span>
-  <span class="col-source"><span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ st.source_state.value }}</span>{% if g.fetched_ver and g.fetched_ver.installed %}<span class="pill" title="fetched package version (from the build marker)">deb {{ g.fetched_ver.installed }}</span>{% if g.fetched_ver.has_update %}<span class="ver ver-yellow" title="the manifest now pins a different version — Update re-fetches">update → {{ g.fetched_ver.pinned }}</span>{% endif %}{% if g.upstream and g.upstream.ahead %}<span class="ver ver-yellow" title="a newer upstream release exists — Update fetches it, verified against upstream's checksums.txt">upstream {{ g.upstream.latest }}</span>{% endif %}{% endif %}</span>
-  <span class="col-version">{% if st.source_version %}<span class="pill mono"{% if st.source_state.value == "binary" %} title="installed from a verified prebuilt artifact (sha256-checked); build and host tests need the source channel"{% endif %}>{{ st.source_version }}</span>{% endif %}</span>
+  <span class="col-source"><span class="pill" title="match = clean at manifest pin; differs = clean but at another commit; dirty = tracked files modified; untracked build output is ignored.">src: {{ st.source_state.value }}</span></span>
+  {# A fetched-package stack (deb) has no source, so its version cell is free for the deb pill. #}
+  <span class="col-version">{% if st.source_version %}<span class="pill mono"{% if st.source_state.value == "binary" %} title="installed from a verified prebuilt artifact (sha256-checked); build and host tests need the source channel"{% endif %}>{{ st.source_version }}</span>{% elif g.fetched_ver and g.fetched_ver.installed %}<span class="pill" title="fetched package version (from the build marker)">deb {{ g.fetched_ver.installed }}</span>{% endif %}</span>
   {# YELLOW only when the MAIN component is behind — this commit IS the main's head. A stale
      radiolib raises the row-actions Update link instead, and leaves this pill grey (truthfully). #}
   <span class="col-head">{% if st.source_head %}<span class="pill mono{% if g.update_main == 'behind' %} ver ver-yellow{% endif %}"
@@ -157,6 +158,7 @@
   <span class="col-status"><span class="badge badge-{{ g.state }}">{{ g.state }}</span></span>
 {% endif %}
 <span class="col-extra">
+  {% if g.fetched_ver and g.fetched_ver.installed %}{% if g.fetched_ver.has_update %}<span class="ver ver-yellow" title="the manifest now pins a different version — Update re-fetches">update → {{ g.fetched_ver.pinned }}</span>{% endif %}{% if g.upstream and g.upstream.ahead %}<span class="ver ver-yellow" title="a newer upstream release exists — Update fetches it, verified against upstream's checksums.txt">upstream {{ g.upstream.latest }}</span>{% endif %}{% endif %}
   {% if g.meshcore_mode %}<span class="pill" title="MeshCore mode (saved){% if g.running and g.meshcore_running_mode != g.meshcore_mode %}; the running launch uses {{ g.meshcore_running_mode }} — restart to apply{% endif %}">mode: {{ g.meshcore_mode }}{% if g.running and g.meshcore_running_mode != g.meshcore_mode %} · running {{ g.meshcore_running_mode }}{% endif %}</span>{% endif %}
   {% if g.jobs %}<span class="pill">⏳ {{ g.jobs|length }} job</span>{% endif %}
 </span>
