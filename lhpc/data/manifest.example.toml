@@ -1254,7 +1254,6 @@ main = "meshtastic"
   run = "{runtime}/build/tools/meshtasticd/meshtasticd -c {runtime}/config/files/meshtasticd.yaml -d {runtime}/state/meshtasticd"
   pre_steps = [ { kind = "mkdir", path = "{runtime}/state/meshtasticd/ssl" } ]
   readiness = "endpoint"
-  start_note = "Hint: Use the meshtastic CLI through lhpc. Example: lhpc meshtastic --version"
   # THREE managed artifacts, all inside the runtime root: the server-only meshtasticd binary, the
   # browser UI that belongs to the SAME source revision, and the Meshtastic Python CLI.
   #
@@ -1609,6 +1608,27 @@ main = "meshtastic"
     key = "spi.bus.0.unlocked"
     kind = "spi-bus"
     mode = "exclusive"
+
+  # The managed Meshtastic CLI (`lhpc meshtastic …`, see docs/stacks/meshtastic.md) as an
+  # ON-DEMAND component: the Dashboard lists it under the running stack with the copyable
+  # launch line — the operator runs it in a terminal; the controller never starts it and it
+  # is no auto-start choice (`optional_role` = listed). No process block: a CLI invocation is
+  # momentary, so there is nothing for status to detect.
+  [[stack.component]]
+  id = "meshtastic-cli"
+  readiness = "manual"
+  name = "Meshtastic CLI"
+  kind = "oneshot"
+  purpose = "The managed Meshtastic CLI against the local node (lhpc meshtastic …)."
+  optional = true
+  interactive = true
+  # It can transmit through the node (sendtext, settings that go on air): TX-capable like the
+  # MeshCore CLI — never "RX-only" in the capability model.
+  tx_capable = true
+  show_config_link = false
+  show_log_link = false
+  depends_on = ["meshtastic"]
+  run_argv = ["lhpc", "meshtastic", "--help"]
 
 # =====================================================================
 # Stack: meshcom — MeshCom firmware in QEMU (433 DIRECT)
@@ -2678,6 +2698,9 @@ main = "meshcore-node"
   name = "MeshCore CLI"
   kind = "oneshot"
   purpose = "One-shot / REPL client over TCP 5000 (meshcli)."
+  # One Companion slot: a one-shot invocation evicts the previous session and its pending
+  # confirmation, so the CLI can report an error for work the node did (upstream behaviour).
+  note = "One-shot commands evict the previous Companion session — a confirmation can be lost and reported as an error; use the REPL for send-and-read, the node log is the truth."
   tx_capable = true
   optional = true
   interactive = true

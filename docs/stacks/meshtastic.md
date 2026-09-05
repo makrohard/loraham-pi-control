@@ -68,7 +68,9 @@ stack's config.
 
 `lhpc meshtastic <args>` runs the **managed** Meshtastic Python CLI against **this box's local
 node** — a thin guarded passthrough, not a reimplementation. Every upstream argument works as
-usual; try `lhpc meshtastic --help` for the full upstream reference.
+usual; try `lhpc meshtastic --help` for the full upstream reference. The Dashboard lists it as
+the on-demand component **Meshtastic CLI** under the running stack, with that line to copy; it
+is never started by the controller and is no auto-start choice.
 
 ```text
 lhpc meshtastic --info

@@ -63,6 +63,13 @@ it is; nothing is migrated between them. The **Repeater** rows are used only whe
   (mode `0600`) on first use and reused thereafter; the repeater's own storage (SQLite/RRD) lives
   under `<runtime>/state/openhop/`, separate from the chat node's database.
 
+## Command-line client (`meshcore-cli`)
+
+The node serves one Companion client at a time, so a one-shot `meshcli` invocation evicts the
+previous session and its pending confirmation: a `send`/`advert` can report an error for work the
+node did, and a read right after an arrival can return nothing. Use the REPL for send-and-read
+sequences; the node log is the truth.
+
 ## Repeater dashboard
 
 openHop's dashboard (statistics, neighbours, packets, logs, policy view) listens on

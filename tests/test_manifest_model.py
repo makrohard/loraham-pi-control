@@ -413,3 +413,16 @@ def test_voice_terminal_variant_shape():
 
     # Both grab the same exclusive audio device, so they can never run at once.
     assert {r.key for r in cli.resources} == {"audio.default"}
+
+
+def test_the_meshtastic_cli_is_an_on_demand_component_not_a_start_hint():
+    """0.2.9: the managed CLI is listed on the Dashboard as an interactive on-demand component
+    (like the MeshCore CLI) with its copyable launch line; the start-time hint is gone."""
+    from lhpc.core.model import ComponentKind
+    comps = _index(load_manifest())
+    cli, node = comps["meshtastic-cli"], comps["meshtastic"]
+    assert cli.kind is ComponentKind.ONESHOT and cli.optional and cli.interactive
+    assert cli.readiness == "manual" and cli.depends_on == ("meshtastic",)
+    assert list(cli.run_argv) == ["lhpc", "meshtastic", "--help"] and cli.process is None
+    assert cli.tx_capable                                          # it transmits through the node
+    assert not node.start_note                                     # the hint is retired

@@ -806,3 +806,13 @@ def test_firewall_cli_points_at_the_deferred_webserver_apply(tmp_path, monkeypat
     out = capsys.readouterr().out
     assert "Next:\n  lhpc webserver apply" in out            # bare command under Next:, as everywhere
     assert "the running console completes it automatically" in out
+
+
+def test_explain_models_the_meshtastic_cli_as_tx_capable(tmp_path, monkeypatch, capsys):
+    # RE-AUDIT: the manifest is the capability model — the managed CLI can transmit through the
+    # node, so `lhpc explain` must not call it RX-only (as the MeshCore CLI is not).
+    _rt(monkeypatch, tmp_path, capsys)
+    assert main(["explain", "meshtastic"]) == 0
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "meshtastic-cli" in ln)
+    assert "TX-capable" in line and "RX-only" not in line

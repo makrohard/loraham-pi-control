@@ -2363,3 +2363,24 @@ def test_task_banner_assets_mark_the_starting_stack_and_reload_once():
     assert ".badge-starting" in css
     dash = (base / "templates" / "dashboard.html").read_text()
     assert dash.count('data-stack="{{ s.id }}"') == 3                 # running + interactive blocks
+
+
+def test_the_dashboard_lists_the_meshtastic_cli_with_its_launch_line(tmp_path, monkeypatch):
+    from lhpc.core import config as _cfg
+    from lhpc.core.model import RunState
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
+    svc._set_running_band("meshtastic", "868")
+    cli = svc.stack("meshtastic").component("meshtastic-cli")
+    assert svc.optional_role(cli) == "listed"                        # run on demand, no tick
+    assert "lhpc meshtastic --help" in svc.manual_start_command(cli)
+    snap = svc.build_snapshot()
+    for ss in snap.stacks:
+        if ss.stack.id == "meshtastic":
+            ss.components["meshtastic"].run_state = RunState.RUNNING
+    monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
+    page = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "Meshtastic CLI" in page and 'data-copy="runc-meshtastic-cli"' in page
+    assert "lhpc meshtastic --help" in page
+    assert "Use the meshtastic CLI through lhpc" not in page
