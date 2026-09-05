@@ -187,6 +187,16 @@
 </div>
 {% endmacro %}
 
+{# A stored password, shown on the authenticated page with a copy button (same copy.js wiring as
+   cmdbox: `.copybtn` + `data-copy`). The value appears here and NOWHERE else — never in a flash,
+   a marker, a log or a JSON API. #}
+{% macro secretbox(id, text) %}
+<div class="cmdbox secretbox">
+  <button type="button" class="copybtn" data-copy="{{ id }}" title="Copy password">⧉ copy password</button>
+  <pre class="next" id="{{ id }}">{{ text }}</pre>
+</div>
+{% endmacro %}
+
 
 {# Dual status: running state + install/source state + version. #}
 {% macro dual_status(status) %}

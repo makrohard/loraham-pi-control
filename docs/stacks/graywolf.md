@@ -150,11 +150,15 @@ and a fixed-position beacon will keep beaconing those coordinates: check the bea
 ## Web UI credentials
 
 The first start generates the admin password and writes it to
-`<runtime>/state/graywolf/graywolf-admin.txt` (0600). **LHPC owns that account**: the
-provisioning step logs in with it on every start, so if you change the password in the web
-UI, write the new one into that file (one line) or the next start will fail. The file is
-written *before* the account is created, so an interrupted first start retries cleanly
-instead of leaving an account nobody can log into.
+`<runtime>/state/graywolf/graywolf-admin.txt` (0600). The stack page's **Password** section
+shows the stored password with a copy button (the console page is authenticated; the value
+never enters a log, a task marker, a flash or a JSON API) and an *Edit stored password file*
+command (`nano <path>`). **LHPC owns that account**: the provisioning step logs in with it on
+every start, so if you change the password in the web UI, write the new one into that file
+(one line) or the next start will fail. A file that is readable by others, not a regular
+file, or empty shows the reason instead of a value. The file is written *before* the account
+is created, so an interrupted first start retries cleanly instead of leaving an account
+nobody can log into.
 
 ## RF safety
 

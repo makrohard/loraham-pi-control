@@ -443,39 +443,108 @@ class WebserverOpsMixin:
     def ui_credentials_list(self, stack_id: str) -> list:
         """`ui_credentials` for EVERY component of the stack that declares a password file, each
         naming its component — the stack's Password sub-sections. Independent of web pages: a
-        backend that mints the login for a sibling's UI still gets its section."""
+        backend that mints the login for a sibling's UI still gets its section. The MeshCom
+        stack gets ONE synthetic row for its HMAC password (`config/secrets/xr_pw`): not a
+        `ui_password_file` — it is changed through the HMAC actions, never by editing the file,
+        because the firmware bakes it at build."""
         st = self.stack(stack_id)
         out = []
         for c in (st.components if st else ()):
             creds = self.ui_credentials(stack_id, c.id) if c.ui_password_file else {}
             if creds:                                   # {} = no login in the current mode
                 out.append({"component_id": c.id, "name": c.name, **creds})
+        hmac_on = self.hmac_status(stack_id) if hasattr(self, "hmac_status") else None
+        if hmac_on is not None:
+            comp = self._hmac_component(stack_id)
+            row = {"component_id": comp.id, "name": comp.name, "hmac": True, "enabled": hmac_on,
+                   "user": "(HMAC)", "path": "", "exists": False, "value": None, "reason": "",
+                   "edit_command": "", "note": ""}
+            if hmac_on:
+                path, exists, value, reason = self._read_stored_password(
+                    ("config", "secrets", "xr_pw"))
+                row.update(path=str(path) if path else "", exists=exists, value=value,
+                           reason=reason)
+            else:
+                # A binary-installed stack cannot enable HMAC (the published firmware is built
+                # with an empty password): say THAT, not "Enable it first".
+                row["reason"] = self.hmac_binary_block(stack_id) if hasattr(
+                    self, "hmac_binary_block") else ""
+            out.append(row)
         return out
 
-    def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
-        """Where a stack's SELF-GENERATED web-UI password lives, and how to read it.
+    # The one exception set the marker readers use too: nothing else may escape, and no
+    # exception TEXT is ever rendered (it could carry a path or a value).
+    _PW_READ_ERRORS = (OSError, PathContainmentError, ValueError, UnicodeError)
 
-        Some apps mint their own credential on first start (graywolf does). LHPC stores the
-        file but must never surface the value: a rendered page is copied into chats and
-        screenshots, and a log is world-readable for longer than anyone expects. So this
-        returns the account name and a copyable command the operator runs ON THE BOX — the
-        secret stays on the box. `{}` when no component declares one. With `component_id`,
-        ONLY that component's file counts — a proxied page must show the login of the component
-        behind it, never a sibling's.
+    def _read_stored_password(self, parts, normalize=None):
+        """The SAFE reader for a stored password file → (path, exists, value, reason).
+        Containment through `Paths.under` (a manifest `ui_password_file` is unvalidated at load,
+        so this is the gate — an escape reads as unreadable, never as a path); a NO-FOLLOW leaf
+        stat; the 0600 posture (a leaf readable by group/other is refused, like every secret
+        this controller reads); a bounded regular-file read; the FIRST line, stripped, run through
+        `normalize` (the openHop rule for the repeater password) — empty/non-regular/oversize/
+        undecodable/malformed → `value=None` with a reason, never an empty displayed value."""
+        import stat as _stat
+
+        from . import runtime_fs
+        try:
+            path = self._paths.under(*parts)
+        except (PathContainmentError, ValueError):
+            return None, False, None, "the stored password file lies outside the runtime root"
+        st = runtime_fs.stat_leaf_nofollow(self._paths, path)
+        if st is None:
+            return path, False, None, ""
+        if not _stat.S_ISREG(st.st_mode):
+            return path, True, None, "the stored password file is not a regular file"
+        if st.st_mode & 0o077:
+            return path, True, None, ("the stored password file is readable by others "
+                                      f"({st.st_mode & 0o777:#o}) — chmod 600 it")
+        try:
+            text = runtime_fs.read_text_regular(self._paths, path, max_bytes=4096)
+        except self._PW_READ_ERRORS:
+            return path, True, None, "the stored password file could not be read"
+        if "\ufffd" in text:                          # undecodable bytes (decoded with 'replace')
+            return path, True, None, "the stored password file is not UTF-8 text"
+        first = text.splitlines()[0].strip() if text.strip() else ""
+        if normalize is not None:
+            first = normalize(first)
+        if not first:
+            return path, True, None, "the stored password file holds no usable password"
+        return path, True, first, ""
+
+    def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
+        """A stack's SELF-GENERATED web-UI login, ready to render on the stack page (0.2.9:
+        the Password section SHOWS the stored password — the page is authenticated, and the
+        value never enters a marker, a log, a flash, an ActionResult or a JSON API).
+
+        Returns `user`, `path` (display), `exists`, `value` (the first line of the stored file,
+        or None), `reason` (why there is no value: not created yet / lax mode / malformed /
+        unreadable), `edit_command` (`nano <quoted path>` — display-only quoting, the operator
+        runs it on the box) and the component's `note`. `{}` when no component declares one.
+        With `component_id`, ONLY that component's file counts — a proxied page must show the
+        login of the component behind it, never a sibling's.
         """
+        import shlex
+
+        from . import meshcore_identity as _mci
         st = self.stack(stack_id)
         for c in (st.components if st else ()):
             if component_id and c.id != component_id:
                 continue
             if not c.ui_password_file:
                 continue
-            path = self._paths.runtime_root / c.ui_password_file
-            # `exists` lets the panel say "not created yet" instead of offering a `cat` of a
-            # file that a first start (of a repeater mode, for the MeshCore repeater) will mint.
+            # The openHop repeater password has a shape (16–128 printable ASCII, no spaces);
+            # anything else that LHPC or an app minted is one non-empty line.
+            normalize = (_mci._normalize_password
+                         if c.ui_password_file.endswith(_mci.REPEATER_ADMIN_FILENAME) else None)
+            path, exists, value, reason = self._read_stored_password(
+                tuple(p for p in c.ui_password_file.split("/") if p), normalize)
             return {"user": c.ui_user or "admin",
-                    "path": str(path),
-                    "command": f"cat {path}",
-                    "exists": path.is_file(),
+                    "path": str(path) if path else "",
+                    "exists": exists,
+                    "value": value,
+                    "reason": reason,
+                    "edit_command": ("nano " + shlex.quote(str(path))) if (path and exists) else "",
                     "note": c.ui_password_note}
         return {}
 

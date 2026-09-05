@@ -415,3 +415,22 @@ def test_a_main_component_declared_first_still_yields_the_stack_id_to_the_web_co
     pages = web_pages(st)
     assert [(p.page_id, p.component_id) for p in pages] == [("mf", "w"), ("mf-m", "m")]
     assert pages[1].name == "Main" and pages[1].label == "Main First · Main"
+
+
+def test_a_password_file_declared_outside_the_runtime_root_is_never_read(tmp_path):
+    # `ui_password_file` is unvalidated at manifest load; `Paths.under` is the containment gate.
+    m = tmp_path / "escape.toml"
+    m.write_text(_TWO_PAGES.replace('ui_password_file = "state/b/admin.txt"',
+                                     'ui_password_file = "../outside/admin.txt"'))
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    outside = tmp_path.parent / "outside"
+    outside.mkdir(exist_ok=True)
+    (outside / "admin.txt").write_text("never-read\n")
+    svc = ControllerService(manifest_path=m, system=FakeSystem().system,
+                            paths=Paths(runtime_root=tmp_path))
+    creds = svc.ui_credentials("two", "b")
+    assert creds["value"] is None and creds["path"] == "" and creds["exists"] is False
+    assert "outside the runtime root" in creds["reason"]
+    body = create_app(lambda: svc).test_client().get("/stacks?open=two").get_data(as_text=True)
+    assert "outside the runtime root" in body and "never-read" not in body
+    assert str(outside) not in body                        # never the path either

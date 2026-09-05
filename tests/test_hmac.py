@@ -1105,3 +1105,36 @@ def test_recover_reports_failure_when_terminal_rewrite_fails(tmp_path, monkeypat
     monkeypatch.setattr(ControllerService, "_hmac_write_marker", lambda self, d: False)
     r = svc.hmac_apply_recover("meshcom", _RID)
     assert not r.ok and "not written" in r.summary.lower()
+
+
+def test_the_meshcom_password_section_follows_the_hmac_state(tmp_path):
+    """0.2.9: MeshCom's Password section is the HMAC password — present while enabled (the first
+    line of `config/secrets/xr_pw`), with the HMAC actions as the way to change it; 'Enable it
+    first' while disabled; never an edit command (the firmware bakes the secret at build)."""
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    rows = [r for r in svc.ui_credentials_list("meshcom") if r.get("hmac")]
+    assert len(rows) == 1 and rows[0]["enabled"] is False and rows[0]["value"] is None
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    row = next(r for r in svc.ui_credentials_list("meshcom") if r.get("hmac"))
+    secret = (tmp_path / "config" / "secrets" / "xr_pw").read_text().splitlines()[0]
+    assert row["enabled"] is True and row["value"] == secret and row["edit_command"] == ""
+    assert not any(r.get("hmac") for r in svc.ui_credentials_list("kiss"))      # meshcom only
+    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
+    assert 'id="stack-password-meshcom-bridge"' in body or "stack-password-" in body
+    assert f'>{secret}</pre>' in body and body.count(secret) == 1
+    assert "Change password" in body and "Renew" in body and "nano" not in body.split("HMAC password", 1)[1][:900]
+    # the ActionResult / task feeds stay value-free
+    assert secret not in svc.hmac_set_secret("meshcom", "renew").summary
+    assert secret not in str(svc.running_tasks())
+
+
+def test_the_meshcom_password_row_says_when_the_secret_file_is_missing(tmp_path):
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    assert svc.hmac_set_secret("meshcom", "enable").ok
+    (tmp_path / "config" / "secrets" / "xr_pw").unlink()             # enabled, file gone
+    row = next(r for r in svc.ui_credentials_list("meshcom") if r.get("hmac"))
+    assert row["enabled"] is True and row["value"] is None and row["exists"] is False
+    body = create_app(lambda: svc).test_client().get("/stacks?open=meshcom").get_data(as_text=True)
+    assert "HMAC password file not found" in body and "Renew it" in body

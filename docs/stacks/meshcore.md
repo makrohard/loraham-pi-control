@@ -69,7 +69,9 @@ openHop's dashboard (statistics, neighbours, packets, logs, policy view) listens
 `127.0.0.1:8000` in the repeater modes and is reached like every stack web UI: through the LHPC
 proxy, as the page `meshcore-meshcore-node` (the stack's first page `meshcore` stays the MeshCore
 Web UI, so nothing saved for it moves). The login is `admin` with the password LHPC minted into
-`<runtime>/config/secrets/openhop_repeater_admin.txt`. LHPC owns the repeater's configuration,
+`<runtime>/config/secrets/openhop_repeater_admin.txt` — shown, with a copy button and an edit
+command, in the stack page's Password section once a repeater mode has minted it (a value that
+is not 16–128 printable ASCII characters shows *malformed* instead). LHPC owns the repeater's configuration,
 identities, radio settings and version, so the proxy refuses every dashboard route that would
 change them — setup wizard, config import/export, web/MQTT/duty-cycle/advert-rate settings, the
 policy editor, transport keys, region and flood policy, radio and CAD settings, repeater mode and
@@ -82,7 +84,8 @@ operational actions of a logged-in admin (send advert or text, ping, discovery, 
 The page exists in every mode, like every stack's page exists while its stack is stopped, so the
 proxy can be configured before the mode is switched; its panel says when the upstream is not
 served in the saved mode. In `chat` the proxy answers 502 for it (a saved LAN policy opens the
-page's port in `chat` too), and the Password section says the admin password is not minted yet.
+page's port in `chat` too), and the Password section says "not created yet — start a repeater
+mode first".
 The stack body carries the Mode switch (the same saved setting as the row under Settings → Repeater).
 
 **Upgrading to 0.2.8:** the stack's build now also consumes the pinned repeater checkout, so an

@@ -160,3 +160,19 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
         assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, p
     assert "location = " not in out.split("# meshcore-meshcore-node web UI")[1]   # no exact-only form
     assert "upstream lhpc_ui_meshcore_meshcore_node {" in out
+
+
+def test_the_repeater_password_is_shown_when_minted_and_malformed_is_said(tmp_path):
+    from lhpc.core import meshcore_identity as _mci
+    svc = _svc(tmp_path)
+    creds = svc.ui_credentials("meshcore", "meshcore-node")
+    assert creds["exists"] is False and creds["value"] is None      # not minted yet (chat)
+    f = tmp_path / "config" / "secrets" / _mci.REPEATER_ADMIN_FILENAME
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("short\n"); f.chmod(0o600)
+    creds = svc.ui_credentials("meshcore", "meshcore-node")
+    assert creds["value"] is None and "no usable password" in creds["reason"]   # openHop's shape rule
+    good = "A" * 24
+    f.write_text(good + "\n")
+    creds = svc.ui_credentials("meshcore", "meshcore-node")
+    assert creds["value"] == good and creds["edit_command"] == f"nano {f}"

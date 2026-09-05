@@ -1,7 +1,7 @@
 {# Per-stack row body on /stacks — folds in the former /stacks/<id> detail page as collapsible
    sections: Install (open) → actions + Dependencies + System dependencies; Info (main component,
    no actions); Settings; Daemon parameters. Requires the `g` group dict. #}
-{% from "_macros.html" import action_btn, stack_actions, cmdbox, source_check_btn, freshness_pill, hmac_actions, banner %}
+{% from "_macros.html" import action_btn, stack_actions, cmdbox, secretbox, source_check_btn, freshness_pill, hmac_actions, banner %}
 <div class="stackrow-body">
   <p class="summary">{{ g.stack.summary }}</p>
 
@@ -235,23 +235,46 @@
     {% endwith %}
   {% endif %}
 
-  {# ===== Password — only for a stack whose manifest declares where its app generates and
-     stores its own web-UI password. The VALUE is deliberately absent: it would end up in
-     screenshots, chat logs and the browser cache. The operator gets the account name and a
-     command to run ON THE BOX, whose output they can copy. ===== #}
+  {# ===== Password — for a stack whose manifest declares where its app (or LHPC) stores its
+     web-UI password, and for MeshCom's HMAC password. The stored VALUE is shown here, on the
+     authenticated page, with a copy button (0.2.9 product decision); it appears nowhere else —
+     no marker, log, flash or JSON. A stored file that is not 0600, not a regular file, or
+     malformed shows the reason instead of a value. ===== #}
   {% for c in g.ui_creds_list %}
     <details class="advcfg" id="stack-password-{{ c.component_id }}">
       <summary>Password{% if g.ui_creds_list|length > 1 %} — {{ c.name }}{% endif %}</summary>
       <div class="body">
-        <p>{{ c.name }} signs in as <strong>{{ c.user }}</strong>. The password is stored on
-          this box at <code>{{ c.path }}</code> (mode 0600).</p>
-        <p class="muted">LHPC does not display it here on purpose — a password on a rendered
-          page travels into screenshots and chat history. Run this on the box and copy the
-          line it prints:</p>
-        {% if not c.exists %}<p class="depnote depnote-warn">The file does not exist yet — it is
-          created on the first start{% if g.meshcore_mode %} of a repeater mode{% endif %}.</p>{% endif %}
-        {{ cmdbox('uipw-' ~ c.component_id, c.command) }}
-        {% if c.note %}<p class="muted">{{ c.note }}</p>{% endif %}
+        {% if c.hmac %}
+          <p>{{ c.name }} authenticates its mesh clients with the <strong>HMAC password</strong>
+            (<code>config/secrets/xr_pw</code>, baked into the firmware at build).</p>
+          {% if not c.enabled %}
+            <p class="depnote depnote-warn">{% if c.reason %}{{ c.reason }}{% else %}HMAC password
+              not enabled — Enable it first (HMAC Password actions above).{% endif %}</p>
+          {% elif c.value is not none %}
+            {{ secretbox('uipw-' ~ c.component_id, c.value) }}
+            <p class="muted">Change password: <strong>Renew</strong> (HMAC Password actions above;
+              Disable / Enable remove or restore it). Editing the file by hand would leave the
+              firmware and the bridge out of step.</p>
+          {% elif c.reason %}
+            <p class="depnote depnote-warn">{{ c.reason }}</p>
+          {% else %}
+            <p class="depnote depnote-warn">HMAC password file not found — Renew it (HMAC Password
+              actions above).</p>
+          {% endif %}
+        {% else %}
+          <p>{{ c.name }} signs in as <strong>{{ c.user }}</strong>.</p>
+          {% if c.value is not none %}
+            {{ secretbox('uipw-' ~ c.component_id, c.value) }}
+            <p class="muted">Edit stored password file (on the box):</p>
+            {{ cmdbox('uipwedit-' ~ c.component_id, c.edit_command) }}
+          {% elif c.reason %}
+            <p class="depnote depnote-warn">{{ c.reason }}</p>
+          {% else %}
+            <p class="depnote depnote-warn">Password not created yet —
+              {% if g.meshcore_mode %}start a repeater mode first{% else %}start the stack first{% endif %}.</p>
+          {% endif %}
+          {% if c.note %}<p class="muted">{{ c.note }}</p>{% endif %}
+        {% endif %}
       </div>
     </details>
   {% endfor %}

@@ -570,32 +570,6 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     assert svc.stack_web_view("graywolf")["suggested_port"] == 8444
 
 
-def test_password_section_names_the_account_and_never_the_secret(tmp_path):
-    """A stack whose app mints its own web-UI password gets a Password sub-section: the account
-    name, where the file is, and a copyable command to read it ON THE BOX. The value itself must
-    never be rendered — a password on a page ends up in screenshots and chat history."""
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-
-    creds = svc.ui_credentials("graywolf")
-    assert creds["user"] == "admin"
-    assert creds["path"].endswith("state/graywolf/graywolf-admin.txt")
-    assert creds["command"] == f"cat {creds['path']}"
-    assert svc.ui_credentials("kiss") == {}          # only declared where it applies
-
-    # A real secret in the file must not leak into the page.
-    pw_file = tmp_path / "state" / "graywolf" / "graywolf-admin.txt"
-    pw_file.parent.mkdir(parents=True, exist_ok=True)
-    pw_file.write_text("s3cret-do-not-render\n")
-
-    body = create_app(lambda: svc).test_client().get("/stacks?open=graywolf").get_data(as_text=True)
-    assert 'id="stack-password-graywolf"' in body
-    assert "<summary>Password</summary>" in body
-    assert 'data-copy="uipw-graywolf"' in body
-    assert creds["command"] in body
-    assert "s3cret-do-not-render" not in body
-
-
 def test_default_port_skips_a_port_another_stack_already_saved(tmp_path):
     # Positional defaults are only stable while the eligible SET is stable: adding a stack whose
     # id sorts earlier shifts everyone after it, and on an upgraded box that shift can land on a
@@ -1869,3 +1843,84 @@ def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch):
         assert resp.status_code == 302 and "wsg=1" in resp.headers["Location"]
     assert seen["mode"] == "lan" and seen["cidrs"] == ["192.168.0.0/24"]
     assert seen["confirm"] is True and seen["confirm_public"] is True
+
+
+# ---- 0.2.9: the Password section shows the stored password (safely) ----------------------------
+
+def _pw_file(tmp_path, text=b"s3cret-shown-here\n", mode=0o600):
+    f = tmp_path / "state" / "graywolf" / "graywolf-admin.txt"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(text)
+    f.chmod(mode)
+    return f
+
+
+def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path):
+    """The stack page shows the stored web-UI password itself (an authenticated page; product
+    decision 0.2.9) with a copy button, plus `nano <path>` to edit the file — never a `cat`."""
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    assert svc.ui_credentials("kiss") == {}          # only declared where it applies
+    creds = svc.ui_credentials("graywolf")
+    assert creds["user"] == "admin" and creds["exists"] is False and creds["value"] is None
+    assert creds["edit_command"] == "" and "command" not in creds
+    f = _pw_file(tmp_path)
+    creds = svc.ui_credentials("graywolf")
+    assert creds["value"] == "s3cret-shown-here" and creds["exists"] is True
+    assert creds["edit_command"] == f"nano {f}" and creds["reason"] == ""
+    body = create_app(lambda: svc).test_client().get("/stacks?open=graywolf").get_data(as_text=True)
+    assert 'id="stack-password-graywolf"' in body and "<summary>Password</summary>" in body
+    assert '<pre class="next" id="uipw-graywolf">s3cret-shown-here</pre>' in body
+    assert "copy password" in body and f"nano {f}" in body
+    assert "cat " + str(f) not in body and "not shown" not in body and "on purpose" not in body
+    assert body.count("s3cret-shown-here") == 1          # the value appears ONLY in the secretbox
+
+
+def test_password_section_states_absent_lax_malformed_and_unreadable_without_a_value(tmp_path):
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    c = create_app(lambda: svc).test_client()
+    body = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "Password not created yet" in body and "start the stack first" in body
+    assert "uipwedit-graywolf" not in body                # no edit box for an absent file
+    # readable by others -> reason, no value
+    _pw_file(tmp_path, mode=0o644)
+    creds = svc.ui_credentials("graywolf")
+    assert creds["value"] is None and "readable by others" in creds["reason"] and "chmod 600" in creds["reason"]
+    body = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "chmod 600" in body and "s3cret-shown-here" not in body
+    # empty -> malformed
+    _pw_file(tmp_path, text=b"\n\n")
+    assert svc.ui_credentials("graywolf")["value"] is None
+    assert "no usable password" in svc.ui_credentials("graywolf")["reason"]
+    # not UTF-8 -> reason
+    _pw_file(tmp_path, text=b"\xff\xfe\x00bad\n")
+    assert svc.ui_credentials("graywolf")["value"] is None
+    assert "UTF-8" in svc.ui_credentials("graywolf")["reason"]
+    # oversize -> unreadable (bounded read), never a truncated value
+    _pw_file(tmp_path, text=b"x" * 5000 + b"\n")
+    creds = svc.ui_credentials("graywolf")
+    assert creds["value"] is None and "could not be read" in creds["reason"]
+    # a symlinked leaf is never followed
+    f = _pw_file(tmp_path)
+    real = tmp_path / "elsewhere.txt"
+    real.write_text("linked-secret\n"); real.chmod(0o600)
+    f.unlink(); f.symlink_to(real)
+    creds = svc.ui_credentials("graywolf")
+    assert creds["value"] is None and "not a regular file" in creds["reason"]
+    body = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert "linked-secret" not in body and str(real) not in body
+
+
+def test_a_stored_password_never_reaches_the_json_apis_or_flashes(tmp_path):
+    from lhpc.adapters.web.app import create_app
+    svc = _svc(tmp_path)
+    _pw_file(tmp_path, text=b"ONLY-IN-THE-PRE\n")
+    c = create_app(lambda: svc).test_client()
+    page = c.get("/stacks?open=graywolf").get_data(as_text=True)
+    assert page.count("ONLY-IN-THE-PRE") == 1 and 'id="uipw-graywolf">ONLY-IN-THE-PRE<' in page
+    for api in ("/api/tasks", "/api/dash-signature", "/api/system"):
+        r = c.get(api)
+        assert "ONLY-IN-THE-PRE" not in r.get_data(as_text=True), api
+    assert "ONLY-IN-THE-PRE" not in c.get("/").get_data(as_text=True)     # the dashboard never
+    assert "ONLY-IN-THE-PRE" not in str(svc.running_tasks())

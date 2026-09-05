@@ -26,7 +26,11 @@ channel](../../README.md#binary-channel-prebuilt).
 
 The firmware connects to the bridge over TCP (external-radio); `XR_HOST`/`XR_PORT`
 point at the bridge, `XR_PASSWORD` (optional HMAC) comes from `<runtime>/config/secrets/xr_pw`. The HMAC
-password and any real GPS coordinates are secrets — git-ignored, never committed.
+password and any real GPS coordinates are secrets — git-ignored, never committed. The stack
+page's **Password** section shows the HMAC password while it is enabled (copy button); it is
+changed only through the HMAC actions — *Renew* mints a new one and rebuilds the firmware,
+*Disable* / *Enable* remove or restore it — never by editing the file, which the firmware bakes
+in at build.
 
 ## GPS
 

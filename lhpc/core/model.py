@@ -424,7 +424,11 @@ class Component:
     # upstream-version check (and the opt-in upstream install). "" = no upstream check.
     release_repo: str = ""
     ui_user: str = ""             # the account name to log in with (e.g. "admin")
-    ui_password_file: str = ""    # runtime-root-relative path holding the password, one line
+    # Runtime-root-relative path holding the web-UI password (first line). CONTRACT (0.2.9): the
+    # secret may be shown ONLY in the stack page's authenticated Password section, read through
+    # the controller's safe reader (containment, no-follow, 0600 posture); it must never reach
+    # logs, flashes, task markers, ActionResult text, status output or JSON APIs.
+    ui_password_file: str = ""
     ui_password_note: str = ""    # who owns that password and how to change it (shown as-is)
     log_paths: tuple[str, ...] = ()
     start_order: int | None = None

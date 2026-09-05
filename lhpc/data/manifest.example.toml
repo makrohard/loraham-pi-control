@@ -1022,8 +1022,8 @@ main = "graywolf"
   release_repo = "chrissnell/graywolf"
   build_timeout = 900.0
   # graywolf generates its own web-UI password on first start; the provisioning step stores it
-  # under state/. The console shows the operator WHERE it is and the command to read it — never
-  # the value, which must not travel through a rendered page, a log or a screenshot.
+  # under state/. The stack page's Password section shows the stored value (authenticated page,
+  # copy button) and the command to edit the file; it never enters a log, a marker or a flash.
   ui_user = "admin"
   ui_password_file = "state/graywolf/graywolf-admin.txt"
   ui_password_note = "graywolf generates this password itself on first start. LHPC owns the account: it signs in on every start to apply the settings, so if you change the password in the app's own UI, write the new one into that file or the next start will fail."
@@ -2212,7 +2212,7 @@ main = "meshcore-node"
   build_requires = ["openhop-repeater-src"]
   # The repeater dashboard's login: `admin` + the password LHPC mints into this 0600 file on the
   # first repeater-mode config generation (see the `dashboard_password` param). Shown on the
-  # stack page's Password section, never rendered as a value.
+  # stack page's Password section (value + edit command); a lax or malformed file shows a reason.
   ui_user = "admin"
   ui_password_file = "config/secrets/openhop_repeater_admin.txt"
   ui_password_note = "LHPC mints this password when a repeater mode first starts and hands it to the repeater on every start; the dashboard's own password change is refused at the proxy. To change it, edit that file (16–128 printable ASCII characters, no spaces) and restart the stack."
