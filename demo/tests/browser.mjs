@@ -48,10 +48,10 @@ try {
     throw new Error("dashboard shows 'Daemon not installed' despite pre-install");
 
   // DEFAULT state: every stack pre-installed+built, so kiss offers START straight away.
-  // Start it via the real confirm->Apply flow. Note: the confirm form has BOTH a
-  // "Save params" and an "Apply start" button — we must click "Apply" by text, and the
-  // stack body ALWAYS shows start+stop, so neither is a running signal; the authoritative
-  // running check is the DASHBOARD DAEMON PANEL going READY (a stack owns its band's daemon).
+  // 0.2.9: Start means start — a routine Start runs the saved configuration at once (no confirm
+  // page; only a consequential choice asks), so clicking the row's Start IS the start. The stack
+  // body ALWAYS shows start+stop, so neither is a running signal; the authoritative running check
+  // is the DASHBOARD DAEMON PANEL going READY (a stack owns its band's daemon).
   await openKiss(page);
   await hasOp(page, "start");
   await page.evaluate(() => {
@@ -61,19 +61,6 @@ try {
     });
     if (!f) throw new Error("kiss start form not found");
     (f.querySelector('button') || { click() { f.requestSubmit(); } }).click();
-  });
-  await page.waitForFunction(
-    () => [...document.querySelectorAll('input[name="confirmed"]')].some(i => i.value === "yes"),
-    { timeout: 30000 });
-  await page.evaluate(() => {
-    const f = [...document.querySelectorAll('form')].find(
-      (f) => f.querySelector('input[name="confirmed"][value="yes"]') &&
-             (f.querySelector('input[name="op"]') || {}).value === "start");
-    if (!f) throw new Error("confirm Apply form not found");
-    const btn = [...f.querySelectorAll('button')].find((x) => /apply/i.test(x.textContent))
-      || f.querySelector('button');
-    if (!btn) throw new Error("Apply button not found");
-    btn.click();
   });
 
   const daemonReady = () => page.waitForFunction(() => {
@@ -86,7 +73,7 @@ try {
 
   // start worked <=> the 433 daemon panel is now READY (kiss owns 433)
   await daemonReady();
-  console.log("OK: start kiss (Apply) -> 433 daemon live (READY) on the dashboard");
+  console.log("OK: start kiss -> 433 daemon live (READY) on the dashboard");
 
   // RX-TX Monitor is LIVE: the demo's boot.js poller reads /api/daemon/433 from the bridge
   // every tick and fills the rd-* cells (the real dash.js can't run under the Pyodide bridge).
