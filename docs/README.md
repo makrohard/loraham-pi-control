@@ -37,6 +37,8 @@ Guide to the `lhpc` docs, grouped by what you're trying to do.
   user service (loopback only) and how one-click self-update works.
 - [Production webserver (HTTPS + mTLS)](webserver.md) — using the console (Dashboard /
   Stack pages / Settings), the nginx front end, client-certificate auth, and exposing it to your LAN.
+- [SSH tunnel](ssh-tunnel.md) — reach the console and every stack UI from a remote machine over
+  SSH alone, with remote exposure left off; one copyable tunnel per stack.
 - [WiFi access point (field)](wifi-access-point.md) — turn the Pi into its own WiFi
   network so a phone can reach it with no infrastructure WiFi.
 - [Firewalling the Pi](firewall.md) — the opt-in **managed nftables firewall** (one sudo command)

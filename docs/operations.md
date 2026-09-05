@@ -258,3 +258,12 @@ gets a manual `kill` instead. A `start` reports failure unless required componen
 verify ready. A failed update leaves the active source intact. Uninstall refuses
 while running and preserves shared checkouts and config/secrets. GET routes do no
 network. See `docs/hardening-0.1.md` (including what is still open).
+
+**"identity drift" on clean or uninstall.** Every adopted source carries an ownership record
+(`state/source-registry/`) naming the commit LHPC checked out. A destructive command re-proves that
+record first and refuses when the checkout's HEAD or origin no longer matches it — the tree changed
+outside an LHPC transaction, so LHPC will not delete it. Inspect the checkout (`git -C src/<name>
+log -1`, `git remote -v`); if it is yours to drop, remove it and its record by hand (`rm -rf
+src/<name> state/source-registry/<name>-*.json`) and reinstall, or delete only the stale record so the
+next install backfills it from the checkout's own origin and HEAD. A record is never rewritten to
+match a tree silently.
