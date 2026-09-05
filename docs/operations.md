@@ -232,6 +232,18 @@ Stop, install, update and clean keep their confirmation pages (band collateral, 
 typed clean). The plan and the apply judge the saved identity alike, so the CLI's dry run
 (`lhpc stack start <id>`) refuses exactly what the web refuses, printing the `lhpc config` remedy.
 
+**A web Start/Restart is detached.** The page returns at once ("Starting '<stack>' — follow it in
+the banner") and the start runs as a tracked job, exactly like a web install or build: the hidden
+`lhpc _stack-start` runner proves the console tracked this attempt, then runs the ordinary locked
+start/restart; its log is `logs/web-start-<stack>.log` (`web-restart-…` for a restart), reachable
+from the banner's *view →*. While the job runs the stack's row on the Apps page and its card on the
+Dashboard carry a yellow *starting…* badge; when it ends the page reloads once and shows the
+server-rendered state. The banner turns green with the result (a MeshCom start's boot note rides
+along as its hint) or red with the refusal — a red banner is dismissed with ✕, an *unsafe* one (the
+job could not be tracked) needs *Recover*. A second Start while one runs is refused ("already in
+progress"); a start refused by a pending self-update or a contended admission is refused before
+anything is spawned. The CLI and boot restore keep starting synchronously.
+
 Config writes are type-safe and fail-closed, and a managed save patches only its own keys: an
 unsupported structure or wrong table shape refuses the save and preserves the file byte-for-byte.
 

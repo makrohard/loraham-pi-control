@@ -852,10 +852,13 @@ class MaintenanceOpsMixin:
         never masks this attempt's derived unsafe. Read-only (never `active_jobs(cleanup=True)`)."""
         from . import webjob_gate
         op, st = rec.get("op", ""), rec.get("state")
+        # A start/restart job's hint is the operation's own summary (the result the synchronous
+        # start used to flash), carried in the marker detail — never a secret, never a path.
+        _detail = rec.get("detail", "") if op in ("start", "restart") else None
         if st == "done":
-            return "done", self._JOB_HINT.get((op, "done"))
+            return "done", self._JOB_HINT.get((op, "done")) or _detail
         if st == "failed":
-            return "failed", self._JOB_HINT.get((op, "failed"))
+            return "failed", self._JOB_HINT.get((op, "failed")) or _detail
         if st == "unsafe":
             return "unsafe", self._JOB_HINT.get(("*", "unsafe"))
         # starting/running: a child alive in/through its gate (this SAME attempt) is NORMAL startup.
@@ -1027,6 +1030,11 @@ class MaintenanceOpsMixin:
                 extra = fin
             item = {"kind": "job", "run_id": log, "attempt_id": rec.get("attempt_id", ""),
                     "label": (f"{rec.get('op', '')} {target}").strip(),
+                    "op": rec.get("op", ""), "stack": rec.get("stack", ""),
+                    # `admitted`: the child passed its pre-mutation boundary (mark_running) — a
+                    # FAILED admitted start/restart may have changed lifecycle state (an owner or a
+                    # dependent stopped, a restart's stop leg done), a non-admitted one changed nothing.
+                    "admitted": bool(rec.get("admitted")),
                     "href": f"/logs/{target}?job={log}", "state": state, **extra}
             if hint:
                 item["hint"] = hint

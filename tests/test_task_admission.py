@@ -266,3 +266,35 @@ def test_self_update_apply_contends_typed(held_admission):
     assert not r.ok and (r.data.get("contended") or r.data.get("admission_blocked"))
     # no request/in-flight marker written
     assert not (held_admission._paths.under("state", "selfupdate.inflight")).exists()
+
+
+def test_restart_hook_fires_before_the_stop_and_a_refusal_stops_nothing(tmp_path, monkeypatch):
+    """0.2.9: the detached web restart's admission hook runs at the restart transaction's
+    pre-mutation boundary — under admission + config + lifecycle locks, after preflight — and
+    BEFORE `stop()`. A refusing (superseded) hook leaves the running stack untouched: no stop, no
+    start. The hook is never handed to the nested start."""
+    from conftest import set_call
+    from lhpc.core.services import ActionResult, ControllerService as _CS
+    svc = _svc(tmp_path)
+    set_call(svc)
+    events = []
+    monkeypatch.setattr(_CS, "stop", lambda self, t, **kw: events.append(("stop", t)) or
+                        ActionResult(False, "stop stub — abort here"))
+    monkeypatch.setattr(_CS, "_start_impl", lambda self, t, **kw: events.append(("start", t)) or
+                        ActionResult(True, "start stub"))
+
+    def refusing():
+        events.append(("hook", svc._held_counts().get(svc.ADMISSION_KEY, 0) > 0))
+        return ActionResult(False, "superseded")
+    r = svc.restart("igate", apply=True, _before_restart_locked=refusing)
+    assert r.summary == "superseded"
+    assert events == [("hook", True)]                       # under admission; nothing stopped/started
+
+    def admitting():
+        events.append(("hook", True))
+        return None
+    events.clear()
+    r2 = svc.restart("igate", apply=True, _before_restart_locked=admitting)
+    assert events[:2] == [("hook", True), ("stop", "igate")]  # hook BEFORE the stop
+    assert not r2.ok and "stop was not verified" in r2.summary
+    assert ("start", "igate") not in events                 # aborted after the (stubbed) failed stop

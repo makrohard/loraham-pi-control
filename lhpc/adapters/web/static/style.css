@@ -164,6 +164,7 @@ tr:last-child td { border-bottom: none; }
 .badge-running { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
 .badge-degraded { background: var(--badge-warn-bg); color: var(--warn); border-color: var(--badge-warn-border); }
 .badge-booting { background: var(--badge-warn-bg); color: var(--warn); border-color: var(--badge-warn-border); }   /* transient: firmware booting / callsign applying */
+.badge-starting { background: var(--badge-warn-bg); color: var(--warn); border-color: var(--badge-warn-border); margin-left: .35rem; }   /* a detached web start/restart is running (taskbanner.js) */
 .badge-failed { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
 .badge-stopped, .badge-not-installed, .badge-unknown { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }

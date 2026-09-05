@@ -1,4 +1,4 @@
-"""Attempt / terminal-result markers for detached WEB build/test/install jobs.
+"""Attempt / terminal-result markers for detached WEB build/test/install/start/restart jobs.
 
 One marker per job LOG name — `state/jobresults/<log>.json` — driving the running-task banner's
 green/red lifecycle. The PARENT `reserve()`s it (state=`starting`, `startup_unverified=True`) BEFORE
@@ -24,7 +24,7 @@ from .paths import PathContainmentError
 
 _DIR = ("state", "jobresults")
 _MARKER_MAX = 64 * 1024
-_OPS = ("build", "test", "install")
+_OPS = ("build", "test", "install", "start", "restart")
 _STATES = ("starting", "running", "done", "failed", "unsafe")
 _TERMINAL = ("done", "failed", "unsafe")
 _TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")

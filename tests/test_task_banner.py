@@ -253,3 +253,42 @@ def test_benign_clock_skew_still_shows_a_just_finished_banner(tmp_path):
     _write_hmac(svc, "done", finished_at=_utc(5))
     t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
     assert t["state"] == "done" and t["finished_ago_s"] == 0     # clamped, never negative
+
+
+def test_job_items_carry_op_and_stack_and_start_hints_are_the_summary(tmp_path):
+    from lhpc.core import jobresult
+    svc = _svc(tmp_path)
+    a = "d" * 32
+    assert jobresult.reserve(svc._paths, "web-start-meshcom.log", a, "start", "meshcom", "meshcom", [])
+    assert jobresult.mark_gate_passed(svc._paths, "web-start-meshcom.log", a)
+    assert jobresult.mark_running(svc._paths, "web-start-meshcom.log", a)
+    assert jobresult.terminalize(svc._paths, "web-start-meshcom.log", a, "done",
+                                 detail="Run applied for 'meshcom'. the node boots in ~1 min")
+    t = next(t for t in svc.running_tasks() if t["kind"] == "job")
+    assert t["op"] == "start" and t["stack"] == "meshcom" and t["label"] == "start meshcom"
+    assert t["state"] == "done" and t["hint"] == "Run applied for 'meshcom'. the node boots in ~1 min"
+    assert t["href"] == "/logs/meshcom?job=web-start-meshcom.log"
+    # a build job keeps its fixed hint (never the detail)
+    b = "e" * 32
+    assert jobresult.reserve(svc._paths, "build-meshcom-qemu.log", b, "build", "meshcom-qemu", "meshcom", [])
+    assert jobresult.terminalize(svc._paths, "build-meshcom-qemu.log", b, "done", detail="ignored")
+    tb = next(t for t in svc.running_tasks() if t["run_id"] == "build-meshcom-qemu.log")
+    assert tb["hint"] == "Next: Test." and tb["op"] == "build"
+
+
+def test_job_items_expose_the_admitted_flag_for_the_reload_decision(tmp_path):
+    # RE-AUDIT: a FAILED start/restart that was admitted may have mutated lifecycle state, so the
+    # Apps page must refresh for it; a failed non-admitted one changed nothing. The banner feed
+    # carries the marker's own `admitted` flag — no new state.
+    from lhpc.core import jobresult
+    svc = _svc(tmp_path)
+    a, b = "f" * 32, "a" * 32
+    assert jobresult.reserve(svc._paths, "web-start-chat.log", a, "start", "chat", "chat", [])
+    assert jobresult.terminalize(svc._paths, "web-start-chat.log", a, "failed", detail="refused")
+    assert jobresult.reserve(svc._paths, "web-restart-kiss.log", b, "restart", "kiss", "kiss", [])
+    assert jobresult.mark_gate_passed(svc._paths, "web-restart-kiss.log", b)
+    assert jobresult.mark_running(svc._paths, "web-restart-kiss.log", b)
+    assert jobresult.terminalize(svc._paths, "web-restart-kiss.log", b, "failed", detail="start leg failed")
+    items = {t["run_id"]: t for t in svc.running_tasks() if t["kind"] == "job"}
+    assert items["web-start-chat.log"]["admitted"] is False
+    assert items["web-restart-kiss.log"]["admitted"] is True

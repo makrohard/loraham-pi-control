@@ -165,3 +165,15 @@ def test_stale_terminalize_after_new_reserve_is_a_noop(tmp_path):
     assert not jobresult.remove(p, _LOG, _A)                # stale dismiss cannot unlink B
     d = jobresult._read_raw(p, _LOG)
     assert d["attempt_id"] == _B and d["state"] == "starting"
+
+
+def test_start_and_restart_are_job_ops(tmp_path):
+    from lhpc.core import jobresult
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    a = "c" * 32
+    assert jobresult.reserve(paths, "web-start-igate.log", a, "start", "igate", "igate", [])
+    assert jobresult.reserve(paths, "web-restart-chat.log", a, "restart", "chat", "chat", [])
+    assert not jobresult.reserve(paths, "web-stop-chat.log", a, "stop", "chat", "chat", [])
+    assert jobresult.read_one(paths, "web-start-igate.log")["op"] == "start"

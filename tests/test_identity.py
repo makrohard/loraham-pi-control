@@ -1483,12 +1483,9 @@ def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch)
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
     started = []
-    real_impl = type(svc)._start_impl
-    def impl(self, t, **kw):
-        if kw.get("apply"):
-            started.append(kw.get("band"))
-        return real_impl(self, t, **kw)
-    monkeypatch.setattr(type(svc), "_start_impl", impl)
+    monkeypatch.setattr(type(svc), "spawn_start_job",
+                        lambda self, op, target, band="", stop_owners=False, cascade=False:
+                        started.append(band) or (f"web-{op}-{target}.log", "admitted", ""))
     client, tok = _web(svc, monkeypatch)
     monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("868",))
     resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",

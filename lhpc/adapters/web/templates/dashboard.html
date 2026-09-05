@@ -146,7 +146,7 @@
           {% if r.running %}
             {% for s in r.running %}
               <div class="runstack">
-                <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
+                <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                   <span class="pill">{{ s.id }}</span></p>
                 <ul class="complist">
                   {% for c in s.components %}
@@ -241,7 +241,7 @@
             {% for s in r.interactive %}
               <div class="runstack">
                 {% if s.running %}
-                  <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
+                  <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-running">&#10003; running</span>
                     <form method="post" action="{{ url_for('action') }}" class="act">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -251,7 +251,7 @@
                       <button type="submit">Stop</button>
                     </form></p>
                 {% else %}
-                  <p><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
+                  <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
                     <span class="badge badge-stopped">not running</span>
                     <form method="post" action="{{ url_for('interactive_dismiss', stack_id=s.id) }}" class="act dismiss" title="Dismiss">
                       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">

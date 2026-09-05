@@ -504,6 +504,15 @@ class DemoService(ControllerService):
             return None, "blocked", f"{op} is not simulated in the demo."
         return None, "blocked", fn().summary
 
+    def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
+                        cascade: bool = False):
+        """The web Start/Restart is a DETACHED job in production; Pyodide cannot spawn one, so run
+        the simulated operation synchronously and return the `blocked` shape with the real summary
+        (the web flashes it and returns to the stack)."""
+        res = self.run_action(op, target, apply=True, stop_owners=stop_owners, band=band,
+                              cascade=cascade)
+        return None, "blocked", res.summary
+
     # The remaining visible actions must SIMULATE against the model too — inheriting the
     # production methods made e.g. "Uninstall applied" report success while the stack stayed
     # installed (the real code no-ops with no filesystem/process to act on). Each mutates the

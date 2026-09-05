@@ -386,6 +386,9 @@ Internal driver — `lhpc _network-finalize --uuid <uuid> --op-id <token> [--pwf
 ### _hmac-apply
 Internal driver — `lhpc _hmac-apply <stack> <enable|disable|renew> <run_id>` — spawned detached by the web/CLI apply flow to run the steps against a run marker + log. Not for direct use.
 
+### _stack-start
+Internal detached runner — `lhpc _stack-start <target> --web-result web-<start|restart>-<target>.log --attempt-id <hex> [--band B] [--stop-owners] [--cascade] [--restart]` — spawned by the web console's Start/Restart (`spawn_start_job`). It proves the parent identity-tracked this exact attempt (`webjob_gate`), then runs the ordinary locked `start`/`restart` with a hook that marks the attempt admitted under every lock and before the first mutation (for a restart: before the stop); the result — summary and start notes — lands in the attempt marker the task banner shows. A superseded attempt cancels with zero side effects. Not for direct use.
+
 ### _controller-uninstall-prep
 Internal quiescence gate — `lhpc _controller-uninstall-prep [--root <dir>]` — invoked by `uninstall.sh` before it removes any controller state. Refuses on active/unprovable build/test/web jobs, unresolved auto-install/HMAC state, or any UNKNOWN component state; otherwise stops the managed stacks (clients before the shared daemon) and verifies cessation. Exit 0 = safe to remove; nonzero = abort teardown. Not for direct use.
 

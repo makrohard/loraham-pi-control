@@ -2561,7 +2561,8 @@ class LifecycleOpsMixin:
 
     @invalidates_snapshot
     def restart(self, target: str, apply: bool = False, stop_owners: bool = False,
-                band: str = "", cascade: bool = False) -> ActionResult:
+                band: str = "", cascade: bool = False, *,
+                _before_restart_locked=None) -> ActionResult:
         """Public, LOCKED entry — holds ONE bundle across the internal stop+start so a
         DIRECT call gets the same coordination as CLI/web. A restart runs the SAVED configuration
         (no per-launch values); its plan (`apply=False`) combines the start plan with the stop's
@@ -2638,6 +2639,12 @@ class LifecycleOpsMixin:
                                 return ActionResult(
                                     False, f"Cannot restart '{target}': {_pos_note}",
                                     next_commands=[f"lhpc status {target}"])
+                            # PRE-MUTATION HOOK: every lock held, nothing stopped yet. A refusal
+                            # cancels the restart with the running stack untouched.
+                            if _before_restart_locked is not None:
+                                _hook_refusal = _before_restart_locked()
+                                if _hook_refusal is not None:
+                                    return _hook_refusal
                             return self._restart_impl(target, apply=True,
                                                       stop_owners=stop_owners, band=_rband,
                                                       cascade=cascade, position=_position,
@@ -3255,8 +3262,7 @@ class LifecycleOpsMixin:
                 if not ln or not pid:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
                     return None, aid, f"could not start install for '{target}'"
-                return log, aid, _settle_track(
-                    log, aid, pid, self._track_or_terminate(life, ln, pid, target, "install", attempt_id=aid))
+                return log, aid, (ln, pid, target)
 
             def _spawn_build(c, steps, name):
                 log, aid = name + ".log", uuid.uuid4().hex
@@ -3292,8 +3298,26 @@ class LifecycleOpsMixin:
                 if not ln or not pid:
                     jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
                     return None, aid, f"could not start {op} for '{c.id}'"
-                return log, aid, _settle_track(
-                    log, aid, pid, self._track_or_terminate(life, ln, pid, c.id, op, attempt_id=aid))
+                return log, aid, (ln, pid, c.id)
+
+            def _launch(spawn_fn, adm_stack):
+                """ONE ordering for every detached job: reserve + spawn (under task admission) →
+                capture the child's complete identity → RELEASE the parent's admission → publish the
+                `.job` tracking marker. The child's `verify_tracked` gate passes only once the marker
+                exists, so by the time it takes task admission itself the parent no longer holds the
+                flock (audit-found: the parent held admission across the handshake, so the child saw
+                it as an external holder). Returns (log, aid, outcome) — outcome "" | "orphan" |
+                "terminated", or the spawn error when log is None."""
+                log, aid, spawned = spawn_fn()
+                if log is None:
+                    adm_stack.close()
+                    return None, aid, spawned
+                ln, pid, cid = spawned
+                ident = procident.proc_identity(pid)              # capture FIRST
+                adm_stack.close()                                  # then release admission
+                return log, aid, _settle_track(                    # then publish (or terminate)
+                    log, aid, pid, self._track_or_terminate(life, ln, pid, cid, op,
+                                                            attempt_id=aid, ident=ident))
 
             # ---- ordered job list (primary first) ----
             if op == "install":
@@ -3314,7 +3338,7 @@ class LifecycleOpsMixin:
                 spawn_fns = [(lambda c=c, st=st, nm=nm: _spawn_build(c, st, nm)) for (c, st, nm) in ordered]
 
             # ---- primary: spawn + handshake; a blocked primary spawns NO secondaries ----
-            plog, paid, pout = spawn_fns[0]()
+            plog, paid, pout = _launch(spawn_fns[0], _adm_stack)
             if plog is None:                        # reserve/spawn/render failed
                 self.prune_logs()
                 return None, "blocked", f"blocked — {pout}"
@@ -3330,12 +3354,91 @@ class LifecycleOpsMixin:
                 return None, "blocked", (f"blocked — {reason}" if reason and not reason.startswith("blocked")
                                          else (reason or "blocked"))
             for fn in spawn_fns[1:]:            # admitted/pending: start the secondary component jobs
-                fn()
+                _sec = _contextlib.ExitStack()  # each under its own fresh admission (same ordering)
+                try:
+                    self._admit(_sec, "web-job", target)
+                except (AdmissionRefused, reslock.ResourceBusy):
+                    _sec.close()
+                    break
+                _launch(fn, _sec)
             self.prune_logs()
             return plog, admission, build_dep_note
 
         finally:
-            _adm_stack.close()   # release admission held across the spawn
+            _adm_stack.close()   # released long ago on the normal path; belt for the early returns
+
+    def spawn_start_job(self, op: str, target: str, band: str = "", stop_owners: bool = False,
+                        cascade: bool = False):
+        """Spawn a DETACHED web start/restart (the hidden `lhpc _stack-start` verb) and return
+        `(job_log_name, admission, reason)` exactly like `spawn_web_job`: the web flashes per the
+        admission and returns immediately; the task banner follows the job (`web-start-<target>.log`
+        / `web-restart-<target>.log`, never the `start-<x>.log` process-log namespace `spawn_job`
+        truncates). One attempt per log: a second Start while one runs is a typed refusal. The child
+        proves it was tracked (`webjob_gate`), then runs the ordinary locked `start()`/`restart()`
+        with a hook that marks the attempt RUNNING under every lock and before any mutation — a
+        superseded attempt cancels with zero side effects."""
+        import contextlib as _contextlib
+        import sys
+        import uuid
+
+        from . import jobresult, procident, reslock
+        if op not in ("start", "restart"):
+            return None, "blocked", f"{op} is not a detached operation"
+        if not (self.stack(target) or self.stack_of(target)):
+            return None, "blocked", f"unknown stack or component '{target}'"
+        life = self._lifecycle()
+        _adm = _contextlib.ExitStack()
+        try:
+            self._admit(_adm, "web-job", target)
+        except AdmissionRefused as _a:
+            _adm.close()
+            return None, "blocked", _a.reason
+        except reslock.ResourceBusy:
+            _adm.close()
+            return None, "blocked", "a task is starting right now (admission contended) — retry"
+        try:
+            name = f"web-{op}-{target}"
+            log, aid = name + ".log", uuid.uuid4().hex
+            if not jobresult.reserve(self._paths, log, aid, op, target,
+                                     self.stack_of(target) or target, []):
+                # reserve refuses over a LIVE attempt (running) — or over one that never settled
+                # (a child that died before admitting reads `unsafe`): say both, name the remedy.
+                return None, "blocked", (f"a {op} of '{target}' is already in progress — or its "
+                                         "previous attempt is still open in the task banner "
+                                         "(Recover or dismiss it first)")
+            argv = [sys.executable, "-m", "lhpc", "_stack-start", target,
+                    "--web-result", log, "--attempt-id", aid]
+            if band:
+                argv += ["--band", band]
+            if stop_owners:
+                argv.append("--stop-owners")
+            if cascade and op == "restart":          # the confirmed "Stop dependents & restart"
+                argv.append("--cascade")
+            if op == "restart":
+                argv.append("--restart")
+            ln, pid = life.spawn_job(name, argv, str(self._paths.runtime_root))
+            if not ln or not pid:
+                jobresult.terminalize(self._paths, log, aid, "failed", detail="could not start")
+                return None, "blocked", f"could not start the {op} of '{target}'"
+            ident = procident.proc_identity(pid)                   # capture FIRST
+            _adm.close()                                           # release admission
+            terr = self._track_or_terminate(life, ln, pid, target, op, attempt_id=aid,
+                                            ident=ident)           # then publish
+            if terr:
+                if "ORPHAN RISK" in terr:
+                    jobresult.terminalize(self._paths, log, aid, "unsafe",
+                                          detail="the job could not be identity-tracked and its "
+                                                 "stop is UNPROVEN — inspect processes (ps) then "
+                                                 "Recover", driver_ident=ident)
+                    return None, "blocked", "blocked — the job could not be tracked; Recover it first"
+                jobresult.terminalize(self._paths, log, aid, "failed", detail=terr[:200])
+                return None, "blocked", "blocked — the job process was terminated before it ran"
+            admission, reason = self._web_admit_handshake(log, aid)
+            if admission == "blocked":
+                return None, "blocked", reason or "blocked"
+            return log, admission, ""
+        finally:
+            _adm.close()
 
     def prune_logs(self) -> int:
         """Delete the oldest runtime logs beyond a bounded count/byte budget, NEVER
@@ -3515,14 +3618,18 @@ class LifecycleOpsMixin:
             return False
 
     def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str,
-                            attempt_id: str = "") -> str:
+                            attempt_id: str = "", ident: dict | None = None) -> str:
         """Persist a job marker; if it cannot be persisted, terminate the (identity-
         verified) spawned session so it never leaks as an untracked orphan. Returns ""
         on success, else a visible error describing the outcome (the literal 'ORPHAN RISK'
-        marks the unproven-cessation case)."""
+        marks the unproven-cessation case). `ident` is the identity the caller captured
+        IMMEDIATELY after the spawn (the web spawners capture it while they still hold task
+        admission, release admission, then publish through here — so the child's own admission
+        never sees the parent as an external holder)."""
         # Capture the identity IMMEDIATELY after spawn and use exactly that for both the
         # marker and any cleanup — never re-read a possibly-reused pid as the original job.
-        ident = procident.proc_identity(pid)
+        if ident is None:
+            ident = procident.proc_identity(pid)
         if self._write_job_marker(log_name, pid, cid, op, ident=ident, attempt_id=attempt_id):
             return ""
         killed = life._terminate_unobserved(pid, ident)

@@ -155,6 +155,15 @@ Full detail (and what is still open) in [`hardening-0.1.md`](hardening-0.1.md); 
   malformed or malicious journal blocks fail-closed.
 - **Typed outcomes.** A verified stop needs process cessation AND ready-endpoint disappearance;
   markers clear only then, and restart/owner-stop/cascade propagate typed failures.
+- **Detached web jobs (install/build/test and, since 0.2.9, start/restart).** The console reserves
+  an attempt marker (`state/jobresults/<log>.json`), spawns the child under task admission,
+  captures the child's complete process identity, **releases its own admission**, and only then
+  publishes the `.job` tracking marker — so the child's `verify_tracked` gate passes only once the
+  parent no longer holds the flock the child itself must take. A child that cannot be tracked is
+  terminated (or the attempt is marked *unsafe* when its stop is unproven). The child advances the
+  attempt (`gate passed → running → done/failed`) and, for start/restart, marks it *running* from
+  the pre-mutation hook the locked `start()`/`restart()` fire — for a restart **before the stop** —
+  so a superseded attempt cancels with zero side effects.
 - Manual `start/` wrappers are retired — lhpc starts services itself, and interactive components
   get their copy-paste command from the same structured spec.
 

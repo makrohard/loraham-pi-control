@@ -36,7 +36,6 @@ from flask import (
 from lhpc.core import config as _config
 from lhpc.core import meshcore_mode as _meshcore_mode
 from lhpc.core import validators
-from lhpc.core.outcomes import manual_required_only
 from lhpc.core.services import ControllerService
 from lhpc.core.status import rollup_states, stack_dependencies, summarize
 from lhpc.version import __version__
@@ -1476,27 +1475,29 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             else:                                       # admitted
                 flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
             return redirect(url_for("logs_view", target=target, job=job))
+        if op in ("start", "restart"):
+            # DETACHED: the start/restart runs as a tracked job (the hidden `_stack-start` verb); the
+            # page returns at once and the task banner follows it — a stack row shows "starting"
+            # while the job runs and the page reloads once when it ends. Blocked = typed refusal.
+            job, admission, reason = service.spawn_start_job(op, target, band=band,
+                                                             stop_owners=stop_owners,
+                                                             cascade=cascade)
+            if admission == "blocked":
+                flash(reason or f"{op} could not start.", "warn")
+            elif admission == "pending":
+                flash(f"{op.capitalize()} of '{target}' requested — admission not yet confirmed; "
+                      "follow it in the banner.", "warn")
+            else:
+                flash(f"{'Restarting' if op == 'restart' else 'Starting'} '{target}' — follow it "
+                      "in the banner.", "ok")
+            return _redirect_for(target)
         result = service.run_action(op, target, apply=True, source=source,
-                                    stop_owners=stop_owners, cascade=cascade, band=band,
-                                    purge=purge)
-        # The AUTHORITATIVE identity recheck under the locks (config changed after the plan, or a
-        # direct POST) gets the same Settings-row UX as the plan-time refusal.
-        if (not result.ok and op in ("start", "restart")
-                and result.data.get("enforce_fields")):
-            return _settings_back(target, result)
-        # An interactive/systemd START whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
-        # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
-        # START-ONLY: on a stop/restart, MANUAL_REQUIRED means "a foreign process is still running,
-        # kill it yourself" — a WARNING. `stop` already returns ok=False; only this display lied.
-        ok_flash = result.ok or (op == "start" and manual_required_only(result.results))
+                                    cascade=cascade, band=band, purge=purge)
+        # On a stop, MANUAL_REQUIRED means "a foreign process is still running, kill it yourself"
+        # — a WARNING (`stop` already returns ok=False). Start notes travel in the start job's
+        # marker detail (banner hint) since the start became detached.
         flash(f"{result.summary} {' '.join(result.details[:6])}",
-              "ok" if ok_flash else "warn")
-        # Start note(s) for a just-started component (boot expectations, connect hints):
-        # YELLOW and LONG-LIVED (30 s) — a 1–2 min boot warning must outlast the quick
-        # green flashes.
-        if op == "start":
-            for note in service.start_notes(result):
-                flash(note, "warn transient-long")
+              "ok" if result.ok else "warn")
         return _redirect_for(target)
 
     def _safe_job(value):

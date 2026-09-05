@@ -788,18 +788,6 @@ def _spy_starts(monkeypatch):
     return starts
 
 
-def test_start_without_saving_is_ephemeral(tmp_path, monkeypatch):
-    from lhpc.core.services import ControllerService as _CS
-    c = _install_igate(tmp_path)
-    starts = _spy_starts(monkeypatch)
-    tok = _csrf(c)
-    c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
-                            "_params": "1", "p_call": "XX0XXA-8", "band": ""})   # no _save
-    assert starts == ["igate"]                               # started
-    cfg = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).stack_config("igate")
-    assert cfg["call"] != "XX0XXA-8"                         # ephemeral: NOT persisted
-
-
 # --- Area 2: Save & start short-circuits after the first failed persistence ------------------
 
 # --- Area 3: truthful daemon-save reporting -------------------------------------------------
@@ -1761,44 +1749,6 @@ def test_stop_manual_required_flashes_yellow_not_green(tmp_path, monkeypatch):
     assert "flash-warn" in cls and "flash-ok" not in cls
 
 
-def test_start_manual_required_still_flashes_green(tmp_path, monkeypatch):
-    # The intended interactive-start behaviour is preserved: the daemon came up and readied, and
-    # the operator now runs the TUI themselves -> success, not a warning.
-    svc = _manual_required_svc(tmp_path, monkeypatch, "Run applied for 'meshcom'.")
-    c = create_app(service_factory=lambda: svc).test_client()
-    tok = _csrf(c)
-    body = c.post("/action", data={"_csrf": tok, "op": "start", "target": "meshcom",
-                                   "confirmed": "yes"}, follow_redirects=True).data.decode()
-    cls = _flash_class(body, "Run applied for")
-    assert "flash-ok" in cls and "flash-warn" not in cls
-
-
-def test_start_notes_flash_yellow_and_long(tmp_path, monkeypatch):
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService, ActionResult
-    from lhpc.core.paths import Paths
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text(
-        '[operator]\ncallsign = "XX0XXB"\n')
-    svc = ControllerService(system=FakeSystem(cmdlines_data={}).system,
-                            paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "run_action",
-                        lambda self, op, target, apply=False, **k:
-                        ActionResult(True, "started", data={}))
-    monkeypatch.setattr(type(svc), "start_notes",
-                        lambda self, result: ["the firmware boots in ~1–2 min"])
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    c = create_app(service_factory=lambda: svc).test_client()
-    tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "meshcom",
-                                "confirmed": "yes"}, follow_redirects=True)
-    body = r.data.decode()
-    assert "flash-warn" in body and "transient-long" in body     # yellow + 30s class
-    assert "boots in ~1–2 min" in body
-    assert "another machine" not in body
-
-
 def test_web_and_updater_trigger_paths_never_call_systemctl():
     """P0 invariant: the web adapter and the updater trigger/run-service paths must not shell out
     to systemctl/systemd-run (the sandbox blocks the user bus; only the OPERATOR repair/recover
@@ -2160,6 +2110,17 @@ def _spy_actions(monkeypatch):
     return calls
 
 
+def _spy_spawns(monkeypatch, admission="admitted", reason=""):
+    """Record every spawn_start_job(op, target, band, stop_owners) call and stub the spawn."""
+    from lhpc.core.services import ControllerService
+    spawns = []
+    def spy(self, op, target, band="", stop_owners=False, cascade=False):
+        spawns.append((op, target, band, stop_owners, cascade))
+        return (f"web-{op}-{target}.log" if admission != "blocked" else None), admission, reason
+    monkeypatch.setattr(ControllerService, "spawn_start_job", spy)
+    return spawns
+
+
 def _igate_ready(tmp_path):
     """igate installed + built, with an operator callsign the plan accepts."""
     from lhpc.core.services import ControllerService as _CS
@@ -2170,19 +2131,18 @@ def _igate_ready(tmp_path):
 
 
 def test_routine_start_runs_with_no_page_between(tmp_path, monkeypatch):
-    # Click Start -> the plan finds no consequential choice -> the start runs -> back where the
-    # operator came from, result flashed. No confirmation page, no per-launch inputs.
+    # Click Start -> the plan finds no consequential choice -> the start is spawned as a tracked
+    # job -> back where the operator came from at once, "follow it in the banner" flashed. No
+    # confirmation page, no per-launch inputs, no synchronous run.
     c = _igate_ready(tmp_path)
     calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
-    assert [(op, t) for op, t, _ in calls] == [("start", "igate")]
-    kw = calls[0][2]
-    assert kw["stop_owners"] is False and kw["cascade"] is False
-    assert not any(k in kw for k in ("params", "file_overrides", "daemon_overrides"))
+    assert spawns == [("start", "igate", "", False, False)] and calls == []
     page = c.get("/").get_data(as_text=True)
-    assert "start igate (stub)" in page                       # the result, flashed
+    assert "Starting &#39;igate&#39; — follow it in the banner" in page
 
 
 def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch):
@@ -2191,25 +2151,26 @@ def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService as _CS
     _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
         callsign="XX0XXA")
-    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "chat"})
     assert r.status_code == 302                                # no stage-1 page
-    assert [(op, t) for op, t, _ in calls] == [("restart", "chat")]
+    assert spawns == [("restart", "chat", "", False, False)]
+    assert "Restarting &#39;chat&#39;" in c.get("/stacks").get_data(as_text=True)
 
 
 def test_a_crafted_post_with_the_old_launch_fields_changes_nothing(tmp_path, monkeypatch):
     # p_<name>/pf_<name>/dp_<band>_<PARAM>/opt_start_<id>/_save fields are simply not read.
     from lhpc.core.config import load_stack_config
     c = _igate_ready(tmp_path)
-    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
                                 "confirmed": "yes", "_params": "1", "_save": "all",
                                 "_save_then_start": "1", "p_call": "ZZ9ZZZ-1",
                                 "p_tx_freq": "434.500", "dp_433_SF": "10",
                                 "opt_start_x": "on"})
-    assert r.status_code == 302 and len(calls) == 1
+    assert r.status_code == 302 and len(spawns) == 1
     cfg = load_stack_config(Paths(runtime_root=tmp_path), "igate")
     assert "call" not in cfg and "tx_freq" not in cfg and "dp_433_SF" not in cfg
 
@@ -2235,23 +2196,6 @@ def test_identity_refusal_sends_the_operator_to_the_settings_row(tmp_path, monke
     assert "field-bad" not in c.get("/stacks?open=igate").get_data(as_text=True)
 
 
-def test_a_locked_apply_refusal_gets_the_same_settings_ux(tmp_path, monkeypatch):
-    # The authoritative recheck under the locks (config changed after the plan) redirects to the
-    # Settings row exactly like the plan-time refusal.
-    from lhpc.core.services import ControllerService, ActionResult
-    c = _igate_ready(tmp_path)
-    orig = ControllerService.run_action
-    def flip(self, op, target, apply=False, **k):
-        if apply:
-            return ActionResult(False, "Cannot start 'igate': a callsign is required",
-                                data={"enforce_fields": ["c_call"]})
-        return orig(self, op, target, apply=apply, **k)
-    monkeypatch.setattr(ControllerService, "run_action", flip)
-    tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate"})
-    assert r.status_code == 302 and "bad=c_call" in r.headers["Location"]
-
-
 def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService, ActionResult
     c = _igate_ready(tmp_path)
@@ -2275,12 +2219,12 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))._set_running_band(
         "meshtastic", "868")
     c = _real_app(tmp_path, cmdlines={200: ["meshtasticd"]})
-    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
                                 "from": "dash"})
     body = r.get_data(as_text=True)
-    assert r.status_code == 200 and calls == []
+    assert r.status_code == 200 and spawns == []
     assert "Confirm: start" in body and "held by <strong>meshtastic</strong>" in body
     assert 'name="stop_owners" value="yes"' in body
     assert "Stop owner(s) &amp; start</button>" in body
@@ -2289,8 +2233,7 @@ def test_a_resource_conflict_asks_for_the_minimal_confirmation(tmp_path, monkeyp
     r2 = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
                                  "confirmed": "yes", "stop_owners": "yes"})
     assert r2.status_code == 302
-    assert calls and calls[0][0] == "start" and calls[0][2]["stop_owners"] is True
-    assert calls[0][2]["band"] == "868"
+    assert spawns == [("start", "daemon", "868", True, False)]
 
 
 def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch):
@@ -2308,16 +2251,16 @@ def test_a_restart_that_takes_dependents_down_asks_first(tmp_path, monkeypatch):
             paths=Paths(runtime_root=tmp_path))
     factory().set_operator_identity(callsign="XX0XXA")
     c = create_app(service_factory=factory).test_client()
-    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon", "band": "433"})
     body = r.get_data(as_text=True)
-    assert r.status_code == 200 and calls == []
+    assert r.status_code == 200 and spawns == []
     assert "Confirm: restart" in body and "Other running stacks depend on this" in body
     assert "chat" in body and "Stop dependents &amp; restart</button>" in body
     r2 = c.post("/action", data={"_csrf": tok, "op": "restart", "target": "daemon",
                                  "band": "433", "confirmed": "yes", "cascade": "yes"})
-    assert r2.status_code == 302 and [(op, t) for op, t, _ in calls] == [("restart", "daemon")]
+    assert r2.status_code == 302 and spawns == [("restart", "daemon", "433", False, True)]   # consent travels
 
 
 def test_start_daemon_only_on_a_band(tmp_path, monkeypatch):
@@ -2325,12 +2268,12 @@ def test_start_daemon_only_on_a_band(tmp_path, monkeypatch):
     binp = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
     binp.parent.mkdir(parents=True); binp.write_text("#!/bin/sh\n")
     c = _real_app(tmp_path)
-    calls = _spy_actions(monkeypatch)
+    spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
     r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon", "band": "868",
                                 "from": "dash"})
     assert r.status_code == 302
-    assert calls == [("start", "daemon", calls[0][2])] and calls[0][2]["band"] == "868"
+    assert spawns == [("start", "daemon", "868", False, False)]
     assert 'name="p_radio"' not in c.get("/").get_data(as_text=True)
 
 
@@ -2352,7 +2295,7 @@ def test_stack_start_launches_each_component_with_its_own_saved_values(tmp_path,
     # Colliding param names across components: the SAVED component-scoped values launch per
     # component and render each component's own config file (no per-launch inputs involved).
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
-    m, c = _collide_app(tmp_path)
+    m, _c = _collide_app(tmp_path)
     svc = ControllerService(manifest_path=m, system=FakeSystem().system,
                             paths=Paths(runtime_root=tmp_path))
     assert svc.save_config_bundle("ostack2", values={"tgt.rp": "RP-T", "dep.rp": "RP-D",
@@ -2363,9 +2306,7 @@ def test_stack_start_launches_each_component_with_its_own_saved_values(tmp_path,
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
-    tok = _csrf(c, "/stacks?open=ostack2")   # csrf field lives in the (lazy) stack body
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "ostack2"})
-    assert r.status_code == 302
+    assert svc.start("ostack2", apply=True).ok                                # what the job runs
     assert seen["tgt"]["rp"] == "RP-T" and seen["dep"]["rp"] == "RP-D"         # launched per component
     files = tmp_path / "config" / "files"
     assert "FP=FP-T" in (files / "tgt.conf").read_text()                      # own generated config
@@ -2386,3 +2327,39 @@ def test_row_open_indicator_and_settings_highlight_assets():
     assert not (base / "templates" / "_stack_params.html").exists()
     assert not (base / "static" / "stackparams.js").exists()
     assert "stackparams.js" not in (base / "templates" / "base.html").read_text()
+
+
+def test_a_blocked_or_pending_spawn_flashes_and_returns(tmp_path, monkeypatch):
+    c = _igate_ready(tmp_path)
+    tok = _csrf(c)
+    _spy_spawns(monkeypatch, admission="blocked", reason="a start of 'igate' is already in progress")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    assert r.status_code == 302
+    assert "already in progress" in c.get("/").get_data(as_text=True)
+    _spy_spawns(monkeypatch, admission="pending")
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    assert "admission not yet confirmed" in c.get("/").get_data(as_text=True)
+
+
+def test_task_banner_assets_mark_the_starting_stack_and_reload_once():
+    base = Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web"
+    js = (base / "static" / "taskbanner.js").read_text()
+    css = (base / "static" / "style.css").read_text()
+    assert 'isStartJob' in js and '"stackrow-" + sid' in js and 'data-stack' in js
+    assert "window.location.reload()" in js and "reloading" in js     # one reload, guarded
+    # a terminal attempt seen on the FIRST poll reloads too, once per attempt (sessionStorage)
+    assert "sessionStorage" in js and "lhpc_reloaded_starts" in js and "attempt_id" in js
+    assert "startingSeen" not in js
+    # the Dashboard's signature poll owns the reload there (no double render); the remembered
+    # set is pruned to the attempts the feed still lists
+    assert 'dashOwnsReload = !!document.querySelector(".radiogrid")' in js
+    assert "still listed: keep remembering" in js
+    # `done`, or `failed` after admission (state may have changed), reloads; never without storage;
+    # never while the operator types
+    assert 'return t.state === "done" || (t.state === "failed" && !!t.admitted);' in js
+    assert "else if (changedThePage(t))" in js
+    assert "if (!markReloaded(seen) || dashOwnsReload) return;" in js
+    assert "/^(SELECT|INPUT|TEXTAREA)$/.test(a.tagName)" in js
+    assert ".badge-starting" in css
+    dash = (base / "templates" / "dashboard.html").read_text()
+    assert dash.count('data-stack="{{ s.id }}"') == 3                 # running + interactive blocks

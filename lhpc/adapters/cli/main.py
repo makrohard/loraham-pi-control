@@ -395,6 +395,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_hd.add_argument("action", choices=("enable", "disable", "renew"))
     p_hd.add_argument("run_id")
 
+    # Internal: the DETACHED web Start/Restart runner (spawned by `spawn_start_job`). Proves the
+    # parent tracked this attempt, then runs the ordinary locked start()/restart() with the admission
+    # hook; the result lands in the attempt marker for the task banner. Not for direct use.
+    p_ss = sub.add_parser("_stack-start", help=argparse.SUPPRESS)
+    p_ss.add_argument("target")
+    p_ss.add_argument("--web-result", default="", help=argparse.SUPPRESS)
+    p_ss.add_argument("--attempt-id", default="", help=argparse.SUPPRESS)
+    p_ss.add_argument("--band", default="", help=argparse.SUPPRESS)
+    p_ss.add_argument("--stop-owners", action="store_true", help=argparse.SUPPRESS)
+    p_ss.add_argument("--cascade", action="store_true", help=argparse.SUPPRESS)
+    p_ss.add_argument("--restart", action="store_true", help=argparse.SUPPRESS)
+
     # Internal: uninstall.sh's quiescence gate — refuses on active jobs / unresolved auto-install|HMAC
     # / UNKNOWN state, then stops managed stacks (clients before the shared daemon) with verified
     # cessation. Exit 0 = safe to remove controller state; nonzero = abort teardown. Not for direct use.
@@ -948,6 +960,48 @@ def _run(argv: list[str] | None = None) -> int:
                                   allow_console=args.allow_console, delay=args.delay)
         print(f"[network-finalize] done rc={rc}")
         return rc
+    if args.command == "_stack-start":
+        # Detached web Start/Restart runner (stdout/stderr stream to logs/web-<op>-<target>.log).
+        # GATE FIRST: the parent must have identity-tracked THIS attempt before anything runs; an
+        # untracked child exits without touching the box. The start/restart itself is the ordinary
+        # locked operation; the hook marks the attempt RUNNING under every lock, right before the
+        # first mutation (for a restart: before the stop) — a superseded attempt cancels there with
+        # zero side effects. ONE terminal marker write across all exits.
+        import os as _os
+
+        from lhpc.core import jobresult, webjob_gate
+        from lhpc.core.outcomes import manual_required_only
+        from lhpc.core.services import ActionResult as _AR
+        op = "restart" if args.restart else "start"
+        web, aid = args.web_result or "", args.attempt_id or ""
+        if web != f"web-{op}-{args.target}.log":              # strictly bound to web-<op>-<target>.log
+            print(f"web {op}: result name is not bound to this target — refusing.")
+            return 3
+        if not webjob_gate.verify_tracked(svc._paths, web, op, args.target, aid, _os.getpid()):
+            print(f"web {op}: parent tracking not confirmed — refusing (no mutation).")
+            return 3
+        if not jobresult.mark_gate_passed(svc._paths, web, aid):
+            print(f"web {op}: could not clear the startup flag — refusing (no mutation).")
+            return 3
+
+        def _admitted():
+            if jobresult.mark_running(svc._paths, web, aid):
+                return None
+            return _AR(False, f"Cannot {op} '{args.target}': this web attempt was "
+                              "superseded — nothing was changed.")
+        if op == "start":
+            res = svc.start(args.target, apply=True, stop_owners=args.stop_owners,
+                            band=args.band, _before_start_locked=_admitted)
+        else:
+            res = svc.restart(args.target, apply=True, stop_owners=args.stop_owners,
+                              band=args.band, cascade=args.cascade,
+                              _before_restart_locked=_admitted)
+        rc = _render(res)
+        ok = res.ok or (op == "start" and manual_required_only(res.results))
+        notes = svc.start_notes(res) if op == "start" else []
+        detail = " ".join([res.summary, *notes]).strip()
+        jobresult.terminalize(svc._paths, web, aid, "done" if ok else "failed", detail=detail[:400])
+        return 0 if ok else (rc or 1)
     if args.command == "_hmac-apply":
         # Detached driver: stdout/stderr are captured to the run log by spawn_job, so `print`
         # streams into the live log window. Never prints the secret (the step runner redacts).
