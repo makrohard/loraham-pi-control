@@ -260,8 +260,10 @@ def test_each_page_keeps_its_own_policy_key_and_nginx_block(tmp_path):
                                         stack_webs=proxies)
     assert "upstream lhpc_ui_two {" in cfg and "upstream lhpc_ui_two_b {" in cfg
     assert "listen 127.0.0.1:8445" in cfg and "listen 127.0.0.1:8446" in cfg
-    assert f"location ~ {webserver.deny_location_regex('/api/update')} {{ return 403; }}" in cfg
-    assert cfg.count(f"location ~ {webserver.deny_location_regex('/ws/frame')} {{ return 403; }}") == 1
+    # 404, never 403: a 403 logs the operator out of a single-page dashboard (openHop's interceptor)
+    assert f"location ~ {webserver.deny_location_regex('/api/update')} {{ return 404; }}" in cfg
+    assert cfg.count(f"location ~ {webserver.deny_location_regex('/ws/frame')} {{ return 404; }}") == 1
+    assert "return 403; }" not in cfg.split("location ~")[1] if "location ~" in cfg else True
 
 
 def test_an_unknown_page_id_is_refused_and_the_valid_ids_are_named(tmp_path):

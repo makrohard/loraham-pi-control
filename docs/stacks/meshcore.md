@@ -181,7 +181,7 @@ the GUI never becomes a second owner of those.
   build). `meshcore_py` is pinned for a reproducible Companion client.
 * **Exposure** — the backend binds **loopback only**; the sole public path is the LHPC nginx
   reverse proxy (TLS, optional mTLS, CIDR gate), enabled per stack on the **Webserver** page.
-* **Security boundary** — the proxy **refuses** (`403`) the operations LHPC owns: factory reset
+* **Security boundary** — the proxy **refuses** (`404` — a `403` would log the operator out of the openHop dashboard, whose app treats it as an expired session) the operations LHPC owns: factory reset
   (would destroy the managed identity), radio / TX-power / tuning (the daemon owns the LoRa
   config), position, device name, and the device-touching admin reset. GPS **advert-location
   policy** is LHPC-owned too, but it rides a combined `POST /api/device/policy` alongside

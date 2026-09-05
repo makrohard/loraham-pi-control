@@ -428,7 +428,7 @@ class StackWebProxy:
     swc: object                    # config.StackWebConfig
     upstream_address: str            # "127.0.0.1:18083"
     upstream_scheme: str             # "http" | "https"
-    deny_paths: tuple = ()           # exact request paths this proxy refuses (-> 403)
+    deny_paths: tuple = ()           # request paths this proxy refuses (rendered as 404 regex locations)
 
 
 def nginx_token(stack_id: str) -> str:
@@ -642,7 +642,11 @@ def _stack_deny_locations(s) -> str:
         if base in seen:
             continue
         seen.add(base)
-        out.append(f"        location ~ {deny_location_regex(base)} {{ return 403; }}")
+        # 404, not 403: single-page dashboards (openHop's) treat a 403 on ANY call as "session
+        # gone" and log the operator out the moment they touch a denied feature (audit-found on
+        # e293: the first call after login was a denied /api/update/check). A denied route is
+        # simply absent through this proxy — the app then reports one failed feature.
+        out.append(f"        location ~ {deny_location_regex(base)} {{ return 404; }}")
     return "\n".join(out)
 
 

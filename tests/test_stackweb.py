@@ -1639,7 +1639,7 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
     deny = set(svc.stack_web_deny_paths("meshcore"))
     missing = required - deny
     assert not missing, f"MeshCore Web UI proxy no longer denies LHPC-owned operations: {missing}"
-    # And they actually render as nginx 403s.
+    # And they actually render as nginx 404s (a 403 logs the operator out of a SPA dashboard).
     up = svc.stack_web_upstream("meshcore")
 
     class _SWC:
@@ -1650,7 +1650,7 @@ def test_meshcore_webui_proxy_denies_all_lhpc_owned_operations(tmp_path):
         svc._paths, svc.config().webserver,
         [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore"))])
     for p in required:
-        assert f"location ~ {ws.deny_location_regex(p)} {{ return 403; }}" in out, \
+        assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, \
             f"{p} not denied in nginx config"
 
 

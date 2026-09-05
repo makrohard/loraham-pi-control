@@ -157,6 +157,6 @@ def test_repeater_dashboard_proxy_denies_every_config_mutating_route(tmp_path):
         svc._paths, svc.config().webserver,
         [StackWebProxy(_SWC(), up[0], up[1], svc.stack_web_deny_paths("meshcore-meshcore-node"))])
     for p in required:
-        assert f"location ~ {ws.deny_location_regex(p)} {{ return 403; }}" in out, p
+        assert f"location ~ {ws.deny_location_regex(p)} {{ return 404; }}" in out, p
     assert "location = " not in out.split("# meshcore-meshcore-node web UI")[1]   # no exact-only form
     assert "upstream lhpc_ui_meshcore_meshcore_node {" in out
