@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.10
+
+- **Reticulum 1.5.1 → 1.5.2** — the maintenance release that fixes the 1.5.1 resource-transfer regression; nomadnet, lxmd and sideband stay.
+- **MeshCom firmware → the `dev` tip 674413c** (v4.35p.08.29 + 34: v4.35s backpressure, GPS filter, the KISS/TCP interface merged and reverted upstream); the QEMU overlay was rebased onto it, bounds the tip's new per-loop GPS UART drain under QEMU (an unpaced live feed starved the firmware loop and left the net-console deaf), and `setup.sh` fetches the firmware by ref so a SHA pin works (meshcom-qemu-raspi 579e463). Binary republished.
+- **Meshtastic firmware pin → the stable release tag v2.7.26** — the known-working line now follows stable tags (v2.8.x are prereleases); `dev` still builds the master tip. Binary republished from the tag.
+- **Release test matrix** (`docs/test-matrix.md`) is the leading pre-release live test: every stack purged, installed, built and started on the box with times and memory recorded; the pin-maintenance recipe is one short list.
+
 ## 0.2.9
 
 - **Start means start:** a web Start or Restart runs exactly the saved configuration — the start-confirm page with its Stack-parameters panel, per-band daemon panels, identity fields, optional-component checkboxes and Save / Save-and-start is gone; Settings is the only place configuration changes (the CLI always worked this way). A routine Start/Restart runs at once and returns where you came from; only a consequential choice still asks — another running stack owns the radio, or a restart would stop running dependents (the restart plan now carries the stop's collateral). A start refused over a missing or unusable identity lands on the stack's Settings with the offending row highlighted, and the refusal is known at plan time: the CLI's dry run and the web click share one verdict, re-checked under the locks before anything is mutated. A licensed stack whose local callsign is empty still launches with the global one (materialized for the launch, never saved). Optional components follow one rule (`hidden` / `listed` / `tickable`) on the Settings card and in the run order. A stack row shows a waiting indicator while its body loads. The daemon's `debug` launch flag, settable only on the retired page, is gone

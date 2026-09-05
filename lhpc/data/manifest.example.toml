@@ -1278,7 +1278,7 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "6d41e279f1f51bd59f687b9d441c1bf47b1594fc", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]
@@ -1363,15 +1363,15 @@ main = "meshtastic"
 
     # A NORMAL managed Git source, so Meshtastic gets the ordinary pinned / stable / dev selectors
     # and the existing Check / Update / Build flows — no bespoke update path. `pinned` (the
-    # known-good default) is the master commit built + run-proven on the 2026-07 Zero 2W
-    # acceptance runs (native build, uputronics dual HAT, 868 up + region applied).
-    # Selecting `dev` clones and builds the configured development branch normally.
+    # known-working line) follows the latest STABLE release tag of master (v2.8.x are
+    # prereleases); `dev` clones and builds the master tip. Both are proven on the Zero 2W by
+    # the release test matrix (native build, uputronics dual HAT, 868 up + region applied).
     # The config template still ships WITH lhpc (config_file.base = {asset}/…), so nothing is
     # cloned merely to read a yaml.
     [stack.component.source]
     path = "src/meshtastic-firmware"
-    pin_commit = "6d41e279f1f51bd59f687b9d441c1bf47b1594fc"
-    pin_tag = "v2.7.26.54e0d8d-32-g6d41e279"
+    pin_commit = "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb"
+    pin_tag = "v2.7.26.54e0d8d"
     remote = "https://github.com/meshtastic/firmware.git"
     branch = "master"
     local_dir = "meshtastic-firmware"
@@ -1872,8 +1872,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
-    pin_tag = "54c3ec3"
+    pin_commit = "579e463e290757b096356b889007c9d150fe150b"
+    pin_tag = "579e463"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -1942,7 +1942,7 @@ main = "meshcom-qemu"
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/platformio/.venv"] },
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pip", "install", "--disable-pip-version-check", "platformio==6.1.19"], announce = "[install] PlatformIO 6.1.19 into {runtime}/build/tools/platformio/.venv — pip is quiet off-TTY; progress: watch {runtime}/build/tools/platformio/.venv/lib grow" },
     { argv = ["scripts/build-qemu.sh", "{runtime}/build/tool-cache/qemu-xtensa/esp_develop_9.0.0_20240606", "--link-gate", "{asset}/scripts/meshtastic-link-gate.sh"], announce = "[build] qemu-system-xtensa FROM SOURCE (headless: no SDL/GTK/VNC/OpenGL/audio) at the pinned Espressif commit — clone + configure + compile, slow + silent off-TTY; progress: watch {runtime}/build/tool-cache/qemu-xtensa grow" },
-    { argv = ["scripts/setup.sh", "--ref", "v4.35p.08.29"], announce = "[clone] MeshCom-Firmware (icssw-org v4.35p.08.29) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
+    { argv = ["scripts/setup.sh", "--ref", "674413ce38bebcc02969a4c1b754a6f1850bf4ba"], announce = "[clone] MeshCom-Firmware (icssw-org dev 674413c, v4.35p.08.29 + 34) into the .work/ workspace — git is quiet off-TTY; progress: watch {source}/.work grow" },
     { argv = ["scripts/apply-overlay.sh"] },
     { argv = ["scripts/prepare-openeth.sh"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core" }, announce = "[resolve] ESP32 platform + toolchain — large download, output is quiet; progress: watch {runtime}/build/tools/platformio/core grow" },
     { argv = ["scripts/build.sh", "--env", "qemu-headless-extradio-gpsd"], env = { PIO = "{runtime}/build/tools/platformio/.venv/bin/pio", PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", XR_HOST = "10.0.2.2", XR_PORT = "7000", XR_PASSWORD = "@file?:{runtime}/config/secrets/xr_pw" } },
@@ -2125,8 +2125,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-qemu-raspi"
-    pin_commit = "54c3ec38a358afceee2e034b72c9adc8b3504635"
-    pin_tag = "54c3ec3"
+    pin_commit = "579e463e290757b096356b889007c9d150fe150b"
+    pin_tag = "579e463"
     remote = "https://github.com/makrohard/meshcom-qemu-raspi.git"
     branch = "main"
 
@@ -2178,9 +2178,16 @@ main = "meshcom-qemu"
     # QEMU overlay patch was REBASED onto 08.29 in makrohard/meshcom-qemu-raspi (32268d0) —
     # same 26 hunks, byte-identical added/removed lines, only context offsets moved — and it
     # now applies through apply-overlay.sh's fail-closed `git apply --check`.
+    # 0.2.10: bumped to the `dev` tip 674413c (34 commits past v4.35p.08.29: v4.35s BP-09
+    # backpressure, GPS Kalman filter, the KISS/TCP interface PR merged AND reverted upstream);
+    # `setup.sh --ref` now names the SHA itself, so the checkout IS the pin. The QEMU overlay
+    # patch was rebased onto this commit in makrohard/meshcom-qemu-raspi (5c50c1e; one hunk
+    # moved around upstream's GPS-03 filter reset); setup.sh fetches BY REF (a SHA is not a
+    # `clone --branch` name); the overlay also bounds the dev tip's new per-loop GPS UART drain
+    # under QEMU (unpaced socket UART starved loop(), net-console deaf); pinned there as 579e463.
     path = "src/MeshCom-Firmware"
-    pin_commit = "2cb6bb4d3c9f8403d2f4278b6a01ae329ed6dc83"
-    pin_tag = "v4.35p.08.29"
+    pin_commit = "674413ce38bebcc02969a4c1b754a6f1850bf4ba"
+    pin_tag = "v4.35p.08.29-34-g674413c"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2847,8 +2854,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "149e4151095adf098b8f53eab0c03b37169e8559"
-pin_tag = "1.5.1"
+pin_commit = "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6"
+pin_tag = "1.5.2"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
