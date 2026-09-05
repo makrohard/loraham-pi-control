@@ -712,6 +712,9 @@ def test_web_pill_renders_provenance(tmp_path, monkeypatch):
     # the source pill lives in the stack SUMMARY row on the overview page
     body = client.get("/stacks").get_data(as_text=True)
     assert "src: binary" in body and "binary@" + ("ab" * 32)[:9] in body
+    # ONE version pill in the row (the version cell); the artifact tooltip rides on it
+    assert body.count("binary@" + ("ab" * 32)[:9]) == 1
+    assert "verified prebuilt artifact" in body
 
 
 # ===== merged from test_binary_predicates.py =====
