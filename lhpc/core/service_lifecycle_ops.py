@@ -4625,7 +4625,7 @@ class LifecycleOpsMixin:
                 return bool(st and st.run_state in (RunState.RUNNING, RunState.DEGRADED))
         return False
 
-    def dash_signature(self) -> str:
+    def dash_signature(self, restart_required=None) -> str:
         """A compact signature of the dashboard's STRUCTURAL state — which
         components are running, which bands the daemon serves, and which
         interactive apps are marked. The web polls this cheaply and only does a
@@ -4656,7 +4656,8 @@ class LifecycleOpsMixin:
                 marks.append(f"{stem}={runtime_fs.read_text(self._paths, idir / name).strip()}")
             except (OSError, ValueError):
                 marks.append(stem)
-        rr = self.restart_required_stacks()      # dashboard reloads when the yellow flag flips
+        # dashboard reloads when the yellow flag flips; the route hands in the list it already read
+        rr = self.restart_required_stacks() if restart_required is None else list(restart_required)
         # BOOTING components (post-start runner still applying settings, e.g. MeshCom's
         # callsign push): the yellow 'booting' state must flip the signature when it
         # clears, or the dash keeps showing 'booting' after the node is serving.
@@ -4689,6 +4690,10 @@ class LifecycleOpsMixin:
         """
         if not (comp.build_marker and comp.build_requires):
             return ""
+        return self._request_memo(("consumed-source", comp.id),
+                                  lambda: self._consumed_source_lines_uncached(comp))
+
+    def _consumed_source_lines_uncached(self, comp) -> str:
         by_id = {c.id: c for st in self.stacks() for c in st.components}
         lines = []
         for cid in (comp.id, *comp.build_requires):
@@ -4803,7 +4808,10 @@ class LifecycleOpsMixin:
         page = next((p for p in pages if p.component_id == status.component_id), None)
         swc = self.config().stackweb.get(page.page_id) if page is not None else None
         try:
-            snap = self._system.procfs.tcp_listeners()      # ONE /proc read for this component's pins
+            # ONE /proc read per REQUEST for every component's pins (the Dashboard asks for each
+            # running component; before 0.2.9 that was one /proc/net/tcp read per component).
+            snap = self._request_memo(("tcp-listeners",),
+                                      self._system.procfs.tcp_listeners)
         except Exception:
             snap = []
         out = []

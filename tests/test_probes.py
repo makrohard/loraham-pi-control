@@ -209,12 +209,14 @@ def _fake(head: str, porcelain: str = "", *, repo: bool = True) -> FakeSystem:
     paths = {_ABS}
     if repo:
         paths.add(f"{_ABS}/.git")
+    # `porcelain` is a v1-style " M file" line list; rendered as porcelain=v2 entry lines.
+    entries = "".join(f"1 .M N... 100644 100644 100644 {head} {head} {ln.split()[-1]}\n"
+                      for ln in porcelain.splitlines() if ln.strip())
     return FakeSystem(
         paths=paths,
         commands={
-            ("git", "-C", _ABS, "rev-parse", "HEAD"): CommandResult(0, head + "\n", ""),
-            ("git", "-C", _ABS, "status", "--porcelain", "--untracked-files=no"):
-                CommandResult(0, porcelain, ""),
+            ("git", "-C", _ABS, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+                CommandResult(0, f"# branch.oid {head}\n# branch.head main\n" + entries, ""),
         },
     )
 
@@ -252,7 +254,39 @@ def test_source_dirty_overrides_pin():
 def test_source_unknown_on_git_error():
     fake = FakeSystem(
         paths={_ABS, f"{_ABS}/.git"},
-        commands={("git", "-C", _ABS, "rev-parse", "HEAD"): CommandResult(128, "", "fatal")},
+        commands={("git", "-C", _ABS, "status", "--porcelain=v2", "--branch",
+                   "--untracked-files=no"): CommandResult(128, "", "fatal")},
     )
     p = probe_source(fake.system, SourceSpec(path="src/comp", pin_commit=_PIN), _ABS)
     assert p.state is SourceState.UNKNOWN
+
+
+def test_source_probe_is_two_subprocesses_and_parses_status_v2():
+    """0.2.9: ONE `git status --porcelain=v2 --branch` (HEAD + tracked dirtiness) plus
+    `git describe` — never a third `rev-parse`. Detached HEAD keeps its oid; an unborn branch
+    or a timeout is UNKNOWN, never a guessed clean."""
+    from lhpc.core.probes.source import parse_status_v2
+    assert parse_status_v2(f"# branch.oid {_PIN}\n# branch.head main\n") == (_PIN, False)
+    assert parse_status_v2(f"# branch.oid {_PIN}\n# branch.head (detached)\n") == (_PIN, False)
+    assert parse_status_v2("# branch.oid (initial)\n# branch.head main\n") == ("", False)
+    assert parse_status_v2(f"# branch.oid {_PIN}\n1 .M N... 100644 100644 100644 a b f.c\n") == (_PIN, True)
+    assert parse_status_v2(f"# branch.oid {_PIN}\n2 R. N... 100644 100644 100644 a b R100 n\to\n")[1]
+    assert parse_status_v2(f"# branch.oid {_PIN}\nu UU N... 100644 100644 100644 100644 a b c f\n")[1]
+    fake = _fake(_PIN)
+    p = probe_source(fake.system, SourceSpec(path="src/comp", pin_commit=_PIN), _ABS)
+    assert p.state is SourceState.MATCH
+    gits = [c for c in fake.system.runner.calls if c[:1] == ["git"]]
+    assert len(gits) == 2 and gits[0][3] == "status" and gits[1][3] == "describe"
+    assert not any("rev-parse" in c for c in gits)
+    # unborn branch -> UNKNOWN, with no head
+    fake2 = FakeSystem(paths={_ABS, f"{_ABS}/.git"}, commands={
+        ("git", "-C", _ABS, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+            CommandResult(0, "# branch.oid (initial)\n", "")})
+    p2 = probe_source(fake2.system, SourceSpec(path="src/comp", pin_commit=_PIN), _ABS)
+    assert p2.state is SourceState.UNKNOWN and p2.head == ""
+    # timeout -> UNKNOWN
+    fake3 = FakeSystem(paths={_ABS, f"{_ABS}/.git"}, commands={
+        ("git", "-C", _ABS, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+            CommandResult(0, "", "", timed_out=True)})
+    assert probe_source(fake3.system, SourceSpec(path="src/comp", pin_commit=_PIN),
+                        _ABS).state is SourceState.UNKNOWN

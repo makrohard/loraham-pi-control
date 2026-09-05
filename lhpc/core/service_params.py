@@ -419,7 +419,7 @@ class ParamsConfigMixin:
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
         use_band = "" if (cfg_band and name in _BANDLESS_STACK_PARAMS) else cfg_band
-        stored = load_stack_config(self._paths, self._owner_stack_id(target), use_band)
+        stored = self._stack_config_cached(self._owner_stack_id(target), use_band)
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -432,13 +432,13 @@ class ParamsConfigMixin:
         operator-substituted default — never masked by a same-named sibling."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
         if cfg_band and name in _BANDLESS_STACK_PARAMS:
             # STACK-LEVEL params live in the BAND-LESS file (see `save_config_bundle`). Read from
             # the banded file they resolve to their DEFAULT — which the console and `lhpc config`
             # then display, and which the next bundle save writes back as "at default -> remove",
             # silently clearing the switch while editing something unrelated.
-            stored = load_stack_config(self._paths, self._owner_stack_id(target), "")
+            stored = self._stack_config_cached(self._owner_stack_id(target), "")
         rc, fc = self._owner_param_counts(owner)
         k = "r" if kind == "run" else "f"
         count = (rc if kind == "run" else fc).get(name, 0)
@@ -640,7 +640,7 @@ class ParamsConfigMixin:
         owner = self._owner_stack(target)
         if owner is None:
             return None
-        stored = load_stack_config(self._paths, self._owner_stack_id(target),
+        stored = self._stack_config_cached(self._owner_stack_id(target),
                                    self._config_band(target, band))
         run_counts, file_counts = self._owner_param_counts(owner)
         owner_comp_ids = {c.id for c in owner.components}
@@ -670,7 +670,7 @@ class ParamsConfigMixin:
         ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
         run_counts, _ = self._owner_param_counts(owner)
         op = self.config().operator
 
@@ -825,7 +825,7 @@ class ParamsConfigMixin:
         if s is not None and s.main == self.DAEMON_ID:
             comps = []
         cfg = self.config()
-        stored = load_stack_config(self._paths, target)
+        stored = self._stack_config_cached(target)
         live = {cid: st.run_state for ss in self.build_snapshot().stacks
                 for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
@@ -1713,7 +1713,7 @@ class ParamsConfigMixin:
         found = {}
         for sid in ("reticulum",):
             try:
-                cfg = load_stack_config(self._paths, sid)
+                cfg = self._stack_config_cached(sid)
             except ConfigError as exc:
                 # `load_stack_config` is FAIL-CLOSED: a malformed/unreadable stack file raises
                 # ConfigError, which is NOT an OSError or ValueError. Catching the wrong types
@@ -2137,7 +2137,7 @@ class ParamsConfigMixin:
         ambiguous flat legacy value is NOT applied here (the start blocks; see `_config_ambiguity`)."""
         cfg_band = self._config_band(target, band)
         owner = self._owner_stack(target)
-        stored = load_stack_config(self._paths, self._owner_stack_id(target), cfg_band)
+        stored = self._stack_config_cached(self._owner_stack_id(target), cfg_band)
         _, file_counts = self._owner_param_counts(owner)
         out = {}
         for c in self._file_config_components(target):

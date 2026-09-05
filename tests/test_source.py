@@ -61,12 +61,13 @@ def _ls_remote(remote, ref, sha):
 
 
 def _git_src(src, sha):
-    """A clean git checkout at `sha`. `probe_source` needs all three: a failing `status
-    --porcelain` makes it return UNKNOWN *without* a head, and the row then renders no @head."""
+    """A clean git checkout at `sha`. `probe_source` needs both: a failing `status
+    --porcelain=v2` makes it return UNKNOWN *without* a head, and the row then renders no @head."""
     a = str(src)
-    return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),
-            ("git", "-C", a, "describe", "--tags", "--always", "--dirty"): CR(0, "v111a\n", ""),
-            ("git", "-C", a, "status", "--porcelain", "--untracked-files=no"): CR(0, "", "")}
+    return {("git", "-C", a, "rev-parse", "HEAD"): CR(0, sha + "\n", ""),     # the source check's own read
+            ("git", "-C", a, "status", "--porcelain=v2", "--branch", "--untracked-files=no"):
+                CR(0, f"# branch.oid {sha}\n# branch.head main\n", ""),
+            ("git", "-C", a, "describe", "--tags", "--always", "--dirty"): CR(0, "v111a\n", "")}
 
 
 def test_uninstalled_source_is_unknown_and_makes_no_network_call(tmp_path):
@@ -4334,3 +4335,141 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch):
     # ...and with the TUI gone, the marker is reaped exactly like chat's.
     snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
     assert "voice" in svc.clear_stale_interactive(keep="kiss")
+
+
+# ===== 0.2.9: the render contract "once per request" =====
+def _count_calls(monkeypatch, owner, name):
+    n = []
+    orig = getattr(owner, name)
+    monkeypatch.setattr(owner, name, lambda self, *a, **k: (n.append(1), orig(self, *a, **k))[1])
+    return n
+
+
+def test_a_render_reads_firewall_status_and_listeners_once(tmp_path, monkeypatch):
+    # Before 0.2.9 a /stacks render called firewall_status() 10–13× and tcp_listeners() once per
+    # TCP endpoint; both are now render-wide reads passed down the existing seams.
+    from lhpc.core.probes.backends import FakeSystem as _FS
+    fw = _count_calls(monkeypatch, ControllerService, "firewall_status")
+    lis = _count_calls(monkeypatch, _FS, "tcp_listeners")
+    c = create_app(lambda: _svc_snapshot_cache(tmp_path)).test_client()
+    for path in ("/stacks", "/", "/stacks/meshcore/body"):
+        fw.clear(); lis.clear()
+        assert c.get(path).status_code == 200
+        assert len(fw) <= 2, (path, len(fw))          # the render-wide read (+ the settings view)
+        assert len(lis) <= 2, (path, len(lis))        # the snapshot assessment + ONE shared read
+
+
+def test_stack_config_is_loaded_once_per_stack_and_band_per_request(tmp_path, monkeypatch):
+    # 467 `load_stack_config` reads per render (every parameter row) collapse to one per
+    # (stack, band) through the thread-local request memo.
+    from lhpc.core import service_params as _sp
+    n = []
+    orig = _sp.load_stack_config
+    monkeypatch.setattr(_sp, "load_stack_config",
+                        lambda *a, **k: (n.append((a[1], a[2] if len(a) > 2 else k.get("band", ""))),
+                                         orig(*a, **k))[1])
+    svc = _svc_snapshot_cache(tmp_path)
+    c = create_app(lambda: svc).test_client()
+    n.clear(); assert c.get("/stacks").status_code == 200
+    assert len(n) == len(set(n)), "the same (stack, band) file was read more than once in a render"
+    assert len(n) <= 3 * len(svc.stacks())
+
+
+def test_request_memo_is_thread_local_and_cleared_with_the_snapshot(tmp_path):
+    import threading
+    svc = _svc_snapshot_cache(tmp_path)
+    a = svc._request_memo(("k",), object)
+    assert svc._request_memo(("k",), object) is a            # memoized within the request
+    svc.invalidate_snapshot()
+    b = svc._request_memo(("k",), object)
+    assert b is not a                                          # dropped with the snapshot
+    svc._invalidate_config()
+    assert svc._request_memo(("k",), object) is not b          # dropped by a config write too
+    r = {}
+    def other():
+        r["t"] = svc._request_memo(("k",), object)
+    t = threading.Thread(target=other); t.start(); t.join(5)
+    assert r["t"] is not svc._request_memo(("k",), object)    # per thread, never shared
+    # a failing compute is never memoized
+    calls = []
+    def boom():
+        calls.append(1)
+        raise ValueError("x")
+    for _ in range(2):
+        try:
+            svc._request_memo(("boom",), boom)
+        except ValueError:
+            pass
+    assert calls == [1, 1]
+
+
+def test_consumed_source_lines_run_git_once_per_component_per_request(tmp_path):
+    svc = _svc_snapshot_cache(tmp_path)
+    comp = next(c for s in svc.stacks() for c in s.components if c.build_requires and c.build_marker)
+    before = len(svc._system.runner.calls)
+    first = svc._consumed_source_lines(comp)
+    n_git = len(svc._system.runner.calls) - before
+    assert n_git >= 1 and svc._consumed_source_lines(comp) == first
+    assert len(svc._system.runner.calls) - before == n_git      # the second read hit the memo
+    svc.invalidate_snapshot()
+    svc._consumed_source_lines(comp)
+    assert len(svc._system.runner.calls) - before == 2 * n_git  # a new request recomputes
+
+
+def test_runtime_root_realpath_is_resolved_once_but_every_target_per_call(tmp_path, monkeypatch):
+    import os as _os
+    from lhpc.core.paths import PathContainmentError, Paths
+    root = tmp_path / "rt"
+    (root / "state").mkdir(parents=True)
+    p = Paths(runtime_root=root)
+    p.under("state")                                           # warms the root's realpath
+    n = []
+    orig = _os.path.realpath
+    monkeypatch.setattr(_os.path, "realpath", lambda x, *a, **k: (n.append(x), orig(x, *a, **k))[1])
+    p.under("state", "x.json"); p.under("logs", "y.log")
+    assert len(n) == 2 and all(str(root) != str(x) for x in n)  # targets only, never the root again
+    (root / "state" / "esc").symlink_to(tmp_path)              # a symlink leaving the root
+    with pytest.raises(PathContainmentError):
+        p.under("state", "esc", "z")                           # still caught per call
+
+
+def test_components_sharing_a_checkout_and_pin_are_probed_once_per_snapshot(tmp_path):
+    # chat and igate both build from src/LoRaHAM_Daemon at the same pin: one snapshot asks git
+    # about that checkout ONCE (two subprocesses), not once per component.
+    from lhpc.core.probes.backends import FakeSystem
+    from lhpc.core.status import StatusProber
+    src = tmp_path / "src" / "LoRaHAM_Daemon"
+    fake = FakeSystem(paths={str(src), str(src / ".git")}, commands=_git_src(src, "a" * 40))
+    svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
+    comps = [c for s in svc.stacks() for c in s.components
+             if c.source and c.source.path == "src/LoRaHAM_Daemon"]
+    assert len(comps) >= 2 and len({c.source.pin_commit for c in comps}) == 1   # precondition
+    prober = StatusProber(fake.system, svc._paths)
+    snap = prober.assess_stacks(svc.stacks())
+    git = [c for c in fake.system.runner.calls if c[:3] == ["git", "-C", str(src)]]
+    assert len(git) == 2, git                                   # status + describe, once
+    heads = {snap.stacks[i].components[c.id].source_head for i, s in enumerate(svc.stacks())
+             for c in comps if c.id in snap.stacks[i].components}
+    assert heads == {"a" * 40}
+    # a DIFFERENT pin on the same path is a different question -> its own probe
+    from lhpc.core.model import SourceSpec
+    other = SourceSpec(path="src/LoRaHAM_Daemon", pin_commit="b" * 40)
+    prober2 = StatusProber(fake.system, svc._paths)
+    fake.system.runner.calls.clear()
+    prober2._assess_source(type("C", (), {"id": "x", "source": other})())
+    prober2._assess_source(type("C", (), {"id": "y", "source": comps[0].source})())
+    assert len([c for c in fake.system.runner.calls if c[:1] == ["git"]]) == 4
+
+
+def test_a_restart_plan_assesses_the_snapshot_once(tmp_path, monkeypatch):
+    # The combined restart plan (start leg + stop collateral) goes through the INNER planners: the
+    # public entries would drop the snapshot and the request memo between the two legs and assess
+    # everything twice inside one web Restart click.
+    from conftest import set_call
+    n = _count_assessments(monkeypatch)
+    svc = _svc_snapshot_cache(tmp_path)
+    set_call(svc)
+    n.clear()
+    plan = svc.restart("igate", apply=False)
+    assert plan.ok and "dependents" in plan.data
+    assert len(n) <= 2, f"restart plan assessed {len(n)}×"          # one memoized (+ one fresh recheck)

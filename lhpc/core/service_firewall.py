@@ -1045,9 +1045,9 @@ class FirewallOpsMixin:
         id, resolved proto/port, deny flag, selection, whether it exposes non-loopback), the
         locked SSH + proxy-ingress rows, AP controls, foreign-firewall recommendation, and the
         three script paths for the cmdboxes."""
-        cand = self.firewall_candidate()
         fwcfg = getattr(self.config(), "firewall", None)
         st = self.firewall_status()
+        cand = st.get("candidate") or self.firewall_candidate()   # the status already built it
         rows, seen_ids = [], set()
         for e in cand["endpoints"]:
             # One UI row per STABLE endpoint id — a stack whose per-band scopes diverge produces

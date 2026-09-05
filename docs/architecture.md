@@ -155,6 +155,14 @@ Full detail (and what is still open) in [`hardening-0.1.md`](hardening-0.1.md); 
   malformed or malicious journal blocks fail-closed.
 - **Typed outcomes.** A verified stop needs process cessation AND ready-endpoint disappearance;
   markers clear only then, and restart/owner-stop/cascade propagate typed failures.
+- **Evidence once per request (0.2.9 render contract).** A page render reads each piece of
+  evidence ONCE: the status snapshot (thread-local memo, dropped at every request start and
+  around every public mutation), the per-(stack, band) config files and a component's consumed-
+  source SHAs (the same thread-local `_request_memo`), one firewall status and one `/proc/net/tcp`
+  listener snapshot passed down the `fw_status=`/`listeners=` seams, one `realpath` of the runtime
+  root per process (every target path is still resolved per call), and two git subprocesses per
+  distinct checkout and pin (`status --porcelain=v2 --branch` for HEAD + tracked dirtiness,
+  `describe` for the version; components sharing a checkout are probed once per snapshot). Authoritative rechecks under operation locks keep using `build_snapshot(fresh=True)`.
 - **Detached web jobs (install/build/test and, since 0.2.9, start/restart).** The console reserves
   an attempt marker (`state/jobresults/<log>.json`), spawns the child under task admission,
   captures the child's complete process identity, **releases its own admission**, and only then

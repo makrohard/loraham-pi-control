@@ -22,6 +22,7 @@ inside it or adoption is refused typed.
 
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,15 @@ class Paths:
     def runtime_root_exists(self) -> bool:
         return self.runtime_root.is_dir()
 
+    @functools.cached_property
+    def _root_real(self) -> Path:
+        """`realpath(runtime_root)`, resolved ONCE per `Paths` (a frozen dataclass; the cache
+        lives in the instance dict). One process has one runtime root, whose own symlinks exist
+        before the controller starts — the TARGET of every `under()`/`contains()` is still
+        resolved per call, so a symlink-escape of a mutable path is caught exactly as before.
+        A render used to resolve the root a thousand times (2.5 s on a Zero 2 W)."""
+        return Path(os.path.realpath(self.runtime_root))
+
     def _lexical_under(self, rel: str) -> Path:
         """Lexical containment only (reject absolute / `..`). Used for SOURCE dirs,
         which may legitimately be SYMLINKS to an external checkout (adopt-by-link)."""
@@ -61,7 +71,7 @@ class Paths:
         (Use `resolve_source` for observe-only source dirs, which may be links.)"""
         rel = os.path.join(*parts) if parts else ""
         target = self._lexical_under(rel)
-        base_real = Path(os.path.realpath(self.runtime_root))
+        base_real = self._root_real
         real = Path(os.path.realpath(target))
         if real != base_real and base_real not in real.parents:
             raise PathContainmentError(f"path escapes runtime root via symlink: {rel!r}")
@@ -70,7 +80,7 @@ class Paths:
     def contains(self, path: Path) -> bool:
         """True if `path` (an absolute runtime path) stays under the runtime root once
         its PARENT's symlinks are resolved — without following a leaf symlink."""
-        base = Path(os.path.realpath(self.runtime_root))
+        base = self._root_real
         real = Path(os.path.realpath(path.parent)) / path.name
         return real == base or base in real.parents
 

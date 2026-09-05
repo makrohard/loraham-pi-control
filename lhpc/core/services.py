@@ -28,6 +28,7 @@ from .config import (
     HW_SETUPS,
     Config,
     ConfigError,
+    _stack_config_path,
     conditional_clear_stack_config,
     load_config,
     load_stack_config,
@@ -339,9 +340,11 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     def _invalidate_config(self) -> None:
         """Drop the cached Config so the NEXT read (any thread) reloads from disk. Called
         after every successful config mutation so a saved callsign/remote/param is
-        immediately visible to subsequent web AND CLI service actions (no stale cache)."""
+        immediately visible to subsequent web AND CLI service actions (no stale cache). The
+        writing thread's per-request evidence memo (stack configs) is dropped with it."""
         with self._config_lock:
             self._config = None
+        self._snapshot_state.memo = None
 
     def _installer(self) -> Installer:
         return Installer(self._paths, self.stacks(), self.config(), self._system)
@@ -870,8 +873,43 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         per HTTP request (web before_request) and on entry+exit of every PUBLIC mutating service entry
         (`@invalidates_snapshot`, snapshot_memo.py), so a snapshot is never served after state could
         change. Under-lock authoritative rechecks additionally use `build_snapshot(fresh=True)` to bypass
-        a snapshot this same op cached before it acquired its lock. Thread-local (see `__init__`)."""
+        a snapshot this same op cached before it acquired its lock. Thread-local (see `__init__`).
+        The per-request evidence memo (`_request_memo`) shares this lifetime and is dropped with it."""
         self._snapshot_state.cache = None
+        self._snapshot_state.memo = None
+
+    def _request_memo(self, key, compute):
+        """ONCE PER REQUEST (0.2.9 render contract): memoize a read-only piece of evidence for the
+        rest of the current request/operation, in the SAME thread-local state as the snapshot —
+        never an ordinary service attribute, because Waitress worker threads share this service.
+        Cleared wherever the snapshot memo is cleared (every web request start, every public
+        mutating entry) and by `_invalidate_config` (a config write in this thread). Only a
+        successful `compute()` is memoized; an exception propagates and is retried next time."""
+        st = self._snapshot_state
+        memo = getattr(st, "memo", None)
+        if memo is None:
+            memo = st.memo = {}
+        try:
+            return memo[key]
+        except KeyError:
+            val = memo[key] = compute()
+            return val
+
+    def _stack_config_cached(self, stack_id: str, band: str = "") -> dict:
+        """`load_stack_config` once per (stack, band) per request — the parameter views resolve
+        every row through it (hundreds of reads of the same few files per render). The memo key
+        carries the file's stat signature (inode, size, mtime), so a write by ANY path — a service
+        save, a CLI in another process, a hand edit — is seen on the next read at the cost of one
+        `stat` instead of a parse; the safe no-follow loader still reads the bytes. READ-ONLY: the
+        returned dict is shared for the request; callers must not mutate it. A malformed file
+        still raises `ConfigError` on every read (never memoized)."""
+        try:
+            st = os.stat(_stack_config_path(self._paths, stack_id, band))
+            sig = (st.st_ino, st.st_size, st.st_mtime_ns)
+        except OSError:
+            sig = None
+        return self._request_memo(("stack-config", stack_id, band, sig),
+                                  lambda: load_stack_config(self._paths, stack_id, band))
 
     # ---- read-only operations --------------------------------------------
 
@@ -1746,7 +1784,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if not stack_id:
             return False
         try:
-            cfg = load_stack_config(self._paths, stack_id)          # bandless
+            cfg = self._stack_config_cached(stack_id)          # bandless
         except (OSError, ValueError, KeyError, ConfigError):
             return False
         raw = str(cfg.get("use_gps", "")).strip().lower()
@@ -1937,7 +1975,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if s is not None:
             # Optional components are soft: included only when the operator has
             # opted into auto-starting them (even via another component's depends_on).
-            cfg = load_stack_config(self._paths, target)
+            cfg = self._stack_config_cached(target)
             # Only a TICKABLE optional component (`optional_role`) honours its saved tick: a stale
             # `autostart_<feed>` or `autostart_<fixture>` flag must never force a feed the position
             # plan does not want (the whole stack then stopped starting) or silently replay a

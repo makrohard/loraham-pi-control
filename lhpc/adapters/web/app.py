@@ -338,8 +338,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # Webserver box: LHCP console (always) + each running web-UI stack. Resolve the request-scoped
         # reached address + log href here (the service returns structural evidence only).
         webservers = []
+        # ONE firewall read for the whole Dashboard: the webserver rows and the firewall box.
         try:
-            for w in service.dashboard_webservers(served_via_nginx=served_via_nginx()):
+            firewall = service.firewall_status()
+        except Exception:
+            firewall = None
+        try:
+            for w in service.dashboard_webservers(served_via_nginx=served_via_nginx(),
+                                                  fw_status=firewall):
                 w_entry = w
                 if w["kind"] == "console":
                     addr = _console_addr(w.get("port", ""))
@@ -383,11 +389,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             webservers = []            # fail-safe: never break the dashboard over the webserver box
         try:
-            firewall = service.firewall_status()
+            if firewall is None:
+                raise RuntimeError("firewall status unavailable")
             firewall["has_log"] = service.firewall_has_log()
             security_pill = service.security_pill(webservers)
         except Exception:
             firewall, security_pill = None, {"level": "warn", "label": "unknown", "title": ""}
+        restart_required = service.restart_required_stacks()      # read once: box + signature
         return render_template(
             "dashboard.html", version=__version__, runtime_root=_runtime_root(),
             radios=radios, pending_interactive=pending_interactive, webservers=webservers,
@@ -401,7 +409,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             peer_loopback=peer_is_loopback(),
             # Durable restart-required flags (file reads only): a yellow "Restart now"
             # action per flagged stack.
-            restart_required=service.restart_required_stacks(),
+            restart_required=restart_required,
             welcome=service.auto_install_welcome(),
             welcome_dismissed=service.welcome_note_dismissed(),
             tasks=service.running_tasks(),
@@ -413,7 +421,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             power_ok={"reboot": service.power_supported("reboot"),
                       "poweroff": service.power_supported("poweroff")},
             network_dash=_network_dash_safe(service),
-            dash_sig=service.dash_signature())
+            dash_sig=service.dash_signature(restart_required=restart_required))
 
     @app.get("/api/dash-signature")
     def dash_signature_api():
@@ -752,7 +760,21 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} d ago"
 
-    def _stack_groups(band="", only_sid=None, cfg_sid=""):
+    def _render_wide_reads():
+        """The evidence a whole Apps/Dashboard render shares — ONE firewall status and ONE
+        /proc/net/tcp listener snapshot — passed down the existing `listeners=`/`fw_status=`
+        seams instead of being re-read per stack (10–13× per page before 0.2.9). Fail-soft."""
+        try:
+            fw = service.firewall_status()
+        except Exception:
+            fw = None
+        try:
+            lis = service._request_memo(("tcp-listeners",), service._system.procfs.tcp_listeners)
+        except Exception:
+            lis = None
+        return fw, lis
+
+    def _stack_groups(band="", only_sid=None, cfg_sid="", *, fw_status=None, listeners=None):
         """Per-stack overview rows for the Stacks page. Each row now carries the FULL per-stack
         detail (formerly the /stacks/<id> page): component statuses/evidence, system+build+runtime
         dependency diagnosis, needs-build, daemon parameters, known-working offer, restart-required
@@ -851,7 +873,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
                 # [] for a stack with no web UI -> no Webserver sub-section; else one entry per
                 # proxied PAGE (component with a client http/https endpoint).
-                "stack_webs": service.stack_web_views(stack.id),
+                "stack_webs": service.stack_web_views(stack.id, listeners=listeners,
+                                                      fw_status=fw_status),
                 # One Password sub-section per component that declares where its self-generated
                 # UI password lives — independent of web pages.
                 "ui_creds_list": service.ui_credentials_list(stack.id),
@@ -929,7 +952,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         with a missing var. `hw_probe` is caller-supplied (the page pops it from the session and shows
         it inline; the lazy partial passes None — the transient belongs to the whole-page render).
         `only_sid` (lazy partial) builds just that stack's group — the page-wide ctx below is O(1)."""
-        groups, snapshot = _stack_groups(band, only_sid, cfg_sid)
+        fw_status, listeners = _render_wide_reads()
+        groups, snapshot = _stack_groups(band, only_sid, cfg_sid, fw_status=fw_status,
+                                         listeners=listeners)
         # Rows the operator had open on their last visit (mirrored to the `lhpc_open` cookie by
         # stacks_state.js). Rendering them already-open with their body inline — like a ?open= row —
         # means a restored-open row is present at FIRST PAINT, so re-opening it never shifts the page
@@ -940,7 +965,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # evidence only (monitor_view: no probing/mutation) — fail-safe so it never breaks /stacks.
         from lhpc.core.config import WEBSERVER_ACCESS_MODES as _WS_MODES
         try:
-            _ws = service.webserver_monitor(served_via_nginx=served_via_nginx()).data
+            _ws = service.webserver_monitor(served_via_nginx=served_via_nginx(),
+                                            listeners=listeners, fw_status=fw_status).data
         except Exception:
             _ws = None
         ctx = {

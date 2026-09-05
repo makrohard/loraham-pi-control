@@ -597,7 +597,8 @@ class WebserverOpsMixin:
                 port=live_port, live_scope=listen_scope) if swc.enabled else [],
         }
 
-    def dashboard_webservers(self, served_via_nginx: bool | None = None) -> list[dict]:
+    def dashboard_webservers(self, served_via_nginx: bool | None = None,
+                             fw_status=None) -> list[dict]:
         """Rows for the dashboard Webserver box: the console (LHCP) ALWAYS, then — for each stack whose
         MAIN component is running/degraded — its web-UI row (http/https) followed by a row per OTHER
         open TCP port (kiss/meshcore/meshtastic; no auth). Structural evidence only — the adapter adds
@@ -607,15 +608,18 @@ class WebserverOpsMixin:
         from .model import RunState
         up = (RunState.RUNNING, RunState.DEGRADED)
         try:
-            snap = self._system.procfs.tcp_listeners()      # ONE /proc/net/tcp read for the whole box
+            # ONE /proc/net/tcp read for the whole REQUEST (shared with the component pins)
+            snap = self._request_memo(("tcp-listeners",), self._system.procfs.tcp_listeners)
         except Exception:
             snap = []
-        try:
-            # ONE firewall read for the whole render, like `snap` above: firewall_status() re-reads
-            # the receipt and re-hashes the intent, which is measurable per row on a Zero 2W.
-            fw_status = self.firewall_status()
-        except Exception:
-            fw_status = None                                # -> containment "unknown", conservative
+        if fw_status is None:
+            try:
+                # ONE firewall read for the whole render, like `snap` above: firewall_status()
+                # re-reads the receipt and re-hashes the intent, which is measurable per row on a
+                # Zero 2W. The dashboard route hands in the read it already made for its own box.
+                fw_status = self.firewall_status()
+            except Exception:
+                fw_status = None                            # -> containment "unknown", conservative
         # ONE /proc cmdline scan at most, and only if a row actually needs it: `cmdlines()` lists
         # /proc and reads a file per PID, and most rows are fixed-port endpoints that never ask.
         argv_cache: dict = {}

@@ -24,6 +24,22 @@ class SourceProbe:
     evidence: dict[str, str] = field(default_factory=dict)
 
 
+def parse_status_v2(text: str) -> tuple[str, bool]:
+    """(head, dirty) from `git status --porcelain=v2 --branch` output. `head` is the
+    `# branch.oid` value ("" for an unborn `(initial)` branch or a missing header); `dirty`
+    is True when any entry line (ordinary `1`, rename/copy `2`, unmerged `u`) is present —
+    headers (`#`) and, with -uno, nothing else appear otherwise. Detached HEAD
+    (`# branch.head (detached)`) still carries its oid."""
+    head, dirty = "", False
+    for line in text.splitlines():
+        if line.startswith("# branch.oid "):
+            oid = line.split(" ", 2)[2].strip()
+            head = "" if oid == "(initial)" else oid
+        elif line and not line.startswith("#"):
+            dirty = True
+    return head, dirty
+
+
 def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe:
     ev = {"path": abs_path}
     if not system.fs.exists(abs_path):
@@ -33,16 +49,26 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
         ev["state"] = "not-a-repo"
         return SourceProbe(SourceState.NOT_A_REPO, evidence=ev)
 
-    head_res = system.runner.run(
-        ["git", "-C", abs_path, "rev-parse", "HEAD"], timeout=_TIMEOUT_S
+    # ONE `git status --porcelain=v2 --branch` answers both questions the probe used to ask
+    # git separately (HEAD via rev-parse, tracked dirtiness via status): `# branch.oid` is the
+    # full HEAD commit, and every non-header line is a TRACKED-file change (-uno excludes
+    # untracked files: build artifacts, *.log and app runtime data the programs write into
+    # their own repo are NOT source edits). Two subprocesses per source instead of three.
+    status_res = system.runner.run(
+        ["git", "-C", abs_path, "status", "--porcelain=v2", "--branch", "--untracked-files=no"],
+        timeout=_TIMEOUT_S,
     )
-    if head_res.timed_out:
-        ev["error"] = "git rev-parse timed out"
+    if status_res.timed_out:
+        ev["error"] = "git status timed out"
         return SourceProbe(SourceState.UNKNOWN, evidence=ev)
-    if head_res.returncode != 0:
-        ev["error"] = (head_res.stderr or "git rev-parse failed").strip()[:120]
+    if status_res.returncode != 0:
+        ev["error"] = (status_res.stderr or "git status failed").strip()[:120]
         return SourceProbe(SourceState.UNKNOWN, evidence=ev)
-    head = head_res.stdout.strip()
+    head, dirty = parse_status_v2(status_res.stdout)
+    if not head:
+        # An unborn branch (`(initial)`) or an unparseable answer: no HEAD to compare -> UNKNOWN.
+        ev["error"] = "git status: no HEAD commit"
+        return SourceProbe(SourceState.UNKNOWN, evidence=ev)
     ev["head"] = head
 
     desc = system.runner.run(
@@ -52,19 +78,6 @@ def probe_source(system: System, spec: SourceSpec, abs_path: str) -> SourceProbe
     version = desc.stdout.strip() if desc.returncode == 0 else head[:12]
     ev["version"] = version
 
-    # Only TRACKED-file modifications count as "dirty" (-uno excludes untracked
-    # files). Build artifacts (compiled binaries, *.log) and app runtime data the
-    # programs write into their own repo (channels.json, contacts.mesh, …) are NOT
-    # source edits and must not mark the source modified.
-    status_res = system.runner.run(
-        ["git", "-C", abs_path, "status", "--porcelain", "--untracked-files=no"],
-        timeout=_TIMEOUT_S,
-    )
-    if status_res.timed_out or status_res.returncode != 0:
-        # Can't determine cleanliness -> report UNKNOWN rather than assuming clean.
-        ev["error"] = (status_res.stderr or "git status failed").strip()[:120]
-        return SourceProbe(SourceState.UNKNOWN, evidence=ev)
-    dirty = bool(status_res.stdout.strip())
     if dirty:
         ev["dirty"] = "yes"
         return SourceProbe(SourceState.DIRTY, head=head, version=version, evidence=ev)

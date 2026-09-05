@@ -72,16 +72,20 @@ def _matched_listeners(listeners, port: int, family: str | None) -> list:
 
 
 def tcp_endpoint_match(system: System, address: str,
-                       resolve_owner: bool = True) -> tuple[bool, str, int | None, bool]:
+                       resolve_owner: bool = True,
+                       listeners=None) -> tuple[bool, str, int | None, bool]:
     """Family/host-aware TCP endpoint match — the ONE matcher shared by status, start
     readiness, and stop cessation. Returns (present, evidence, owner_pid, owner_incomplete).
     The owner PID, when resolved, is that of the MATCHED loopback listener — never a
-    wrong-family listener that merely shares the port."""
+    wrong-family listener that merely shares the port. `listeners` is a caller-shared
+    `tcp_listeners()` snapshot (one /proc read for a whole assessment); None reads fresh."""
     try:
         _host, port, family = parse_endpoint(address)
     except ValueError as exc:
         return False, f"{address}: invalid ({exc})", None, False
-    matched = _matched_listeners(system.procfs.tcp_listeners(), port, family)
+    if listeners is None:
+        listeners = system.procfs.tcp_listeners()
+    matched = _matched_listeners(listeners, port, family)
     fam = family or "localhost"
     if not matched:
         return False, f"{address}: absent (family={fam})", None, False

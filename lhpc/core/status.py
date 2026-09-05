@@ -77,6 +77,14 @@ class StatusProber:
         # artifact. Passed in by the service (which owns the receipt read) so status stays a
         # pure, bounded assessor.
         self._binary_cover = binary_cover or {}
+        # ONE /proc/net/tcp read per whole-snapshot assessment (set by `assess_stacks`); None
+        # outside it, so a standalone `assess_component` still reads fresh.
+        self._listeners = None
+        # ONE git probe per identical (checkout, pin) for the life of this prober — several
+        # components share a checkout (chat and igate both build from src/LoRaHAM_Daemon), and the
+        # probe's answer depends on nothing but the path and the pin. A prober lives for one
+        # snapshot, so this needs no invalidation; a different pin is a different key.
+        self._source_probes: dict = {}
 
     def _resolve_addr(self, address: str, *, lenient: bool = False) -> str:
         """A RELATIVE unix/path endpoint address is runtime-root-relative (contained by
@@ -112,14 +120,21 @@ class StatusProber:
         snap = Snapshot(runtime_root_exists=self._paths.runtime_root_exists)
         index: dict[str, ComponentStatus] = {}
         all_components: list[Component] = []
-        for stack in stacks:
-            ss = StackStatus(stack=stack)
-            for comp in stack.components:
-                status = self.assess_component(comp)
-                ss.components[comp.id] = status
-                index[comp.id] = status
-                all_components.append(comp)
-            snap.stacks.append(ss)
+        try:
+            self._listeners = self._system.procfs.tcp_listeners()   # once for every TCP endpoint
+        except Exception:
+            self._listeners = None
+        try:
+            for stack in stacks:
+                ss = StackStatus(stack=stack)
+                for comp in stack.components:
+                    status = self.assess_component(comp)
+                    ss.components[comp.id] = status
+                    index[comp.id] = status
+                    all_components.append(comp)
+                snap.stacks.append(ss)
+        finally:
+            self._listeners = None
 
         # Attach runtime dependency observations now that all are computed.
         for stack in stacks:
@@ -227,7 +242,11 @@ class StatusProber:
                 evidence={"artifact": rec.filename, "sha256": rec.artifact_sha256,
                           "built_from": commit, "channel": "binary"})
         abs_path = str(self._paths.resolve_source(comp.source.path))
-        return probe_source(self._system, comp.source, abs_path)
+        key = (abs_path, comp.source.pin_commit or "")
+        probe = self._source_probes.get(key)
+        if probe is None:
+            probe = self._source_probes[key] = probe_source(self._system, comp.source, abs_path)
+        return probe
 
     def _profile_state(self, comp: Component, src) -> ProfileState:
         # confirmed-working only when the CLEAN source's HEAD appears in an operator-confirmed
@@ -309,7 +328,7 @@ class StatusProber:
                 # retained owner PID is that of the MATCHED listener. Keeps status in exact
                 # agreement with start readiness and stop cessation.
                 present, detail, owner_pid, owner_incomplete = tcp_endpoint_match(
-                    self._system, spec.address)
+                    self._system, spec.address, listeners=self._listeners)
                 obs.present = present
                 obs.owner_pid = owner_pid
                 obs.owner_incomplete = owner_incomplete
