@@ -1254,7 +1254,9 @@ class MaintenanceOpsMixin:
         """The stack's CURRENT coherent composition from the ownership registry (one entry per
         source component), with a local `git rev-parse` fallback for a pre-registry adoption.
         Returns None when any source component cannot be resolved — a PARTIAL composition is
-        never captured (coherence over coverage). Mutation-context only (may run local git)."""
+        never captured (coherence over coverage); an OPTIONAL component whose source was never
+        adopted here (skipped GUI sidecar) is simply not part of it. Mutation-context only (may
+        run local git)."""
         from . import source_registry
         stack = self.stack(stack_id)
         if stack is None:
@@ -1266,6 +1268,12 @@ class MaintenanceOpsMixin:
                 continue
             rel = c.source.path
             rec = source_registry.read_record(self._paths, rel)
+            if rec is None and c.optional and not self._paths.resolve_source(rel).exists():
+                # An OPTIONAL component whose source was never adopted on this box (a GUI
+                # sidecar skipped on a headless install) is not part of what runs here, so it
+                # is not part of the composition either — otherwise a Lite box could never
+                # confirm the stack. An adopted-but-unprovable source still refuses below.
+                continue
             if rec is None or not rec.resolved_commit:
                 # Pre-registry adoption: origin-verify + BACKFILL a legacy record here in the
                 # mutation path (the same ownership proof update/uninstall require), so the

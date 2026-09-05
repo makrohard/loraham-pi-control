@@ -5,6 +5,7 @@
 - **Reticulum 1.5.1 → 1.5.2** — the maintenance release that fixes the 1.5.1 resource-transfer regression; nomadnet, lxmd and sideband stay.
 - **MeshCom firmware → the `dev` tip 674413c** (v4.35p.08.29 + 34: v4.35s backpressure, GPS filter, the KISS/TCP interface merged and reverted upstream); the QEMU overlay was rebased onto it, bounds the tip's new per-loop GPS UART drain under QEMU (an unpaced live feed starved the firmware loop and left the net-console deaf), and `setup.sh` fetches the firmware by ref so a SHA pin works (meshcom-qemu-raspi 579e463). Binary republished.
 - **Meshtastic firmware pin → the stable release tag v2.7.26** — the known-working line now follows stable tags (v2.8.x are prereleases); `dev` still builds the master tip. Binary republished from the tag.
+- **Known-working on headless boxes:** a stack whose optional GUI sidecar is skipped on a Lite install (Reticulum's Sideband) could never be confirmed as known working — the start candidate refused to exist for the missing checkout. A never-adopted optional component is now simply not part of the composition; an adopted-but-unprovable source still blocks it.
 - **Release test matrix** (`docs/test-matrix.md`) is the leading pre-release live test: every stack purged, installed, built and started on the box with times and memory recorded; the pin-maintenance recipe is one short list.
 
 ## 0.2.9

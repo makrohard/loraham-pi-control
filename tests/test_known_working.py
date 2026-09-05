@@ -613,3 +613,35 @@ def test_candidate_clear_failure_is_truthful_incomplete(tmp_path, monkeypatch):
     assert not res.ok                                     # truthful INCOMPLETE
     assert any("could not be cleared" in dd for dd in res.details)
     assert (d / "kiss.json").is_symlink()                 # evidence retained
+
+
+# --- composition capture: skipped optional sidecars ------------------------------------------
+
+def _seed_reticulum_sources(tmp_path, *, with_sideband: bool):
+    """Registry records + present dirs for the reticulum sources a Lite box adopts; Sideband's
+    checkout is absent unless asked for (the GUI sidecar is skipped without --with-gui)."""
+    paths = Paths(runtime_root=tmp_path)
+    rels = {"rns-lora-interface": "src/loraham-rns-interface", "rns": "src/reticulum",
+            "nomadnet": "src/nomadnet", "lxmd": "src/lxmf"}
+    if with_sideband:
+        rels["sideband"] = "src/sideband"
+    for i, (cid, rel) in enumerate(rels.items()):
+        (tmp_path / rel).mkdir(parents=True, exist_ok=True)
+        assert source_registry.write_record(paths, source_registry.RegistryRecord(
+            rel, "", "dev", chr(ord("a") + i) * 40, time.time(), "", "", (cid,)))
+    return paths
+
+
+def test_composition_excludes_an_optional_component_never_adopted_here(tmp_path):
+    """Reticulum on a Lite box: Sideband is skipped (no checkout, no record) — the composition
+    is the four adopted sources, so the stack CAN be confirmed as known working."""
+    _seed_reticulum_sources(tmp_path, with_sideband=False)
+    entries = _svc(tmp_path)._stack_composition_entries("reticulum")
+    assert entries and set(entries) == {"rns-lora-interface", "rns", "nomadnet", "lxmd"}
+
+
+def test_composition_still_refuses_a_missing_required_source(tmp_path):
+    """Coherence over coverage: the REQUIRED node source without a record -> no composition."""
+    paths = _seed_reticulum_sources(tmp_path, with_sideband=True)
+    assert source_registry.remove_record(paths, "src/reticulum")
+    assert _svc(tmp_path)._stack_composition_entries("reticulum") is None
