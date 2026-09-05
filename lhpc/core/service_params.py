@@ -31,7 +31,7 @@ from .config import (
     update_yaml,
 )
 from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
-from .model import ComponentKind, RunState
+from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, ConfigWrite
 from .snapshot_memo import invalidates_snapshot
