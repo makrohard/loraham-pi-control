@@ -223,9 +223,9 @@ Checks after the rows — every planned check of this release, filled as it is m
 | 37 | host tests | meshcore | host test PASSED in 0:02:37, lowest 132 MB, no OOM; TX test (one frame per band, daemon up) PASSED in 0:00:05, no OOM | pass |
 | 38 | host tests | meshtastic | host test refused as designed: binary install (rc 1, 0:00:03); TX test: not daemon-TX-testable by design (the stack drives its own radio; verify TX from its own app/logs) — the typed refusal says exactly that | n/a by design |
 | 39 | host tests | meshcom | host test refused as designed: binary install (rc 1, 0:00:03); TX test with the daemon up: first attempt 433 did not confirm (TXOK 1→1), retry PASSED in 0:00:06 (TXOK 1→2) | pass (host test n/a on the binary install; TX pass) |
-| 40 | release | final commit "0.2.10" (results table, docs) + tag v0.2.10 on main |  | queued |
-| 41 | release | CI, testlab, demo-pages green on the tag |  | queued |
-| 42 | release | images v0.2.10: milestone tag, both variants built, assets published |  | queued |
+| 40 | release | final commit "0.2.10" (results table, docs) + tag v0.2.10 on main | main rewritten to four commits over v0.2.9 (docs matrix 8921ef5 → pins 805f41c → known-working fix 82c63db → 0.2.10 f42dc45), tree identical to the tested state; tag v0.2.10 on f42dc45 pushed 2026-09-06 01:20 | pass |
+| 41 | release | CI, testlab, demo-pages green on the tag | on the tagged head f42dc45: CI success (run 33997957395), testlab success (33997957492); demo-pages did not trigger for the docs-only final commit and was green on the last code commit | pass |
+| 42 | release | images v0.2.10: milestone tag, both variants built, assets published | loraham-images milestone adcee81 tagged v0.2.10 after the binaries were live: lint, precheck, build (lite), build (desktop), publish-tag all success; assets loraham-lhpc-desktop.img.xz 1913 MiB (135 MiB under the 2 GiB limit), loraham-lhpc-lite.img.xz 892 MiB, components/packages/provenance per variant, SHA256SUMS, signature | pass |
 <!-- checks:end -->
 
 | host tests | outcome | duration | OOM | TX test |
