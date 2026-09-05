@@ -154,9 +154,11 @@ they inherit the global operator callsign via a `default = "{callsign}"` while t
 field is empty. `node` (31 UTF-8 bytes), `node_long` (39), `node_short` (4) are
 **unlicensed local identities** — give them `default = ""` and never `{callsign}`: they
 must be deliberately configured and never inherit an amateur callsign. A start without a
-resolvable identity is refused before any lifecycle mutation.
+resolvable identity is refused before any lifecycle mutation — by the plan already, so the web can
+send the operator to the exact Settings row.
 
-`param` entries become CLI args (start-time) or web **Settings** fields. A `config_file`
+`param` entries become CLI args (built from the SAVED values at start) and web **Settings** fields —
+Settings is the only place a value changes; a start never takes per-launch input. A `config_file`
 lets LHPC generate a component's config from a base, updating just the named keys.
 
 ```toml

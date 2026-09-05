@@ -199,28 +199,6 @@ _SECURITY_HEADERS = {
 ServiceFactory = Callable[[], ControllerService]
 
 
-def _parse_start_daemon_overrides(form):
-    """STRICTLY parse the Start-confirm `dp_*` fields into a per-band map ``{band: {PARAM: value}}``
-    (or None). Returns ``(per_band_or_None, error)``. Every field whose name starts with `dp_` must
-    have the exact shape ``dp_<band>_<PARAM>`` (both parts non-empty) and appear once — a malformed
-    or duplicated field name is rejected here (error != None) so the start fails BEFORE any launch.
-    Unknown band / unknown parameter / value validity are enforced by the service normalizer
-    (`_normalize_ephemeral_overrides`); this parser does not duplicate those rules. A blank value is
-    carried through (the service treats blank/absent as "no override")."""
-    per_band: dict = {}
-    for name in form:
-        if not name.startswith("dp_"):
-            continue
-        if len(form.getlist(name)) > 1:                       # duplicated/conflicting field
-            return None, f"duplicated daemon field {name!r}"
-        parts = name.split("_", 2)                            # ["dp", band, PARAM]
-        if len(parts) != 3 or not parts[1] or not parts[2]:   # malformed shape (dp_bad, dp_433_, dp_)
-            return None, f"malformed daemon field {name!r}"
-        _, band, param = parts
-        per_band.setdefault(band, {})[param] = form[name]
-    return (per_band or None), None
-
-
 def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     """Build the Flask app. `service_factory` is injectable for tests."""
     app = Flask(__name__)
@@ -1347,118 +1325,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return redirect(url_for("stacks_overview", open=stack_id, inst=stack_id)
                         + "#stack-install-" + stack_id)
 
-    # START-confirm run/file/daemon params share the daemon-flag hide set + the confirm form.
-    # Submitted as HIDDEN inputs on the start-confirm page (carry saved values, not editable rows):
-    # the band value + the per-band stored TX/CAD values (edited in the per-band daemon panels).
-    # The per-process `hw`/`txmode`/`cadmon`/`cadrssi` stay VISIBLE (collapsed under "Daemon process
-    # options"); `hw` uses friendly choice labels so the `--hw` wire name "loraham" is never shown.
-    _HIDE_RUN = {"radio", "tx_433", "tx_868", "cadmon_433", "cadmon_868",
-                 "cadrssi_433", "cadrssi_868"}
+    def _settings_back(target: str, refusal, band: str = ""):
+        """A start/restart refused over the SAVED identity: flash the refusal and send the operator
+        to the stack's Settings with the offending row(s) marked (`?cfg=` force-opens the section,
+        `?bad=` names the `c_`/`f_` fields `_stack_settings.html` highlights). Nothing is persisted
+        about the refusal — an ordinary refusal is an ordinary flash (settled decision)."""
+        sid = service.stack_of(target) or target
+        flash(refusal.summary, "warn")
+        bad = ",".join(str(f) for f in (refusal.data.get("enforce_fields") or ()))
+        # `band` is the frozen operation band: a band-switchable stack refused on 868 must open
+        # its 868 store, not the declared primary (the saved value the refusal judged lives there).
+        return redirect(url_for("stacks_overview", cfg=sid, bad=bad or None, band=band or None)
+                        + "#stack-settings-" + sid)
 
-    def _collect_start_params(target: str, band: str):
-        """(params, file_overrides, have_form) from the submitted confirm form, keyed by component-
-        aware API key (bare when unique, `component.name` when the name collides). `have_form` marks
-        a submission of the confirm form itself (`_params=1`) vs the initial dashboard POST — only
-        then are unchecked flag checkboxes read as OFF and `pf_*` file overrides collected."""
-        have_form = request.form.get("_params") == "1"
-        params: dict = {}
-        file_over = {} if have_form else None
-        for f in service.start_param_fields(target, band):
-            if f["kind"] == "run":
-                if f["flag"] and have_form:
-                    params[f["key"]] = "1" if request.form.get(f["field"]) else ""
-                else:
-                    params[f["key"]] = request.form.get(f["field"], f["saved"])
-            elif have_form:                                   # file overrides only on a real submit
-                if f["flag"]:
-                    file_over[f["key"]] = "1" if request.form.get(f["field"]) else ""
-                else:
-                    v = request.form.get(f["field"])
-                    if v is not None:
-                        file_over[f["key"]] = v
-        return params, file_over, have_form
-
-    def _stack_save_values(target: str, band: str, params: dict, file_over: dict | None) -> dict:
-        """Map the confirm 'Stack parameters' rows into a `save_config_bundle` values dict, keyed by
-        component-aware API key (run -> `<key>`, file -> `file_<key>`; `key` is bare when unique,
-        `component.name` when duplicated). Only the SAVABLE section rows are persisted — a stack
-        without a savable section (the daemon, whose run params are ephemeral start options) saves
-        nothing here."""
-        values: dict = {}
-        for r in service.stack_start_params(target, band, params, file_over):
-            if r.get("dep_stack"):
-                continue                       # dependency rows persist into THEIR stack's config
-            if r["field"].startswith("pf_"):
-                values[f"file_{r['key']}"] = r["value"]
-            else:
-                values[r["key"]] = r["value"]
-        return values
-
-    def _dep_save_values(target: str, band: str, params: dict, file_over) -> dict:
-        """Per-dependency-stack `save_config_bundle` values from the confirm panel's dependency
-        rows — {dep_stack_id: values}. Keys stay component-qualified (they resolve in the
-        dependency's own scope); locked rows (the GPS switch) are never persisted from here."""
-        by_dep: dict = {}
-        for r in service.stack_start_params(target, band, params, file_over):
-            dsid = r.get("dep_stack")
-            if not dsid or r["locked"]:
-                continue
-            k = f"file_{r['key']}" if r["field"].startswith("pf_") else r["key"]
-            by_dep.setdefault(dsid, {})[k] = r["value"]
-        return by_dep
-
-    def _save_daemon_confirm(target: str) -> dict:
-        """Persist the inline daemon-radio panel values (per band) from the confirm form. Returns a
-        STRUCTURED per-band result — {"parse_error": str|None, "bands": {band: bool}, "ok": bool} —
-        so the caller can report EXACTLY which bands persisted (truthful partial persistence) and
-        never over-claim. `ok` is True only when there was no parse error and every submitted band
-        saved (a submission with no daemon values is trivially ok)."""
-        per_band, err = _parse_start_daemon_overrides(request.form)
-        if err:
-            return {"parse_error": err, "bands": {}, "ok": False}
-        bands: dict = {}
-        for b in sorted((per_band or {}).keys()):
-            bands[b] = service.save_daemon_params(target, b, per_band[b]).ok
-        return {"parse_error": None, "bands": bands, "ok": all(bands.values()) if bands else True}
-
-    def _render_confirm(op: str, target: str, band: str, params: dict, file_over,
-                        source: str, frm: str, enforce_fields=()):
-        """Stage-1 (and post-Save / enforcement re-render) of the confirm page."""
-        # start AND restart carry the parameter panel: a restart identity refusal must
-        # reopen Required with the offending fields marked, exactly like a start
-        # (audit-found: restart refusals flashed and redirected, losing the contract).
-        _has_panel = op in ("start", "restart")
-        run_params = service.run_params_for(target) if _has_panel else []
-        hidden_params = [p for p in run_params if p.name in _HIDE_RUN]
-        stack_params = (service.stack_start_params(target, band, params, file_over)
-                        if _has_panel else None)
-        stack_param_groups = (service.stack_start_param_groups(target, band, params, file_over)
-                              if _has_panel else None)
-        # Run params covered by the savable 'Stack parameters' panel; the rest (e.g. the daemon's
-        # ephemeral `debug` start flag) render as PLAIN inputs — start options, never persisted.
-        # Fixture-owned params are excluded HERE too: the panel filters them, so leaving them in
-        # the difference resurfaced the fixture's knobs as plain inputs — the confirm page must
-        # not offer settings for a component this start never runs.
-        covered = {r["name"] for r in (stack_params or []) if r["field"].startswith("p_")}
-        _fixture = service.fixture_run_param_names(target) if op == "start" else set()
-        plain_params = [p for p in run_params
-                        if p.name not in _HIDE_RUN and p.name not in covered
-                        and p.name not in _fixture] if op == "start" else []
-        # Submitted-but-unsaved daemon-panel values (best-effort parse; a malformed field is ignored
-        # for DISPLAY only) so a re-render after a failed Save/enforcement keeps the operator's edits.
-        _dp_display, _ = (_parse_start_daemon_overrides(request.form) if op == "start" else (None, ""))
-        plan = service.run_action(op, target, apply=False, params=params, source=source,
-                                  band=band, file_overrides=file_over)
-        # The whole Apply form lives under `{% elif plan.ok %}`, so a plan that fails ON THE
-        # SUBMITTED VALUES blanks the page the operator needs in order to FIX those values — a
-        # dead end reachable from "Save & start", a rejected identity, a bad frequency, a daemon
-        # parse error. Re-plan on the SAVED config in that case: the inputs render from
-        # `params`/`file_over` separately, so the operator's typed values and the marked rows are
-        # untouched, the flash still carries the real error, and a genuine blocker (one that fails
-        # with no submitted values at all) still suppresses the form exactly as before.
-        if not plan.ok and (params or file_over):
-            plan = service.run_action(op, target, apply=False, params=None, source=source,
-                                      band=band, file_overrides=None)
+    def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None):
+        """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
+        (a resource conflict that stops another stack's owner, dependents a restart takes down) —
+        a routine Start/Restart runs directly (0.2.9: Start means start). Install/update/clean
+        keep their confirmation (source selector, typed clean)."""
+        if plan is None:
+            plan = service.run_action(op, target, apply=False, source=source, band=band)
         # Split the install/build system-dep gate: MANDATORY missing deps hard-block (missing_deps,
         # suppresses the Apply form); OPTIONAL missing deps only warn (optional_deps, form stays).
         # BUILD dependencies gate the SOURCE channel only — a download needs no toolchain
@@ -1466,24 +1352,20 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         _gate = (service.install_dep_gate(target)
                  if (op == "build" or (op == "install" and source != service.BINARY_CHANNEL))
                  else None)
+        sid = service.stack_of(target)
+        cancel_href = (url_for("dashboard") if (frm == "dash" or not sid)
+                       else url_for("stacks_overview", open=sid) + "#stackrow-" + sid)
         return render_template(
             "confirm.html", version=__version__, runtime_root=_runtime_root(),
             op=op, target=target, plan=plan, tx=("tx" in op),
-            hidden_params=hidden_params, plain_params=plain_params,
-            params=params, source=source, band=band,
-            stack_params=stack_params, stack_param_groups=stack_param_groups,
-            enforce_fields=list(enforce_fields or ()),
-            blockers=(plan.data.get("blockers") if op == "start" else None),
-            stop_deps=(plan.data.get("dependents") if op == "stop" else None),
-            other_bands=(plan.data.get("other_bands") if op == "stop" else None),
+            source=source, band=band,
+            blockers=(plan.data.get("blockers") if op in ("start", "restart") else None),
+            stop_deps=(plan.data.get("dependents") if op in ("stop", "restart") else None),
+            other_bands=(plan.data.get("other_bands") if op in ("stop", "restart") else None),
             commands=(plan.data.get("commands") if op in ("start", "stop") else None),
             missing_deps=(_gate["block"] if _gate else None),
             optional_deps=(_gate["warn"] if _gate else None),
-            daemon_panels=(service.daemon_start_panels(target, params, band, _dp_display)
-                           if op == "start" else None),
-            optional_starts=(service.optional_start_components(target)
-                             if op == "start" else None),
-            frm=frm,
+            frm=frm, cancel_href=cancel_href,
             source_choices=(service.allowed_channels(service.stack_of(target) or target)
                             if op in ("install", "update") else None),
             # A refused binary install offers the source channel right on this page.
@@ -1498,54 +1380,37 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op not in service.WEB_ACTIONS:
             abort(400)
         band = request.form.get("band", "")    # chosen band for a band-switchable stack
-        # ONE CONCRETE OPERATION BAND, frozen HERE — before any field is collected, rendered,
-        # saved or applied — and carried onward as the hidden `band` of the confirm form, so the
-        # render, the Save, the Save-only re-render and the Apply all address the SAME per-band
-        # config. Why this must be frozen: see `operation_band`.
-        _band_moved = False
-        _submitted_band = band
+        _submitted_band, confirmed = band, request.form.get("confirmed") == "yes"
+        # ONE CONCRETE OPERATION BAND, frozen HERE on every POST (the Apps dropdown / the running
+        # band / the marker / the primary — never a confirm control) and carried as the hidden
+        # `band` of a confirmation form. Why it must be frozen: see `operation_band`. A CONFIRMED
+        # form's band is honoured or refused, never reinterpreted: its consequences (the owner to
+        # stop, the dependents) were computed on that band, so if the box moved underneath — radio
+        # mode narrowed, board swapped — the click is refused and the operator plans again.
         if op in ("start", "restart"):
             band = service.operation_band(target, band)
-            # NOTE: when the rendered band was "" the hidden field is omitted, so a later move to a
-            # concrete band is not caught here. Unreachable: a band-switchable stack renders "" only
-            # with hardware unset, and that page carries no Apply form at all.
-            # The frozen band is HONOURED, never silently reinterpreted: if the box changed under
-            # the operator between confirm and Apply (radio mode narrowed, board swapped) so that
-            # the confirmed band no longer resolves to itself, refuse with a typed mismatch and
-            # re-render on the band that is now true — the confirmed form described the old one.
-            _band_moved = (_submitted_band and band != _submitted_band
-                           and request.form.get("confirmed") == "yes")
-        # Collect run + file params (only meaningful for start). The confirm 'Stack parameters'
-        # panel submits p_<name> (run) / pf_<name> (file); defaults come from the saved config.
-        params, file_over, _have = (_collect_start_params(target, band)
-                                    if op in ("start", "restart") else ({}, None, False))
+            # Two ways the confirmed band can be stale: the box no longer serves it (operation_band
+            # resolves elsewhere), or the target has MOVED — it is live on another band now (the
+            # running-band marker, which an explicit band deliberately outranks in operation_band).
+            # Either way the consequences on the page were computed for the old band: refuse.
+            _live = service.running_band(service.stack_of(target) or target, "")
+            _moved = band if band != _submitted_band else (_live if _live and _live != band else "")
+            if confirmed and _submitted_band and _moved:
+                flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "
+                      f"{_moved or 'its fixed band'} — check the plan and confirm again.", "warn")
+                return _redirect_for(target)
         # Source version selector (only meaningful for install/update). A MISSING selector defaults
-        # to 'dev' (the remote branch tip) — the confirm page preselects it, and every normal POST
-        # carries the operator's explicit choice. An INVALID selector is rejected by run_action
-        # (never silently rewritten). Note a 'dev' checkout of a component that declares a
-        # `pin_commit` reads `src: differs` forever, by design: clean, just not at the pin.
-        # The web default is THE SAME as the CLI's: `default_channel` — binary wherever it is
-        # published (that is the whole point: a fresh Pi must not silently start a four-hour
-        # compile because nobody touched the selector), the historical "dev" everywhere else.
-        # A binary plan does fetch the index, so an offline box renders a typed refusal that
-        # offers the source channel — which is the honest outcome, not a source build nobody
-        # asked for (audit finding).
-        _t = request.form.get("target", "")
-        _sid = service.stack_of(_t) or _t
+        # to the CLI's `default_channel` — binary wherever it is published (a fresh Pi must not
+        # silently start a four-hour compile because nobody touched the selector), the historical
+        # "dev" everywhere else. An INVALID selector is rejected by run_action (never silently
+        # rewritten). A binary plan does fetch the index, so an offline box renders a typed refusal
+        # that offers the source channel — the honest outcome, not a source build nobody asked for.
+        _sid = service.stack_of(target) or target
         source = request.form.get("source") or (
             service.default_channel(_sid) if _sid else "dev")
         stop_owners = request.form.get("stop_owners") == "yes"
         cascade = request.form.get("cascade") == "yes"
         frm = request.form.get("from", "")     # origin page (e.g. "dash") for redirect
-        save_mode = request.form.get("_save", "")           # "stack" | "daemon" | ""
-        # The frozen band is HONOURED, never silently reinterpreted (audit rule). If the box changed
-        # under the operator between confirm and Apply — radio mode narrowed, board swapped — so the
-        # confirmed band no longer resolves to itself, refuse with a typed mismatch and re-render on
-        # the band that is now true: the confirmed form described the old one.
-        if _band_moved:
-            flash(f"Cannot {op} '{target}' on {_submitted_band} MHz: this box now runs it on "
-                  f"{band or 'its fixed band'} — check the values and confirm again.", "warn")
-            return _render_confirm(op, target, band, {}, None, source, frm)
         # Refuse to start an app that isn't installed or built yet — send the operator to THIS
         # stack's Install section (which has the Install/Build buttons, and repeats the reason in a
         # banner) with a warning and the CLI command, rather than spawning a doomed start.
@@ -1561,140 +1426,24 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                       f"missing ({', '.join(unbuilt)}). Build it on this page "
                       f"(or run: lhpc build {target}).", "warn")
                 return _install_back(target)
-        # Panel "Save" / "Save & start". FAIL CLOSED: for Save & start the requested start happens
-        # ONLY after EVERY selected persistence succeeds. Any failure (parse, stack or per-band
-        # daemon write) blocks the start and re-renders the confirm with the SUBMITTED values +
-        # visible errors — nothing is started, reconfigured, generated or recorded.
-        if op in ("start", "restart") and save_mode in ("stack", "daemon", "all"):
-            then_start = request.form.get("_save_then_start") == "1"
-            # Validate the daemon form BEFORE the first write, so a malformed field fails closed
-            # without persisting anything.
-            if save_mode in ("daemon", "all"):
-                _pb, _derr = _parse_start_daemon_overrides(request.form)
-                if _derr:
-                    flash(f"Cannot save daemon parameters: {_derr}", "warn")
-                    return _render_confirm(op, target, band, params, file_over, source, frm)
-            stack_ok = True
-            _saved_parts: list = []
-            _failed_parts: list = []
-            stack_values = _stack_save_values(target, band, params, file_over)
-            # The panel's SAVE enforces the SAME identity contract as its Apply, BEFORE the generic
-            # bundle write (audit-found: Save reached save_config_bundle directly, whose blank rule
-            # is "clear the override", so emptying a required Meshtastic/MeshCore node name DELETED
-            # it — the opposite of what the panel promises). Refusing first also keeps the Save
-            # all-or-nothing: a bad identity never lets the other panel fields persist.
-            _id_bad = (service.identity_refusal_for_values(target, band, stack_values)
-                       if save_mode in ("stack", "all") and stack_values else None)
-            if _id_bad is not None:
-                flash(_id_bad.summary, "warn")
-                return _render_confirm(op, target, band, params, file_over, source, frm,
-                                       enforce_fields=tuple(_id_bad.data.get("enforce_fields", ())))
-            if save_mode in ("stack", "all") and stack_values:
-                # The panel's SAVE (and the save half of Save-and-start) carries the SAME
-                # authoritative in-transaction identity recheck as Apply — audit rule: all four
-                # panel paths behave alike, and a concurrent global clear must never leave a
-                # blank persisted here either.
-                res = service.save_config_bundle(target, values=stack_values, band=band,
-                                                 _identity_guard=True)
-                flash(res.summary + (" " + "; ".join(res.details) if res.details else ""),
-                      "ok" if res.ok else "warn")
-                (_saved_parts if res.ok else _failed_parts).append(f"'{target}' config")
-                stack_ok = res.ok
-            # Dependency rows persist into the DEPENDENCY's own stack config (band-aware) —
-            # part of the same fail-closed Save: any failed dependency save blocks the start.
-            if save_mode in ("stack", "all") and stack_ok:
-                for _dsid, _dvals in _dep_save_values(target, band, params, file_over).items():
-                    # A dependency's identity obeys the same contract as the target's.
-                    _dbad = service.identity_refusal_for_values(_dsid, band, _dvals)
-                    if _dbad is not None:
-                        flash(_dbad.summary, "warn")
-                        return _render_confirm(
-                            op, target, band, params, file_over, source, frm,
-                            enforce_fields=tuple(_dbad.data.get("enforce_fields", ())))
-                    _dres = service.save_config_bundle(_dsid, values=_dvals, band=band,
-                                                       _identity_guard=True)
-                    flash(f"{_dsid}: " + _dres.summary
-                          + (" " + "; ".join(_dres.details) if _dres.details else ""),
-                          "ok" if _dres.ok else "warn")
-                    (_saved_parts if _dres.ok else _failed_parts).append(
-                        f"'{_dsid}' config (dependency)")
-                    stack_ok = stack_ok and _dres.ok
-            # Save & start SHORT-CIRCUIT: a failed stack save must NOT trigger the daemon save and
-            # must NOT start — re-render immediately with the submitted values. (`_save_daemon_confirm`
-            # / `save_daemon_params` are never reached.) AUDIT-FOUND: earlier writes may have
-            # PERSISTED (the target's config saves before a dependency's) — report saved vs
-            # NOT-saved precisely, mirroring the daemon partial-save path, never a blanket
-            # "could not be saved".
-            if then_start and not stack_ok:
-                _p = []
-                if _saved_parts:
-                    _p.append("saved: " + ", ".join(_saved_parts))
-                if _failed_parts:
-                    _p.append("NOT saved: " + ", ".join(_failed_parts))
-                flash("Not started — a configuration save failed"
-                      + (f" ({'; '.join(_p)})" if _p else "") + ". Fix it and try again.", "warn")
-                return _render_confirm(op, target, band, params, file_over, source, frm)
-            daemon_res = {"parse_error": None, "bands": {}, "ok": True}
-            if save_mode in ("daemon", "all"):
-                daemon_res = _save_daemon_confirm(target)
-                if daemon_res["parse_error"]:
-                    flash(f"Daemon parameters not saved: {daemon_res['parse_error']}", "warn")
-                for _b, _bok in daemon_res["bands"].items():
-                    flash(f"Daemon {_b} MHz: {'saved' if _bok else 'save FAILED'}",
-                          "ok" if _bok else "warn")
-            if not then_start:
-                # Save-only: re-render with the (now saved) values — never starts. Taken from
-                # start_param_fields() (HMAC-filtered AND identity-aware): stack_config()
-                # substitutes the global callsign into an empty identity field, so handing it
-                # back as a form value let a SECOND Save persist the inherited global as a
-                # local override (audit-found copy-on-save through Save-only).
-                return _render_confirm(op, target, band,
-                                       {f["key"]: f["saved"]
-                                        for f in service.start_param_fields(target, band)
-                                        if f["kind"] == "run"},
-                                       None, source, frm)
-            if not (stack_ok and daemon_res["ok"]):
-                # Save & start, but a later save failed (a per-band DAEMON save after a successful/
-                # absent stack save) -> DO NOT start. Earlier successful saves are RETAINED. Report
-                # PRECISELY what did and did not persist (never over-claim the stack save — during
-                # `_save=daemon` no stack config is written), and re-render with the submitted values.
-                saved, not_saved = [], []
-                if save_mode in ("stack", "all") and stack_values:
-                    (saved if stack_ok else not_saved).append("stack config")
-                for _b, _bok in daemon_res["bands"].items():
-                    (saved if _bok else not_saved).append(f"daemon {_b} MHz")
-                parts = []
-                if saved:
-                    parts.append("saved: " + ", ".join(saved))
-                if not_saved:
-                    parts.append("NOT saved: " + ", ".join(not_saved))
-                flash("Not started — a save failed" + (f" ({'; '.join(parts)})" if parts else "")
-                      + ". Fix it and try again.", "warn")
-                return _render_confirm(op, target, band, params, file_over, source, frm)
-            # every selected save succeeded -> fall through to the apply below
-        if request.form.get("confirmed") != "yes":
+        if op in ("start", "restart") and not confirmed:
+            # START MEANS START: plan the SAVED configuration (identity included — the plan and
+            # the apply take every decision alike). A refusal flashes where the operator came
+            # from; an identity refusal lands on the Settings row to fix; only a CONSEQUENTIAL
+            # choice — another stack's owner to stop, dependents a restart takes down — asks for
+            # confirmation. Everything else runs now.
+            plan = service.run_action(op, target, apply=False, band=band)
+            if not plan.ok:
+                if plan.data.get("enforce_fields"):
+                    return _settings_back(target, plan, band)
+                flash(f"{plan.summary} {' '.join(plan.details[:6])}", "warn")
+                return _redirect_for(target)
+            if plan.data.get("blockers") or plan.data.get("dependents"):
+                return _render_confirm(op, target, band, source, frm, plan=plan)
+        elif not confirmed:
             # Stage 1: show the dry-run plan, options and a confirmation form.
-            return _render_confirm(op, target, band, params, file_over, source, frm)
+            return _render_confirm(op, target, band, source, frm)
         # Stage 2: apply.
-        # Optional-component start choices (KISS Serial, GPS relay, …): the checkbox IS
-        # the durable auto-start config option — persist a CHANGED choice before the
-        # start, so `_run_order` includes/excludes the component for this and every
-        # later run. A failed save blocks the start (never a silently ignored choice).
-        if op == "start" and service.stack(target) is not None:
-            opts = service.optional_start_components(target)
-            changed = {f"autostart_{o['id']}":
-                       ("on" if request.form.get(f"opt_start_{o['id']}") == "on" else "")
-                       for o in opts
-                       if o.get("startable", True)      # listed-only rows have no checkbox
-                       and (request.form.get(f"opt_start_{o['id']}") == "on")
-                       != o["autostart"]}
-            if changed:
-                saved = service.save_config_bundle(target, values=changed)
-                if not saved.ok:
-                    flash(f"Not started — the optional-component choice could not be "
-                          f"saved: {saved.summary}", "warn")
-                    return _render_confirm(op, target, band, params, file_over, source,
-                                           frm)
         # DESTRUCTIVE clean: additionally requires the operator to TYPE the stack id —
         # a mismatch re-renders the confirm with ZERO mutation.
         purge = False
@@ -1703,7 +1452,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if typed != target:
                 flash(f"Clean not applied: type the stack id '{target}' exactly to confirm "
                       "the destructive purge.", "warn")
-                return _render_confirm(op, target, band, params, file_over, source, frm)
+                return _render_confirm(op, target, band, source, frm)
             purge = True
         # install/build/test run as detached jobs streaming to a log -> show it live.
         if op in ("install", "build", "test"):
@@ -1727,41 +1476,14 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             else:                                       # admitted
                 flash(f"{op} started — watch the live output below (it shows when it ends).", "ok")
             return redirect(url_for("logs_view", target=target, job=job))
-        # Ephemeral PER-BAND daemon-param values from the confirm panel(s). STRICT parse of EVERY
-        # dp_* field: a malformed/duplicated field shape is a visible start failure BEFORE any
-        # launch; unknown band/param/value are validated by the service normalizer. Band-scoped
-        # dp_<band>_<PARAM> keeps 433 and 868 separate; values are applied for THIS launch only.
-        daemon_overrides = None
-        if op == "start":
-            daemon_overrides, dp_err = _parse_start_daemon_overrides(request.form)
-            if dp_err:
-                flash(f"Cannot start '{target}': {dp_err}", "warn")
-                return _redirect_for(target)
-            # CALL/node enforcement (UX): block the start and RE-RENDER the confirm with the
-            # 'Stack parameters' panel expanded and the offending field highlighted, so the operator
-            # can supply the call/node in place. The service layer enforces this authoritatively too.
-            # UX pre-gate. `band` was frozen to the concrete operation band above, so this
-            # judges the stack on the band that will actually launch (audit-found: the raw form
-            # band judged a Voice stack active on 868 against its empty 433 settings).
-            id_ok, id_fields, id_msg = service.enforce_identity(
-                target, band, params, file_over)
-            if not id_ok:
-                flash(id_msg, "warn")
-                return _render_confirm(op, target, band, params, file_over, source, frm,
-                                       enforce_fields=id_fields)
-        result = service.run_action(op, target, apply=True, params=params, source=source,
+        result = service.run_action(op, target, apply=True, source=source,
                                     stop_owners=stop_owners, cascade=cascade, band=band,
-                                    daemon_overrides=daemon_overrides, file_overrides=file_over,
                                     purge=purge)
-        # An AUTHORITATIVE identity refusal (config changed after the UX gate, or a direct
-        # POST) gets the same Required-field UX as the pre-gate: re-render the confirm with
-        # the submitted values, the Required section open and every offending field marked —
-        # never a bare flash+redirect that loses the contract's guidance (audit-found).
+        # The AUTHORITATIVE identity recheck under the locks (config changed after the plan, or a
+        # direct POST) gets the same Settings-row UX as the plan-time refusal.
         if (not result.ok and op in ("start", "restart")
                 and result.data.get("enforce_fields")):
-            flash(result.summary, "warn")
-            return _render_confirm(op, target, band, params, file_over, source, frm,
-                                   enforce_fields=result.data["enforce_fields"])
+            return _settings_back(target, result)
         # An interactive/systemd START whose ONLY non-success is the expected MANUAL_REQUIRED (e.g.
         # chat: daemon up + readied, operator runs the TUI) is a success, not a warning.
         # START-ONLY: on a stop/restart, MANUAL_REQUIRED means "a foreign process is still running,
@@ -1851,8 +1573,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # PLAIN CONFIG EDITING may leave a stack without an identity — the operator is allowed to
         # clear a field, and a stopped stack may hold incomplete configuration. The protection is
         # at the LAUNCH boundary, which refuses to start without a resolvable identity; the row
-        # here carries the problem note. Only the Start/Restart panel (a launch) refuses a clear,
-        # because an operation that is refused must not leave a mutation behind.
+        # here carries the problem note, and the next Start sends the operator back to this row.
         result = service.save_config_bundle(
             stack_id, values=values, band=band, remotes=remotes)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),

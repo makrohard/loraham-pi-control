@@ -1331,19 +1331,6 @@ def test_stack_start_gate_ignores_loopback_only_stack(tmp_path, monkeypatch):
     assert svc.firewall_gate_stack_start("kiss")[0]        # loopback backend -> no gate
 
 
-def test_stack_start_gate_honours_ephemeral_bind_override(tmp_path, monkeypatch):
-    # Saved config keeps kiss on loopback, but an ephemeral Start-confirm --kiss-host 0.0.0.0
-    # would expose it this launch -> the gate must see it from the launch plan and refuse.
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
-    monkeypatch.setattr(svc, "firewall_status",
-                        lambda: {"config_ok": True, "live_ok": False})
-    assert svc.firewall_gate_stack_start("kiss")[0]        # saved config = loopback -> allowed
-    allowed, msg, _cmds = svc.firewall_gate_stack_start(
-        "kiss", params={"kiss_host": "0.0.0.0"})
-    assert not allowed and "Firewall changes pending" in msg
-
-
 def test_stack_start_gate_fails_closed_on_unmapped_nonloopback_listener(tmp_path, monkeypatch):
     # A tcp listener with NO firewall metadata (future addition) cannot have its scope derived;
     # a non-loopback one must be treated as exposed and gated, never silently started.
@@ -1371,22 +1358,6 @@ def test_stack_start_gate_partial_install_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "partial")
     allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss")
     assert not allowed and "partially installed" in msg
-
-
-def test_stack_start_gate_verified_refuses_ephemeral_port_move(tmp_path, monkeypatch):
-    # P1-1: even with a live-verified firewall, an EPHEMERAL scope change (here a port move) that
-    # is not represented in the applied model must be refused — the receipt vouches only for the
-    # saved candidate, never for an ad-hoc launch scope.
-    svc = _svc(tmp_path)
-    _expose_kiss(svc)                                      # saved 0.0.0.0:9001, modeled + verified
-    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
-    monkeypatch.setattr(svc, "firewall_status",
-                        lambda: {"config_ok": True, "live_ok": True,
-                                 "candidate": svc.firewall_candidate()})
-    assert svc.firewall_gate_stack_start("kiss")[0]        # exact saved scope -> allowed
-    allowed, msg, _ = svc.firewall_gate_stack_start("kiss", params={"kiss_port": "9002"})
-    assert not allowed
-    assert msg == "Save the setting permanently, apply the firewall, then start."
 
 
 def test_fw_scope_modeled_matches_full_scope(tmp_path):
@@ -2721,3 +2692,35 @@ def test_an_unverified_running_endpoint_stays_a_review_and_never_disappears(tmp_
 def test_a_restricted_live_endpoint_still_reads_lan_exposed(tmp_path):
     pill = _svc(tmp_path).security_pill([_row("8001", "warn", "exposed", "restricted_noauth")])
     assert pill["level"] == "warn" and pill["label"] == "lan-exposed"
+
+
+def test_stack_start_gate_judges_the_saved_scope_only(tmp_path, monkeypatch):
+    # 0.2.9: a start runs exactly the saved configuration, so the gate's launch plan IS the saved
+    # scope — a saved loopback kiss passes, a saved exposure with firewall changes pending refuses.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": False})
+    assert svc.firewall_gate_stack_start("kiss")[0]        # saved config = loopback -> allowed
+    _expose_kiss(svc)                                      # saved 0.0.0.0:9001
+    allowed, msg, _cmds = svc.firewall_gate_stack_start("kiss")
+    assert not allowed and "Firewall changes pending" in msg
+
+
+def test_stack_start_gate_verified_refuses_a_saved_scope_the_model_lacks(tmp_path, monkeypatch):
+    # The receipt vouches only for the modeled candidate: a saved port the applied model does not
+    # cover (saved after the last apply) is refused until the firewall is applied again.
+    svc = _svc(tmp_path)
+    _expose_kiss(svc)                                      # saved 0.0.0.0:9001, modeled + verified
+    monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")
+    modeled = svc.firewall_candidate()
+    monkeypatch.setattr(svc, "firewall_status",
+                        lambda: {"config_ok": True, "live_ok": True, "candidate": modeled})
+    assert svc.firewall_gate_stack_start("kiss")[0]        # exact saved scope -> allowed
+    from lhpc.core import config as _cfg
+    _cfg.save_stack_config(svc._paths, "kiss", {"kiss_host": "0.0.0.0", "kiss_port": "9002"},
+                           svc._config_band("kiss", ""))
+    svc._invalidate_config()
+    allowed, msg, _ = svc.firewall_gate_stack_start("kiss")
+    assert not allowed
+    assert "not covered by the applied firewall" in msg

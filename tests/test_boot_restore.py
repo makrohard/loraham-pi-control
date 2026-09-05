@@ -293,10 +293,11 @@ def _drv(tmp_path, monkeypatch, *, cur_boot="CURBOOT", enabled=True, web=(True, 
 
 
 def _stub_start(record, *, ok=True, call_hook=True, summary="started"):
-    def stub(self, target, apply=False, params=None, stop_owners=False, band="",
-             daemon_overrides=None, file_overrides=None, auto_install_ctx=None, *,
-             _before_start_locked=None):
-        record.append({"target": target, "params": params, "band": band})
+    def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+             _before_start_locked=None, _operator=True, position=None, position_note=""):
+        # the REAL start() signature (no per-launch params since 0.2.9): a call the service
+        # could not make fails here too, instead of being swallowed by a permissive stub
+        record.append({"target": target, "band": band})
         if call_hook and _before_start_locked is not None:
             refusal = _before_start_locked()
             if refusal is not None:
@@ -524,7 +525,7 @@ def test_driver_full_run_restores_and_prunes(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     res = svc.boot_restore_run()
     assert res.ok and res.data.get("driver_completed") is True
-    assert calls == [{"target": "kiss", "params": None, "band": "433"}]
+    assert calls == [{"target": "kiss", "band": "433"}]
     assert not path.exists()                              # evidence consumed + pruned
     j = _journal_on_disk(tmp_path)
     assert j["state"] == "done"
@@ -718,7 +719,7 @@ def test_daemon_reconcile_two_residual_bands_is_all_active(tmp_path, monkeypatch
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     res = svc.boot_restore_run()
     assert res.ok
-    assert calls == [{"target": "daemon", "params": None, "band": ""}]   # params=None = all-active
+    assert calls == [{"target": "daemon", "band": ""}]                  # band "" = all-active
 
 
 def test_daemon_reconcile_one_residual_band_is_explicit(tmp_path, monkeypatch):
@@ -727,7 +728,7 @@ def test_daemon_reconcile_one_residual_band_is_explicit(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "start", _stub_start(calls))
     res = svc.boot_restore_run()
     assert res.ok
-    assert calls == [{"target": "daemon", "params": {"radio": "868"}, "band": ""}]
+    assert calls == [{"target": "daemon", "band": "868"}]               # the one residual band
 
 
 def test_daemon_reconcile_no_residual_succeeds_without_start(tmp_path, monkeypatch):

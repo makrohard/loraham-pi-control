@@ -310,6 +310,10 @@ lhpc stack start <stack>
 lhpc status
 lhpc stack stop <stack>
 ```
+
+A start — CLI or web — runs exactly the **saved** configuration; **Settings** (web) and
+`lhpc config` are the only places a value changes. In the web console *Start* runs at once and asks
+only when it would stop another stack; a missing identity sends you to that Settings row.
 </details>
 
 After `lhpc stack start meshcom`, the **emulated node itself still boots** (~1 min on a Pi 5,

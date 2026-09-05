@@ -38,13 +38,12 @@ class FirewallOpsMixin:
                     (mapped if ep.firewall else unmapped).append((st.stack, comp, ep))
         return mapped, unmapped
 
-    def _fw_resolve_scope(self, stk, comp, ep, overrides=None, band=None):
+    def _fw_resolve_scope(self, stk, comp, ep, band=None):
         """Resolve one endpoint into (endpoint_id, proto, family, addr, port, allow_cidrs,
         deny). Configured port/bind params OVERRIDE the static endpoint address (the MeshCom
         bridge's --port/--bind are the reason the static address is never authoritative). Bind
         family is derived from the resolved bind address so an IPv4-only listener never opens
-        IPv6. `overrides` (keyed by `(kind, comp_id, name)`) are ephemeral per-launch values
-        that take precedence over saved config. `band` selects which per-band config to read
+        IPv6. `band` selects which per-band config to read
         (None = the stack's default band) — the candidate resolves EACH band, and the gate
         resolves the actual LAUNCH band, so a per-band bind/port is never silently mis-scoped."""
         meta = ep.firewall
@@ -57,9 +56,9 @@ class FirewallOpsMixin:
             _auth = "none"
         band = self._config_band(stk.id, band or "") if hasattr(self, "_config_band") else ""
         static_host, _, static_port = str(ep.address).rpartition(":")
-        port = self._fw_param_int(stk, comp, meta.port_param, band, static_port, overrides)
-        bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host, overrides)
-        allow = self._fw_param_str(stk, comp, meta.allow_param, band, "", overrides)
+        port = self._fw_param_int(stk, comp, meta.port_param, band, static_port)
+        bind = self._fw_param_str(stk, comp, meta.bind_param, band, static_host)
+        allow = self._fw_param_str(stk, comp, meta.allow_param, band, "")
         cidrs = _split_cidrs(allow)
         # STABLE id: the STATIC manifest port never changes even when the configured port does,
         # so a ticked direct-access checkbox survives a port change (fragile-id fix).
@@ -87,25 +86,18 @@ class FirewallOpsMixin:
         return {"id": eid, "proto": "tcp", "family": family, "addr": addr, "port": port,
                 "allow_cidrs": cidrs, "deny": False, "auth": _auth, "loopback": _is_loopback(static_host)}
 
-    def _fw_param_int(self, stk, comp, name, band, default, overrides=None):
+    def _fw_param_int(self, stk, comp, name, band, default):
         if not name:
             return _to_int(default, 0)
-        if overrides and (ov := overrides.get(("run", comp.id, name))) not in (None, ""):
-            return _to_int(ov, _to_int(default, 0))
         v = self._resolved_param_value(stk.id, "run", comp.id, name, band)
         return _to_int(v, _to_int(default, 0))
 
-    def _fw_param_str(self, stk, comp, name, band, default, overrides=None):
+    def _fw_param_str(self, stk, comp, name, band, default):
         # A firewall param may be a RUN param (kiss --kiss-host/--bind) OR a config-FILE param
         # (meshcore wifi.allow lives in the component's TOML) — resolve run first, then file, so
-        # a file-param allow-list is never silently missed. Ephemeral per-launch overrides take
-        # precedence (same run-then-file order) so a Start-confirm bind/allow change is honoured.
+        # a file-param allow-list is never silently missed.
         if not name:
             return default
-        if overrides:
-            for kind in ("run", "file"):
-                if (ov := overrides.get((kind, comp.id, name))) not in (None, ""):
-                    return ov
         for kind in ("run", "file"):
             v = self._resolved_param_value(stk.id, kind, comp.id, name, band)
             if v not in (None, ""):
@@ -950,32 +942,26 @@ class FirewallOpsMixin:
 
     # ---- stack-start exposure gate (FW-R8, plan P1-B) ---------------------------------------
 
-    def _fw_prospective_stack_scopes(self, target, params=None, band="", file_overrides=None):
+    def _fw_prospective_stack_scopes(self, target, band=""):
         """The complete set of non-loopback listener SCOPES the START of `target` will bind,
-        resolved from the ACTUAL launch plan: the LAUNCH band's per-band config PLUS ephemeral
-        run/file overrides for THIS launch. Each scope is a full tuple (id/proto/family/addr/
-        port/allow_cidrs/band) — never reduced to a bare port. A deny-default listener counts as
-        exposed; loopback-only listeners are excluded. An UNMAPPED tcp listener (no firewall
-        metadata) is included and flagged `_unmapped` so it can never match a modeled scope
-        (fail-closed). Empty when the target owns no externally-binding listener."""
+        resolved from the ACTUAL launch plan: the LAUNCH band's SAVED per-band config (a start
+        runs exactly the saved configuration — there are no per-launch values). Each scope is a
+        full tuple (id/proto/family/addr/port/allow_cidrs/band) — never reduced to a bare port. A
+        deny-default listener counts as exposed; loopback-only listeners are excluded. An
+        UNMAPPED tcp listener (no firewall metadata) is included and flagged `_unmapped` so it
+        can never match a modeled scope (fail-closed). Empty when the target owns no
+        externally-binding listener."""
         order = self._run_order(target)
         if not order:
             return []
         comp_ids = {c.id for _s, c in order}
         cfg_band = self._config_band(target, band)
-        ov = {}                                            # (kind, comp_id, name) -> ephemeral value
-        for kind, raw in (("run", params), ("file", file_overrides)):
-            if not raw:
-                continue
-            for _s, comp in order:
-                for name, val in self._overrides_for_comp(target, kind, raw, comp.id).items():
-                    ov[(kind, comp.id, name)] = val
         mapped, unmapped = self._fw_listener_endpoints()
         scopes = []
         for stk, comp, ep in mapped:
             if comp.id not in comp_ids:
                 continue
-            sc = self._fw_resolve_scope(stk, comp, ep, overrides=ov, band=cfg_band)
+            sc = self._fw_resolve_scope(stk, comp, ep, band=cfg_band)
             if sc["loopback"] and not sc["deny"]:
                 continue                                   # loopback-only -> nothing to expose
             scopes.append({"id": sc["id"], "proto": sc["proto"], "family": sc["family"],
@@ -1015,14 +1001,14 @@ class FirewallOpsMixin:
             return _cidrs_covered(sc["allow_cidrs"], e["allow_cidrs"])   # selected allow
         return False
 
-    def firewall_gate_stack_start(self, target, params=None, band="", file_overrides=None):
+    def firewall_gate_stack_start(self, target, band=""):
         """Exposure gate for a stack/component START. Absent firewall -> allow (behaviour
         preserved). Partial -> refuse. No non-loopback scope -> allow. Otherwise the firewall
         must be live-verified against the current saved intent (config_ok+live_ok) AND every
         prospective non-loopback scope must EXACTLY match a modeled candidate scope (full
-        proto/family/addr/port/band/CIDR) — an ephemeral widening/move or a wrong-band remote
-        scope not in the model is refused, so a listener never binds non-loopback without a
-        verified drop/allow. Returns (allowed, message, commands)."""
+        proto/family/addr/port/band/CIDR) — a wrong-band remote scope or a saved listener the
+        applied firewall does not model is refused, so a listener never binds non-loopback
+        without a verified drop/allow. Returns (allowed, message, commands)."""
         state = self._fw_integration_state()
         if state == "absent":
             return True, "", []
@@ -1032,7 +1018,7 @@ class FirewallOpsMixin:
                     "Firewall integration is partially installed — refusing to start a "
                     "non-loopback listener until it is repaired.",
                     [f"sudo bash {base}"])
-        scopes = self._fw_prospective_stack_scopes(target, params, band, file_overrides)
+        scopes = self._fw_prospective_stack_scopes(target, band)
         if not scopes:
             return True, "", []                            # nothing non-loopback -> nothing to gate
         st = self.firewall_status()
@@ -1047,7 +1033,8 @@ class FirewallOpsMixin:
             if not self._fw_scope_modeled(sc, modeled):
                 self.firewall_render()
                 return (False,
-                        "Save the setting permanently, apply the firewall, then start.",
+                        "The saved listener is not covered by the applied firewall — apply "
+                        "the firewall, then start.",
                         [f"sudo bash {base}"])
         return True, "", []
 

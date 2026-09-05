@@ -29,8 +29,8 @@ restores the stacks that were **LHPC-owned and never verifiably stopped** before
 not literally "alive at power-off": a stack that crashed shortly before the reboot may be
 restored too, and that is safe because every restored start replays the **saved** configuration
 through the normal gated start path (hardware, band arbitration, callsign, firewall exposure,
-TX mode strictly from saved config). One-off confirm-page overrides from the previous session
-are never replayed. Each piece of pre-reboot evidence is consumed exactly once: a failed restore
+TX mode strictly from saved config) — the same saved configuration every web or CLI start runs.
+Each piece of pre-reboot evidence is consumed exactly once: a failed restore
 is not retried — the dashboard banner and `lhpc autostart` name the stacks to start manually.
 
 ## Install channels
@@ -196,8 +196,8 @@ apply by itself. Authorization is a polkit rule installed by `bootstrap-deps.sh`
 
 ## Daemon radio parameters
 
-Each daemon-client stack has a collapsible **Daemon radio parameters** panel (config, stack and
-start-confirm pages; follows the 433/868 band switch). Editable params: MODE, FREQ, SF, BW, CR, CRC,
+Each daemon-client stack has a collapsible **Daemon radio parameters** panel under its Settings
+(follows the 433/868 band switch) — the only place these values change. Editable params: MODE, FREQ, SF, BW, CR, CRC,
 LDRO, PREAMBLE, SYNC, POWER, TXMODE, TXQUEUE, CADMONITOR, CADRSSI, CADWAIT, CADIDLE,
 CADTXAFTERTIMEOUT. Defaults come from each app's source (`lhpc/core/daemon_params.py`); MeshCom
 CADIDLE is 28 ms. Every value is validated + canonicalised server-side (`daemon_control.validate_set`)
@@ -211,9 +211,26 @@ components (CLI and web share this path); params the app re-SETs on connect (rad
 warning, and params the daemon does not echo are reported SENT, not confirmed. A contended band
 returns a typed busy result and leaves the saved profile intact.
 
-**Start-confirm** shows one panel per band the launch touches, whose values apply to **that start
-only** (never persisted). Every field is validated before any launch or CONF `SET` — a malformed,
-duplicated, unknown or wrong-band field fails the start.
+## Starting and restarting
+
+**Start means start.** A Start or Restart from the Dashboard or the Apps page runs exactly the
+**saved** configuration — there are no per-launch values (0.2.9; Settings is the only place
+configuration changes, and the CLI's `lhpc stack start` has always worked this way). The click
+freezes the operation band (the Apps dropdown, else the running band, else the primary), plans the
+run (hardware, band arbitration, GPS, radio mode, firewall exposure, resource conflicts, identity)
+and then:
+
+- **nothing consequential** → the start runs and you land back where you came from with the
+  result flashed;
+- **a consequential choice** — another running stack owns the radio (*Stop owner(s) & start*) or a
+  restart would take running dependents down with it (*Stop dependents & restart*) — → a minimal
+  confirmation page: the plan, the consequence, **Start/Restart** lower right, **Cancel** lower left;
+- **a missing or unusable identity** → nothing runs; you land on the stack's Settings with the
+  offending row highlighted, the refusal flashed. Fix the row, Save, click Start again.
+
+Stop, install, update and clean keep their confirmation pages (band collateral, version channel,
+typed clean). The plan and the apply judge the saved identity alike, so the CLI's dry run
+(`lhpc stack start <id>`) refuses exactly what the web refuses, printing the `lhpc config` remedy.
 
 Config writes are type-safe and fail-closed, and a managed save patches only its own keys: an
 unsupported structure or wrong table shape refuses the save and preserves the file byte-for-byte.

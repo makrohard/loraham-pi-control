@@ -88,14 +88,15 @@ render the returned `ActionResult`. The web adapter calls the service directly
   1. tracked defaults (`lhpc/data/defaults.toml`) + the manifest;
   2. operator overrides — `~/loraham-pi-control/config/local.toml` (callsign, remotes);
   3. secrets — `config/secrets.toml`, mode `0600` (never tracked, never in output);
-  4. per-stack settings — `config/stacks/<id>[@band].toml`, written from a stack's Settings, and
-     from the identity fields of a Start/Restart panel: an identity is configuration, so it is saved
-     before the launch, on the band the operation runs on. Every other Start/Restart parameter stays
-     ephemeral to that launch. Config editing (`lhpc config`, Settings) may CLEAR an identity — the
-     stack then cannot start until one is set again, which the launch gate enforces. A blank on the
-     Start/Restart panel is refused instead: that operation is a launch, so it must not leave a
-     mutation behind. The refusal is re-checked inside the write transaction, so a concurrent change
-     to the global callsign cannot slip past it.
+  4. per-stack settings — `config/stacks/<id>[@band].toml`, written ONLY from a stack's Settings
+     (web) or `lhpc config`. A start runs exactly this saved configuration: there are no per-launch
+     values (0.2.9), so the launch, the controller's stored truth and global-change tracking can
+     never disagree. The one launch-time overlay is an inherited identity: a licensed stack whose
+     local callsign is empty launches with the global operator callsign, materialized for that launch
+     and never persisted (the empty local field keeps meaning "inherit"). Identity enforcement runs on
+     the PLAN and again, under the locks, immediately before the apply — CLI dry run, web click and
+     the locked mutation share one verdict. Config editing may CLEAR an identity — the stack then
+     cannot start until one is set again; the web sends the operator to that Settings row.
 - The config file each app reads is generated from its `config_file` params
   (`{callsign}`/`{band}`/`{runtime}`/`{source}` substituted; `{callsign}` resolves to the
   effective identity — the stack's own callsign, else the inherited global base — and a

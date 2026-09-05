@@ -476,7 +476,7 @@ class Component:
     gui_optional: bool = False
     # A TEST FACILITY, not an operator choice: never offered as an optional start, never
     # auto-installed. `optional` alone could not express this — it made the meshcom GPS relay
-    # (which replays a synthetic NMEA file) sit on the confirm page beside the real feed.
+    # (which replays a synthetic NMEA file) sit on the Settings card beside the real feed.
     test_fixture: bool = False
     # This component READS a position (device/gpsd/plugin) when GPS is on. Declared where the
     # reading happens, because the `use_gps` param cannot say: reticulum declares `use_gps` on

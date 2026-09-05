@@ -187,23 +187,6 @@
 </div>
 {% endmacro %}
 
-{# One run-parameter control. #}
-{% macro param_input(p, value, name) %}
-  {% if p.kind == 'flag' %}
-    <input type="checkbox" name="{{ name }}" value="1" {% if value %}checked{% endif %}>
-  {% elif p.kind == 'int' %}
-    <input type="number" name="{{ name }}" value="{{ value }}"
-           {% if p.min is not none %}min="{{ p.min }}"{% endif %}
-           {% if p.max is not none %}max="{{ p.max }}"{% endif %}>
-  {% elif p.kind == 'str' %}
-    <input type="text" name="{{ name }}" value="{{ value }}" autocomplete="off">
-  {% else %}
-    <select name="{{ name }}" aria-label="{{ p.label or p.name }}">
-      {% set _labels = dict(p.choice_labels) if p.choice_labels else {} %}
-      {% for ch in p.choices %}<option value="{{ ch }}" {% if value==ch %}selected{% endif %}>{{ _labels.get(ch, ch) }}</option>{% endfor %}
-    </select>
-  {% endif %}
-{% endmacro %}
 
 {# Dual status: running state + install/source state + version. #}
 {% macro dual_status(status) %}

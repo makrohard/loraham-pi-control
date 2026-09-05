@@ -48,11 +48,11 @@ def test_migrated_daemon_run_is_structured_no_shell(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     comp = svc.stack("daemon").component("loraham-daemon")
     assert comp.run_argv and comp.readiness == "daemon-band"
-    argv = commands.expand_argv(comp.run_argv, comp, {"radio": "433", "debug": "on"},
+    argv = commands.expand_argv(comp.run_argv, comp, {"radio": "433"},
                                 OperatorConfig(), str(tmp_path), str(tmp_path))
     assert "/bin/sh" not in argv and "sh" != argv[0]
     assert argv[:3] == ["loraham_daemon/loraham_daemon", "--radio", "433"]
-    assert "--debug" in argv                                     # flag on -> one token
+    assert "--debug" not in argv                                 # the setter-less flag is retired (0.2.9)
 
 
 # --- ownership-race: direct exec records the real executable ------------------

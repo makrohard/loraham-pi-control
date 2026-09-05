@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import cmdbox, param_input %}
+{% from "_macros.html" import cmdbox %}
 {% block title %}confirm {{ op }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   <div class="card">
@@ -61,7 +61,7 @@
           {% endif %}
           {% if stop_deps %}
             <p class="depnote depnote-warn"><strong>Other running stacks depend on this:</strong>
-              {{ stop_deps|join(', ') }}. They will be <strong>stopped too</strong>.</p>
+              {{ stop_deps|join(', ') }}. They will be <strong>stopped too</strong>{% if op == 'restart' %} (and not restarted){% endif %}.</p>
             <input type="hidden" name="cascade" value="yes">
           {% endif %}
           {% if other_bands %}
@@ -92,58 +92,11 @@
               newest release tag, else newest tag, else main</span>
             <br>
           {% endif %}
-          {% if op in ('start', 'restart') %}<input type="hidden" name="_params" value="1">{% endif %}
-          {# Daemon radio band / TX / CAD START flags are chosen elsewhere — submitted as hidden
-             inputs so the start is unchanged (never shown in the editable panels). #}
-          {% for p in hidden_params|default([]) %}
-            <input type="hidden" name="p_{{ p.name }}" value="{{ params[p.name] }}">
-          {% endfor %}
-          {# Plain ephemeral start options not part of savable config (e.g. the daemon debug flag). #}
-          {% if plain_params %}
-            <details class="advcfg">
-              <summary>Daemon process options</summary>
-              <table class="paramgrid">
-                {% for p in plain_params %}
-                  <tr><th>{{ p.label or p.name }}</th>
-                      <td>{{ param_input(p, params.get(p.name), 'p_' + p.name) }}</td></tr>
-                {% endfor %}
-              </table>
-            </details>
-          {% endif %}
-          {% if optional_starts %}
-            <hr class="sep">
-            <p><strong>Optional components</strong>
-              <span class="muted">(saved as the auto-start option for this stack)</span></p>
-            {% for o in optional_starts %}
-              {% if o.startable %}
-              <p><label><input type="checkbox" name="opt_start_{{ o.id }}" value="on"
-                  {% if o.autostart %}checked{% endif %}>
-                Start {{ o.name }}</label></p>
-              {% else %}
-              <p>{{ o.name }} <span class="muted">— run on demand in a terminal after the start
-                (its launch line is shown on the Dashboard); not spawned by the controller</span></p>
-              {% endif %}
-            {% endfor %}
-          {% endif %}
-          {# All editable stack config params (run + config-file) for THIS start — collapsed,
-             above the daemon panel. #}
-          {% if stack_param_groups %}
-            <hr class="sep">
-            {% include "_stack_params.html" %}
-          {% endif %}
-          {% if daemon_panels %}
-            {% set stack_id = target %}
-            {% set dp_inline = true %}
-            <hr class="sep">
-            {# One panel per band this launch touches (two for a dual-band daemon), each with
-               band-scoped input names so 433 and 868 never cross. #}
-            {% for panel in daemon_panels %}
-              {% set daemon_params = panel %}
-              {% include "_daemon_params.html" %}
-            {% endfor %}
-          {% endif %}
           <hr class="sep">
-          <button type="submit">{% if blockers %}Stop owner(s) &amp; Run{% elif stop_deps %}Stop dependents &amp; {{ target }}{% else %}Apply {{ op }}{% endif %}</button>
+          <div class="confirm-btns">
+            <a class="btnlink cancel" href="{{ cancel_href }}">Cancel</a>
+            <button type="submit">{% if blockers %}Stop owner(s) &amp; {{ op }}{% elif stop_deps and op != 'stop' %}Stop dependents &amp; {{ op }}{% elif stop_deps %}Stop dependents &amp; {{ target }}{% elif op in ('start', 'restart') %}{{ op | capitalize }}{% else %}Apply {{ op }}{% endif %}</button>
+          </div>
         </form>
         {% if commands %}
           <hr class="sep">

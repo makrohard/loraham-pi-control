@@ -141,11 +141,6 @@ def test_companion_clients_are_refused_and_not_seeded_without_a_companion(tmp_pa
 def test_a_mode_change_is_saved_only_and_status_follows_the_running_launch(tmp_path):
     svc = _svc(tmp_path)
     _set_mode(svc, "chat+repeater", name="Relay 1")
-    # per-launch overrides of the mode rows are refused — an echo of the saved value too (no
-    # surface posts them for a launch; the confirm page shows them as pills)
-    for val in ("repeater", "chat+repeater"):
-        _clean, err = svc._normalize_file_overrides(mm.STACK_ID, {"mode": val})
-        assert "cannot be changed for a single start" in err
     # the RUNNING mode is the generated config's role: nothing generated yet -> the saved mode
     assert svc.meshcore_running_mode() == "chat+repeater"
     svc.write_config_files(mm.STACK_ID)                           # what a start renders
@@ -318,22 +313,13 @@ def test_repeater_only_neither_mints_nor_depends_on_the_chat_identity(tmp_path):
 # --- where the mode is seen and switched -------------------------------------------------------------
 
 def test_the_mode_is_shown_where_the_operator_looks(tmp_path, monkeypatch):
-    """Confirm page: the Settings card's "Repeater" heading appears there too (rows carry their
-    manifest group). `lhpc status meshcore`: the saved mode, plus the running one while they differ."""
+    """Settings card: the node's rows carry their manifest "Repeater" group with the mode rows.
+    `lhpc status meshcore`: the saved mode, plus the running one while they differ."""
     svc = _svc(tmp_path)
-    headers = [g["header"] for g in svc.stack_start_param_groups(mm.STACK_ID)]
-    rep = next(g for g in svc.stack_start_param_groups(mm.STACK_ID) if g["header"].endswith("— Repeater"))
-    assert rep["header"].startswith(svc.stack(mm.STACK_ID).component(mm.NODE_ID).name)
+    groups = svc.config_param_groups(mm.STACK_ID)
+    rep = next(g for g in groups if g["id"] == f"{mm.NODE_ID}::Repeater")
+    assert rep["name"] == "Repeater"
     assert {r["name"] for r in rep["rows"]} >= {"mode", "repeater_name", "repeater_mode"}
-    mode_row = next(r for r in rep["rows"] if r["name"] == "mode")
-    assert mode_row["locked"] and "Mode switch" in mode_row["locked_hint"]   # saved-only, no input
-    assert headers.index(rep["header"]) == 1                     # right after "Required"
-    # the mode is NOT a start submission: a change inside a start would re-classify identities
-    key = svc._param_key(mm.STACK_ID, "file", mm.NODE_ID, "mode")
-    _p, fo, sub = svc.extract_identity_submission(mm.STACK_ID, {}, {key: "repeater"})
-    assert not sub and fo == {key: "repeater"}
-    _clean, err = svc._normalize_file_overrides(mm.STACK_ID, {key: "repeater"})
-    assert "cannot be changed for a single start" in err
     text = "\n".join(svc.status(mm.STACK_ID).details)
     assert "  mode: chat" in text and "restart to apply" not in text
     _set_mode(svc, "chat+repeater")
@@ -354,15 +340,16 @@ def test_the_mode_is_shown_where_the_operator_looks(tmp_path, monkeypatch):
 
 # --- the optional Companion clients as an auto-start choice ------------------------------------------
 
-def test_the_cli_is_never_an_auto_start_choice_on_either_surface(tmp_path):
-    """The MeshCore CLI is a REPL run on demand: the Settings card and the confirm page offer the
-    SAME optional set (one predicate), and a stale saved tick never seeds it into the start."""
+def test_the_cli_is_never_an_auto_start_choice(tmp_path):
+    """The MeshCore CLI is a REPL run on demand: `optional_role` lists it without a tick, the
+    Settings card follows that one rule, and a stale saved tick never seeds it into the start."""
     svc = _svc(tmp_path)
-    settings = svc.config_view(mm.STACK_ID)["optional"]
-    confirm = svc.optional_start_components(mm.STACK_ID)
-    for listed in (settings, confirm):                   # both LIST the CLI ...
-        assert {o["id"] for o in listed} == {"meshcore-webui", "meshcore-cli"}
-        assert {o["id"] for o in listed if o["startable"]} == {"meshcore-webui"}   # ... no tick
+    comps = {c.id: c for c in svc.stack(mm.STACK_ID).components}
+    assert svc.optional_role(comps["meshcore-cli"]) == "listed"
+    assert svc.optional_role(comps["meshcore-webui"]) == "tickable"
+    listed = svc.config_view(mm.STACK_ID)["optional"]
+    assert {o["id"] for o in listed} == {"meshcore-webui", "meshcore-cli"}
+    assert {o["id"] for o in listed if o["startable"]} == {"meshcore-webui"}   # ... no tick
     svc.save_config(mm.STACK_ID, {"autostart_meshcore-cli": "on", "autostart_meshcore-webui": "on"})
     svc._invalidate_config()
     order = [c.id for _s, c in svc._run_order(mm.STACK_ID)]
@@ -416,12 +403,12 @@ def test_a_client_start_is_judged_by_the_mode_the_running_node_was_launched_with
 
 # --- an interactive SERVICE keeps its auto-start tick (0.2.7 behaviour) --------------------------------
 
-def test_an_interactive_service_keeps_its_settings_tick_but_gets_no_confirm_checkbox(tmp_path):
+def test_an_interactive_service_keeps_its_settings_tick(tmp_path):
     svc = _svc(tmp_path)
     settings = {o["id"]: o for o in svc.config_view("reticulum")["optional"]}
-    confirm = {o["id"]: o for o in svc.optional_start_components("reticulum")}
     assert settings["nomadnet"]["startable"] is True           # Settings tick, as in 0.2.7
-    assert confirm["nomadnet"]["startable"] is False           # listed, no "Start nomadnet" promise
+    nomadnet = svc.stack("reticulum").component("nomadnet")
+    assert svc.optional_role(nomadnet) == "tickable"          # planned, printed as MANUAL_REQUIRED
     svc.save_config("reticulum", {"autostart_nomadnet": "on"})
     svc._invalidate_config()
     assert "nomadnet" in [c.id for _s, c in svc._run_order("reticulum")]   # planned (MANUAL_REQUIRED)

@@ -30,12 +30,12 @@ def test_daemon_needs_band_and_tx_from_app(tmp_path):
     assert svc._daemon_param_applies("meshcom", "433").get("CADIDLE") == "28"
 
 
-def test_daemon_stack_uses_radio_param_override(tmp_path):
+def test_daemon_stack_uses_the_requested_band(tmp_path):
     svc = _svc(tmp_path)
     order = svc._run_order("daemon")
     assert [c.id for _, c in order] == ["loraham-daemon"]
-    radio, tx = svc._daemon_needs(order, {"radio": "868"})
-    assert radio == "868"                              # explicit override honoured
+    radio, tx = svc._daemon_needs(order, "868")
+    assert radio == "868"                              # the operation band is the daemon's radio
 
 
 def test_optional_component_soft_unless_autostart(tmp_path):
@@ -482,27 +482,6 @@ def test_stop_of_not_running_stack_never_releases_dependencies(tmp_path, monkeyp
     assert not any(r.stack == "kiss" for r in (res.results or ()))
 
 
-def test_dep_override_on_running_dep_warns_and_starts(tmp_path):
-    """AUDIT (warn-and-start, operator ruling): a dependency override submitted while that
-    dependency is already running is NOT applied — the start proceeds but says so loudly,
-    never reporting silent success. An override equal to the saved value stays quiet."""
-    from lhpc.core.probes.backends import Listener
-    svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
-                       200: ["loraham-kiss-tnc"]},
-        listeners=[Listener(family="ipv4", ip="0.0.0.0", port=8001, inode=1)],
-        owners={1: 200},
-        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
-        paths=Paths(runtime_root=tmp_path))
-    set_call(svc)
-    res = svc.start("graywolf", apply=True, params={"loraham-kiss-tnc.tx_freq": "434.100"})
-    assert any("[warn] loraham-kiss-tnc" in d and "tx_freq=434.1" in d
-               and "restart kiss" in d for d in res.details), res.details
-    # equal to the saved/default value -> untouched form -> no warning
-    res2 = svc.start("graywolf", apply=True, params={"loraham-kiss-tnc.tx_freq": "433.775"})
-    assert not any("[warn] loraham-kiss-tnc" in d for d in res2.details)
-
-
 def test_stop_plan_discloses_dependency_and_daemon_collateral(tmp_path, monkeypatch):
     """AUDIT: the dry-run stop plan must name the dependency stacks AND the daemon band the
     stop would also take down — the confirm page hid the collateral entirely."""
@@ -565,8 +544,9 @@ def test_daemon_restart_does_not_reconfigure_band_in_use(tmp_path):
         unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
         paths=Paths(runtime_root=tmp_path))
     svc._set_running_band("voice", "433")
-    res = svc.run_action("start", "daemon", apply=True,
-                         daemon_overrides={"433": {"MODE": "FSK"}, "868": {"MODE": "FSK"}})
+    for b in ("433", "868"):                              # the SAVED daemon params (Settings)
+        assert svc.save_daemon_params("daemon", b, {"MODE": "FSK"}).ok
+    res = svc.run_action("start", "daemon", apply=True)
     text = "\n".join(res.details)
     assert "[keep] 433 in use by voice" in text          # 433 left untouched
     assert "daemon already serving 433" in text
@@ -720,10 +700,11 @@ def test_healthy_client_start_sends_no_daemon_set(tmp_path):
     assert not any("sent" in d.lower() or "serving" in d for d in res.details)   # no CONF SET
 
 
-def test_healthy_start_with_ephemeral_fsk_sends_no_set(tmp_path):
+def test_healthy_start_with_saved_fsk_sends_no_set(tmp_path):
     svc = _healthy_igate(tmp_path)
     set_call(svc)
-    res = svc.start("igate", apply=True, daemon_overrides={"433": {"MODE": "FSK"}})
+    assert svc.save_daemon_params("igate", "433", {"MODE": "FSK"}).ok
+    res = svc.start("igate", apply=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("MODE" in d or "sent" in d.lower() for d in res.details)       # FSK not applied
 
@@ -920,6 +901,7 @@ def _band_svc(tmp_path, cmdlines, socks, bands):
                             paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham")
     svc._invalidate_config()
+    set_call(svc)                    # the plan enforces the saved identity (0.2.9)
     for sid, b in bands.items():
         svc._set_running_band(sid, b)
     return svc
@@ -998,3 +980,89 @@ def test_restart_is_refused_by_the_dependency_band_rule_before_its_stop(tmp_path
     # which a verified stop clears — is untouched.
     assert not res.results
     assert svc.running_band("graywolf", "") == "433"
+
+
+# ---- 0.2.9 audit: restart cascade is ONE contract (plan, lock bundle, stop leg) -------------------
+
+def _kiss_with_graywolf_running(tmp_path, monkeypatch):
+    """A NON-daemon provider (kiss) with a live dependent (graywolf) on the 433 chain. graywolf's
+    liveness is asserted through `stop_dependents` (the same seam the daemon-cascade tests use):
+    a fake process is not an LHPC-owned launch, so the snapshot alone never reads it RUNNING."""
+    from lhpc.core.probes.backends import Listener
+    svc = ControllerService(system=FakeSystem(
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+                       200: ["/x/loraham-kiss-tnc", "--config", "c"]},
+        listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
+        owners={1: 200},
+        unix_replies={"/tmp/loraconf433.sock": _RDY6}).system,
+        paths=Paths(runtime_root=tmp_path))
+    set_call(svc)
+    monkeypatch.setattr(type(svc), "stop_dependents",
+                        lambda self, t, bands=None: ["graywolf"] if t == "kiss" else [])
+    return svc
+
+
+def _spy_life_stops(monkeypatch):
+    from lhpc.core.lifecycle import Lifecycle
+    from lhpc.core.outcomes import CompResult, Outcome
+    stopped = []
+    monkeypatch.setattr(Lifecycle, "stop",
+                        lambda self, comp, band="": stopped.append(comp.id) or CompResult(
+                            comp.id, "stop", Outcome.STOPPED, "", "stopped (stub)"))
+    return stopped
+
+
+def test_restart_of_a_non_daemon_provider_discloses_its_dependents(tmp_path, monkeypatch):
+    svc = _kiss_with_graywolf_running(tmp_path, monkeypatch)
+    assert "graywolf" in svc._dependents_of("kiss")                        # precondition
+    plan = svc.restart("kiss", apply=False)
+    assert plan.ok and plan.data.get("dependents") == ["graywolf"]
+    assert any("graywolf" in d for d in plan.details)                     # disclosed either way
+    # the lock bundle of a CASCADING restart covers the dependent; a plain one does not
+    keys_c = svc._lifecycle_lock_keys("restart", "kiss", cascade=True)
+    keys_p = svc._lifecycle_lock_keys("restart", "kiss")
+    assert "lifecycle.graywolf" in keys_c and "lifecycle.graywolf" not in keys_p
+
+
+def test_restart_cascade_consent_reaches_the_stop_leg(tmp_path, monkeypatch):
+    # AUDIT-FOUND: the confirmation asked "Stop dependents & restart", then the stop leg ran with
+    # cascade=False (masked by the daemon, whose stop cascades on its own). A confirmed cascade
+    # must stop the dependent; an unconfirmed restart must leave it alone — like `stop`.
+    svc = _kiss_with_graywolf_running(tmp_path, monkeypatch)
+    stopped = _spy_life_stops(monkeypatch)
+    res = svc.restart("kiss", apply=True, cascade=True)
+    assert "graywolf" in stopped and "loraham-kiss-tnc" in stopped
+    assert stopped.index("graywolf") < stopped.index("loraham-kiss-tnc")   # dependent first
+    assert any("dependent] graywolf" in d for d in res.details)            # ...and the result says so
+    stopped.clear()
+    svc.restart("kiss", apply=True)
+    assert "loraham-kiss-tnc" in stopped and "graywolf" not in stopped
+    # the same consent travels through run_action (the web/CLI dispatch)
+    stopped.clear()
+    svc.run_action("restart", "kiss", apply=True, cascade=True)
+    assert "graywolf" in stopped
+
+
+def test_restart_plan_predicts_exactly_what_its_apply_does_with_dependents(tmp_path, monkeypatch):
+    # RE-AUDIT: the dry run rendered "[stop] graywolf" whatever `cascade` was, so the CLI (which
+    # has no cascade option) promised a stop its apply never performed. Plan and apply now take
+    # the same decision; the dependent set stays in `data` for the web's confirmation.
+    svc = _kiss_with_graywolf_running(tmp_path, monkeypatch)
+    plain = svc.restart("kiss", apply=False)
+    assert plain.data["dependents"] == ["graywolf"]
+    assert not any("[stop] graywolf" in d for d in plain.details)
+    assert any("[running dependent] graywolf" in d for d in plain.details)
+    cascading = svc.restart("kiss", apply=False, cascade=True)
+    assert cascading.data["dependents"] == ["graywolf"]
+    assert any("[stop] graywolf" in d for d in cascading.details)
+    # ...and the apply matches each prediction
+    stopped = _spy_life_stops(monkeypatch)
+    svc.restart("kiss", apply=True)
+    assert "graywolf" not in stopped
+    stopped.clear()
+    svc.restart("kiss", apply=True, cascade=True)
+    assert "graywolf" in stopped
+    # run_action carries one value to both halves — what the CLI's plan→apply flow relies on
+    assert not any("[stop] graywolf" in d for d in svc.run_action("restart", "kiss").details)
+    assert any("[stop] graywolf" in d
+               for d in svc.run_action("restart", "kiss", cascade=True).details)

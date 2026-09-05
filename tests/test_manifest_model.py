@@ -22,7 +22,9 @@ def test_single_daemon_with_radio_run_param():
     radio = next(p for p in d.run_params if p.name == "radio")
     # `--radio both` was removed: lhpc runs one process per band, so the daemon offers only 433/868.
     assert radio.choices == ("433", "868") and radio.default == "433"
-    assert any(p.name == "debug" and p.kind == "flag" for p in d.run_params)
+    # 0.2.9: the daemon's `debug` flag had no setter left (its only one was the retired start
+    # page) — a knob the capability model advertises must be settable, so it is gone.
+    assert not any(p.name == "debug" for p in d.run_params)
     # Provides both band sockets/radios.
     provided = {r.key for r in d.resources if r.mode is ResourceMode.PROVIDER}
     assert {"loraham.daemon-socket.433", "loraham.daemon-socket.868"} <= provided

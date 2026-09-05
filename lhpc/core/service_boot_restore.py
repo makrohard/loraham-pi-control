@@ -539,8 +539,10 @@ class BootRestoreOpsMixin:
             if not boot_restore.write_journal(self._paths, journal):
                 item["_integrity"] = "journal unwritable at settle"
             return
-        params = {"radio": residual[0]} if len(residual) == 1 else None
-        res = self.start(self.DAEMON_STACK_ID, apply=True, params=params,
+        # ONE residual band -> an explicit per-band daemon start; several -> the serve-all start
+        # (band ""), exactly what the operator's `lhpc stack start daemon [--band]` would do.
+        band = residual[0] if len(residual) == 1 else ""
+        res = self.start(self.DAEMON_STACK_ID, apply=True, band=band,
                          _before_start_locked=self._boot_claim_hook(journal, item))
         self._boot_settle_item(journal, item, res)
 

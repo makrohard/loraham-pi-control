@@ -226,11 +226,11 @@ def test_optional_post_start_success_is_scheduled(tmp_path):
 
 
 @pytest.mark.needs_session
-def test_ephemeral_start_params_override_saved_config(tmp_path, monkeypatch):
-    # A value set on the start-confirm page (ephemeral params) must reach the launch + post-start,
-    # overriding the saved config — fixes meshtastic NodeName / igate params not applying on start.
+def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatch):
+    # Start runs exactly the SAVED configuration (0.2.9: there are no per-launch values): the
+    # value saved in Settings is what the launch and the post-start push carry.
     svc = _igate_svc(tmp_path)
-    svc.save_config("igate", {"tx_freq": "433.900"})            # saved default
+    svc.save_config("igate", {"tx_freq": "434.500"})
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     seen = {}
     def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
@@ -238,8 +238,8 @@ def test_ephemeral_start_params_override_saved_config(tmp_path, monkeypatch):
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
     set_call(svc)
-    svc.start("igate", apply=True, params={"tx_freq": "434.500"})
-    assert seen["cfg"]["tx_freq"] == "434.500"                  # ephemeral wins over saved 433.900
+    svc.start("igate", apply=True)
+    assert seen["cfg"]["tx_freq"] == "434.500"
 
 
 def test_tcp_send_retry_render():

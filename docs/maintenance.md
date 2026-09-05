@@ -104,7 +104,7 @@ is guarded by `test_readme_not_drifted`; `tests/README.md` documents the test ti
      + settings-render exist; apply/fail-closed is proven only at the ActionResult seam);
   2. boot-restore has NO isolation-safe case — the whole `test_boot_restore.py` is `needs_session` at
      module scope (split out the pure route-toggle tests to give it a sandbox-safe contract case);
-  3. no route-level binary-channel SWITCH test (only confirm-page channel selection);
+  3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
   4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running at the web seam;
   5. no direct `/hardware` setup POST test (only `/hardware/probe`);
   6. full route table — a coverage-matrix gate over every route OPERATION, form, CLI leaf and stack

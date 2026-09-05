@@ -677,16 +677,6 @@ def test_password_file_absent_from_generic_config_and_start_forms(tmp_path):
     for comp in view["components"]:
         assert "password_file" not in {p.name for p in comp["params"]}
         assert "password_file" not in comp["values"]
-    assert "password_file" not in {r["name"] for r in svc.stack_start_params("meshcom")}
-    assert "password_file" not in {f["name"] for f in svc.start_param_fields("meshcom")}
-
-
-def test_ephemeral_start_override_cannot_set_password_file(tmp_path):
-    svc = _svc(tmp_path)
-    clean, err = svc._normalize_run_params("meshcom", {"password_file": ""})
-    assert clean == {} and "HMAC" in err
-    clean2, err2 = svc._normalize_run_params("meshcom", {"password_file": "/tmp/x"})
-    assert clean2 == {} and "HMAC" in err2
 
 
 def test_normal_config_save_unaffected_by_the_guard(tmp_path):

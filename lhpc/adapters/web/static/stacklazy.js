@@ -35,12 +35,27 @@
     if (delta) { window.scrollBy(0, delta); }
   }
 
+  // The waiting indicator + "Loading …" from the moment the row opens until the body lands (the
+  // render takes seconds on a small Pi). Replaced by the body, or by the fallback link.
+  function showLoading(ph) {
+    if (ph.querySelector(".loading")) return;
+    var p = document.createElement("p");
+    p.className = "loading";
+    var sp = document.createElement("span");
+    sp.className = "spinner";
+    sp.setAttribute("aria-hidden", "true");
+    p.appendChild(sp);
+    p.appendChild(document.createTextNode("Loading \u2026"));
+    ph.appendChild(p);
+  }
+
   function loadBody(details) {
     var ph = details.querySelector(":scope > .lazy-body");
     if (!ph || ph.getAttribute("data-loading") || ph.getAttribute("data-loaded")) return;
     var url = ph.getAttribute("data-body-url");
     if (!url) return;
     ph.setAttribute("data-loading", "1");
+    showLoading(ph);
     fetch(url, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -54,7 +69,7 @@
           while (tmp.firstChild) parent.insertBefore(tmp.firstChild, ph);
           parent.removeChild(ph);
         });
-        // Tell the per-body enhancers (copy/bandfilter/dparams/daemoncfg/stackparams) to wire the
+        // Tell the per-body enhancers (copy/bandfilter/dparams/daemoncfg) to wire the
         // freshly-injected subtree. `details` is the root that now holds the new body.
         document.dispatchEvent(new CustomEvent("lhpc:bodyloaded", { detail: { root: details } }));
       })

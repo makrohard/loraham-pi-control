@@ -12,8 +12,6 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 from lhpc.core.validators import ValidationError
-from lhpc.core.outcomes import Outcome
-from conftest import real_spawn
 
 
 def _svc(tmp_path):
@@ -207,35 +205,6 @@ def test_cli_hint_prints_the_exact_local_command(tmp_path):
         "lhpc config meshcore node_name ")
 
 
-def test_web_refusal_marks_every_missing_field_and_opens_required(tmp_path, monkeypatch):
-    # The identity gate must fire BEFORE run_action side effects and re-render the confirm
-    # page with the Required section open and EVERY missing field marked red.
-    from lhpc.adapters.web.app import create_app
-    from lhpc.core.services import ActionResult
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    started = []
-    monkeypatch.setattr(type(svc), "run_action",
-                        lambda self, op, target, apply=False, **k:
-                        (started.append(target) if apply else None)
-                        or ActionResult(True, "plan" if not apply else "started"))
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    import re
-    html = client.get("/stacks").get_data(as_text=True)
-    m = re.search(r'name="_csrf" value="([^"]+)"', html)
-    resp = client.post("/action", data={
-        "_csrf": m.group(1), "op": "start", "target": "meshtastic", "confirmed": "yes"})
-    page = resp.get_data(as_text=True)
-    assert resp.status_code == 200, resp.location               # re-rendered confirm, no redirect
-    assert started == []                                        # refused BEFORE any start
-    assert page.count("field-bad") >= 2                         # both name fields marked
-    assert 'class="advcfg stackparams" open' in page            # Required section opened
-    assert "Required" in page
-
-
 def test_global_card_renders_and_never_marked_required(tmp_path):
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
@@ -247,46 +216,7 @@ def test_global_card_renders_and_never_marked_required(tmp_path):
     assert "field-bad" not in card and 'class="req"' not in card
 
 
-def test_inherited_value_is_shown_as_inherited_not_saved(tmp_path):
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    rows = svc.stack_start_params("chat")
-    idrow = next(r for r in rows if r["is_identity"])
-    assert idrow["value"] == ""                                  # never prefilled with global
-    assert "inherits global XX0XXA" in idrow["identity_hint"]
-    assert "inherits the global operator callsign" in idrow["identity_note"]
-
-
 # ===== audit-found launch/materialization regressions =====
-
-def test_inherited_identity_reaches_the_launch_inputs(tmp_path):
-    # P0 (audit): enforcement approved via the global while the argv/config build read the
-    # empty local value — the launch must carry the EFFECTIVE identity, ephemerally.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    params, file_over, err = svc._preflight_start_inputs("igate", "", {}, None, "start")
-    assert err is None
-    assert params.get("call") == "XX0XXA"                    # materialized for THIS launch
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""  # not persisted
-    # an ephemeral EMPTY field from the confirm form must not mask the inheritance either
-    params, _fo, err = svc._preflight_start_inputs("igate", "", {"call": ""}, None, "start")
-    assert err is None and params.get("call") == "XX0XXA"
-    # a local override stays untouched
-    params, _fo, err = svc._preflight_start_inputs("igate", "", {"call": "XX0XXA-5"}, None, "start")
-    assert err is None and params.get("call") == "XX0XXA-5"
-
-
-def test_dashboard_post_does_not_backfill_the_global_into_identity_fields(tmp_path):
-    # P1 (audit): start_param_fields fed the substituted global back as the identity param,
-    # which the confirm form displayed as local and Save persisted (copy-on-save).
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    f = next(x for x in svc.start_param_fields("chat") if x["name"] == "call")
-    assert f["saved"] == ""                                   # stored-only: empty = inherit
-    row = next(r for r in svc.stack_start_params("chat") if r["is_identity"])
-    assert row["default"] == ""                               # Reset-to-defaults = inherit
-    assert row["identity_hint"].startswith("inherits global")
-
 
 def test_tx_identity_resolves_per_band(tmp_path):
     # P2 (audit): a band-scoped local identity must identify the TX test on ITS band.
@@ -438,33 +368,6 @@ def test_start_identity_follows_the_implicit_running_band(tmp_path, monkeypatch)
     res = svc.start("voice", apply=True)
     assert "callsign is required" not in res.summary
     assert not res.data.get("enforce_fields")
-
-
-def test_save_only_twice_never_pins_the_inherited_global(tmp_path, monkeypatch):
-    # P1 (audit): the Start-confirm Save-only re-render rebuilt form values from
-    # stack_config() (global substituted in), so a second Save persisted the inherited
-    # global as a local override.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    html = client.get("/stacks").get_data(as_text=True)
-    tok = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
-    for _round in (1, 2):                                  # Save-only TWICE
-        body = client.post("/action", data={
-            "_csrf": tok, "op": "start", "target": "igate", "confirmed": "yes",
-            "_save": "stack", "_params": "1", "p_call": "", "p_tx_freq": "434.100",
-            "band": ""}).get_data(as_text=True)
-        m = re.search(r'name="p_call" value="([^"]*)"', body)
-        assert m and m.group(1) == "", f"round {_round}: identity input prefilled: {m}"
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""
-    svc.set_operator_identity(callsign="XX0XXB")
-    assert svc.identity_resolution("igate")[0]["effective"] == "XX0XXB"   # still follows
 
 
 def test_global_change_marking_is_band_aware(tmp_path, monkeypatch):
@@ -723,53 +626,6 @@ def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tm
     assert svc.enforce_identity("voice", "868")[0] is True      # the refusal clears
 
 
-def test_web_start_judges_the_active_band_and_both_refusals_reopen_required(tmp_path, monkeypatch):
-    # P2 (audit): (a) the bandless dashboard POST must be judged on the ACTIVE band;
-    # (b) an AUTHORITATIVE service refusal must reopen the confirm with Required expanded
-    # and the fields marked — never a bare flash+redirect.
-    import re
-    from lhpc.adapters.web.app import create_app
-    from lhpc.core.services import ActionResult
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "running_band",
-                        lambda self, sid, default="": "868" if sid == "voice" else default)
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
-                                  band="433").ok                # 433-only identity
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    html = client.get("/stacks").get_data(as_text=True)
-    tok = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
-    # (a) bandless POST -> pre-gate judges 868 (where the identity is missing) -> re-render
-    body = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
-                                        "confirmed": "yes"}).get_data(as_text=True)
-    assert "field-bad" in body and 'class="advcfg stackparams" open' in body
-    # (b) pre-gate passes but the AUTHORITATIVE gate refuses -> same Required UX
-    svc2 = _svc(tmp_path / "b")
-    for m in ("is_installed", "unbuilt_components", "missing_system_deps"):
-        monkeypatch.setattr(type(svc2), m,
-                            (lambda name: lambda self, t: True if name == "is_installed"
-                             else [])(m))
-    monkeypatch.setattr(type(svc2), "enforce_identity",
-                        lambda self, t, b="", p=None, f=None: (True, [], ""))
-    monkeypatch.setattr(type(svc2), "run_action",
-                        lambda self, op, target, apply=False, **k:
-                        ActionResult(False, f"Cannot start '{target}': callsign required",
-                                     data={"enforce_fields": ["pf_node_name"]})
-                        if apply else ActionResult(True, "plan"))
-    app2 = create_app(lambda: svc2)
-    c2 = app2.test_client()
-    html2 = c2.get("/stacks").get_data(as_text=True)
-    tok2 = re.search(r'name="_csrf" value="([^"]+)"', html2).group(1)
-    resp = c2.post("/action", data={"_csrf": tok2, "op": "start", "target": "meshcore",
-                                    "confirmed": "yes"})
-    body2 = resp.get_data(as_text=True)
-    assert resp.status_code == 200                              # re-render, not a redirect
-    assert "field-bad" in body2 and 'class="advcfg stackparams" open' in body2
-
-
 # ===== closure RE-audit regressions (@b3f42bb findings) =====
 
 def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, monkeypatch):
@@ -784,14 +640,14 @@ def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, mon
     seen = {}
     real_impl = type(svc)._start_impl
 
-    def impl_after_dismiss(self, target, apply=False, params=None, **kw):
+    def impl_after_dismiss(self, target, apply=False, **kw):
         # the marker vanishes between outer planning and the inner applied path
         try:
             self._interactive_marker("voice").unlink()
         except OSError:
             pass
         seen["band"] = kw.get("band")
-        return real_impl(self, target, apply=apply, params=params, **kw)
+        return real_impl(self, target, apply=apply, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl_after_dismiss)
     res = svc.start("voice", apply=True)
     assert seen.get("band") == "868"                            # immutable resolved band
@@ -848,64 +704,6 @@ def test_structurally_invalid_markers_are_unsafe_and_never_rewritten(tmp_path, m
     assert mp.read_text() == raw                               # byte-identical
 
 
-def test_web_restart_identity_refusal_reopens_required(tmp_path, monkeypatch):
-    # P2 (audit): a web RESTART with a missing identity flashed+redirected; it must expose
-    # the same Required editor with the fields marked, before any stop.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    stops = []
-    monkeypatch.setattr(type(svc), "stop",
-                        lambda self, *a, **kw: stops.append(1), raising=False)
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    html = client.get("/stacks").get_data(as_text=True)
-    tok = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
-    resp = client.post("/action", data={"_csrf": tok, "op": "restart",
-                                        "target": "graywolf", "confirmed": "yes"})
-    body = resp.get_data(as_text=True)
-    assert resp.status_code == 200, resp.location              # re-render, no redirect
-    assert stops == []                                         # refused BEFORE any stop
-    assert "field-bad" in body and 'class="advcfg stackparams" open' in body
-
-
-def test_restart_confirm_save_saves_without_restarting(tmp_path, monkeypatch):
-    # REVIEW-FOUND P1: the restart confirm's Save button ("Save does not start") fired an
-    # immediate restart while saving nothing, and panel edits on Apply were discarded.
-    import re
-    from lhpc.adapters.web.app import create_app
-    from lhpc.core.services import ActionResult
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    ran = []
-    monkeypatch.setattr(type(svc), "run_action",
-                        lambda self, op, target, apply=False, **k:
-                        (ran.append((op, apply, (k.get("params") or {}).get("call")))
-                         if apply else None)
-                        or ActionResult(True, "ok"))
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    html = client.get("/stacks").get_data(as_text=True)
-    tok = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
-    # Save-only on the RESTART confirm: persists, does NOT restart
-    client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf",
-                                 "confirmed": "yes", "_save": "stack", "_params": "1",
-                                 "p_call": "XX0XXA-7"})
-    assert ran == []                                            # nothing restarted
-    assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == "XX0XXA-7"
-    # Apply restart WITH a panel edit: the edit reaches the operation
-    client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf",
-                                 "confirmed": "yes", "_params": "1",
-                                 "p_call": "XX0XXA-9"})
-    assert ran and ran[-1] == ("restart", True, "XX0XXA-9")
-
-
 def test_pasting_a_hint_template_verbatim_never_yields_a_transmitting_identity(tmp_path):
     # REVIEW-FOUND: bare YOURCALL passed the voice shape and NODENAME passed the node
     # validators — a verbatim paste of the printed remedy must never produce a startable
@@ -933,117 +731,6 @@ def test_no_angle_bracket_placeholder_in_any_printed_remedy(tmp_path):
         assert "--callsign YOURCALL" in msg
 
 
-def test_identity_edits_on_start_are_persisted_not_transient(tmp_path, monkeypatch):
-    # CLOSURE-AUDIT P2: a transient identity value on the Start/Restart panel made the
-    # launch and the persisted store disagree, so a later global change mis-classified the
-    # running stack (old on-air identity survived undisclosed). PERSISTED-ONLY model: the
-    # submitted identity is saved through the one existing save path BEFORE any lifecycle
-    # mutation, then stripped — launch and inheritance classification share one truth.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")                       # global A
-    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-7"}).ok   # local L
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    app = create_app(lambda: svc)
-    client = app.test_client()
-    html = client.get("/stacks").get_data(as_text=True)
-    tok = re.search(r'name="_csrf" value="([^"]+)"', html).group(1)
-    # the audit's reproduction: clear the local callsign on the panel, Apply WITHOUT Save
-    client.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf",
-                                 "confirmed": "yes", "_params": "1", "p_call": "",
-                                 "p_tx_freq": "434.100"})
-    # the transient clear was PERSISTED before launch: store and launch now agree
-    assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == ""
-    assert svc.identity_resolution("graywolf")[0]["source"] == "global"
-    # ...so the later global change correctly flags the inheriting stack
-    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "graywolf")
-    r = svc.set_operator_identity(callsign="XX0XXB")
-    assert any("graywolf" in d for d in r.details), r.details
-    assert svc.restart_required("graywolf") is not None
-    # the reverse: a submitted override persists (no phantom-inherit warnings later)
-    svc2 = _svc(tmp_path / "b")
-    svc2.set_operator_identity(callsign="XX0XXA")
-    svc2.start("chat", apply=True, file_overrides={"call": "XX0XXA-9"})
-    assert svc2._stored_param_value("chat", "file", "loraham-chat", "call") == "XX0XXA-9"
-    # ordinary params stay ephemeral — nothing but the identity was persisted
-    assert svc._stored_param_value("graywolf", "run", "graywolf", "tx_freq") == ""
-
-
-def test_identity_persist_uses_the_band_the_operation_runs_on(tmp_path, monkeypatch):
-    # REVIEW-FOUND (HIGH): the Start/Restart panel prefilled the identity from the RAW band
-    # (a bandless dashboard POST resolves to the PRIMARY band) while the launch and the new
-    # save resolved the RUNNING band — so restarting a stack running on 868 copied the 433
-    # file's callsign into the 868 config and durably pinned a stack that was inheriting.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433"},
-                                  band="433").ok
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
-    # the panel now prefills from the band the operation will run on — 868 is empty (inherits)
-    saved = {f["name"]: f["saved"] for f in svc.start_param_fields("voice")
-             if f["name"] == "callsign"}
-    assert saved["callsign"] == "", saved
-    # ...including the confirm-page renderer, which is what the browser posts BACK (review-found:
-    # only start_param_fields had been converted, so file-kind identities still leaked the other
-    # band's value through the rendered input on a bandless dashboard POST)
-    rows = {r["name"]: r for r in svc.stack_start_params("voice")}
-    assert rows["callsign"]["value"] == "", rows["callsign"]
-    assert "inherits global XX0XXA" in rows["callsign"]["identity_hint"]
-    # ...and a bandless start therefore persists nothing into the 868 file
-    _p, _fo, _sub = svc.extract_identity_submission("voice", None, {"callsign": ""})
-    assert svc.save_identity_submission("voice", svc.operation_band("voice", ""),
-                                        "start", _sub) is None
-    assert svc._stored_param_value("voice", "file", "loraham-voice", "callsign", "868") == ""
-    assert svc._stored_param_value("voice", "file", "loraham-voice", "callsign", "433") \
-        == "XX0XXA/433"                                     # the other band is untouched
-
-
-def test_cleared_file_identity_reaches_the_save_path(tmp_path):
-    # REVIEW-FOUND: _normalize_file_overrides drops blank values, so a file-kind identity
-    # cleared back to "inherit" never reached the persist step and the stale local override
-    # survived the launch. Persist therefore runs on the RAW inputs, before normalization.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
-    svc.start("chat", apply=True, file_overrides={"call": ""})
-    assert svc._stored_param_value("chat", "file", "loraham-chat", "call") == ""
-    assert svc.identity_resolution("chat")[0]["source"] == "global"
-
-
-def test_placeholder_identity_is_refused_before_it_is_stored(tmp_path):
-    # REVIEW-FOUND: the manifest validator accepts the retired generic defaults, so a
-    # submitted placeholder would be PERSISTED and only then refused by the enforce gate —
-    # durably writing a value the very next gate rejects.
-    svc = _svc(tmp_path)
-    r = svc.start("meshtastic", apply=True, params={"node_name": "LoRaHAM Pi"})
-    assert not r.ok and "placeholder" in r.summary
-    assert r.data.get("enforce_fields")                     # web stays on the confirm page
-    assert svc._stored_param_value("meshtastic", "run", "meshtastic", "node_name") == ""
-
-
-def test_blank_unlicensed_identity_is_refused_never_cleared(tmp_path):
-    # REVIEW-FOUND (introduced by running the persist ahead of the normalizer that used to reject
-    # blanks): an unlicensed identity NEVER inherits, so a blank there means MISSING, not "clear
-    # the override". Persisting it deleted a configured node name and then refused the start
-    # anyway, leaving the operator to retype what they had.
-    svc = _svc(tmp_path)
-    assert svc.save_config_bundle("meshtastic", values={"node_name": "Shack Node",
-                                                        "node_short": "SHCK"}).ok
-    r = svc.start("meshtastic", apply=True, params={"node_name": ""})
-    assert not r.ok and "required" in r.summary
-    assert r.data.get("enforce_fields")
-    assert svc._stored_param_value("meshtastic", "run", "meshtastic",
-                                   "node_name") == "Shack Node"   # NOT wiped
-    # a licensed field keeps the documented clear-to-inherit meaning
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-5"}).ok
-    svc.start("igate", apply=True, params={"call": ""})
-    assert svc._stored_param_value("igate", "run", "igate", "call") == ""
-
-
 def _config_bytes(svc):
     """Every persisted config file, content-addressed — proves a refused operation wrote NOTHING."""
     root = svc._paths.runtime_root / "config"
@@ -1052,9 +739,9 @@ def _config_bytes(svc):
 
 
 def test_identity_is_not_saved_when_admission_refuses(tmp_path, monkeypatch):
-    # AUDIT-FOUND: the identity was written BEFORE task admission, so a start/restart refused by a
-    # pending self-update/uninstall/power operation still changed configuration. Admission is the
-    # controller's first lock and must precede every mutation, the identity save included.
+    # AUDIT-FOUND (0.2.8): the identity was written BEFORE task admission. 0.2.9 removed the save
+    # from the start, but the contract stays: a start/restart refused by a pending self-update/
+    # uninstall/power operation changes NOTHING — configuration included.
     import json
     from lhpc.core import lifecycle as lcmod
     svc = _svc(tmp_path)
@@ -1066,59 +753,10 @@ def test_identity_is_not_saved_when_admission_refuses(tmp_path, monkeypatch):
         {"kind": "poweroff", "boot_id": "boot-1", "requested_uptime": 100.0}))
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
     for op in (svc.start, svc.restart):
-        r = op("igate", apply=True, params={"call": "XX0XXA-9"})
+        r = op("igate", apply=True)
         assert not r.ok and r.data.get("admission_blocked")
         assert _config_bytes(svc) == before                  # byte-identical, nothing written
     assert svc._stored_param_value("igate", "run", "igate", "call") == "XX0XXA-5"
-
-
-def test_identity_save_and_launch_share_one_band_across_a_marker_change(tmp_path, monkeypatch):
-    # AUDIT-FOUND: the save resolved the band through _launch_band_hint and start() then resolved it
-    # AGAIN for _op_band. A Voice-Lite interactive marker dismissed between those two reads stored
-    # the identity on 868 and ran the operation on primary 433. The band is now resolved ONCE, under
-    # admission, and the same concrete value feeds the save, planning, locks, feeds and the launch.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "gui_fallback_active", lambda self, sid: True)
-    monkeypatch.setattr(type(svc), "interactive_band", lambda self, sid: "868")
-    seen = {}
-    # AUDIT-FOUND in the first version of this test: dismissing the marker inside the _start_impl
-    # spy was TOO LATE — the old double-resolution had already made its second _launch_band_hint
-    # call by then, so the test passed against the very defect it claimed to cover. The dismissal
-    # must land immediately after the REAL save returns, which is the only point at which a
-    # surviving post-save resolution could still read it.
-    real_save = type(svc).save_identity_submission
-    def save_then_dismiss(self, target, band, op, sub):
-        r = real_save(self, target, band, op, sub)
-        monkeypatch.setattr(type(svc), "gui_fallback_active", lambda s, sid: False)
-        return r
-    monkeypatch.setattr(type(svc), "save_identity_submission", save_then_dismiss)
-    real = type(svc)._start_impl
-    def spy(self, target, **kw):
-        seen["band"] = kw.get("band")
-        return real(self, target, **kw)
-    monkeypatch.setattr(type(svc), "_start_impl", spy)
-    svc.start("voice", apply=True, file_overrides={"callsign": "XX0XXA/868"})
-    assert seen["band"] == "868"                              # launch stayed on the judged band
-    assert svc._stored_param_value("voice", "file", "loraham-voice",
-                                   "callsign", "868") == "XX0XXA/868"
-    assert svc._stored_param_value("voice", "file", "loraham-voice",
-                                   "callsign", "433") == ""   # never the other band
-
-
-def test_submitted_identity_wins_over_a_concurrent_edit(tmp_path, monkeypatch):
-    # AUDIT-FOUND: the helper compared the submission against a value read OUTSIDE the config
-    # transaction and skipped the save when they matched. An edit landing in that window made it
-    # strip the submitted identity without ever writing it, and the launch used the other value.
-    # Every submitted key now goes into the bundle verbatim; save_config_bundle decides no-ops.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-9"}).ok
-    _p, _fo, sub = svc.extract_identity_submission("igate", {"call": "XX0XXA-9"}, None)
-    assert sub                                                # submitted, equal to what is stored
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-1"}).ok   # concurrent edit
-    assert svc.save_identity_submission("igate", "", "start", sub) is None
-    assert svc._stored_param_value("igate", "run", "igate", "call") == "XX0XXA-9"
 
 
 def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_path, monkeypatch):
@@ -1146,12 +784,10 @@ def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_pat
         seen.append(kw.get("band"))
         return real(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", spy)
-    # the panel prefills the PRIMARY band (433), because the stale marker is not active...
-    rows = {r["name"]: r for r in svc.stack_start_params("voice")}
-    assert rows["callsign"]["value"] == ""
-    # ...and the whole operation — plan, save and launch — must stay on that same band
+    # the whole operation — plan and launch — must stay on the PRIMARY band (433), because the
+    # stale marker is not active...
     plan = svc.restart("voice")                                   # dry run
-    svc.restart("voice", apply=True, file_overrides={"callsign": ""})
+    svc.restart("voice", apply=True)
     # NEITHER frame may carry the stale marker's band. The plan frame legitimately receives an
     # unresolved "" — public start()'s dry-run branch returns before the operation band is resolved,
     # and _start_impl resolves it itself — so the plan is anchored on its rendered band as well.
@@ -1179,11 +815,6 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
         monkeypatch.setattr(type(svc), "running_band", lambda s, sid, d="": "868")
         return real_guard(self, op, target)
     monkeypatch.setattr(type(svc), "_admission_guard", guard)
-    real_save = type(svc).save_identity_submission
-    def save_spy(self, target, band, op, sub):
-        seen["save"] = band
-        return real_save(self, target, band, op, sub)
-    monkeypatch.setattr(type(svc), "save_identity_submission", save_spy)
     real_stop = type(svc).stop
     monkeypatch.setattr(type(svc), "stop",
                         lambda self, t, **kw: (seen.__setitem__("stop", kw.get("band")),
@@ -1194,115 +825,10 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
         return real_impl(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl)
     before = b433.read_bytes() if b433.exists() else None
-    svc.restart("voice", apply=True, file_overrides={"callsign": "XX0XXA/868"})
-    assert seen["save"] == "868", seen        # identity saved on the band the operation runs on
-    assert seen["stop"] == "868", seen        # ...the same band it stops
+    svc.restart("voice", apply=True)
+    assert seen["stop"] == "868", seen        # the band the operation runs on is the one it stops
     assert seen["launch"] == "868", seen      # ...and the same band it launches
-    assert svc._stored_param_value("voice", "file", "loraham-voice",
-                                   "callsign", "868") == "XX0XXA/868"
     assert (b433.read_bytes() if b433.exists() else None) == before   # 433 byte-identical
-
-
-def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
-    # AUDIT-FOUND: a bandless Web entry (dashboard restart-required, Stacks Run) left band="" and
-    # each layer resolved it independently — identity rows on the RUNNING band, ordinary radio rows
-    # on the PRIMARY. One form could show the 868 callsign beside 433 frequency/SF/preamble, save
-    # the 868 callsign into the 433 store, and launch the 868 operation with 433 radio parameters.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868",
-                                                   "file_sf": "11"}, band="868").ok
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433",
-                                                   "file_sf": "7"}, band="433").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
-    before = b433.read_bytes()
-    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    seen = {}
-    real_impl = type(svc)._start_impl
-    def impl(self, target, **kw):
-        seen["launch"] = kw.get("band")
-        return real_impl(self, target, **kw)
-    monkeypatch.setattr(type(svc), "_start_impl", impl)
-    client = create_app(lambda: svc).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"',
-                    client.get("/stacks").get_data(as_text=True)).group(1)
-    # a BANDLESS restart: no band field at all
-    page = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice",
-                                        "frm": "stacks"}).get_data(as_text=True)
-    assert 'name="band" value="868"' in page, "confirm must carry the frozen operation band"
-    assert "XX0XXA/868" in page and "XX0XXA/433" not in page      # identity from 868
-    assert 'value="11"' in page                                   # ...and SF from 868, not 7
-    # Save writes only the 868 store
-    client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice", "band": "868",
-                                 "confirmed": "yes", "_params": "1", "_save": "stack",
-                                 "pf_callsign": "XX0XXA/868", "pf_sf": "12"})
-    assert svc._stored_param_value("voice", "file", "loraham-voice", "sf", "868") == "12"
-    assert b433.read_bytes() == before                            # 433 byte-identical
-    # Apply launches on that same band
-    client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice", "band": "868",
-                                 "confirmed": "yes", "_params": "1",
-                                 "pf_callsign": "XX0XXA/868", "pf_sf": "12"})
-    assert seen.get("launch") == "868", seen
-
-
-@pytest.mark.parametrize("stack,kind,comp,field,other,other_val,other_new", [
-    ("meshtastic", "run", "meshtastic", "p_node_name", "p_node_short", "SHCK", "XXXX"),
-    ("meshcore", "file", "meshcore-node", "pf_node_name", "pf_preset",
-     "eu_uk_long", "eu_uk_medium"),
-])
-def test_web_save_enforces_the_unlicensed_identity_policy(tmp_path, monkeypatch, stack, kind, comp,
-                                                          field, other, other_val, other_new):
-    # AUDIT-FOUND: the panel's SAVE button reached save_config_bundle directly, whose blank rule is
-    # "clear the override" — so emptying a required local node name DELETED it, the exact opposite
-    # of what the panel text promises and of what the same panel's Apply does.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    pre = "" if kind == "run" else "file_"
-    seed = {f"{pre}node_name": "Shack Node", f"{pre}{other.split('_', 1)[1]}": other_val}
-    assert svc.save_config_bundle(stack, values=seed).ok
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    client = create_app(lambda: svc).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"',
-                    client.get("/stacks").get_data(as_text=True)).group(1)
-    page = client.post("/action", data={"_csrf": tok, "op": "start", "target": stack,
-                                        "confirmed": "yes", "_params": "1", "_save": "stack",
-                                        field: "", other: other_new}).get_data(as_text=True)
-    assert "never inherited" in page                       # typed refusal, on the page
-    assert "field-bad" in page and 'stackparams" open' in page   # Required open, field marked
-    assert svc._stored_param_value(stack, kind, comp, "node_name") == "Shack Node"
-    assert svc._stored_param_value(stack, kind, comp,
-                                   other.split("_", 1)[1]) == other_val   # nothing partial
-
-
-def test_a_rejected_field_never_blanks_the_confirm_page(tmp_path, monkeypatch):
-    # REVIEW-FOUND: the Apply form lives under `{% elif plan.ok %}`, so planning with the SUBMITTED
-    # values meant any rejected field — bad frequency, refused identity, or both together — left the
-    # operator on a page with no inputs at all: a dead end, on the very page that exists to fix it.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    client = create_app(lambda: svc).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"',
-                    client.get("/stacks").get_data(as_text=True)).group(1)
-    # an invalid ordinary value, and the compound case: invalid value PLUS a refused identity
-    for extra in ({}, {"pf_callsign": "N0CALL"}):
-        page = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
-                                            "confirmed": "yes", "_params": "1", "_save": "stack",
-                                            "pf_freq": "nope", **extra}).get_data(as_text=True)
-        assert 'name="pf_freq"' in page, "the operator must still have a field to correct"
-        assert "stackparams" in page and "nope" in page   # the panel and the typed value survive
 
 
 def test_a_fixed_band_client_never_scopes_the_daemon_to_another_band(tmp_path):
@@ -1314,36 +840,7 @@ def test_a_fixed_band_client_never_scopes_the_daemon_to_another_band(tmp_path):
     assert svc.operation_band("meshcore", "433") == ""       # flattened, as it always was
     assert svc.operation_band("daemon", "433") == "433"      # the daemon still honours it
     order = svc._run_order("meshcore")
-    assert svc._daemon_needs(order, {}, svc.operation_band("meshcore", "433"))[0] == "868"
-
-
-def test_web_refuses_when_the_band_moves_under_a_confirmed_form(tmp_path, monkeypatch):
-    # AUDIT RULE: a frozen band must be HONOURED or REFUSED, never silently reinterpreted. If the
-    # box changes between confirm and Apply (radio mode narrowed, board swapped) so the confirmed
-    # band no longer resolves to itself, the operator is told — the form described the old band.
-    import re
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
-    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
-    started = []
-    real_impl = type(svc)._start_impl
-    def impl(self, t, **kw):
-        if kw.get("apply"):
-            started.append(kw.get("band"))
-        return real_impl(self, t, **kw)
-    monkeypatch.setattr(type(svc), "_start_impl", impl)
-    client = create_app(lambda: svc).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"',
-                    client.get("/stacks").get_data(as_text=True)).group(1)
-    # the confirmed form says 433; the box now only serves 868
-    monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("868",))
-    page = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
-                                        "band": "433", "confirmed": "yes"}).get_data(as_text=True)
-    assert "Confirm:" in page                       # re-confirm, not a silent remap
-    assert not started, started                     # and nothing was launched
+    assert svc._daemon_needs(order, svc.operation_band("meshcore", "433"))[0] == "868"
 
 
 def test_identity_policy_reads_component_qualified_bundle_keys(tmp_path):
@@ -1354,7 +851,7 @@ def test_identity_policy_reads_component_qualified_bundle_keys(tmp_path):
     bare = svc.identity_refusal_for_values("meshtastic", "", {"node_name": ""})
     qual = svc.identity_refusal_for_values("meshtastic", "", {"meshtastic.node_name": ""})
     assert bare is not None and qual is not None            # BOTH shapes are seen
-    assert qual.data.get("enforce_fields") == ["p_node_name"]
+    assert qual.data.get("enforce_fields") == ["c_node_name"]      # the Settings field
     fq = svc.identity_refusal_for_values("meshcore", "", {"file_meshcore-node.node_name": ""})
     assert fq is not None                                   # ...including the file-kind shape
 
@@ -1368,7 +865,7 @@ def test_daemon_operation_band_reaches_the_radio_sink(tmp_path, monkeypatch):
     assert any("--radio 433" in d for d in plan.details), plan.details
     assert not any("all bands" in d or "868" in d for d in plan.details), plan.details
     seen = {}
-    def spy(self, lc, stk, comp, tx, radio, over, target, ctx, **kw):
+    def spy(self, lc, stk, comp, running, radio, start_sid, **kw):
         seen["radio"] = radio
         raise _Stop
     monkeypatch.setattr(type(svc), "_ensure_daemon", spy)
@@ -1414,23 +911,6 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     assert m["mode"] == "build", m                     # build outranks restart
     assert m["params"] == ["firmware env", "call"], m  # reasons unioned, no duplication
     assert m["band"] == "433", m                       # the concrete band is retained
-
-
-def test_licensed_clear_has_one_meaning_on_every_path(tmp_path):
-    # AUDIT-FOUND: with no global to inherit, the Web pre-gate refused a licensed clear while the
-    # service PERSISTED it and only then refused — one submission, two persistence semantics, and
-    # the changelog promised "refused before any change".
-    svc = _svc(tmp_path)
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    assert not svc.enforce_identity("chat", "", None, {"call": ""})[0]
-    r = svc.start("chat", apply=True, file_overrides={"call": ""})
-    assert not r.ok and "cannot be cleared" in r.summary
-    assert svc._stored_param_value("chat", "file", "loraham-chat", "call") == "XX0XXA-7"
-    # ...and with a valid global present, the clear is the documented inherit
-    svc.set_operator_identity(callsign="XX0XXA")
-    svc.start("chat", apply=True, file_overrides={"call": ""})
-    assert svc._stored_param_value("chat", "file", "loraham-chat", "call") == ""
-    assert svc.identity_resolution("chat")[0]["source"] == "global"
 
 
 def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
@@ -1507,26 +987,6 @@ def test_a_change_on_another_band_does_not_mark_the_live_band(tmp_path, monkeypa
     assert m is not None and m["band"] == "868", m
 
 
-def test_a_concurrent_global_clear_never_leaves_a_persisted_blank(tmp_path, monkeypatch):
-    # AUDIT-FOUND, twice: the blank-inherits-global decision, the write and the launch gate were
-    # separate critical sections, so a global clear landing between them left the launch REFUSED
-    # with the blank PERSISTED. They are now ONE exclusive boundary, so only two serialisations
-    # exist. This drives the clear at the boundary's own edge and asserts the contract directly.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    real = type(svc).operation_band
-    def clear_then_resolve(self, target, band=""):
-        if svc.config().operator.callsign:
-            svc.set_operator_identity(callsign="")    # the clear wins the race TO the boundary
-        return real(self, target, band)
-    monkeypatch.setattr(type(svc), "operation_band", clear_then_resolve)
-    r = svc.start("chat", apply=True, file_overrides={"call": ""})
-    stored = svc._stored_param_value("chat", "file", "loraham-chat", "call")
-    assert not (not r.ok and stored == ""), "refused AND the blank persisted — the forbidden outcome"
-    assert not r.ok and stored == "XX0XXA-7", (r.ok, stored)   # clear won: refuse, keep the value
-
-
 def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     # AUDIT-FOUND: the marker compared the pre-save EFFECTIVE value against the RAW submitted one,
     # so clearing a licensed callsign that was already inherited — or that equalled the global —
@@ -1555,24 +1015,6 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     m = svc.restart_required("chat")
     assert m["mode"] == "build" and m["params"] == ["firmware env", "call"], m
     assert m["band"] == "433", m
-def test_restart_apply_race_is_serialised_like_start(tmp_path, monkeypatch):
-    # REVIEW-FOUND: the two race regressions both drove `start()`. Restart Apply enters the same
-    # boundary with its own band and from a different guard nesting, so it gets its own case.
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    real = type(svc).operation_band
-    def clear_then_resolve(self, target, band=""):
-        if svc.config().operator.callsign:
-            svc.set_operator_identity(callsign="")
-        return real(self, target, band)
-    monkeypatch.setattr(type(svc), "operation_band", clear_then_resolve)
-    r = svc.restart("chat", apply=True, file_overrides={"call": ""})
-    stored = svc._stored_param_value("chat", "file", "loraham-chat", "call")
-    assert not (not r.ok and stored == ""), "refused AND the blank persisted"
-    assert stored == "XX0XXA-7", stored
-
-
 def test_save_only_rechecks_the_identity_inside_its_write(tmp_path, monkeypatch):
     # REVIEW-FOUND: Save-only is the one panel path that does NOT defer the identity to a launch,
     # so its `_identity_guard=True` in-transaction recheck is what stops a raced blank from
@@ -1628,33 +1070,6 @@ def test_settings_and_cli_may_clear_an_identity(tmp_path, monkeypatch):
     assert svc._stored_param_value("meshtastic", "run", "meshtastic", "node_name") == ""
 
 
-def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, monkeypatch):
-    """SIMPLIFICATION (operator ruling): an earlier round held the EXCLUSIVE configuration guard
-    across an entire launch so no writer could change an identity mid-start. That blocked Settings
-    and `lhpc config` for the length of a start — minutes on MeshCom — to prevent a divergence this
-    controller already DISCLOSES. The contract is now the designed one: the write succeeds, and the
-    live consumer gets a restart-required marker telling the operator the running process no longer
-    matches the saved configuration."""
-    svc = _svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
-    live = {"v": False}
-    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
-    real_impl = type(svc)._start_impl
-    seen = {}
-    def spy(self, t, **kw):
-        live["v"] = True                      # the stack is live from here on
-        seen["at_launch"] = svc._stored_param_value("chat", "file", "loraham-chat", "call")
-        return real_impl(self, t, **kw)
-    monkeypatch.setattr(type(svc), "_start_impl", spy)
-    svc.start("chat", apply=True, file_overrides={"call": "XX0XXA-7"})
-    assert seen["at_launch"] == "XX0XXA-7"     # the launch used the confirmed identity
-    # a later write is ACCEPTED (never blocked) and the live consumer is warned
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-9"}).ok
-    m = svc.restart_required("chat")
-    assert m is not None and "call" in m["params"], m
-
-
 def test_an_explicit_unavailable_band_is_refused_not_remapped(tmp_path, monkeypatch):
     # AUDIT-FOUND: `--band 433` on 868-only hardware was silently remapped — the plan and the launch
     # went to 868 although the caller (or boot-restore, replaying a recorded band) asked for 433.
@@ -1685,19 +1100,6 @@ def test_a_presented_interactive_command_is_a_live_identity_consumer(tmp_path, m
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
     m = svc.restart_required("chat")
     assert m is not None and "call" in m["params"], m
-
-
-def test_a_no_op_start_discloses_that_it_saved_an_identity(tmp_path, monkeypatch):
-    # AUDIT-FOUND: submitting a new identity to an ALREADY-HEALTHY stack reported
-    # "nothing to start" and nothing else — which reads as "your identity was ignored".
-    svc = _svc(tmp_path)
-    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-3"}).ok
-    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
-    monkeypatch.setattr(type(svc), "_order_already_healthy", lambda self, o, r="": True)
-    r = svc.start("chat", apply=True, file_overrides={"call": "XX0XXA-7"})
-    assert svc._stored_param_value("chat", "file", "loraham-chat", "call") == "XX0XXA-7"
-    assert any("identity saved" in d for d in r.details), r.details
-    assert any("restart" in c for c in r.next_commands), r.next_commands
 
 
 def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
@@ -1795,21 +1197,6 @@ def test_the_apply_hint_agrees_with_the_restart_marker(tmp_path, monkeypatch):
     marked = svc.restart_required("chat") is not None
     said_restart = any("Restart the stack to apply" in d for d in r.details)
     assert marked and said_restart, (marked, r.details)
-
-
-def test_a_legacy_global_refusal_says_why_not_that_none_exists(tmp_path):
-    """REVIEW-FOUND: with a legacy SSID-bearing global the Start panel said "there is no global
-    operator callsign to inherit" while the Stacks card showed one set with a legacy warning —
-    the reason `inheritable_global` returns was being discarded."""
-    from lhpc.core import config as cfgmod
-    svc = _svc(tmp_path)
-    cfgmod.save_operator_config(svc._paths, "XX0XXA-12")      # legacy shape, not inheritable
-    svc._invalidate_config()
-    assert svc.operator_callsign_legacy() is True
-    r = svc.start("chat", apply=True, file_overrides={"call": ""})
-    assert not r.ok
-    assert "there is no global operator callsign" not in r.summary, r.summary
-    assert "XX0XXA-12" in r.summary, r.summary                # names the actual obstacle
 
 
 def test_an_old_versions_candidate_cannot_delete_a_pinned_identity(tmp_path):
@@ -1912,47 +1299,251 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     assert sent == [], sent                                     # never transmitted as XX0XXA
 
 
-def test_a_partly_up_stack_keeps_the_identity_warning(tmp_path, monkeypatch):
-    """REVIEW-FOUND: a start SAVES the submitted identity before launching, which marks the live
-    stack restart-required. If the main is ALREADY_HEALTHY — the stack is only partly up, so the
-    run is not short-circuited as fully healthy — nothing relaunches it, yet every outcome is
-    acceptable, ok=True, and the tail erased that marker. The node kept transmitting the OLD
-    callsign and NOTHING said so: no marker, no dashboard warning, and the result's "identity
-    saved" note is itself gated on the marker still existing."""
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.status import RunState
 
+# ---- 0.2.9: the identity is SAVED configuration; the plan and the apply judge it alike ----------
+
+def _web(svc, monkeypatch):
+    import re
+    from lhpc.adapters.web.app import create_app
+    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
+    monkeypatch.setattr(type(svc), "unbuilt_components", lambda self, t: [])
+    monkeypatch.setattr(type(svc), "missing_system_deps", lambda self, t: [])
+    client = create_app(lambda: svc).test_client()
+    tok = re.search(r'name="_csrf" value="([^"]+)"',
+                    client.get("/stacks").get_data(as_text=True)).group(1)
+    return client, tok
+
+
+def test_web_refusal_names_every_missing_field_on_the_settings_row(tmp_path, monkeypatch):
+    # Meshtastic needs BOTH node names: the plan refuses before any start, and the operator lands
+    # on the Settings section with both rows marked (`?bad=` carries every field).
+    from lhpc.core.services import ActionResult
+    svc = _svc(tmp_path)
+    started = []
+    real = type(svc).run_action
+    def spy(self, op, target, apply=False, **k):
+        if apply:
+            started.append(target)
+            return ActionResult(True, "started")
+        return real(self, op, target, apply=apply, **k)
+    monkeypatch.setattr(type(svc), "run_action", spy)
+    client, tok = _web(svc, monkeypatch)
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "meshtastic"})
+    assert resp.status_code == 302 and started == []            # refused BEFORE any start
+    loc = resp.location
+    assert "cfg=meshtastic" in loc and "bad=c_node_name,c_node_short" in loc
+    page = client.get(loc.split("#")[0]).get_data(as_text=True)
+    assert page.count("field-bad") == 2                          # both name rows marked
+
+
+def test_settings_rows_show_an_inherited_identity_as_inherited_not_saved(tmp_path):
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    rows = [r for g in svc.config_param_groups("chat") for r in g["rows"] if r["is_identity"]]
+    assert rows and rows[0]["value"] == ""                       # never prefilled with the global
+    assert "inherits global XX0XXA" in rows[0]["identity_hint"]
+    assert "inherits the global operator callsign" in rows[0]["identity_note"]
+
+
+def test_an_inherited_identity_is_the_only_launch_time_overlay(tmp_path):
+    # Enforcement approved via the global; the argv/config build must carry the EFFECTIVE identity
+    # (materialized for this launch, never persisted) — and nothing else.
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    run_values, file_values = svc._materialize_inherited_identity("igate", "")
+    assert run_values == {"call": "XX0XXA"} and file_values == {}
+    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""  # not persisted
+    # a saved local override needs no overlay
+    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-5"}).ok
+    assert svc._materialize_inherited_identity("igate", "") == ({}, {})
+    assert svc.identity_resolution("igate")[0]["effective"] == "XX0XXA-5"
+
+
+def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
+    # The four invariants, #1: licensed stack, empty local field, valid global -> the process
+    # is launched WITH the inherited callsign.
+    from lhpc.core.lifecycle import Lifecycle, StartLaunch
     (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
     (tmp_path / "src" / "LoRaHAM_Daemon" / "loraham_igate").write_text("#bin")
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
-                                   b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
+    svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
-    monkeypatch.setattr(type(svc), "_lifecycle",
-                        lambda self: Lifecycle(self._paths, self.stacks(), self.config(),
-                                               self._system, spawn=real_spawn))
-    assert svc.start("igate", apply=True).ok
+    seen = {}
+    def stub(self, stack, comp, cfg, band="", **_scope):
+        seen[comp.id] = dict(cfg)
+        return StartLaunch(True, "log", "")
+    monkeypatch.setattr(Lifecycle, "start", stub)
+    monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True))
+    monkeypatch.setattr(type(svc), "_run_post_start",
+                        lambda self, *a, **k: (None, ""))
+    res = svc.start("igate", apply=True)
+    assert seen.get("loraham-igate", {}).get("call") == "XX0XXA", (res.summary, seen)
+    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""
 
-    # The MAIN is genuinely up (never relaunched), but the order is not fully healthy, so the
-    # run proceeds instead of returning early — the exact partly-up shape.
-    real_snapshot = type(svc).build_snapshot
 
-    def snapshot_with_running_main(self, *a, **k):
-        snap = real_snapshot(self, *a, **k)
-        for sub in snap.stacks:
-            c = sub.components.get("loraham-igate")
-            if c is not None:
-                object.__setattr__(c, "run_state", RunState.RUNNING)
-        return snap
+def test_an_unlicensed_identity_never_inherits(tmp_path):
+    # Invariant #2: Meshtastic/MeshCore local identity never falls back to the global callsign —
+    # the plan refuses with the exact field, for the CLI and the web alike.
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    for target, fields in (("meshtastic", ["c_node_name", "c_node_short"]),
+                           ("meshcore", ["f_node_name"])):
+        plan = svc.run_action("start", target, apply=False)
+        assert not plan.ok and "never used here" in plan.summary, plan.summary
+        assert plan.data.get("enforce_fields") == fields, plan.data
+        assert any(c.startswith(f"lhpc config {target}") for c in plan.next_commands)
 
-    monkeypatch.setattr(type(svc), "build_snapshot", snapshot_with_running_main)
-    monkeypatch.setattr(type(svc), "_order_already_healthy", lambda self, *a, **k: False)
 
-    res = svc.start("igate", apply=True, params={"call": "XX0XXA-7"})
-    assert res.ok
-    assert any(r.component == "loraham-igate" and r.outcome == Outcome.ALREADY_HEALTHY
-               for r in res.results), [(r.component, r.outcome) for r in res.results]
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == "XX0XXA-7"
-    assert svc.restart_required("igate") is not None, \
-        "the identity was saved but never applied — the warning must survive"
-    assert any("identity saved" in d for d in res.details), res.details
+def test_a_missing_identity_refuses_on_plan_and_apply_before_any_mutation(tmp_path, monkeypatch):
+    # Invariant #3: CLI/web plan truth is identical to the apply, and a refused apply has touched
+    # nothing — no owner stop, no config generation, no launch.
+    svc = _svc(tmp_path)
+    touched = []
+    for name in ("write_config_files", "_ensure_daemon", "stop"):
+        monkeypatch.setattr(type(svc), name,
+                            lambda self, *a, _n=name, **k: touched.append(_n) or [])
+    from lhpc.core.lifecycle import Lifecycle
+    monkeypatch.setattr(Lifecycle, "start", lambda self, *a, **k: touched.append("launch"))
+    for apply in (False, True):
+        r = svc.start("chat", apply=apply)
+        assert not r.ok and "callsign is required" in r.summary
+        assert r.data.get("enforce_fields") == ["f_call"]
+        assert any(c.startswith("lhpc config chat") for c in r.next_commands)   # invariant #4
+    assert touched == []
+    plan = svc.restart("chat", apply=False)
+    assert not plan.ok and "Cannot restart 'chat'" in plan.summary
+
+
+def test_a_stored_placeholder_identity_is_refused_by_the_plan(tmp_path):
+    # A retired generic default (LoRaHAM Pi, ...) is not an identity: hand-written into the store,
+    # it is refused before anything runs, naming the field.
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    cfgmod.save_stack_config(svc._paths, "meshtastic",
+                             {"node_name": "LoRaHAM Pi", "node_short": "SHCK"}, "")
+    svc._invalidate_config()
+    plan = svc.start("meshtastic", apply=False)
+    assert not plan.ok and "c_node_name" in plan.data.get("enforce_fields", [])
+    assert "'node_name' is required" in plan.summary
+
+
+def test_web_start_judges_the_active_band(tmp_path, monkeypatch):
+    # A bandless dashboard POST is judged on the band the operation will run on: voice running on
+    # 868 with a 433-only identity is refused and the Settings row is marked.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(type(svc), "running_band",
+                        lambda self, sid, default="": "868" if sid == "voice" else default)
+    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
+                                  band="433").ok                # 433-only identity
+    client, tok = _web(svc, monkeypatch)
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice"})
+    assert resp.status_code == 302 and "bad=f_callsign" in resp.location
+    assert "band=868" in resp.location                     # the refused store, not the primary
+    assert svc.identity_resolution("voice", "433")[0]["source"] == "local"
+    assert svc.identity_resolution("voice", "868")[0]["source"] == "missing"
+
+
+def test_web_restart_identity_refusal_happens_before_any_stop(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    stops = []
+    monkeypatch.setattr(type(svc), "stop", lambda self, *a, **kw: stops.append(1), raising=False)
+    client, tok = _web(svc, monkeypatch)
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf"})
+    assert resp.status_code == 302 and "bad=c_call" in resp.location
+    assert stops == []                                         # refused BEFORE any stop
+
+
+def test_web_bandless_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
+    # A bandless Web restart of a stack running on 868 runs on 868 — the 433 store is untouched.
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868",
+                                                   "file_sf": "11"}, band="868").ok
+    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433",
+                                                   "file_sf": "7"}, band="433").ok
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@433.toml"
+    before = b433.read_bytes()
+    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
+    seen = {}
+    real_impl = type(svc)._start_impl
+    def impl(self, target, **kw):
+        seen["launch"] = kw.get("band")
+        return real_impl(self, target, **kw)
+    monkeypatch.setattr(type(svc), "_start_impl", impl)
+    client, tok = _web(svc, monkeypatch)
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice"})
+    assert resp.status_code == 302                                # runs directly
+    assert seen.get("launch") == "868", seen
+    assert b433.read_bytes() == before                            # 433 byte-identical
+
+
+def test_a_stale_confirmed_band_is_refused_never_remapped(tmp_path, monkeypatch):
+    # AUDIT RULE (review-found again): a CONFIRMED form's band is honoured or refused, never
+    # silently re-resolved — its consequences (owners to stop) were computed on that band. The box
+    # narrowed to 868 under a form that says 433: nothing runs; the operator plans again.
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    started = []
+    real_impl = type(svc)._start_impl
+    def impl(self, t, **kw):
+        if kw.get("apply"):
+            started.append(kw.get("band"))
+        return real_impl(self, t, **kw)
+    monkeypatch.setattr(type(svc), "_start_impl", impl)
+    client, tok = _web(svc, monkeypatch)
+    monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("868",))
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
+                                        "band": "433", "confirmed": "yes"})
+    assert resp.status_code == 302 and started == []
+    page = client.get("/stacks").get_data(as_text=True)
+    assert "now runs it on 868" in page and "confirm again" in page
+    # RE-AUDIT: the target MOVED while both bands stay served — an explicit band outranks the
+    # running-band marker in operation_band, so the live band is checked on its own here.
+    monkeypatch.setattr(type(svc), "stack_bands", lambda self, t: ("433", "868"))
+    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": "868")
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice",
+                                        "band": "433", "confirmed": "yes", "cascade": "yes"})
+    assert resp.status_code == 302 and started == []
+    assert "now runs it on 868" in client.get("/stacks").get_data(as_text=True)
+    # a STOPPED target may still be started on an explicitly chosen non-primary band
+    monkeypatch.setattr(type(svc), "running_band", lambda self, sid, d="": d)
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice",
+                                        "band": "868", "confirmed": "yes"})
+    assert resp.status_code == 302 and started == ["868"]
+
+
+def test_a_config_write_during_a_launch_is_reported_not_locked_out(tmp_path, monkeypatch):
+    """SIMPLIFICATION (operator ruling): the write succeeds, and the live consumer gets a
+    restart-required marker telling the operator the running process no longer matches the saved
+    configuration."""
+    svc = _svc(tmp_path)
+    svc.set_operator_identity(callsign="XX0XXA")
+    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
+    live = {"v": False}
+    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: live["v"])
+    real_impl = type(svc)._start_impl
+    seen = {}
+    def spy(self, t, **kw):
+        live["v"] = True                      # the stack is live from here on
+        seen["at_launch"] = svc._stored_param_value("chat", "file", "loraham-chat", "call")
+        return real_impl(self, t, **kw)
+    monkeypatch.setattr(type(svc), "_start_impl", spy)
+    svc.start("chat", apply=True)
+    assert seen["at_launch"] == "XX0XXA-7"     # the launch used the saved identity
+    # a later write is ACCEPTED (never blocked) and the live consumer is warned
+    assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-9"}).ok
+    m = svc.restart_required("chat")
+    assert m is not None and "call" in m["params"], m
+
+
+def test_a_legacy_global_refusal_says_why_not_that_none_exists(tmp_path):
+    """REVIEW-FOUND: with a legacy SSID-bearing global the refusal said "there is no global
+    operator callsign to inherit" while the Stacks card showed one set with a legacy warning."""
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    cfgmod.save_operator_config(svc._paths, "XX0XXA-12")      # legacy shape, not inheritable
+    svc._invalidate_config()
+    assert svc.operator_callsign_legacy() is True
+    r = svc.start("chat", apply=False)
+    assert not r.ok
+    assert "there is no global operator callsign" not in r.summary, r.summary
+    assert "XX0XXA-12" in r.summary, r.summary                # names the actual obstacle

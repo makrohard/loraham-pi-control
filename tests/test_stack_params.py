@@ -70,13 +70,24 @@ def test_identity_field_map(tmp_path):
 
 # --- enforcement --------------------------------------------------------------
 
+def _seed_raw(svc, stack_id, values, band=None):
+    """Write SAVED values past the validating bundle (a hand-edited store) — what the SAVED-config
+    identity gate must judge. Lands in the stack's per-band store when it has one."""
+    from lhpc.core import config as cfgmod
+    if band is None:
+        band = svc._config_band(stack_id, "")
+    cfgmod.save_stack_config(svc._paths, stack_id, values, band)
+    svc._invalidate_config()
+
+
 def test_licensed_refuses_empty_and_n0call(tmp_path):
     svc = _svc(tmp_path)
     assert svc.enforce_identity("igate")[0] is False                       # empty operator callsign
-    assert svc.enforce_identity("igate", params={"call": ""})[0] is False
-    assert svc.enforce_identity("igate", params={"call": "N0CALL"})[0] is False
-    assert svc.enforce_identity("igate", params={"call": "n0call-1"})[0] is False
-    assert svc.enforce_identity("igate", params={"call": "XX0XXA-10"})[0] is True
+    for bad in ("", "N0CALL", "n0call-1"):
+        _seed_raw(svc, "igate", {"call": bad})
+        assert svc.enforce_identity("igate")[0] is False, bad
+    _seed_raw(svc, "igate", {"call": "XX0XXA-10"})
+    assert svc.enforce_identity("igate")[0] is True
 
 
 def test_licensed_default_uses_operator_callsign(tmp_path):
@@ -122,68 +133,33 @@ def test_unlicensed_requires_deliberate_local_names(tmp_path):
     assert ok is False and len(fields) == 2, (fields, msg)      # long AND short marked
     set_call(svc)                                               # a global callsign changes nothing
     assert svc.enforce_identity("meshtastic")[0] is False
-    ok, fields, _ = svc.enforce_identity(
-        "meshtastic", params={"node_name": "Field Node", "node_short": "FN1"})
-    assert ok is True
+    _seed_raw(svc, "meshtastic", {"node_name": "Field Node", "node_short": "FN1"})
+    assert svc.enforce_identity("meshtastic")[0] is True
     # a retired generic default does not count as deliberately configured
-    assert svc.enforce_identity(
-        "meshtastic", params={"node_name": "LoRaHAM Pi", "node_short": "FN1"})[0] is False
+    _seed_raw(svc, "meshtastic", {"node_name": "LoRaHAM Pi", "node_short": "FN1"})
+    assert svc.enforce_identity("meshtastic")[0] is False
 
 
-def test_meshcore_file_node_uses_override(tmp_path):
+def test_meshcore_file_node_uses_the_saved_value(tmp_path):
     svc = _svc(tmp_path)
     assert svc.enforce_identity("meshcore")[0] is False                    # default {callsign} empty
-    assert svc.enforce_identity("meshcore", file_over={"node_name": "MyNode"})[0] is True
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "MyNode"}, band="868").ok
+    assert svc.enforce_identity("meshcore")[0] is True
 
 
 # --- the panel view -----------------------------------------------------------
 
-def test_stack_start_params_shapes(tmp_path):
+def test_identity_fields_name_the_settings_row(tmp_path):
+    # `field` is the Settings form field (`c_`/`f_`) — the row a refused start highlights.
     svc = _svc(tmp_path)
-    rows = svc.stack_start_params("igate")
-    idr = [r for r in rows if r["is_identity"]]
-    assert len(idr) == 1 and idr[0]["name"] == "call" and idr[0]["field"] == "p_call"
-    assert svc.stack_start_params("daemon") == []                          # daemon excluded
-    # voice exposes its file-config params with pf_ fields
-    vrows = svc.stack_start_params("voice")
-    assert any(r["field"].startswith("pf_") for r in vrows)
-    assert any(r["field"] == "pf_callsign" and r["is_identity"] for r in vrows)
-
-
-def test_stack_start_params_prefill_and_override(tmp_path):
-    svc = _svc(tmp_path)
-    # an ephemeral run override is reflected as the row value; config_value stays the saved value
-    rows = svc.stack_start_params("igate", params={"tx_freq": "434.500"})
-    r = next(x for x in rows if x["name"] == "tx_freq")
-    assert r["value"] == "434.500" and r["config_value"] == "433.900"
-    # a file override is reflected too
-    vrows = svc.stack_start_params("voice", file_over={"callsign": "XX1XX"})
-    assert next(x for x in vrows if x["name"] == "callsign")["value"] == "XX1XX"
+    idr = svc._identity_fields("igate")
+    assert len(idr) == 1 and idr[0]["name"] == "call" and idr[0]["field"] == "c_call"
+    assert svc._identity_fields("daemon") == []                            # daemon exempt
+    vrows = svc._identity_fields("voice")
+    assert any(r["field"] == "f_callsign" and r["kind"] == "file" for r in vrows)
 
 
 # --- ephemeral file-override normalization + precedence -----------------------
-
-def test_normalize_file_overrides_validates(tmp_path):
-    svc = _svc(tmp_path)
-    clean, err = svc._normalize_file_overrides("voice", {"callsign": "XX0XXA", "sf": "9"})
-    assert not err and clean["callsign"] == "XX0XXA" and clean["sf"] == "9"
-    _c, err2 = svc._normalize_file_overrides("voice", {"callsign": "bad call!"})
-    assert err2                                                            # invalid -> typed error
-    _u, uerr = svc._normalize_file_overrides("voice", {"unknown": "x"})
-    assert uerr                                                            # unknown -> typed error
-
-
-def test_blank_nonflag_file_override_is_skipped(tmp_path):
-    # Start-page regression: leaving the meshcore Frequency field empty must NOT fail int validation
-    # — a blank non-flag override is treated as absent so the selected RF preset owns the frequency.
-    svc = _svc(tmp_path)
-    assert svc._normalize_file_overrides("meshcore", {"frequency": ""}) == ({}, "")   # skipped, no error
-    ok, err = svc._normalize_file_overrides("meshcore", {"frequency": "869618000"})
-    assert not err and ok["frequency"] == "869618000"                     # real value still validated/kept
-    assert svc._normalize_file_overrides("meshcore", {"frequency": "abc"})[1]   # bad value -> typed error
-    # a flag is NOT skipped when blank (blank flag = off, still an explicit override)
-    assert svc._normalize_file_overrides("meshcore", {"enable_tx": ""}) == ({"enable_tx": ""}, "")
-
 
 def test_meshcore_preset_owns_frequency_for_all_presets(tmp_path):
     """A blank `frequency` must let the selected preset own it — writing a stale explicit
@@ -205,7 +181,7 @@ def test_start_blocks_licensed_without_call_backstop(tmp_path):
     svc = _svc(tmp_path)
     res = svc.start("igate", apply=True)
     assert not res.ok and "callsign" in res.summary.lower()
-    assert res.data.get("enforce_fields") == ["p_call"]
+    assert res.data.get("enforce_fields") == ["c_call"]
 
 
 def test_start_licensed_with_call_passes_enforcement(tmp_path):
@@ -215,86 +191,16 @@ def test_start_licensed_with_call_passes_enforcement(tmp_path):
     assert "callsign is required" not in res.summary
 
 
-def test_param_groups_required_on_top_then_by_component(tmp_path):
-    svc = _svc(tmp_path)
-    groups = svc.stack_start_param_groups("meshcom")
-    assert groups[0]["header"] == "Required"
-    assert [r["name"] for r in groups[0]["rows"]] == ["mc_callsign"]   # identity pulled to top
-    headers = [g["header"] for g in groups]
-    # The `test_fixture` relay is NOT run by a stack start, so its knobs stay off the stack's
-    # confirm page: they rendered as a SECOND GPS entry beside the real `use_gps` switch, one the
-    # operator could not actually use. Named DIRECTLY it still exposes them.
-    assert "MeshCom GPS relay (fixture)" not in headers
-    assert [g["header"] for g in svc.stack_start_param_groups("meshcom-gps-relay")] == \
-        ["MeshCom GPS relay (fixture)"]
-    # the identity field is NOT duplicated inside its component group
-    qemu = next(g for g in groups if g["header"] == "MeshCom QEMU node")
-    assert "mc_callsign" not in [r["name"] for r in qemu["rows"]]
-    # a stack with no identity still groups by component (no "Required" group)
-    assert all(g["header"] != "Required" for g in svc.stack_start_param_groups("kiss"))
-
-
-def test_param_groups_show_dependency_stacks_editable(tmp_path):
-    """The confirm page also shows the DEPENDENCY stacks a start pulls up (kiss under
-    graywolf) — EDITABLE like the target's own rows (operator ruling: starting one app or
-    a stack of apps must offer the same control). Fields/keys are always component-
-    qualified so they can never collide with the target's own; each row carries
-    `dep_stack` so the save path routes it into the dependency's own config."""
-    svc = _svc(tmp_path)
-    groups = svc.stack_start_param_groups("graywolf")
-    headers = [g["header"] for g in groups]
-    kiss = next(g for g in groups if g["header"] == "LoRaHAM KISS TNC (dependency)")
-    assert all(not r["locked"] and not r["is_identity"] for r in kiss["rows"])
-    tx = next(r for r in kiss["rows"] if r["name"] == "tx_freq")
-    assert tx["value"] == "433.775"                                        # the value this start uses
-    assert tx["field"] == "p_loraham-kiss-tnc__tx_freq"                    # always qualified
-    assert tx["key"] == "loraham-kiss-tnc.tx_freq"
-    assert tx["dep_stack"] == "kiss"
-    # an ephemeral submitted value prefills the row (round-trip on re-render)
-    over = {"loraham-kiss-tnc.tx_freq": "434.100"}
-    g2 = svc.stack_start_param_groups("graywolf", params=over)
-    tx2 = next(r for g in g2 for r in g["rows"] if r.get("key") == "loraham-kiss-tnc.tx_freq")
-    assert tx2["value"] == "434.100" and tx2["config_value"] == "433.775"
-    # the daemon keeps its own dedicated panel — never duplicated here
-    assert not any("daemon" in h.lower() for h in headers)
-    # optional dependency components that the run order does not start stay off the page
-    assert all(r["component"] != "loraham-kiss-serial" for r in kiss["rows"])
-    # dependency groups render AFTER the target's own groups
-    assert headers.index("LoRaHAM KISS TNC (dependency)") > headers.index("Graywolf APRS station")
-    # a stack whose only dependency is the daemon gets no dependency group
-    assert all("(dependency)" not in h for h in
-               (g["header"] for g in svc.stack_start_param_groups("voice")))
-    # a DIRECT component run keeps its narrow page
-    assert all("(dependency)" not in g["header"]
-               for g in svc.stack_start_param_groups("meshcom-gps-relay"))
-    # ...and the form-parse source of truth carries the same qualified dep fields
-    f = next(f for f in svc.start_param_fields("graywolf")
-             if f.get("dep_stack") == "kiss" and f["name"] == "tx_freq")
-    assert f["field"] == "p_loraham-kiss-tnc__tx_freq" and f["key"] == "loraham-kiss-tnc.tx_freq"
-
-
 def test_dependency_param_override_channel(tmp_path):
-    """The start accepts component-qualified ephemeral overrides for dependency components
-    — validated against the DEPENDENCY's param defs and routed only to that component —
-    while persisted saves are refused from the wrong stack's bundle."""
+    """A dependency's configuration lives in the DEPENDENCY's own stack: the target's bundle
+    refuses a dependency key with a pointer at the right stack."""
     svc = _svc(tmp_path)
-    # validation: qualified + unique-bare resolve; bad values and unknown names are typed errors
-    assert svc._normalize_run_params("graywolf", {"loraham-kiss-tnc.tx_freq": "433.900"}) \
-        == ({"loraham-kiss-tnc.tx_freq": "433.900"}, "")
-    assert svc._normalize_run_params("graywolf", {"tx_freq": "433.900"}) \
-        == ({"tx_freq": "433.900"}, "")                    # bare, unique among the deps
-    assert "invalid frequency" in svc._normalize_run_params(
-        "graywolf", {"loraham-kiss-tnc.tx_freq": "banana"})[1]
-    assert "unknown parameter" in svc._normalize_run_params(
-        "graywolf", {"loraham-kiss-tnc.nope": "1"})[1]
-    # routing: each component receives ONLY its own subset — no cross-leak either way
+    # routing of launch-time values (today only the inherited identity): each component receives
+    # ONLY its own subset — no cross-leak either way
     over = {"loraham-kiss-tnc.tx_freq": "433.900", "tnc_port": "8123"}
     assert svc._overrides_for_comp("graywolf", "run", over, "loraham-kiss-tnc") \
         == {"tx_freq": "433.900"}
     assert svc._overrides_for_comp("graywolf", "run", over, "graywolf") == {"tnc_port": "8123"}
-    # a dry-run start does not refuse the dep override as an unknown parameter
-    res = svc.start("graywolf", apply=False, params={"loraham-kiss-tnc.tx_freq": "433.900"})
-    assert "invalid parameter" not in (res.summary or "")
     # persisted saves stay in the owning stack: the target's bundle refuses a dep key with a
     # pointer at the right stack; the dependency's own bundle accepts the same key
     r = svc.save_config_bundle("graywolf", values={"loraham-kiss-tnc.tx_freq": "433.900"})
@@ -467,14 +373,11 @@ def _seam_svc(tmp_path, monkeypatch):
 @pytest.mark.parametrize("call", ["", "N0CALL", "N0CALL-1"])
 def test_direct_licensed_component_rejects_bad_call_before_side_effects(tmp_path, monkeypatch, call):
     svc = _seam_svc(tmp_path, monkeypatch)
-    res = svc._start_impl("meshcom-qemu", apply=True, params={"mc_callsign": call})  # no _Seam
+    _seed_raw(svc, "meshcom", {"mc_callsign": call})                       # the SAVED value
+    res = svc._start_impl("meshcom-qemu", apply=True)                       # no _Seam
     assert not res.ok
     assert "callsign" in (res.summary + str(res.details)).lower()
-    if call == "":
-        # empty + no global -> identity enforcement names the field to highlight
-        assert res.data.get("enforce_fields") == ["p_mc_callsign"]
-    # a placeholder VALUE is refused by param validation itself — equally before any
-    # side effect (the seam would have raised)
+    assert res.data.get("enforce_fields") == ["c_mc_callsign"]              # the Settings row
 
 
 def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_path, monkeypatch):
@@ -483,7 +386,7 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
     # a fresh config is blocked before any side effect / _Seam — with or without a global
     # operator callsign, which unlicensed stacks never inherit.
     res = svc._start_impl("meshcore-node", apply=True)
-    assert not res.ok and res.data.get("enforce_fields") == ["pf_node_name"]
+    assert not res.ok and res.data.get("enforce_fields") == ["f_node_name"]
     set_call(svc)
     res = svc._start_impl("meshcore-node", apply=True)
     assert not res.ok, "a global callsign must not satisfy an unlicensed node identity"
@@ -491,39 +394,17 @@ def test_direct_unlicensed_component_rejects_empty_node_before_side_effects(tmp_
 
 def test_direct_valid_identity_reaches_start_seam(tmp_path, monkeypatch):
     svc = _seam_svc(tmp_path, monkeypatch)
+    assert svc.save_config_bundle("meshcom", values={"mc_callsign": "XX0XXA-3"}).ok
     with pytest.raises(_Seam):                                             # enforcement passed
-        svc._start_impl("meshcom-qemu", apply=True, params={"mc_callsign": "XX0XXA-3"})
+        svc._start_impl("meshcom-qemu", apply=True)
 
 
-def test_direct_file_identity_uses_owner_stack_persisted_and_ephemeral(tmp_path):
+def test_direct_file_identity_uses_the_owner_stack_store(tmp_path):
     svc = _svc(tmp_path)
     svc.save_config_bundle("meshcore", values={"file_node_name": "SavedNode"}, band="868")
     rows = svc.identity_resolution("meshcore-node", "868")
     assert rows[0]["effective"] == "SavedNode" and rows[0]["source"] == "local"
     assert svc.enforce_identity("meshcore-node", "868")[0] is True
-    rows = svc.identity_resolution("meshcore-node", "868", None, {"node_name": "EphNode"})
-    assert rows[0]["effective"] == "EphNode"
-
-
-def test_direct_unknown_file_override_fails_typed(tmp_path):
-    svc = _svc(tmp_path)
-    assert svc._normalize_file_overrides("meshcore-node", {"nope": "x"})[1]          # unknown -> typed
-    # a param from a SIBLING component is unknown to a direct component target
-    assert svc._normalize_file_overrides("meshcom-qemu", {"node_name": "x"})[1]
-
-
-@pytest.mark.parametrize("params,msg", [
-    pytest.param({"call": "XX0XXA-10", "tx_freq": "not-a-frequency"}, "invalid parameter",
-                 id="test_invalid_ordinary_run_param_rejected_before_lifecycle"),
-    pytest.param({"call": "XX0XXA-10", "nope": "x"}, "unknown parameter",
-                 id="test_unknown_ordinary_run_param_rejected"),
-    pytest.param("not-a-dict", "must be a mapping",
-                 id="test_non_mapping_run_params_rejected"),
-])
-def test_ordinary_run_param_rejected_before_lifecycle(tmp_path, monkeypatch, params, msg):
-    svc = _seam_svc(tmp_path, monkeypatch)
-    res = svc._start_impl("igate", apply=True, params=params)
-    assert not res.ok and msg in res.summary                                       # no _Seam
 
 
 def test_stack_target_and_daemon_behavior_unchanged(tmp_path):
@@ -531,8 +412,8 @@ def test_stack_target_and_daemon_behavior_unchanged(tmp_path):
     svc = _svc(tmp_path)
     assert svc._identity_field("daemon") is None
     assert svc._identity_field("meshcom") == svc._identity_field("meshcom-qemu")   # same field
-    assert {r["name"] for r in svc.stack_start_params("meshcom")} >= \
-           {r["name"] for r in svc.stack_start_params("meshcom-qemu")}             # stack ⊇ component
+    assert {r["name"] for r in svc._identity_fields("meshcom")} >= \
+           {r["name"] for r in svc._identity_fields("meshcom-qemu")}               # stack ⊇ component
 
 
 # --- Area 1: run-param normalization BEFORE public start lock planning -----------------------
@@ -548,24 +429,10 @@ def _lock_seam_svc(tmp_path, monkeypatch):
     return svc
 
 
-@pytest.mark.parametrize("target,params,msg", [
-    pytest.param("daemon", "not-a-dict", "must be a mapping",
-                 id="test_public_start_non_mapping_params_returns_typed_before_lock"),
-    pytest.param("igate", {"nope": "x"}, "unknown parameter",
-                 id="test_public_start_unknown_params_fail_before_lock"),
-    pytest.param("daemon", {"radio": "999"}, "invalid parameter",          # invalid daemon radio
-                 id="test_public_start_invalid_radio_fails_before_lock"),
-])
-def test_public_start_rejected_before_lock(tmp_path, monkeypatch, target, params, msg):
-    svc = _lock_seam_svc(tmp_path, monkeypatch)
-    res = svc.start(target, apply=True, params=params)                     # must NOT raise
-    assert res.ok is False and msg in res.summary                          # no _Seam reached
-
-
 def test_public_start_valid_params_reach_lock_seam(tmp_path, monkeypatch):
     svc = _lock_seam_svc(tmp_path, monkeypatch)
-    with pytest.raises(_Seam):                                             # canonical values -> planning
-        svc.start("daemon", apply=True, params={"radio": "433"})
+    with pytest.raises(_Seam):                                             # the band -> planning
+        svc.start("daemon", apply=True, band="433")
 
 
 # --- Area 1: restart preflight BEFORE lock planning / stop ----------------------------------
@@ -580,40 +447,25 @@ def _restart_lock_seam(tmp_path, monkeypatch):
     return svc
 
 
-def test_public_restart_non_mapping_params_typed_no_lock(tmp_path, monkeypatch):
-    svc = _restart_lock_seam(tmp_path, monkeypatch)
-    res = svc.restart("igate", apply=True, params="not-a-dict")            # must NOT raise
-    assert res.ok is False and "must be a mapping" in res.summary          # no _Seam / no stop
-
-
-def test_public_restart_unknown_and_invalid_radio_no_lock(tmp_path, monkeypatch):
-    svc = _restart_lock_seam(tmp_path, monkeypatch)
-    assert svc.restart("igate", apply=True, params={"nope": "x"}).ok is False
-    assert svc.restart("daemon", apply=True, params={"radio": "999"}).ok is False  # invalid daemon radio
-
-
-def test_public_restart_invalid_file_override_no_lock(tmp_path, monkeypatch):
-    svc = _restart_lock_seam(tmp_path, monkeypatch)
-    assert svc.restart("voice", apply=True, file_overrides={"unknown": "x"}).ok is False
-    assert svc.restart("voice", apply=True, file_overrides={"freq": "not-a-freq"}).ok is False
-
-
 def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
-    res = svc.restart("igate", apply=True, params={"call": "N0CALL"})
-    # N0CALL is refused as an invalid parameter VALUE by the same preflight (before any
-    # lock/stop side effect — no _Seam raised); an EMPTY override with no global falls
-    # through to identity enforcement instead.
+    # a SAVED N0CALL / an empty local with no global: the preflight refuses before any lock/stop
+    # side effect (no _Seam raised), naming the Settings row.
+    _seed_raw(svc, "igate", {"call": "N0CALL"})
+    res = svc.restart("igate", apply=True)
     assert res.ok is False and "callsign" in (res.summary + str(res.details)).lower()
-    res = svc.restart("igate", apply=True, params={"call": ""})
-    assert res.ok is False and res.data.get("enforce_fields") == ["p_call"]
+    assert res.data.get("enforce_fields") == ["c_call"]
+    _seed_raw(svc, "igate", {"call": ""})
+    res = svc.restart("igate", apply=True)
+    assert res.ok is False and res.data.get("enforce_fields") == ["c_call"]
 
 
 @pytest.mark.contract
 def test_public_restart_valid_reaches_lock_seam(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
+    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-10"}).ok
     with pytest.raises(_Seam):                                             # preflight passed
-        svc.restart("igate", apply=True, params={"call": "XX0XXA-10"})
+        svc.restart("igate", apply=True)
 
 
 def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
@@ -621,11 +473,12 @@ def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
     def seam(*a, **k):
         raise _Seam()
     monkeypatch.setattr(svc, "stop", seam)                                 # stop() is the seam
-    # invalid inputs -> typed failure BEFORE stop()
-    assert svc._restart_impl("igate", apply=True, params={"nope": "x"}).ok is False
-    assert svc._restart_impl("igate", apply=True, params={"call": "N0CALL"}).ok is False
+    # an unusable SAVED identity -> typed failure BEFORE stop()
+    _seed_raw(svc, "igate", {"call": "N0CALL"})
+    assert svc._restart_impl("igate", apply=True).ok is False
+    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-10"}).ok
     with pytest.raises(_Seam):                                             # valid -> reaches stop()
-        svc._restart_impl("igate", apply=True, params={"call": "XX0XXA-10"})
+        svc._restart_impl("igate", apply=True)
 
 
 # --- Area 2: direct component targets use the OWNER stack for persistence --------------------
@@ -639,8 +492,7 @@ def test_direct_component_daemon_params_use_owner_stack(tmp_path):
     assert cfgmod.load_stack_config(svc._paths, "meshcom").get("dp_433_SF") == nd   # OWNER stack
     assert cfgmod.load_stack_config(svc._paths, "meshcom-qemu") == {}               # NOT the component
     assert svc._daemon_param_overrides("meshcom-qemu", "433") == {"SF": nd}         # read back via comp
-    sf = next(r for pnl in svc.daemon_start_panels("meshcom-qemu")
-              for r in pnl["rows"] if r["name"] == "SF")
+    sf = next(r for r in svc.daemon_params_view("meshcom-qemu", "433")["rows"] if r["name"] == "SF")
     assert sf["value"] == nd                                                        # panel shows owner value
     assert svc.save_daemon_params("meshcore-node", "868", {"CADWAIT": "1234"}).ok
     assert cfgmod.load_stack_config(svc._paths, "meshcore").get("dp_868_CADWAIT") == "1234"
@@ -841,37 +693,24 @@ def _run_scoped_start(svc, target, monkeypatch, **kw):
 
 def test_direct_start_generates_only_started_components_scoped(tmp_path, monkeypatch):
     svc = _scope_svc(tmp_path)
-    _run_scoped_start(svc, "tgt", monkeypatch, file_overrides={"tval": "TXX"})
+    assert svc.save_config_bundle("tgt", values={"file_tval": "TXX"}).ok      # the SAVED value
+    _run_scoped_start(svc, "tgt", monkeypatch)
     files = tmp_path / "config" / "files"
     assert (files / "tgt.conf").exists()                          # target config generated
     assert (files / "dep.conf").exists()                          # dependency config generated
     assert not (files / "sib.conf").exists()                      # sibling NEVER written
-    assert "TVAL=TXX" in (files / "tgt.conf").read_text()         # target ephemeral reaches target
+    assert "TVAL=TXX" in (files / "tgt.conf").read_text()         # target's saved value reaches target
     dep_txt = (files / "dep.conf").read_text()
     assert "DVAL=ddefault" in dep_txt                             # dependency uses its OWN default
-    assert "TVAL" not in dep_txt and "TXX" not in dep_txt         # target override never leaks to dep
-
-
-def test_direct_start_run_params_component_scoped_no_collision(tmp_path, monkeypatch):
-    # `shared` exists on BOTH tgt and dep; the target's ephemeral value must not leak into the
-    # dependency's launch config (component-scoped comp_cfg).
-    svc = _scope_svc(tmp_path)
-    seen = {}
-    from lhpc.core.lifecycle import Lifecycle, StartLaunch
-    def stub(self, stack, comp, cfg, band="", **_scope):
-        seen[comp.id] = dict(cfg)
-        return StartLaunch(True, "log", "")
-    monkeypatch.setattr(Lifecycle, "start", stub)
-    svc.start("tgt", apply=True, params={"shared": "EPHEMERAL"})
-    assert seen["tgt"].get("shared") == "EPHEMERAL"               # target gets the ephemeral value
-    assert seen["dep"].get("shared") == "dep-run"                 # dependency keeps its OWN default
+    assert "TVAL" not in dep_txt and "TXX" not in dep_txt         # target value never leaks to dep
 
 
 def test_stack_start_keeps_whole_stack_generation(tmp_path, monkeypatch):
     svc = _scope_svc(tmp_path)
-    _run_scoped_start(svc, "ostack", monkeypatch, file_overrides={"tval": "TZZ", "sval": "SZZ"})
+    assert svc.save_config_bundle("ostack", values={"file_tval": "TZZ"}).ok
+    _run_scoped_start(svc, "ostack", monkeypatch)
     files = tmp_path / "config" / "files"
-    # a stack start includes the non-optional components (tgt + dep); the ephemeral applies to each
+    # a stack start includes the non-optional components (tgt + dep), each with its saved values
     assert "TVAL=TZZ" in (files / "tgt.conf").read_text()
     assert (files / "dep.conf").exists()
 
@@ -940,14 +779,6 @@ def test_only_target_scoped_dependency_uses_defaults(tmp_path, monkeypatch):
     assert seen["tgt"]["rp"] == "RP-T"
     assert seen["dep"]["rp"] == "rp-dep"                         # dependency DEFAULT, never target's
     assert "FP=fp-dep" in (tmp_path / "config" / "files" / "dep.conf").read_text()
-
-
-def test_ephemeral_applies_only_to_target(tmp_path, monkeypatch):
-    svc = _scope2_svc(tmp_path)
-    seen = _capture_start(svc, monkeypatch)
-    svc.start("tgt", apply=True, params={"rp": "EPH"})
-    assert seen["tgt"]["rp"] == "EPH"
-    assert seen["dep"]["rp"] == "rp-dep"                         # ephemeral never leaks to dependency
 
 
 def test_stack_start_honors_scoped_and_unique_flat(tmp_path, monkeypatch):
@@ -1027,22 +858,6 @@ def _id_collide_svc(tmp_path):
                              paths=Paths(runtime_root=tmp_path))
 
 
-def test_qualified_ephemeral_applies_per_component(tmp_path, monkeypatch):        # (3)
-    svc = _scope2_svc(tmp_path)
-    seen = _capture_start(svc, monkeypatch)
-    svc.start("ostack2", apply=True, params={"tgt.rp": "E-T", "dep.rp": "E-D"})
-    assert seen["tgt"]["rp"] == "E-T" and seen["dep"]["rp"] == "E-D"              # each to its component
-
-
-def test_unqualified_dup_ephemeral_fails_before_locks(tmp_path, monkeypatch):    # (4)
-    svc = _scope2_svc(tmp_path)
-    def boom(*a, **k):
-        raise _Seam()
-    monkeypatch.setattr(svc, "_config_stable", boom)                             # config-stability seam
-    res = svc.start("ostack2", apply=True, params={"rp": "X"})                   # unqualified duplicate
-    assert res.ok is False and "multiple components" in res.summary              # typed, no _Seam
-
-
 def test_identity_selected_component_not_masked_by_sibling(tmp_path, monkeypatch):  # (5)
     from lhpc.core.lifecycle import Lifecycle
     svc = _id_collide_svc(tmp_path)
@@ -1053,9 +868,10 @@ def test_identity_selected_component_not_masked_by_sibling(tmp_path, monkeypatch
     # the SELECTED licensed field (tgt.call) is EMPTY (no global set); a later same-named
     # component (dep.call) is valid — the start must still BLOCK on tgt, before any
     # lifecycle side effect (no _Seam), never masked by the sibling's valid value.
-    res = svc.start("ids", apply=True, params={"tgt.call": "", "dep.call": "XX0XXA-1"})
+    assert svc.save_config_bundle("ids", values={"dep.call": "XX0XXA-1"}).ok
+    res = svc.start("ids", apply=True)
     assert res.ok is False and "callsign" in res.summary.lower()
-    assert "p_tgt__call" in (res.data.get("enforce_fields") or [])               # selected component's field
+    assert "c_tgt__call" in (res.data.get("enforce_fields") or [])               # selected component's field
 
 
 def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):     # (6)
@@ -1064,18 +880,17 @@ def test_qualified_identity_valid_reaches_start_seam(tmp_path, monkeypatch):    
     def boom(*a, **k):
         raise _Seam()
     monkeypatch.setattr(Lifecycle, "start", boom)                               # controlled non-hardware seam
+    assert svc.save_config_bundle("ids", values={"tgt.call": "XX0XXA-5", "dep.call": "XX0XXA-6"}).ok
     with pytest.raises(_Seam):
-        svc.start("ids", apply=True, params={"tgt.call": "XX0XXA-5", "dep.call": "XX0XXA-6"})
+        svc.start("ids", apply=True)
 
 
 def test_unique_name_stack_stays_bare_no_regression(tmp_path):                   # (7)
     svc = _svc(tmp_path)
-    rows = svc.stack_start_params("voice")                                       # voice: unique names
+    rows = svc.config_param_fields("voice")                                      # voice: unique names
+    assert rows
     for r in rows:
         assert "__" not in r["field"] and "." not in r["key"]                    # bare fields/keys preserved
-    # a bare ephemeral for a unique name still works (igate's tx_freq)
-    clean, err = svc._normalize_run_params("igate", {"tx_freq": "434.500"})
-    assert not err and clean == {"tx_freq": "434.500"}
 
 
 # --- permanent Config page: component-aware (collision fixture) ------------------------------
@@ -1179,42 +994,57 @@ def test_empty_non_default_override_is_kept(tmp_path):
     assert svc.stack_config("s")["opt"] == ""
 
 
-def test_save_only_rerender_never_hands_back_the_hmac_managed_param(tmp_path):
-    # Save on the start-confirm page re-renders with the SAVED values. stack_config() returns the
-    # whole saved config — `password_file` included — and handing that back as an ephemeral start
-    # override made the NEXT submit post it, so the start refused with "managed by the HMAC
-    # password flow". start_param_fields() is the HMAC-filtered set the form legitimately owns;
-    # the re-render must be restricted to it.
-    from lhpc.core.services import ControllerService
-    from lhpc.core.paths import Paths
-    svc = ControllerService(paths=Paths(runtime_root=tmp_path))
-    owned = {f["key"] for f in svc.start_param_fields("meshcom") if f["kind"] == "run"}
-    assert owned, "meshcom should expose start params"
-    assert not [k for k in owned if k.endswith("password_file")], \
-        "an HMAC-managed param must never be offered as a start override"
+
+# ---- 0.2.9 audit: an invalid SAVED launch value refuses before any mutation -------------------
+
+def _spy_stops(monkeypatch):
+    from lhpc.core.services import ControllerService as _CS
+    calls = []
+    orig = _CS.stop
+    monkeypatch.setattr(_CS, "stop", lambda self, t, *a, **k: calls.append(t) or orig(self, t, *a, **k))
+    return calls
 
 
-def test_use_gps_is_shown_saved_only_and_never_blocks_a_start(tmp_path):
-    """`use_gps` is refused as a per-start override, so rendering it as an editable control
-    offered a change that could only end in a failed start — and on graywolf it failed even
-    UNTOUCHED, because the form posts every field it renders and the echo was misread as a
-    change. It is shown (the operator must see what this start will use) with NO input element,
-    so the page cannot post it, and the start is unaffected either way."""
+def test_an_invalid_saved_run_param_refuses_plan_apply_and_restart_before_the_stop(tmp_path, monkeypatch):
+    """The launch validates argv values (`expand_argv`); a stored value that no longer passes —
+    an obsolete rule, a hand edit — used to surface only there, AFTER a restart had stopped the
+    running stack. The saved-config preflight dry-expands the argv first, on the plan and the
+    apply alike, so the refusal comes before owner stops, config generation or the stop leg."""
     svc = _svc(tmp_path)
-    for sid in ("graywolf", "meshcom"):
-        svc.save_stack_config(sid, {"use_gps": "on"})
-        row = next(r for g in svc.stack_start_param_groups(sid)
-                   for r in g["rows"] if r["name"] == "use_gps")
-        assert row["locked"] is True
-        assert row["value"] == "on"                       # visible, and truthful
-        # The hint names the STACK (not the component that declares the param) and points at
-        # the WEB path — the reader is already in the console, so a CLI command is a detour.
-        assert "Apps" in row["locked_hint"] and "Settings" in row["locked_hint"]
-        assert svc.stack(sid).name in row["locked_hint"]
+    set_call(svc)
+    _seed_raw(svc, "igate", {"tx_freq": "banana"})                  # past the validating bundle
+    stops = _spy_stops(monkeypatch)
+    plan = svc.start("igate", apply=False)
+    assert not plan.ok and "invalid saved configuration for loraham-igate" in plan.summary
+    assert "banana" in plan.summary and plan.next_commands == ["lhpc config igate"]
+    res = svc.start("igate", apply=True, stop_owners=True)
+    assert not res.ok and "invalid saved configuration" in res.summary
+    res = svc.restart("igate", apply=True)
+    assert not res.ok and "Cannot restart 'igate': invalid saved configuration" in res.summary
+    assert stops == []                                               # nothing was ever stopped
+    # a valid value passes the same seam
+    _seed_raw(svc, "igate", {"tx_freq": "434.500"})
+    assert svc._saved_launch_refusal("igate", "", "start") is None
+    # the daemon's stored file is NOT a launch input (its argv is rebuilt per band at spawn): a
+    # stale key there (a `radio` choice the manifest no longer has) refuses no client start
+    _seed_raw(svc, "daemon", {"radio": "both"})
+    assert svc._saved_launch_refusal("igate", "", "start") is None
+    assert svc.start("igate", apply=False).ok
 
-        # The echo the web form falls back to is accepted -> the start is not refused.
-        clean, err = svc._normalize_run_params(sid, {"use_gps": "on"})
-        assert err == "" and "use_gps" not in clean       # accepted, and not applied per start
-        # A REAL change is still refused, with the command that does work.
-        _clean, err = svc._normalize_run_params(sid, {"use_gps": "off"})
-        assert "cannot be changed for a single start" in err
+
+def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(tmp_path, monkeypatch):
+    # meshtastic (marked running on 433) owns that radio; igate has an invalid saved value: the
+    # owner stop that `stop_owners=True` would run must not happen for a start that cannot launch.
+    from lhpc.core import config as _cfg
+    svc = ControllerService(system=FakeSystem(cmdlines_data={200: ["meshtasticd"]}).system,
+                            paths=Paths(runtime_root=tmp_path))
+    (tmp_path / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
+    set_call(svc)
+    svc._set_running_band("meshtastic", "433")
+    assert [b.get("holder_stack") for b in svc.run_blockers("igate")], "precondition: an owner"
+    _seed_raw(svc, "igate", {"tx_freq": "banana"})
+    stops = _spy_stops(monkeypatch)
+    res = svc.start("igate", apply=True, stop_owners=True)
+    assert not res.ok and "invalid saved configuration" in res.summary, res.summary
+    assert stops == []

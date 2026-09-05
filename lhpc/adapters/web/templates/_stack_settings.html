@@ -4,6 +4,9 @@
    default; opens on `?cfg=1` only when THIS section's id is the page's single 'stack-settings'. #}
 {% from "_macros.html" import action_btn %}
 {% set _sid = settings_id | default('stack-settings') %}
+{# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only
+   when this stack's section is the one the link opened. #}
+{% set _bad = (request.args.get('bad') or '').split(',') if request.args.get('cfg') == stack.id else [] %}
 <details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id %} open data-force-open="1"{% endif %}>
   <summary>Settings</summary>
   <div class="body">
@@ -165,7 +168,7 @@
               {% if g.rule_before or not loop.first %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
               <tr class="spgroup"><th colspan="3">{{ g.name }}</th></tr>
               {% for r in g.rows %}
-                <tr class="{% if r.advanced %}advrow{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
+                <tr class="{% if r.advanced %}advrow{% endif %}{% if r.field in _bad %} field-bad{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
                   <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
                   <td>
                     {% if r.kind == 'flag' %}

@@ -292,18 +292,6 @@ def test_apply_live_other_band_not_blocked(tmp_path):
     assert r.ok
 
 
-def test_daemon_overrides_are_ephemeral_not_persisted(tmp_path):
-    # A confirm-page value (or its "Reset to defaults") is applied for THIS start only; the saved
-    # config is never touched.
-    from lhpc.core import config as cfgmod
-    svc = _svc(tmp_path)
-    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})                     # saved config
-    assert svc._daemon_param_applies("meshcom", "433")["CADIDLE"] == "40"           # config applied
-    ephem = svc._daemon_param_applies("meshcom", "433", {"CADIDLE": "28"})          # ephemeral wins
-    assert ephem["CADIDLE"] == "28"
-    assert cfgmod.load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"  # config untouched
-
-
 # --- Area 4: canonical daemon-value persistence ----------------------------------------------
 
 def test_lowercase_enum_canonicalized(tmp_path):
@@ -359,98 +347,11 @@ def _daemon_svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def test_ephemeral_invalid_value_fails_before_launch(tmp_path):
-    svc = _daemon_svc(tmp_path)
-    r = svc.run_action("start", "daemon", apply=True, daemon_overrides={"433": {"SF": "99"}})
-    assert not r.ok and "invalid daemon parameter" in r.summary and "SF" in r.summary
-    assert not any("start daemon" in d or "already serving" in d for d in r.details)   # no launch
-
-
-def test_ephemeral_unknown_key_and_wrong_band_rejected(tmp_path):
-    svc = _daemon_svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")      # meshcom identity inherits (gates first now)
-    assert not svc.run_action("start", "daemon", apply=True,
-                              daemon_overrides={"433": {"BOGUS": "x"}}).ok      # unknown key
-    r = svc.run_action("start", "meshcom", apply=True, daemon_overrides={"868": {"CADIDLE": "40"}})
-    assert not r.ok and "not part of this start" in r.summary                   # 868 not in a 433 start
-
-
-def test_ephemeral_mode_fsk_accepted_by_validation(tmp_path):
-    svc = _daemon_svc(tmp_path)
-    r = svc.run_action("start", "daemon", apply=True, daemon_overrides={"433": {"MODE": "FSK"}})
-    assert "invalid daemon parameter" not in (r.summary or "")                  # FSK is valid
-
-
-def test_crafted_web_post_invalid_override_warns(tmp_path):
-    import os, re
-    b = tmp_path / "src" / "loraham-daemon" / "loraham_daemon" / "loraham_daemon"
-    b.parent.mkdir(parents=True); b.write_text("#!/bin/sh\n"); os.chmod(b, 0o755)
-    c = create_app(service_factory=lambda: ControllerService(
-        system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))).test_client()
-    tok = re.search(r'name="_csrf" value="([^"]+)"', c.get("/stacks").get_data(as_text=True)).group(1)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "daemon",
-                                "confirmed": "yes", "p_radio": "433", "dp_433_SF": "99"},
-               follow_redirects=True)
-    assert b"invalid daemon parameter" in r.data                                # rejected, no launch
-
-
 # --- Area 2: genuinely per-band Start-confirm panels -----------------------------------------
-
-def test_daemon_start_panels_per_radio_mode(tmp_path):
-    svc = _svc(tmp_path)
-    assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "both"})] == ["433", "868"]
-    assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "433"})] == ["433"]
-    assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "868"})] == ["868"]
-
-
-def test_confirm_both_makes_two_band_scoped_panels(tmp_path):
-    # In radio-mode `both` (the default), starting the daemon serves BOTH bands as two single-band
-    # processes (`--radio both` no longer exists) -> the start-confirm has one band-scoped panel per
-    # band, each with its own rows, so a 433 value never reaches 868. (The dp_<band>_ field-name
-    # scoping in the rendered template is covered by the daemon-params panel tests above.)
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    panels = svc.daemon_start_panels("daemon", {}, "")
-    assert [p["band"] for p in panels] == ["433", "868"]        # two panels, explicit single bands
-    assert all(p["is_daemon"] and p["rows"] for p in panels)   # each carries its own band-scoped rows
-    # a single-band request yields exactly one panel (no cross-band panel)
-    assert [p["band"] for p in svc.daemon_start_panels("daemon", {"radio": "433"}, "")] == ["433"]
-
-
-def test_per_band_ephemeral_values_do_not_cross(tmp_path):
-    svc = _svc(tmp_path)
-    assert svc._daemon_param_applies("daemon", "433", {"CADIDLE": "111"})["CADIDLE"] == "111"
-    assert svc._daemon_param_applies("daemon", "868", {"CADIDLE": "222"})["CADIDLE"] == "222"
-
-
-def test_ephemeral_start_leaves_saved_overrides_untouched(tmp_path):
-    from lhpc.core import config as cfgmod
-    svc = _daemon_svc(tmp_path)
-    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"})
-    svc.run_action("start", "daemon", apply=True, daemon_overrides={"433": {"CADIDLE": "250"}})
-    assert cfgmod.load_stack_config(svc._paths, "daemon")["dp_433_CADIDLE"] == "40"
-
 
 # --- Area 3: browser-only FSK warning covers inline start-confirm ----------------------------
 
 # --- Area 1: strict Start-confirm dp_* field parsing -----------------------------------------
-
-def test_parse_start_daemon_overrides_shapes():
-    from lhpc.adapters.web.app import _parse_start_daemon_overrides as parse
-    from werkzeug.datastructures import MultiDict
-    # malformed field SHAPE rejected at the parser (before any launch)
-    for bad in ("dp_bad", "dp_433_", "dp_"):
-        pb, err = parse(MultiDict([(bad, "x")]))
-        assert err is not None and pb is None
-    # duplicated field rejected
-    _, err = parse(MultiDict([("dp_433_MODE", "LORA"), ("dp_433_MODE", "FSK")]))
-    assert err is not None
-    # unknown band/param are PARSED here (service normalizer rejects them, not this parser)
-    pb, err = parse(MultiDict([("dp_433_BOGUS", "x")]))
-    assert err is None and pb == {"433": {"BOGUS": "x"}}
-    # valid incl. FSK
-    pb, err = parse(MultiDict([("dp_433_MODE", "FSK"), ("dp_868_CADIDLE", "40")]))
-    assert err is None and pb == {"433": {"MODE": "FSK"}, "868": {"CADIDLE": "40"}}
-
 
 def _daemon_web(tmp_path):
     import os
@@ -466,31 +367,6 @@ def _start_post(c, extra):
     data = {"_csrf": tok, "op": "start", "target": "daemon", "confirmed": "yes", "p_radio": "433"}
     data.update(extra)
     return c.post("/action", data=data, follow_redirects=True)
-
-
-def test_crafted_malformed_field_fails_before_launch(tmp_path):
-    c = _daemon_web(tmp_path)
-    r = _start_post(c, {"dp_bad": "x"})
-    assert b"malformed daemon field" in r.data                 # parser-level rejection
-    # no start marker written -> no launch occurred
-    assert not (tmp_path / "state").exists() or not list((tmp_path / "state").glob("*.json"))
-
-
-def test_crafted_unknown_param_fails_via_normalizer(tmp_path):
-    c = _daemon_web(tmp_path)
-    r = _start_post(c, {"dp_433_BOGUS": "x"})
-    assert b"invalid daemon parameter" in r.data and b"BOGUS" in r.data
-
-
-def test_crafted_unknown_band_fails(tmp_path):
-    c = _daemon_web(tmp_path)
-    r = _start_post(c, {"dp_999_MODE": "LORA"})
-    assert b"invalid daemon parameter" in r.data                # unknown band 999
-
-
-def test_crafted_empty_param_field_rejected(tmp_path):
-    c = _daemon_web(tmp_path)
-    assert b"malformed daemon field" in _start_post(c, {"dp_433_": "x"}).data
 
 
 # --- in-panel 433/868 band chooser (like the Settings band switch) ---------------------------
@@ -538,16 +414,31 @@ def test_daemon_params_band_chooser_rendered(tmp_path):
     assert "band=433" in ks and "band=868" in ks and '<span class="disabled"' not in ks
 
 
-def test_bandless_component_start_ignores_daemon_overrides(tmp_path):
-    # A band-less component (meshcom-gps-relay feeds the QEMU UART, serves no radio band): the
-    # Start-confirm form carries the meshcom daemon panel's 433 values, but the start does not
-    # (re)launch the daemon — the override must be IGNORED, never rejected as "not part of this
-    # start". Regression for the operator-reported gps-relay start failure.
-    svc = _daemon_svc(tmp_path)
-    svc.set_operator_identity(callsign="XX0XXA")      # meshcom identity inherits (gates first now)
-    r = svc.run_action("start", "meshcom-gps-relay", apply=False,
-                       daemon_overrides={"433": {"CADIDLE": "40"}})
-    assert "not part of this start" not in (r.summary or "")
-    # a REAL daemon-serving start still validates the band (unchanged):
-    r2 = svc.run_action("start", "meshcom", apply=True, daemon_overrides={"868": {"CADIDLE": "40"}})
-    assert not r2.ok and "not part of this start" in r2.summary
+
+def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
+    # 0.2.9: Settings is the only place daemon parameters change; a start applies the SAVED
+    # per-band values. `_daemon_param_applies` has no per-launch input any more.
+    from lhpc.core import config as cfgmod
+    svc = _svc(tmp_path)
+    svc.save_daemon_params("meshcom", "433", {"CADIDLE": "40"})
+    assert svc._daemon_param_applies("meshcom", "433")["CADIDLE"] == "40"
+    assert cfgmod.load_stack_config(svc._paths, "meshcom")["dp_433_CADIDLE"] == "40"
+    # per-band stores never cross
+    svc.save_daemon_params("daemon", "433", {"CADIDLE": "111"})
+    svc.save_daemon_params("daemon", "868", {"CADIDLE": "222"})
+    assert svc._daemon_param_applies("daemon", "433")["CADIDLE"] == "111"
+    assert svc._daemon_param_applies("daemon", "868")["CADIDLE"] == "222"
+
+
+def test_crafted_start_post_fields_are_ignored_not_applied(tmp_path):
+    # A crafted web POST carrying the OLD per-launch fields (dp_<band>_<PARAM>, p_<name>) changes
+    # nothing: the start runs the saved configuration, the saved daemon params stay untouched,
+    # and no "invalid daemon parameter" refusal exists any more.
+    from lhpc.core import config as cfgmod
+    c = _daemon_web(tmp_path)
+    from lhpc.core.services import ControllerService as _CS
+    svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    svc.save_daemon_params("daemon", "433", {"CADIDLE": "40"})
+    r = _start_post(c, {"dp_433_SF": "99", "dp_433_CADIDLE": "250", "dp_bad": "x"})
+    assert b"invalid daemon parameter" not in r.data and b"malformed daemon field" not in r.data
+    assert cfgmod.load_stack_config(svc._paths, "daemon")["dp_433_CADIDLE"] == "40"

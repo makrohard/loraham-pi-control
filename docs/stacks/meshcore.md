@@ -32,8 +32,8 @@ One openhop process runs on the radio in every mode; `mode` (the Mode switch at 
 stack's page, the same row under Settings → Repeater, or `lhpc config meshcore mode …`) selects
 which program it is. The Apps row carries a `mode:` pill and `lhpc status meshcore` prints the
 saved mode — and, while the stack runs with another one, the running mode with "restart to apply".
-On the start-confirm panel the Repeater rows come first and show the saved values; the mode is
-changed before a start (a mode change decides which identities exist), never per start. Changing it flags the stack
+The mode is changed in Settings before a start (a mode change decides which identities exist),
+never per start — a start runs the saved configuration. Changing it flags the stack
 restart-required like any other setting. The default is `chat`, so an updated box keeps running
 exactly what it ran before.
 

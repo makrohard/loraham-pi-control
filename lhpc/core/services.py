@@ -1739,7 +1739,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         `target` may be a component id — it is normalized to its owner stack, so a direct
         component start is gated exactly like a stack start.
 
-        Deliberately not settable per start: an ephemeral value would let a launch differ
+        A saved setting only (as every setting is): a per-launch value would let a launch differ
         from the saved state that claims and generated config were derived from.
         """
         stack_id = self.gps_owner_stack(target)
@@ -1753,8 +1753,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         if raw in ("on", "off"):
             return raw == "on"
         # Unset = the MANIFEST default, not a hardcoded "off": the switch defaults to "on"
-        # (position via `auto` when a gpsd exists), and the Settings/confirm pages already
-        # render that default — reading unset as off here would make the pages show "on"
+        # (position via `auto` when a gpsd exists), and the Settings page already
+        # renders that default — reading unset as off here would make the pages show "on"
         # while every start behaved as off.
         from .gps import use_gps_default
         return use_gps_default(self.stacks(), stack_id) == "on"
@@ -1888,42 +1888,34 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     # production feed.
     _FIXTURE_FEEDS: ClassVar[dict] = {"meshcom": "meshcom-gps-relay"}
 
-    def _optional_listed(self, c) -> bool:
-        """Optional components the Settings card and the confirm page LIST: what an operator can
-        run — services and one-shots — never a library/firmware (nothing to run) nor a position
-        feed/fixture (the plan admits the feed; the fixture runs only by name). Whether the row
-        gets an auto-start control is `_never_operator_autostart` (a one-shot/interactive client
-        such as the MeshCore CLI is listed as "run on demand")."""
+    def optional_role(self, c) -> str:
+        """THE single rule for an optional component's place on the operator's surfaces —
+        "hidden" | "listed" | "tickable":
+          * hidden   — nothing an operator runs: a library/firmware (nothing to run), a production
+                       GPS feed (the resolved position plan is its only admitter) or a `test_fixture`
+                       (runs deliberately, by name, never with the stack);
+          * listed   — shown on the Settings card as "run on demand": a one-shot/interactive
+                       CLIENT (the MeshCore CLI, a REPL in the operator's terminal) is run by name,
+                       never "with the stack";
+          * tickable — a SERVICE the operator may auto-start with the stack (`autostart_<id>`;
+                       an INTERACTIVE service such as nomadnet stays a choice: the start plans it
+                       and prints its launch line, MANUAL_REQUIRED, instead of spawning it).
+        A saved `autostart_<id>` flag counts ONLY for a tickable component — the Settings list,
+        the run-order admission and (formerly) the confirm page used to encode this separately
+        and drifted (a stale FIXTURE tick silently replayed a synthetic position on every
+        start; the CLI was offered a tick one surface never showed). Non-optional -> "hidden"."""
         from .model import ComponentKind
-        return (bool(c.optional) and c.kind not in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
-                and not c.test_fixture and c.id not in self._all_gps_feed_ids())
-
-    def _never_operator_autostart(self, c) -> bool:
-        """Components that are NOT an operator start/auto-start choice, whose saved
-        `autostart_<id>` flag is therefore ignored: production GPS feeds (the resolved position
-        plan is their only admitter), `test_fixture` components (run deliberately, by name), and
-        anything that is not a SERVICE — a library or firmware never runs, and a one-shot client
-        (the MeshCore CLI, a REPL in the operator's terminal) is run on demand, by name, never
-        "with the stack". An INTERACTIVE service (nomadnet) stays a choice: the start plans it
-        and prints its launch line (MANUAL_REQUIRED) instead of spawning it, as before.
-
-        THE single predicate for that rule — it was encoded separately in the Settings optional
-        list, the confirm-page checkbox list and the run-order admission, and the copies drifted:
-        the run order ignored stale feed ticks but still honored a stale FIXTURE tick, silently
-        replaying a synthetic position on every start, after both UIs that could show or clear
-        the flag were removed; later the Settings list offered the CLI an auto-start tick the
-        confirm page (rightly) never showed, and a saved tick seeded the REPL into the start.
-        """
-        from .model import ComponentKind
-        return (c.test_fixture or c.id in self._all_gps_feed_ids()
-                or c.kind != ComponentKind.SERVICE)
+        if (not c.optional or c.kind in (ComponentKind.LIBRARY, ComponentKind.FIRMWARE)
+                or c.test_fixture or c.id in self._all_gps_feed_ids()):
+            return "hidden"
+        return "tickable" if c.kind == ComponentKind.SERVICE else "listed"
 
     def _gps_components_excluded(self, target: str) -> set:
         """Feed components that must not run under the current plan.
 
         The fixture relay runs only when named directly (`lhpc stack start meshcom-gps-relay`)
         — that explicitness is what makes it "test-only"; it is never an auto-start choice
-        (see `_never_operator_autostart`). What it must never do is run BESIDE the production
+        (see `optional_role`). What it must never do is run BESIDE the production
         feed: both write the same UART socket, so the node would receive a synthetic position
         interleaved with the real one and there would be no way to tell which it beaconed.
 
@@ -1946,16 +1938,14 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # Optional components are soft: included only when the operator has
             # opted into auto-starting them (even via another component's depends_on).
             cfg = load_stack_config(self._paths, target)
-            # Feeds and fixtures are excluded from the auto-start choice: they are not one. A
-            # saved `autostart_meshcom-gps = on` (the confirm page used to offer it as a checkbox)
-            # forced the feed into the order while `use_gps` was off, and starting a feed the plan
-            # does not want is refused — so the whole stack stopped starting, durably, from one
-            # stale tick. A stale FIXTURE tick was worse: with the checkboxes gone it silently
-            # replayed a synthetic position on every start, with no UI left to reveal or clear it.
-            # The plan below is the ONLY feed admitter; the fixture runs only when named directly.
+            # Only a TICKABLE optional component (`optional_role`) honours its saved tick: a stale
+            # `autostart_<feed>` or `autostart_<fixture>` flag must never force a feed the position
+            # plan does not want (the whole stack then stopped starting) or silently replay a
+            # synthetic position. The plan below is the ONLY feed admitter; the fixture runs only
+            # when named directly.
             allowed_optional = {c.id for c in s.components
-                                if c.optional and cfg.get(f"autostart_{c.id}") == "on"
-                                and not self._never_operator_autostart(c)}
+                                if cfg.get(f"autostart_{c.id}") == "on"
+                                and self.optional_role(c) == "tickable"}
             # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
             # resolved global GPS plan, computed HERE — before anything downstream acquires a
             # lock — so run order, claims and the rendered config all describe the same plan.
@@ -2074,14 +2064,12 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 return False
         return True
 
-    def _daemon_needs(self, order, params, band: str = ""):
+    def _daemon_needs(self, order, band: str = ""):
         """The daemon's required radio band + TX mode for this run order. `band`
         overrides the band for a band-switchable app stack. Returns (radio, tx); tx is
         None when no single value applies."""
         if not any(c.id == self.DAEMON_ID for _, c in order):
             return None, None
-        if params and params.get("radio"):
-            return params["radio"], None          # explicit (daemon stack) override
         if band in ("433", "868"):
             bands = {band}
         else:
@@ -2140,7 +2128,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # daemon will actually serve (it starts the free band(s), not the owned one).
             # An EMPTY requested radio means "serve every active band after direct-owner
             # arbitration" (one process per band) — exactly what _ensure_daemon launches. NEVER
-            # fall back to the saved/manifest default of the ephemeral `radio` run param: its
+            # fall back to the saved/manifest default of the daemon's `radio` run param: its
             # manifest default is a single band, which UNDER-LOCKED a dual-band serve-all start
             # (locked 433 while both bands were launched). Enforced by
             # test_daemon_all_active_start_locks_every_band (tests/test_boot_restore.py).
@@ -2263,7 +2251,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                 holder = b.get("holder_stack") or b.get("holder")
                 if holder:
                     add(holder, False, "", "", "")   # holder is a running peer; its own bands apply
-        if cascade and op == "stop":
+        if cascade and op in ("stop", "restart"):      # a restart's stop leg cascades too
             for dep in self._dependents_of(target):
                 add(dep, False, "", "", "stop")
         return sorted(keys, key=reslock.canonical_key)
@@ -2566,7 +2554,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         active = list(self.active_bands())
         return [radio] if radio in ("433", "868") and radio in active else active
 
-    # -- Start-confirm "Stack parameters" panel + CALL/node enforcement ----------
+    # -- CALL/node identity enforcement (plan and apply, on the saved configuration) ----
 
     # A run/file param whose validator marks it the stack's operator identity: a "callsign"
     # validator => LICENSED (refuse empty / N0CALL); a "node" validator => UNLICENSED (refuse only

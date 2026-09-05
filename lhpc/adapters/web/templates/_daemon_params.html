@@ -1,25 +1,15 @@
-{# Per-stack daemon radio-parameter panel. Shared by the config/stack pages (its own form with
-   Save/Apply/Reset) and the start-confirm page (`dp_inline`: inputs live INSIDE the confirm form
-   so they apply to the daemon for THIS start only, and "Reset to defaults" is a client-side reset
-   that never touches the saved config). Requires `daemon_params` + `stack_id`. #}
+{# Per-stack daemon radio-parameter panel (Settings): its own form with Save/Apply/Reset — the
+   ONLY place daemon parameters change; a start applies the saved ones. Requires `daemon_params`
+   + `stack_id`. #}
 {% if daemon_params %}
-  {# Inline (start-confirm) inputs are band-scoped (dp_<band>_<PARAM>) so 433/868 stay separate;
-     the config/stack form uses the per-panel dp_<PARAM> save route. #}
-  {% set dp_pref = ("dp_" + daemon_params.band + "_") if dp_inline else "dp_" %}
+  {% set dp_pref = "dp_" %}
   <details class="advcfg dparams" id="stack-daemon-params-{{ stack_id }}"{% if request.args.get('dp') == stack_id %} open data-force-open="1"{% endif %}>
-    <summary>{% if dp_inline %}Daemon radio parameters ({{ daemon_params.band }} MHz){% else %}Daemon radio parameters{% endif %}</summary>
-    <p class="muted">
-      {% if dp_inline %}The values lhpc will apply to the daemon for <strong>this start</strong>
-      (via the config socket), before the stack's components. Adjust them for this launch, or
-      <em>Reset to defaults</em> to start from defaults — your <strong>saved config is not
-      changed</strong>. <span class="greyed">Greyed</span> radio values get overwritten by the app
-      itself when it starts.
-      {% else %}Applied to the daemon <strong>once</strong>, right after it starts and before this
+    <summary>Daemon radio parameters</summary>
+    <p class="muted">Applied to the daemon <strong>once</strong>, right after it starts and before this
       stack's own components. <span class="greyed">Greyed</span> values are set too, but the stack
       overwrites them when it starts. <em>Save</em> stores; <em>Apply live</em> pushes them to the
       running daemon now (only while the stack is running, or here on the daemon page); <em>Reset</em>
-      restores defaults.{% endif %}</p>
-    {% if not dp_inline %}
+      restores defaults.</p>
       {# 433/868 chooser (like the Settings band switch); bands this stack can't use are disabled. #}
       <p><strong>Band:</strong>
         <span class="bandswitch">
@@ -33,13 +23,10 @@
           {% endfor %}
         </span>
         <span class="muted">— each band has its own daemon radio parameters</span></p>
-    {% endif %}
-    {% if not dp_inline %}
     <form method="post" class="dparams-form"
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <input type="hidden" name="band" value="{{ daemon_params.band }}">
-    {% endif %}
       <table class="paramgrid dptab">
         {% for r in daemon_params.rows %}
           <tr class="{% if r.app_owned %}greyed{% endif %}">
@@ -68,18 +55,13 @@
         {% endfor %}
       </table>
       <div class="actrow">
-        {% if dp_inline %}
-          <button type="button" class="act dp-reset-inline">Reset to defaults</button>
-          <button type="submit" class="act" name="_save" value="daemon">Save</button>
-        {% else %}
           <button type="submit" class="act">Save</button>
           <button type="submit" class="act"
                   {% if not daemon_params.can_apply %}disabled title="Available only while the stack is running"{% endif %}
                   formaction="{{ url_for('daemon_params_apply', stack_id=stack_id) }}">Apply live</button>
           <button type="submit" class="act"
                   formaction="{{ url_for('daemon_params_reset', stack_id=stack_id) }}">Reset to defaults</button>
-        {% endif %}
       </div>
-    {% if not dp_inline %}</form>{% endif %}
+    </form>
   </details>
 {% endif %}

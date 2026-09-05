@@ -1,8 +1,8 @@
 // Daemon-parameter panel: an optional client-side guard (the server always validates; there is
 // NO server-side FSK confirmation or rejection). Warn once, with OK/Cancel, before submitting when
 // ANY MODE selector is FSK — that switches the radio off LoRa and breaks every LoRa stack on the
-// band. Covers the saved-profile Save/Apply form AND the inline start-confirm form (either band on
-// a dual-band hardware setup). Reset buttons never warn; non-FSK values never warn.
+// band. Covers the Settings Save/Apply form (either band on a dual-band hardware setup). Reset
+// buttons never warn; non-FSK values never warn.
 // init(root) re-runs on lhpc:bodyloaded so lazily-loaded stack bodies get wired too.
 (function () {
   "use strict";
@@ -17,8 +17,7 @@
 
   function isResetSubmit(by) {
     if (!by) return false;
-    return /\/daemon-params\/reset$/.test(by.formAction || "")           // saved-profile Reset
-        || (by.className || "").indexOf("dp-reset-inline") !== -1;       // inline client Reset
+    return /\/daemon-params\/reset$/.test(by.formAction || "");          // saved-profile Reset
   }
 
   function wireForm(form) {
@@ -33,23 +32,9 @@
     });
   }
 
-  // Inline start-confirm "Reset to defaults": a CLIENT-SIDE reset of THIS launch's values back to
-  // their defaults (data-dpdefault). It never touches the saved config — the reset values are just
-  // what gets submitted with the start form and applied to the daemon for this launch.
-  function wireReset(btn) {
-    btn.addEventListener("click", function () {
-      var panel = btn.closest(".dparams");
-      if (!panel) return;
-      panel.querySelectorAll("[data-dpdefault]").forEach(function (el) {
-        el.value = el.getAttribute("data-dpdefault");
-      });
-    });
-  }
-
   function init(root) {
     var scope = root || document;
     scope.querySelectorAll("form").forEach(wireForm);
-    scope.querySelectorAll(".dp-reset-inline").forEach(wireReset);
   }
 
   init();

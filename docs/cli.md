@@ -144,14 +144,12 @@ lhpc config operator [--callsign CALL]   # show / set the GLOBAL operator identi
 - **Non-licensed stacks never inherit the global callsign.** Meshtastic needs both local node
   names (`lhpc config meshtastic node_name "Field Node"` + `node_short FN1`, 39/4 UTF-8
   bytes); MeshCore needs its local node name (max 31 bytes). A start without a required
-  identity is refused and prints a command template for every missing field (replace the
-  UPPERCASE token with your value). An identity you type on a start or restart is SAVED as that
-  stack's configuration before the launch; every other start/restart parameter applies to that
-  launch only. `lhpc config` (like the Settings page) may CLEAR an identity — a licensed callsign
-  then falls back to the global one, and with no global left, or for a Meshtastic/MeshCore node
-  name that never inherits, the stack simply cannot be started until you set one again. On the
-  Start/Restart panel the same blank is refused instead, because that operation is a launch and a
-  refused launch must not change your configuration.
+  identity is refused — by the dry run already, before anything is queued or stopped — and prints
+  a command template for every missing field (replace the UPPERCASE token with your value). A start
+  or restart runs the SAVED configuration; nothing is entered per launch. `lhpc config` (like the
+  Settings page) may CLEAR an identity — a licensed callsign then falls back to the global one, and
+  with no global left, or for a Meshtastic/MeshCore node name that never inherits, the stack simply
+  cannot be started until you set one again (the web console sends you to that Settings row).
 - A `<param>` name shared by several components must be qualified as `<component>.<param>` — the command refuses rather than guessing.
 - `--band` selects the band for band-switchable stacks.
 

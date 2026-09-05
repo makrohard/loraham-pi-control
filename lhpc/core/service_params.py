@@ -51,7 +51,6 @@ MESHCORE_COMPONENT = "meshcore-node"
 _REPEATER_SECRETS = (_meshcore_identity.REPEATER_IDENTITY_FILENAME,
                      _meshcore_identity.REPEATER_ADMIN_FILENAME)
 _IDENTITY_SECRET = _meshcore_identity.IDENTITY_FILENAME      # the Companion's key
-_MESHCORE_SAVED_ONLY = ("mode", "repeater_name", "repeater_mode")
 _POSITION_PARAMS = ("lat", "lon")
 
 
@@ -233,18 +232,10 @@ class ParamsConfigMixin:
         dup = dup_run if kind == "run" else dup_file
         return f"{comp_id}.{name}" if name in dup else name
 
-    def _param_field(self, target: str, kind: str, comp_id: str, name: str) -> str:
-        """The Start-confirm form field for one (component, kind, name): `p_<name>`/`pf_<name>` when
-        unique, else `p_<component_id>__<name>` / `pf_<component_id>__<name>`."""
-        prefix = "p_" if kind == "run" else "pf_"
-        dup_run, dup_file = self._dup_names(target)
-        dup = dup_run if kind == "run" else dup_file
-        return f"{prefix}{comp_id}__{name}" if name in dup else f"{prefix}{name}"
-
     def _config_field(self, target: str, kind: str, comp_id: str, name: str) -> str:
         """The permanent Config-page form field for one (component, kind, name): `c_<name>`/`f_<name>`
         when unique, else `c_<component_id>__<name>` / `f_<component_id>__<name>` (same qualification
-        rule + canonical API key as Start-confirm, just the Config page's `c_`/`f_` prefixes)."""
+        rule + canonical API key as the CLI)."""
         prefix = "c_" if kind == "run" else "f_"
         dup_run, dup_file = self._dup_names(target)
         dup = dup_run if kind == "run" else dup_file
@@ -254,7 +245,8 @@ class ParamsConfigMixin:
         """Config-page editable run + file parameters as {component, name, kind ('run'|'file'), field
         (`c_`/`f_` scheme), key (canonical API key), flag, default} — the single source of truth for
         the Config POST parser to fold each submitted field into its canonical API key. [] for a
-        daemon target (its radio params are ephemeral start options, not persisted config)."""
+        daemon target (its radio params are launch flags resolved from the manifest, not
+        persisted config)."""
         if self._is_daemon_target(target):
             return []
         out: list[dict] = []
@@ -279,11 +271,11 @@ class ParamsConfigMixin:
             return []
         s = self.stack(target)
         main_id = s.main if s is not None else None
-        # IDENTITY rows on the SETTINGS surface follow the same truthfulness rules as the
-        # start-confirm panel (audit-found: this surface still prefilled the substituted
-        # global, so merely saving another setting persisted it as a local override —
-        # copy-on-save through the ordinary Config page): stored-only value, empty form
-        # default (reset = inherit), inheritance as placeholder/note, never in the input.
+        # IDENTITY rows on the SETTINGS surface are TRUTHFUL (audit-found: this surface once
+        # prefilled the substituted global, so merely saving another setting persisted it as a
+        # local override — copy-on-save through the ordinary Config page): stored-only value,
+        # empty form default (reset = inherit), inheritance as placeholder/note, never in the
+        # input.
         id_rows = {(r["comp"], r["kind"], r["name"]): r
                    for r in self.identity_resolution(target, band)}
         cfg_band = self._config_band(target, band)
@@ -361,9 +353,8 @@ class ParamsConfigMixin:
     def _dep_param_components(self, target: str) -> list[tuple[str, object]]:
         """(dep_stack_id, component) pairs a STACK target's start pulls up from OTHER stacks
         (its run order, the daemon excluded — the daemon panel is its own channel): the
-        confirm page shows their params and the start accepts component-qualified ephemeral
-        overrides for them. [] for a non-stack target — a direct component run keeps its
-        narrow scope."""
+        Settings card shows their params under the stack. [] for a non-stack target — a direct
+        component run keeps its narrow scope."""
         if self.stack(target) is None:
             return []
         sid = self.stack_of(target)
@@ -408,8 +399,9 @@ class ParamsConfigMixin:
                             f"components — qualify it as '<component>.{key}'")
 
     def _overrides_for_comp(self, target: str, kind: str, overrides, comp_id: str) -> dict:
-        """The subset of ephemeral overrides (API-key form) that target `comp_id`, as {name: value}
-        — so a qualified duplicate value overlays ONLY its named component and never a sibling."""
+        """The subset of launch-time values (API-key form — today only the inherited identity from
+        `_materialize_inherited_identity`) that target `comp_id`, as {name: value} — so a
+        qualified duplicate value overlays ONLY its named component and never a sibling."""
         out: dict = {}
         for k, v in (overrides or {}).items():
             if v is None:
@@ -837,19 +829,13 @@ class ParamsConfigMixin:
         live = {cid: st.run_state for ss in self.build_snapshot().stacks
                 for cid, st in ss.components.items()}
         up = (RunState.RUNNING, RunState.DEGRADED)
-        # Libraries/firmware are build/flash artifacts — never "started", so they
-        # get no autostart toggle or Run button.
-        # A production GPS feed is NOT an operator start choice: whether it runs is decided by
-        # the stack's `use_gps` switch plus the global source, and starting one directly is
-        # refused ("the current position plan does not use it"). Offering a checkbox let the
-        # operator contradict the position plan, and showed a second GPS entry next to the
-        # fixture on the confirm page.
+        # `optional_role` decides the row: hidden (library/firmware/feed/fixture), listed (run on
+        # demand, no auto-start control) or tickable (the `autostart_<id>` checkbox).
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
                      "autostart": stored.get(f"autostart_{c.id}") == "on",
                      "running": live.get(c.id) in up,
-                     # False -> listed, but run on demand (no auto-start control)
-                     "startable": not self._never_operator_autostart(c)}
-                    for c in members if self._optional_listed(c)]
+                     "startable": self.optional_role(c) == "tickable"}
+                    for c in members if self.optional_role(c) != "hidden"]
         main = s.main_component if s else None
         # The GLOBAL operator callsign is edited ONLY on its own card (LHPC main card) and
         # via `lhpc config operator` — never through a stack page, which made a stack look
@@ -2185,7 +2171,9 @@ class ParamsConfigMixin:
         """EVERY operator-identity field CALL/node enforcement guards (a stack may have more
         than one — Meshtastic requires both its long and short node names). Scoped to the
         target: a STACK target inspects every component; a direct COMPONENT target only that
-        component. The daemon is exempt. Licensed fields sort first (the primary remedy)."""
+        component. The daemon is exempt. Licensed fields sort first (the primary remedy).
+        `field` is the Settings form field (`c_`/`f_` scheme) — the row a refused start sends
+        the operator to."""
         if self._is_daemon_target(target):
             return []
         out: list[dict] = []
@@ -2199,7 +2187,7 @@ class ParamsConfigMixin:
                 out.append({"comp": c.id, "name": p.name, "kind": kind, "enforce": enforce,
                             "validator": getattr(p, "validator", ""),
                             "label": p.label or p.name,
-                            "field": self._param_field(target, kind, c.id, p.name),
+                            "field": self._config_field(target, kind, c.id, p.name),
                             "default": str(getattr(p, "default", "") or "")})
         from . import meshcore_mode as _mm
         if (any(r["comp"] == _mm.NODE_ID for r in out)
@@ -2311,33 +2299,6 @@ class ParamsConfigMixin:
         cb = self._config_band(target, hint)
         return cb or (hint if self._is_daemon_target(target) else "")
 
-    def extract_identity_submission(self, target: str, params, file_over):
-        """PHASE 1 of the persisted-only identity model — PURE, no I/O, no locks. Lifts every
-        submitted identity field out of the ephemeral launch inputs and returns
-        (params, file_over, submission). Runs on the RAW inputs, BEFORE `_normalize_*`, because
-        normalization drops blank file values and a blank identity is the deliberate
-        "clear and inherit" (review-found). A malformed payload is left untouched for the
-        normalizer's typed refusal. The values are SAVED later, inside task admission, by
-        `save_identity_submission` — the one authoritative write."""
-        if (params is not None and not isinstance(params, dict)) or (
-                file_over is not None and not isinstance(file_over, dict)):
-            return params, file_over, []
-        recs = self._identity_fields(target)
-        if not recs:
-            return params, file_over, []
-        p = dict(params or {})
-        fo = dict(file_over) if file_over is not None else None
-        values: dict = {}
-        for rec in recs:
-            kind = "run" if rec["kind"] == "run" else "file"
-            key = self._param_key(target, kind, rec["comp"], rec["name"])
-            src = p if kind == "run" else (fo or {})
-            if key not in src:
-                continue
-            values[self._identity_bundle_key(target, rec)] = str(src.get(key) or "").strip()
-            (p if kind == "run" else fo).pop(key, None)
-        return p, fo, values
-
     def _identity_bundle_key(self, target: str, rec: dict) -> str:
         """The `save_config_bundle` key for one identity field — THE single spelling used by the
         extractor, the policy and the writer."""
@@ -2385,38 +2346,6 @@ class ParamsConfigMixin:
             data={"enforce_fields": [r["field"] for r in bad]},
             next_commands=self._identity_config_hints(target, band))
 
-    def save_identity_submission(self, target: str, band: str, op: str, values: dict):
-        """PHASE 2 — the authoritative write, called with task admission HELD and the ONE
-        concrete operation band, before the shared config-stability guard (the save needs the
-        EXCLUSIVE config lock, which cannot nest under that shared guard). Returns a refusal
-        ActionResult, or None when the identity is persisted.
-
-        Every submitted key goes into the bundle verbatim — empty included. There is no
-        "unchanged, skip the save" shortcut: that compared against a value read outside the
-        config transaction, so a concurrent edit in the window made the helper strip the
-        submitted identity without ever writing it and the launch silently used the other
-        value (audit-found). `save_config_bundle` is the single validating, locked,
-        cache-invalidating path and decides for itself whether the write is a no-op."""
-        if not values:
-            return None
-        if (refusal := self.identity_refusal_for_values(target, band, values, op)) is not None:
-            return refusal
-        r = self.save_config_bundle(target, values=values, band=band, _identity_guard=True)
-        if not r.ok:
-            _detail = " ".join(r.details[:2])
-            # A refusal raised by the in-transaction recheck already reads as a full sentence —
-            # do not wrap it in "identity not saved — Config not saved — ..." three deep.
-            _why = (_detail.split("rolled back: ", 1)[1] if "rolled back: " in _detail
-                    else f"identity not saved — {r.summary} {_detail}")
-            return ActionResult(
-                False, _why if _why.startswith("Cannot") else f"Cannot {op} '{target}': {_why}",
-                # enforce_fields keeps the web on the confirm page with the operator's typed
-                # identity intact — a bare flash+redirect would lose it (review-found).
-                data={"enforce_fields": [r_["field"] for r_ in self._identity_fields(target)
-                                         if self._identity_bundle_key(target, r_) in values]},
-                next_commands=self._identity_config_hints(target, band))
-        return None
-
     def _identity_config_hints(self, target: str, band: str = "") -> list[str]:
         """The copy-pasteable remedies for a start refused over missing/invalid identities:
         ONE `lhpc config <stack> <field> <value>` per problem field — a fresh Meshtastic
@@ -2450,18 +2379,6 @@ class ParamsConfigMixin:
             out.append(cmd)
         return out
 
-    def _identity_explicit(self, target: str, band: str, rec: dict, params, file_over) -> str:
-        """The EXPLICIT local value of one identity field — the ephemeral override for that
-        component's key, else its own component-scoped/unique-flat STORED value. Never the
-        manifest default: an empty local field MEANS "inherit" (licensed) or "missing"
-        (unlicensed), and resolution must see that emptiness, not a substituted default."""
-        kind = "run" if rec["kind"] == "run" else "file"
-        key = self._param_key(target, kind, rec["comp"], rec["name"])
-        val = ((params if kind == "run" else file_over) or {}).get(key)
-        if val is None:
-            val = self._stored_param_value(target, kind, rec["comp"], rec["name"], band)
-        return str(val or "").strip()
-
     def inheritable_global(self, rec: dict, candidate: str | None = None) -> tuple:
         """`(value, reason)`: the global operator callsign AS THIS FIELD WOULD INHERIT IT, or
         `("", why)` when there is no global or this stack's protocol cannot carry it. THE single
@@ -2482,10 +2399,12 @@ class ParamsConfigMixin:
         except validators.ValidationError as exc:
             return "", str(exc)
 
-    def identity_resolution(self, target: str, band: str = "", params: dict | None = None,
-                            file_over: dict | None = None) -> list[dict]:
-        """THE authoritative effective-identity resolution — every consumer (start gates,
-        confirm pages, config views, CLI hints, TX tests) reads precedence from here.
+    def identity_resolution(self, target: str, band: str = "") -> list[dict]:
+        """THE authoritative effective-identity resolution of the SAVED configuration — every
+        consumer (start plan + apply gates, Settings views, CLI hints, TX tests) reads precedence
+        from here. The explicit local value is the STORED one (`_stored_param_value`), never the
+        manifest default: an empty local field MEANS "inherit" (licensed) or "missing"
+        (unlicensed), and resolution must see that emptiness, not a substituted default.
 
         Per identity field: {**rec, "explicit", "effective", "source", "problem"} where
         `source` is "local" | "global" | "missing" and `problem` ("" = fine) is the
@@ -2502,7 +2421,9 @@ class ParamsConfigMixin:
         out = []
         global_call = str(self.config().operator.callsign or "").strip()
         for rec in self._identity_fields(target):
-            explicit = self._identity_explicit(target, band, rec, params, file_over)
+            kind = "run" if rec["kind"] == "run" else "file"
+            explicit = self._stored_param_value(target, kind, rec["comp"], rec["name"],
+                                                band).strip()
             validate = validators._NAMED.get(rec["validator"])
             row = dict(rec)
             row.update({"explicit": explicit, "effective": "", "source": "missing",
@@ -2563,26 +2484,21 @@ class ParamsConfigMixin:
             out.append(row)
         return out
 
-    def _materialize_inherited_identity(self, target: str, band: str, params, file_over):
-        """AFTER enforcement approved a start/restart: return (params, file_over) carrying the
-        EFFECTIVE value for every licensed identity field that inherits the global operator
-        callsign — as EPHEMERAL launch inputs only, never persisted. Without this the argv/
-        config-file build reads the stored/submitted (empty) local value, an empty ephemeral
-        override masks the '{callsign}' default, and the station launches WITHOUT the
-        identity the refusal gate just approved (audit-found, reproduced live)."""
-        p = dict(params or {})
-        fo = dict(file_over) if file_over is not None else None
-        for r in self.identity_resolution(target, band, params, file_over):
+    def _materialize_inherited_identity(self, target: str, band: str) -> tuple[dict, dict]:
+        """AFTER enforcement approved a start/restart: (run_values, file_values), API-keyed, with
+        the EFFECTIVE value for every licensed identity field that inherits the global operator
+        callsign — the ONE launch-time overlay on the saved configuration, never persisted (the
+        local field stays empty and keeps meaning "inherit"). Without it the argv/config-file
+        build reads the empty local value and the station launches WITHOUT the identity the
+        refusal gate just approved (audit-found, reproduced live)."""
+        p: dict = {}
+        fo: dict = {}
+        for r in self.identity_resolution(target, band):
             if r["source"] != "global":
                 continue
             kind = "run" if r["kind"] == "run" else "file"
             key = self._param_key(target, kind, r["comp"], r["name"])
-            if kind == "run":
-                p[key] = r["effective"]
-            else:
-                if fo is None:
-                    fo = {}
-                fo[key] = r["effective"]
+            (p if kind == "run" else fo)[key] = r["effective"]
         return p, fo
 
     def effective_identity(self, target: str, band: str = "") -> str:
@@ -2591,13 +2507,13 @@ class ParamsConfigMixin:
         rows = self.identity_resolution(target, band)
         return rows[0]["effective"] if rows else ""
 
-    def enforce_identity(self, target: str, band: str = "", params: dict | None = None,
-                         file_over: dict | None = None) -> tuple[bool, list, str]:
-        """Whether `target` may start given its identity rules. Returns (ok, fields, message):
-        `fields` is EVERY confirm input to highlight (Meshtastic has two required names) and
-        `message` names every problem. Delegates entirely to `identity_resolution` — the one
+    def enforce_identity(self, target: str, band: str = "") -> tuple[bool, list, str]:
+        """Whether `target` may start given its identity rules, judged on the SAVED configuration
+        (the plan and the locked apply share it). Returns (ok, fields, message): `fields` is
+        EVERY Settings field to highlight (Meshtastic has two required names) and `message`
+        names every problem. Delegates entirely to `identity_resolution` — the one
         precedence/validation path all consumers share."""
-        rows = self.identity_resolution(target, band, params, file_over)
+        rows = self.identity_resolution(target, band)
         bad = [r for r in rows if r["problem"]]
         if not bad:
             return (True, [r["field"] for r in rows], "")
@@ -2608,209 +2524,6 @@ class ParamsConfigMixin:
         params (`password_file`) are excluded — they are edited ONLY through the HMAC Enable/Disable/
         Renew flow, never generic config (a blank generic submission would silently restore open auth)."""
         return [p for p in comp.run_params if not self._is_hmac_managed_param(comp, p)]
-
-    def _stack_param_components(self, target: str):
-        """Components whose run/file params make up the editable 'Stack parameters' set (never the
-        daemon — its radio params are the separate daemon panel). Target-scoped: a stack target
-        exposes all components, a direct component target only itself.
-
-        A `test_fixture` component is skipped for a STACK target, the same rule the optional-
-        component list already applies: a stack start never runs the fixture, so its knobs on the
-        confirm page were a second, non-functional GPS entry beside the real switch. Named
-        DIRECTLY (`lhpc stack start meshcom-gps-relay`) it still exposes its own params — that is
-        the deliberate path the manifest documents."""
-        if self._is_daemon_target(target):
-            return []
-        comps = self._target_components(target)
-        if self.stack(target):
-            comps = [c for c in comps if not c.test_fixture]
-        return comps
-
-    def stack_start_params(self, target: str, band: str = "", params: dict | None = None,
-                           file_over: dict | None = None) -> list[dict]:
-        """Rows for the Start-confirm 'Stack parameters' panel: every editable run + file param of
-        the stack (never repo source / operator box / autostart), prefilled with the value that WILL
-        be used for this start (ephemeral override, else saved config, else operator-substituted
-        default). `field` is the confirm input name (`p_`/`pf_`); `default` is the manifest default
-        (for the client Reset-to-defaults button).
-
-        IDENTITY rows are special-cased for truthfulness: their input prefills the EXPLICIT
-        local value only (empty = inheriting/missing — never the substituted global, which a
-        Save would silently copy into local config), with the effective value and its source
-        carried as a placeholder hint + note from `identity_resolution`."""
-        # EVERY row — identity, ordinary and dependency — resolves on the band the operation will
-        # RUN on, which is also the band it writes to (see `operation_band`). This panel renders
-        # the values the browser posts BACK, so a mixed-band form here becomes a mixed-band save.
-        op_band = self.operation_band(target, band)
-        id_rows = {(r["comp"], r["kind"], r["name"]): r
-                   for r in self.identity_resolution(target, op_band, params, file_over)}
-        cfg_band = op_band
-        rows: list[dict] = []
-        for c in self._stack_param_components(target):
-            for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
-                               if not getattr(p, "hidden", False)]):
-                # Each (component, kind, name) carries its OWN field + API key (bare when unique,
-                # component-qualified when the name collides) and its OWN saved value — colliding
-                # components never share a field name or flatten into one value.
-                idrec = id_rows.get((c.id, kind, p.name))
-                # An identity row's FORM default is empty — 'Reset to defaults' must return
-                # the local field to "inherit", never inject the substituted global into it
-                # (audit-found copy-on-reset).
-                default = ("" if idrec else
-                           self._op_subst(dict(p.band_defaults).get(cfg_band or band,
-                                                                    p.default)))
-                saved = (self._stored_param_value(target, kind, c.id, p.name, op_band)
-                         if idrec else
-                         self._resolved_param_value(target, kind, c.id, p.name, op_band))
-                key = self._param_key(target, kind, c.id, p.name)
-                field = self._param_field(target, kind, c.id, p.name)
-                cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
-                is_id = idrec is not None
-                # SAVED-ONLY rows render as a pill, never as an input: the GPS switch, and the
-                # MeshCore mode rows. A mode change re-classifies which identities exist (the chat
-                # name is no identity in `repeater`), so it is made BEFORE a start — the Mode
-                # switch on the stack page or Settings → Repeater — never inside the start's
-                # persist-and-launch transaction (`_normalize_file_overrides` refuses it there).
-                locked = ((kind == "run" and p.name == self.GPS_PARAM)
-                          or (kind == "file" and c.id == MESHCORE_COMPONENT
-                              and p.name in _MESHCORE_SAVED_ONLY))
-                # The switch is stored per STACK (bandless), so the hint must name the stack even
-                # when the param is declared on a component (`meshcom-qemu` -> `meshcom`). It
-                # points at the WEB path — the operator reading it is already in the web console.
-                _owner = self.gps_owner_stack(target) or target
-                _owner_name = (self.stack(_owner).name if self.stack(_owner) else _owner)
-                hint = (f"saved setting — change it under Apps → {_owner_name} → "
-                        "Settings") if locked else ""
-                if locked and kind == "file":
-                    hint = (f"saved setting — change it with the Mode switch on the "
-                            f"{_owner_name} page or under its Settings → Repeater, then start")
-                id_hint, id_note = self._identity_note(idrec, cur)
-                rows.append(self._param_row(p, field, kind, cur, saved, default, is_id,
-                                            c.name, key, c.id, locked, hint,
-                                            identity_hint=id_hint, identity_note=id_note))
-        rows.extend(self._dep_param_rows(target, band, params, file_over))
-        return rows
-
-    def _dep_param_rows(self, target: str, band: str = "", params: dict | None = None,
-                        file_over: dict | None = None) -> list[dict]:
-        """Start-confirm rows for the DEPENDENCY components a stack start pulls up (kiss under
-        graywolf) — EDITABLE exactly like the target's own rows (operator ruling: starting one
-        app or a stack of apps must offer the same control; the earlier saved-only rendering
-        hid the KISS TX frequency behind another page). The start accepts these as component-
-        qualified ephemeral overrides, and Save persists them into the dependency's OWN stack
-        config. Fields/keys are ALWAYS component-qualified (`p_<comp>__<name>` / `<comp>.<name>`)
-        so they can never collide with the target's own fields; each row carries `dep_stack` so
-        the save path routes it to the dependency's config. The GPS switch keeps its saved-only
-        rendering — the one-frozen-decision rule is stack-level, the same as everywhere else."""
-        rows: list[dict] = []
-        # A dependency launches as part of THIS operation, so it follows the same concrete band.
-        op_band = self.operation_band(target, band)
-        for dep_sid, c in self._dep_param_components(target):
-            dep = self.stack(dep_sid)
-            dep_band = self._config_band(dep_sid, op_band)
-            for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
-                               if not getattr(p, "hidden", False)]):
-                default = self._op_subst(dict(p.band_defaults).get(dep_band or op_band, p.default))
-                saved = self._resolved_param_value(dep_sid, kind, c.id, p.name, op_band)
-                key = f"{c.id}.{p.name}"
-                field = f"{'p_' if kind == 'run' else 'pf_'}{c.id}__{p.name}"
-                cur = ((params if kind == "run" else file_over) or {}).get(key, saved)
-                locked = kind == "run" and p.name == self.GPS_PARAM
-                hint = (f"saved setting — change it under Apps → "
-                        f"{dep.name if dep else dep_sid} → Settings") if locked else ""
-                row = self._param_row(p, field, kind, cur, saved, default, False,
-                                      c.name, key, c.id, locked, hint)
-                row["dep_stack"] = dep_sid
-                rows.append(row)
-        return rows
-
-    def start_param_fields(self, target: str, band: str = "") -> list[dict]:
-        """Every editable run + file parameter as {component, name, kind ('run'|'file'), field, key,
-        flag, saved} — covering BOTH the savable panel params and plain start-option params (e.g. the
-        daemon's radio/debug). The single source of truth for the web to read each submitted form
-        field into its correctly-scoped API key (bare when unique, `component.name` when duplicated)."""
-        out: list[dict] = []
-        # ONE concrete operation band for EVERY row (see `operation_band`).
-        op_band = self.operation_band(target, band)
-        id_keys = {(r["comp"], r["kind"], r["name"]) for r in self._identity_fields(target)}
-        for c in self._target_components(target):
-            for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())]):
-                # IDENTITY fields backfill STORED-ONLY (empty = inherit): the resolved value
-                # here becomes the dashboard-POST param, which the confirm form then showed
-                # as a local value and Save persisted — silently copying the inherited global
-                # into local config (audit-found). Launch-time inheritance is materialized
-                # separately, after enforcement.
-                ident = (c.id, kind, p.name) in id_keys
-                out.append({
-                    "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
-                    "field": self._param_field(target, kind, c.id, p.name),
-                    "key": self._param_key(target, kind, c.id, p.name),
-                    "saved": (self._stored_param_value(target, kind, c.id, p.name, op_band)
-                              if ident else
-                              self._resolved_param_value(target, kind, c.id, p.name, op_band))})
-        # Dependency components (kiss under graywolf): ALWAYS component-qualified field/key —
-        # the same addressing `_dep_param_rows` renders, so the confirm POST parser and the
-        # save path read them like every other field.
-        for dep_sid, c in self._dep_param_components(target):
-            for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())]):
-                out.append({
-                    "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
-                    "field": f"{'p_' if kind == 'run' else 'pf_'}{c.id}__{p.name}",
-                    "key": f"{c.id}.{p.name}",
-                    "saved": self._resolved_param_value(dep_sid, kind, c.id, p.name, op_band),
-                    "dep_stack": dep_sid})
-        return out
-
-    def stack_start_param_groups(self, target: str, band: str = "", params: dict | None = None,
-                                 file_over: dict | None = None) -> list[dict]:
-        """The Start-confirm panel rows GROUPED for display: a first 'Required' group with the
-        identity (CALL/node) field(s) on top, then one group per component (header = component name)
-        with that component's remaining params — rows that carry a manifest `group` (the Settings
-        card's sub-heading, e.g. MeshCore's "Repeater") follow under "<component> — <group>", so
-        both surfaces show the same headings. [] when the stack has no editable params."""
-        rows = self.stack_start_params(target, band, params, file_over)
-        groups: list[dict] = []
-        required = [r for r in rows if r["is_identity"]]
-        if required:
-            groups.append({"header": "Required", "rows": required})
-        by_comp: dict[str, list] = {}
-        order: list[str] = []
-        for r in rows:
-            if r["is_identity"] or r.get("dep_stack"):
-                continue
-            header = r["comp_name"] + (f" — {r['group']}" if r.get("group") else "")
-            if header not in by_comp:
-                by_comp[header] = []
-                order.append(header)
-            by_comp[header].append(r)
-        # Right after Required: the group holding saved-only rows (MeshCore's "Repeater", where
-        # the Mode lives), then the other named groups, then the plain rows — the operator sees
-        # the mode before the long tail of chat rows.
-        order.sort(key=lambda h: (0 if " — " in h and any(r["locked"] for r in by_comp[h])
-                                  else 1 if " — " in h else 2))
-        for name in order:
-            groups.append({"header": name, "rows": by_comp[name]})
-        # Dependency stacks the run order pulls up render AFTER the target's own groups, one
-        # group per dependency stack — editable like everything else (see _dep_param_rows).
-        dep_by: dict[str, list] = {}
-        dep_order: list[str] = []
-        for r in rows:
-            dsid = r.get("dep_stack") or ""
-            if not dsid:
-                continue
-            if dsid not in dep_by:
-                dep_by[dsid] = []
-                dep_order.append(dsid)
-            dep_by[dsid].append(r)
-        for dsid in dep_order:
-            dep = self.stack(dsid)
-            groups.append({"header": f"{dep.name if dep else dsid} (dependency)",
-                           "rows": dep_by[dsid]})
-        return groups
 
     def _identity_note(self, idrec: dict | None, value: str) -> tuple:
         """`(hint, note)` for one identity row — ONE wording used by BOTH the Settings page and
@@ -2856,101 +2569,6 @@ class ParamsConfigMixin:
                 "identity_hint": identity_hint, "identity_note": identity_note,
                 "min": getattr(p, "min", None), "max": getattr(p, "max", None)}
 
-    def _normalize_file_overrides(self, target: str, raw: dict | None) -> tuple[dict, str]:
-        """Validate ephemeral file-config overrides ({name: value}) against the TARGET's FileParams
-        (a stack's whole set, or a direct component's own). Returns (clean, err); a non-mapping
-        payload, an UNKNOWN name, or an invalid value is a TYPED start failure — never silently
-        discarded. A blank NON-FLAG value is treated as ABSENT (skipped -> the base/preset default
-        applies), mirroring `update_toml`'s blank rule — so e.g. leaving the Start-page Frequency
-        field empty lets the selected RF preset own the frequency instead of failing int validation.
-        Flags pass through (blank = off)."""
-        if raw is None:
-            return {}, ""
-        if not isinstance(raw, dict):
-            return {}, "file overrides must be a mapping"
-        clean: dict[str, str] = {}
-        for key, val in raw.items():
-            _c, p, err = self._param_ref(target, "file", key)      # rejects unqualified duplicates
-            if err:
-                return {}, f"unknown file parameter {key!r}" if err.startswith("unknown") else err
-            if getattr(p, "kind", "") != "flag" and str(val).strip() == "":
-                continue                # blank non-flag -> no override (base/preset default wins)
-            if _c is not None and _c.id == MESHCORE_COMPONENT and p.name in _MESHCORE_SAVED_ONLY:
-                # The mode rows are SAVED settings only (same rule as `use_gps`): readiness,
-                # status, identity enforcement and the client seeding all read the saved state,
-                # so a per-launch override would make the launch and the controller disagree.
-                # No surface posts them for a launch (the confirm page shows them as pills).
-                return {}, (f"{p.name} cannot be changed for a single start — it is a saved "
-                            f"setting (lhpc config {_meshcore_mode.STACK_ID} {p.name} <value>)")
-            try:
-                clean[key] = validators.validate_param(p, str(val))
-            except validators.ValidationError as exc:
-                return {}, f"{p.name}: {exc}"
-        return clean, ""
-
-    def _normalize_run_params(self, target: str, raw) -> tuple[dict | None, str]:
-        """THE authoritative validation/canonicalisation boundary for ordinary ephemeral run params
-        — parallel to `_normalize_ephemeral_overrides` (daemon) and `_normalize_file_overrides`
-        (file). Validates each supplied value against the TARGET's own run params (a stack's whole
-        exposed set, or a direct component's own) and returns (clean, err). `None` passes through
-        (means: use saved config). A non-mapping payload, an UNKNOWN parameter name, or an invalid
-        value is a TYPED failure — a requested override is NEVER silently ignored."""
-        if raw is None:
-            return None, ""
-        if not isinstance(raw, dict):
-            return {}, "run parameters must be a mapping"
-        clean: dict[str, str] = {}
-        for key, val in raw.items():
-            _c, p, err = self._param_ref(target, "run", key)       # rejects unqualified duplicates
-            if err:
-                return {}, f"unknown parameter {key!r}" if err.startswith("unknown") else err
-            if self._is_hmac_managed_param(_c, p):                  # no ephemeral bypass of the gate
-                return {}, self._HMAC_MANAGED_PARAM_MSG
-            # The GPS switch is PERSISTED only. Accepting a DIFFERENT value per launch would
-            # let a start run with GPS on while the saved state says off — and the resource
-            # claims, the generated config and the post-start push all come from the SAVED
-            # state, so the launch and what the box actually holds would disagree.
-            #
-            # An echo of the CURRENT value is not an override: the console's start form posts
-            # every parameter it renders, so rejecting the value outright blocked every start
-            # from the web. Only a real change is refused.
-            if p.name == "use_gps":
-                current = "on" if self.gps_enabled_for(target) else "off"
-                if str(val).strip().lower() == current:
-                    continue
-                return {}, ("use_gps cannot be changed for a single start — it is a saved "
-                            f"setting (lhpc config {target} use_gps on|off)")
-            try:
-                clean[key] = validators.validate_param(p, val)
-            except validators.ValidationError as exc:
-                return {}, f"{p.name}: {exc}"
-        return clean, ""
-
-    def _preflight_start_inputs(self, target: str, band: str, params, file_overrides, op: str):
-        """Validate ALL supplied start inputs — ordinary `params`, file overrides, and CALL/node
-        identity (using the canonicalized ephemeral values + owner-stack persisted values) — BEFORE
-        any lifecycle side effect. Returns (params_canon, file_canon, err) where `err` is a TYPED
-        failed ActionResult (or None on success). Used by `restart()` before lock planning/stop and
-        by `_restart_impl()` before its `stop()`; a non-mapping/unknown/invalid input NEVER raises,
-        acquires a lock, or stops/alters any process/marker/config/daemon/owner."""
-        params, pv_err = self._normalize_run_params(target, params)
-        if pv_err:
-            return None, None, ActionResult(
-                False, f"Cannot {op} '{target}': invalid parameter — {pv_err}",
-                next_commands=[f"lhpc status {target}"])
-        file_over, fo_err = self._normalize_file_overrides(target, file_overrides)
-        if fo_err:
-            return None, None, ActionResult(
-                False, f"Cannot {op} '{target}': invalid parameter — {fo_err}",
-                next_commands=[f"lhpc status {target}"])
-        id_ok, id_fields, id_msg = self.enforce_identity(target, band, params, file_over)
-        if not id_ok:
-            return None, None, ActionResult(
-                False, f"Cannot {op} '{target}': {id_msg}", data={"enforce_fields": id_fields},
-                next_commands=self._identity_config_hints(target, band))
-        params, file_over = self._materialize_inherited_identity(target, band, params, file_over)
-        return params, file_over, None
-
     def write_config_files(self, target: str, band: str = "",
                            overrides: dict | None = None,
                            position: dict | None = None) -> list[ConfigWrite]:
@@ -2959,9 +2577,9 @@ class ParamsConfigMixin:
         linked-readonly / no-base / failed) so an auto-start can block on a generation
         failure rather than silently launching with stale or absent configuration.
 
-        `overrides` are EPHEMERAL per-start file values ({param_name: value}, this launch only,
-        never persisted) taken from the Start-confirm 'Stack parameters' panel — validated by the
-        caller via `_normalize_file_overrides` before they reach here.
+        `overrides` ({param_name: value}, this launch only, never persisted) is the inherited
+        identity overlay from `_materialize_inherited_identity` — the only launch-time value
+        that is not saved configuration.
 
         `position` is MeshCore's STATIC position ({"lat": …, "lon": …}) from
         `meshcore_position`, set only for a `fixed` source. Absent or empty means "no static
@@ -3019,12 +2637,12 @@ class ParamsConfigMixin:
             fc = c.config_file
             # Validate every stored value against its FileParam; an invalid value
             # (e.g. hand-edited TOML) reverts to the manifest default — never written
-            # raw into the app's config file. An ephemeral override (already validated by
-            # `_normalize_file_overrides`) takes precedence for THIS launch only.
+            # raw into the app's config file. The inherited-identity overlay (`overrides`)
+            # takes precedence for THIS launch only.
             values = {}
             secret_error = ""
-            # The MeshCore mode this render describes — the SAVED mode (a per-launch override of
-            # it is refused by `_normalize_file_overrides`), decided ONCE before the rows because
+            # The MeshCore mode this render describes — the SAVED mode (there is no per-launch
+            # value of it), decided ONCE before the rows because
             # the identity row precedes the mode row in manifest order.
             rendered_mode = ""
             if c.id == MESHCORE_COMPONENT:

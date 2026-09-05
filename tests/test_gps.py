@@ -620,20 +620,6 @@ def test_the_per_stack_switch_survives_a_band_change(tmp_path):
     assert "meshtastic-gps" in [c.id for _s, c in (svc._run_order("meshtastic") or [])]
 
 
-def test_the_gps_switch_cannot_be_set_for_a_single_start(tmp_path):
-    """An ephemeral value would let a launch run with GPS on while the SAVED state said off —
-    and claims, generated config and the post-start push all come from the saved state, so the
-    launch and what the box actually holds would disagree."""
-    svc = _svc(tmp_path)
-    # A CHANGE is refused... (the default is on now, so "off" is the change)
-    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "off"})
-    assert clean == {} and "cannot be changed for a single start" in err
-    # ...but an echo of the CURRENT value is not an override. The console's start form posts
-    # every parameter it renders, so rejecting the value outright blocked every web start.
-    clean, err = svc._normalize_run_params("meshtastic", {"use_gps": "on"})
-    assert err == "" and "use_gps" not in (clean or {})
-
-
 def test_both_meshcom_feeds_claim_one_exclusive_uart(tmp_path):
     """Production and fixture write the SAME QEMU socket. An exclusive claim makes running
     them together structurally impossible instead of relying on admission logic to remember."""
@@ -2443,23 +2429,23 @@ def _gsvc(tmp_path):
 
 
 def test_a_position_feed_is_never_an_operator_autostart_choice(tmp_path):
-    """LIVE-FOUND on the box: MeshCom would not start. The Confirm:start page offered the GPS feed
+    """LIVE-FOUND on the box: MeshCom would not start. The old start page offered the GPS feed
     AND the test fixture as auto-start checkboxes — two GPS controls beside the real `use_gps`
     switch. Ticking the feed saved `autostart_meshcom-gps = on`, which forced it into the run order
     while `use_gps` was off, and starting a feed the plan does not want is REFUSED ("the current
     position plan does not use it") — so one stale tick stopped the whole stack from starting, and
-    kept stopping it. The plan is the only admitter; the checkboxes are gone."""
+    kept stopping it. The plan is the only admitter; a feed/fixture is `optional_role` "hidden"."""
     svc = _gsvc(tmp_path)
     feeds = svc._all_gps_feed_ids()
     assert "meshcom-gps" in feeds                                  # precondition
 
-    # Neither a feed nor a fixture is offered as a checkbox any more.
-    offered = {o["id"] for o in svc.optional_start_components("meshcom")}
+    # Neither a feed nor a fixture is offered on the Settings card.
+    offered = {o["id"] for o in svc.config_view("meshcom")["optional"]}
     assert not (offered & feeds)
     assert "meshcom-gps-relay" not in offered                      # test_fixture
     # ... and the same is true for every stack that has a feed at all.
     for sid in {svc.stack_of(f) for f in feeds}:
-        assert not ({o["id"] for o in svc.optional_start_components(sid)} & feeds), sid
+        assert not ({o["id"] for o in svc.config_view(sid)["optional"]} & feeds), sid
 
     # The exact broken state from the box: feed ticked, GPS off -> feed stays OUT.
     # (off is explicit now — the switch defaults on since the source gained `auto`.)
@@ -2522,7 +2508,7 @@ def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
     confirm-page checkboxes covered feeds AND the fixture — so a pre-existing saved
     `autostart_meshcom-gps-relay = on` still forced the fixture into every meshcom start,
     silently replaying a synthetic position on air, with no UI left that could show or clear
-    the flag. Feeds and fixtures now share ONE predicate (`_never_operator_autostart`)."""
+    the flag. Feeds and fixtures share ONE rule (`optional_role` == "hidden")."""
     svc = _gsvc(tmp_path)
     svc.save_stack_config("meshcom", {"autostart_meshcom-gps-relay": "on"})
 
@@ -2530,15 +2516,17 @@ def test_a_stale_fixture_autostart_tick_is_ignored_by_the_run_order(tmp_path):
     assert "meshcom-gps-relay" not in order
     # The deliberate path is untouched: naming the fixture directly still runs it.
     assert svc.run_action("start", "meshcom-gps-relay", apply=False).ok is True
-    # And the predicate is THE shared rule: nothing it excludes gets an auto-start control on
-    # either operator-facing list, for every stack (a one-shot client may be LISTED as run on
-    # demand; a feed or fixture is not listed at all).
+    # And `optional_role` is THE shared rule: the Settings card lists exactly the non-hidden
+    # components and ticks exactly the tickable ones (a one-shot client is LISTED as run on
+    # demand; a feed or fixture is hidden), for every stack.
     for s in svc.stacks():
-        excluded = {c.id for c in s.components if svc._never_operator_autostart(c)}
-        listed = svc.optional_start_components(s.id)
-        assert not ({o["id"] for o in listed if o["startable"]} & excluded), s.id
-        assert not ({o["id"] for o in listed} & {c.id for c in s.components
-                                                 if c.test_fixture or c.id in svc._all_gps_feed_ids()}), s.id
+        roles = {c.id: svc.optional_role(c) for c in s.components}
+        listed = svc.config_view(s.id)["optional"]
+        assert {o["id"] for o in listed} == {c for c, r in roles.items() if r != "hidden"}, s.id
+        assert {o["id"] for o in listed if o["startable"]} == {
+            c for c, r in roles.items() if r == "tickable"}, s.id
+        assert all(roles[c.id] == "hidden" for c in s.components
+                   if c.test_fixture or c.id in svc._all_gps_feed_ids()), s.id
 
 
 def test_auto_source_resolves_softly_and_explicit_sources_stay_fail_closed(tmp_path,
