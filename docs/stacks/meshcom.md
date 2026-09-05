@@ -1,7 +1,8 @@
 # Stack: MeshCom (QEMU + bridge + GPS)
 
 Runs unmodified MeshCom firmware headless under QEMU, bridged to the LoRaHAM daemon
-on 433 MHz. The daemon must be in **DIRECT** mode (MeshCom does its own CSMA).
+on 433 MHz. The daemon runs in **MANAGED** mode for this stack: the bridge submits managed-TX
+settings when the firmware connects, and that is what a live station uses.
 
 **Boot time:** the emulated node needs **~1 min on a Pi 5 and ~5–6 min on a Pi Zero 2W** after
 `stack start` before it is usable — the web UI answers 502 and the callsign stays a placeholder
@@ -17,7 +18,7 @@ channel](../../README.md#binary-channel-prebuilt).
 | | |
 |---|---|
 | Components | `meshcom-bridge`, `meshcom-gps-relay`, `meshcom-qemu` |
-| Bridge | `meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham`; consumes `/tmp/lora433f.sock`, requires `loraham.profile.433 = DIRECT` |
+| Bridge | `meshcom-loraham-bridge --bind 127.0.0.1 --port 7000 --backend loraham`; consumes `/tmp/lora433f.sock`, requires `loraham.profile.433 = MANAGED` |
 | QEMU | `scripts/run.sh --env qemu-headless-extradio-gpsd`; web UI `:18083`, net-console `:12323` |
 | Callsign | node CALL set over the net-console (`--setcall`) after boot, re-sent until the firmware accepts it. The effective identity (local `mc_callsign`, else the inherited global base) is required — a start without one is refused |
 | Firmware build | `scripts/build.sh` with `XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD=$(cat <runtime>/config/secrets/xr_pw)` baked in → `flash.bin` |
