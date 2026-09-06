@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+0.3.0 is a breaking pre-1.0 cleanup: old development images or runtime state may require a fresh image; the release-test path is a clean final-0.2.10 installation. Pins unchanged since 0.2.10; `sbapp` stays at 1.9.2. Release test: `docs/live-test.md` (10 rows re-run on e293, all pass; the two source-build rows of unchanged pins carry their 0.2.10 measurement).
+
 - **The `igate` stack is removed;** Graywolf replaces it (same RF↔APRS-IS job through the KISS TNC, plus a web UI). Reflash an old development image, or `lhpc clean igate --purge --yes` before an in-place update.
 - **The source `strategy` field is removed** — `link` and the `linked` source state with it. Every managed source is a clone under the runtime root; a symlink where one is expected is refused (generic containment), and a manifest that declares `source.strategy` is now refused at load instead of accepting a key that means nothing. Records and journals written by 0.2.10 still carry the field and are read as an ignored extra.
 - **Stale read tolerances removed:** ownership records need schema v1; source-registry v1 records, the `legacy` selector, journals without `had_prior`, the self-update cache without `schema_version`/`status`, `radio.hardware = "legacy"`, the band-less daemon log fallback and the MeshCore host `node_name` purge are gone. Old development state reads as invalid or is ignored; reflash or clean before an in-place update.

@@ -419,6 +419,15 @@ Ein Klick in der Konsole, oder aus der Shell — vorher `config/` + `profiles/` 
 systemctl --user stop lhpc-web && lhpc self-update --apply
 ```
 
+**Aktualisieren auf 0.3.0.** Diese Version gibt die Lesekompatibilität für Zustände auf der Platte
+auf, die keine unterstützte Version mehr schreibt. Alles, was eine 0.2.10-Box geschrieben hat, wird
+unverändert gelesen. Eine Installation, deren Runtime-Wurzel seit 0.1.7 oder früher mitgeführt wird,
+braucht unter Umständen zwei einmalige Korrekturen: ein `[radio].hardware` mit dem Wert `legacy` gilt
+jetzt als nicht gesetzt — das Board mit `lhpc hardware <setup>` neu wählen; und Ownership-Records
+oder Transaktionsjournale im Format vor 0.1.8 werden als unlesbar abgewiesen — sie werden wie unter
+[Identitätsdrift](docs/operations.md#identity-drift-on-clean-or-uninstall) beschrieben bereinigt.
+Alte Entwicklungs-Images werden neu geflasht statt an Ort und Stelle aktualisiert.
+
 Betriebsmodell, Ein-Klick-Mechanik und `--repair-integration`:
 [`docs/deployment.md`](docs/deployment.md).
 

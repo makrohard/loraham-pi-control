@@ -6,8 +6,56 @@ measured values only. The procedure lives in [test-matrix.md](test-matrix.md); C
 
 ## Contents
 
+- [0.3.0 — release test, 2026-09-06](#030--release-test-2026-09-06)
 - [0.2.10 — release test, 2026-09-05/06](#0210--release-test-2026-09-0506)
 - [Silicon test, 2026-09-05](#silicon-test-2026-09-05)
+
+## 0.3.0 — release test, 2026-09-06
+
+Run on `lhpc-e293` (Raspberry Pi Zero 2 W, Lite image, LoRaHAM Pi HAT dual-module) from the clean
+final-0.2.10 installation, branch head 58a9fbe, 04:43 to 05:55 local. Pins unchanged since 0.2.10.
+Every row: purge → install → build → start → verify → stop, timed by the driver; memory sampled every
+5 s; no OOM line in `dmesg` during the run; the box was left with nothing running.
+
+| # | stack | channel | pins under test | clean | install | build | start | usable | min avail | OOM | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | daemon | binary | daemon 10f4107<br>radiolib 187ef24<br>(binary) | 0:00:06 | 0:00:07 | n/a | 0:00:12 | — | 209 MB | none | **pass** ⁽1⁾ |
+| 2 | chat | pinned | chat 10f4107 | 0:00:05 | 0:00:06 | 0:00:14 | rc 1 (0:00:06) | — | 207 MB | none | **pass** ⁽2⁾ |
+| 3 | voice | pinned | voice 143b83f | 0:00:05 | 0:00:05 | 0:00:13 | 0:00:08 | — | 214 MB | none | **pass** |
+| 4 | kiss | pinned | kiss 3c4461e (v0.5.1) | 0:00:05 | 0:00:05 | 0:00:23 | 0:00:07 | 0:00:00 | 212 MB | none | **pass** |
+| 5 | graywolf | fetched | graywolf 0.14.13 (fetched) | 0:00:05 | 0:00:03 | 0:00:23 | 0:00:11 | 0:00:00 | 208 MB | none | **pass** |
+| 6 | reticulum | pinned | rns ea98db4 (1.5.2)<br>rns-lora-interface 3fef542<br>nomadnet ad10301<br>lxmd 795fdaa<br>sideband 1402bb6 skipped | 0:00:07 | 0:03:45 | 0:02:53 | 0:00:08 | — | 163 MB | none | **pass** |
+| 7 | meshcore | pinned | openhop-core 8cdb04e<br>meshcore-webui 94dcc3d<br>meshcore-cli 568d158 (v1.6.3)<br>openhop-repeater efc5616 | 0:00:10 | 0:01:23 | 0:07:34 | 0:00:12 | — | 43 MB | none | **pass** ⁽7⁾ |
+| 8 | meshtastic | binary | meshtastic 54e0d8d (v2.7.26)<br>CLI pip 2.7.11<br>(binary) | 0:00:07 | 0:02:10 | n/a | 0:00:34 | 0:00:06 | 155 MB | none | **pass** |
+| 9 | meshtastic | source | meshtastic 54e0d8d (v2.7.26)<br>(source) | — | — | — | — | — | — | — | not re-run ⁽9⁾ |
+| 10 | daemon | source | daemon 10f4107<br>radiolib 187ef24<br>(source) | 0:00:05 | 0:02:30 | 0:04:58 | 0:00:13 | — | 139 MB | none | **pass** |
+| 11 | meshcom | binary | firmware 674413c<br>meshcom-qemu-raspi 579e463<br>bridge f018920<br>(binary) | 0:00:07 | 0:00:28 | n/a | 0:13:45 | 0:00:46 | 107 MB | none | **pass** ⁽11⁾ |
+| 12 | meshcom | source | firmware 674413c<br>meshcom-qemu-raspi 579e463<br>bridge f018920<br>(source) | — | — | — | — | — | — | — | not re-run ⁽12⁾ |
+
+⁽1⁾ build refused for a binary install, as designed.
+⁽2⁾ interactive: start ensures the daemon and prints the command (manual start required).
+⁽7⁾ min avail 43 MB during the openHop build, no OOM.
+⁽9⁾ pin unchanged since 0.2.10; measured there (row 10: build 2:42:58, pass).
+⁽11⁾ start 0:13:45 = the controller's wait for the first firmware boot under QEMU (0:07:31 in 0.2.10); web UI usable 46 s later.
+⁽12⁾ pins unchanged since 0.2.10; measured there (row 13: build 0:45:45, pass).
+
+Live gates of this release on the same reference box, each measured in the run rather than
+derived. The matrix above ran on `58a9fbe`; the dated gates below were run on the
+then-current release-branch head, after the amendment each one covers:
+
+| check | result |
+|---|---|
+| igate purged on 0.2.10 → branch deployed → no removed stack in `lhpc list`, `lhpc status`, Apps, Dashboard; daemon + kiss + graywolf chain up, graywolf web 200 | pass |
+| MeshCore identity across install → build → start (chat+repeater) | pass — identity key file and the generated `[identity] key` unchanged, node registered as the same name; build 0:02:57 |
+| ownership records read by the schema-v1 validator; source registry version 2, selectors dev/pinned; `lhpc status --versions` without drift | pass — 3 records v1, 12 registry records v2 |
+| self-update cache envelope (`schema_version`, `local.is_git`, identity `status`) and the Update panel | pass — the identity verdict reads `unsafe: checkout branch 'lhpc-0.3.0' != 'main'`, expected for a branch deployment |
+| uninstall guard claimed with a dead pid → `lhpc self-update --recover-request` clears it | pass — integer owner record, "proven ceased", no guard left |
+| uninstall guard, both halves re-proven after the review fix (2026-09-06 11:05) | pass — a guard written in the pre-0.3.0 form (`"pid"`/`"start_time"` as decimal strings) with a dead pid is recovered and cleared; a claim carrying an unprovable `start_time` of 0 succeeds, stores an int-typed record and is then correctly *retained* by recovery as unprovable; the guard released cleanly and the console stayed active throughout |
+| source adoption after the per-source `strategy` field was removed (2026-09-06 13:10) | pass — a record in the 0.2.10 shape (still carrying `strategy`) reads as `valid` with the field ignored; a clean → install → build of `voice` succeeds and writes a record without it; a manifest declaring `source.strategy` is refused at load; `lhpc doctor` and `lhpc status --versions` report no complaint, drift or unsafe record |
+| source adoption after `[install].source_strategy` was removed (2026-09-06 11:20) | pass — the setting was first shown inert (a `voice` clean+install under `adopt` and under `copy` produced identical results: a git clone of the same HEAD from the same origin, identical ownership record; an illegal hand-written value drew no complaint). With the setting gone, clean → install → build of `voice` succeeds unchanged, `lhpc doctor` reports nothing, and a start on an occupied band is still refused typed. |
+| daemon RX/TX feed per band (`/api/daemon/433`, `/api/daemon/868`) | pass — 433 answers with feed lines, 868 empty, no band-less file read |
+| boot restore across a reboot (2026-09-06 11:00) | pass — daemon (both bands), kiss and graywolf running before `systemctl reboot`; the box came back after 1:15 with a new kernel boot id (`ea6cf0c6…` → `d0405550…`) and `lhpc autostart` reported *done — 3 restored, 0 failed, 0 cancelled, 0 pending, 0 skipped*; `lhpc status` showed the same three running and the unit's journal listed the relaunched processes, including both daemon bands. Exercises the schema-v1 ownership records and the stamped/unstamped classifier this release simplified. |
+| from-zero reinstall (`uninstall.sh --purge` after the root-owned firewall reset) | not run (root step); owed |
 
 ## 0.2.10 — release test, 2026-09-05/06
 

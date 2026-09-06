@@ -403,6 +403,14 @@ One click in the console, or from a shell — back up `config/` + `profiles/` fi
 systemctl --user stop lhpc-web && lhpc self-update --apply
 ```
 
+**Updating to 0.3.0.** This release drops read compatibility for on-disk state that no supported
+release writes. Everything a 0.2.10 box wrote is read unchanged. A deployment that has carried its
+runtime root since 0.1.7 or earlier may need two one-time corrections: a `[radio].hardware` value of
+`legacy` now reads as unset — re-pick the board with `lhpc hardware <setup>`; and pre-0.1.8 source
+ownership records or transaction journals are refused as unreadable — clear them as described under
+[identity drift](docs/operations.md#identity-drift-on-clean-or-uninstall). Old development images are
+reflashed rather than updated in place.
+
 Serving model, the one-click mechanism and `--repair-integration`:
 [`docs/deployment.md`](docs/deployment.md).
 
