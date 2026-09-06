@@ -677,6 +677,10 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 /* ONE continuous separator per row: a tr border spans the full row width by construction —
    per-cell borders rendered as broken segments and collided with the Power pill. */
 .systab tr { border-bottom: 1px solid var(--line); }
+/* Blocks below the metrics table carry the SAME separator as the table rows. */
+.sysblock { border-bottom: 1px solid var(--line); padding: .3rem 0; margin: 0; }
+.sysblock p { margin: 0; }
+.sysblock form { margin: .25rem 0; }
 /* Net renders as a FIXED two-line value (JS joins with \n): constant row height — a one-line
    string wrapped and unwrapped as the rate text length changed, bouncing the box height. */
 /* Net value: everything right-aligned; the rate lives in a FIXED-WIDTH block so the arrow

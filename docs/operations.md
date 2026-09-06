@@ -24,7 +24,8 @@ probes, source/pin state and resource ownership — never from a stale PID file.
 manual or foreign process is never signalled — you get a manual `kill` hint instead
 ([safety model](architecture.md)).
 
-The one boot-time exception is **boot restore** (`lhpc autostart`, default on): after a reboot,
+The one boot-time exception is **boot restore** (Home → System → Autostart, or `lhpc autostart`;
+default on): after a reboot,
 `lhpc-boot-restore.service` (a `Type=oneshot`, `RemainAfterExit=yes` user unit wanted by
 `default.target`) runs the driver ONCE and exits — it is not a supervisor either. It restores the
 stacks that were **LHPC-owned and never verifiably stopped** before the reboot — not literally

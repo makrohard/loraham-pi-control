@@ -421,6 +421,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             power_ok={"reboot": service.power_supported("reboot"),
                       "poweroff": service.power_supported("poweroff")},
             network_dash=_network_dash_safe(service),
+            autostart=_autostart_dash_safe(service),
             dash_sig=service.dash_signature(restart_required=restart_required))
 
     @app.get("/api/dash-signature")
@@ -933,6 +934,35 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return None                    # fail-safe: never break the Apps page over firewall
 
+    def _autostart_dash_safe(svc):
+        """Autostart state + last boot-restore result for the System box. Config + journal
+        reads only (no privilege, no network), fail-soft: any failure renders the switch as
+        unknown rather than breaking the dashboard."""
+        import datetime as _dt
+        out = {"on": False, "reason": "unavailable", "last": ""}
+        try:
+            out["on"], out["reason"] = svc.boot_restore_enabled()
+        except Exception:
+            return out
+        try:
+            st = svc.boot_restore_status()
+        except Exception:
+            return out
+        if st is None:
+            out["last"] = "no boot restore has run yet"
+        elif st["state"] == "blocked":
+            # LIVE condition, not a stored result — an older result here would hide why
+            # nothing was restored this boot.
+            out["last"] = "blocked: " + str(st.get("reason", ""))[:160]
+        else:
+            when = st.get("finished_at")
+            ts = (_dt.datetime.fromtimestamp(when).strftime(" @ %Y-%m-%d %H:%M")  # noqa: DTZ006
+                  if isinstance(when, (int, float)) else "")
+            c = st.get("counts", {})
+            out["last"] = (f"last run: {st['state']}{ts} — {c.get('succeeded', 0)} restored, "
+                           f"{c.get('failed', 0)} failed, {st.get('skipped', 0)} skipped")
+        return out
+
     def _network_dash_safe(svc):
         """One line for the dashboard system card — '' on non-AP boxes or any failure."""
         try:
@@ -1019,14 +1049,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         ctx, _groups, _snapshot = _stacks_context(request.args.get("band", ""),
                                                  cfg_sid=request.args.get("cfg", ""),
                                                   hw_probe=session.pop("hw_probe", None))
-        # Boot-restore toggle state for the webserver panel (config read only — GET-safe).
-        try:
-            _bcfg = service.config().boot
-            ctx.setdefault("boot_restore_on", bool(_bcfg.restore and _bcfg.valid))
-            ctx.setdefault("boot_restore_valid", bool(_bcfg.valid))
-        except Exception:
-            ctx.setdefault("boot_restore_on", False)
-            ctx.setdefault("boot_restore_valid", False)
         # GPS is a GLOBAL box setting and belongs to NO stack — it is not a daemon setting and
         # not a per-stack one. Rendered as its own card on this page so it is visible without
         # expanding any row; the per-stack pages still show it beside their `use_gps` switch,
@@ -1827,7 +1849,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         res = service.set_boot_restore(request.form.get("restore") == "on")
         flash(res.summary, "ok" if res.ok else "warn")
-        return _ws_back()
+        # The switch lives on the dashboard's System box; return where it was pressed.
+        return redirect(url_for("dashboard")) if request.form.get("from") == "dash" else _ws_back()
 
     @app.route("/webserver/configure", methods=["POST"])
     def webserver_configure():

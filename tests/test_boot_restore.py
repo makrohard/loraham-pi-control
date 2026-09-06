@@ -933,10 +933,10 @@ def _csrf_of(client):
 def test_web_toggle_round_trip(tmp_path):
     svc = _svc(tmp_path)
     c = _web_client(svc)
-    body = c.get("/stacks").get_data(as_text=True)
-    assert "Boot restore" in body and 'name="restore"' in body and "checked" in body
+    body = c.get("/").get_data(as_text=True)               # System box on the dashboard
+    assert "Autostart stacks on boot:" in body and 'name="restore"' in body
     tok = _csrf_of(c)
-    r = c.post("/boot-restore", data={"_csrf": tok})       # unchecked checkbox -> off
+    r = c.post("/boot-restore", data={"_csrf": tok})       # no value -> off
     assert r.status_code == 302
     assert svc.boot_restore_enabled()[0] is False
     r = c.post("/boot-restore", data={"_csrf": tok, "restore": "on"})

@@ -176,7 +176,7 @@
 "_stackweb.html#stack_web_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_update.html#self_update_apply" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_update.html#self_update_check" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
-"_webserver.html#boot_restore_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
+"dashboard.html#boot_restore_set" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#webserver_cert" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "_webserver.html#stack_webs_configure" = { limitation = "form flow covered in-process (lhpc web suite); running-app form acceptance pending" }
 "stacks.html#operator_callsign_save" = { limitation = "form flow covered in-process (lhpc web suite: test_config.py, test_identity.py, test_stack_params.py); running-app form acceptance pending" }

@@ -409,10 +409,27 @@
           <tr class="sysrow sysrow-time" id="sys-time-row" hidden><th scope="row">Time</th>
             <td class="sys-gauge" colspan="2"><span class="sys-gaugewrap"><span class="pill" id="sys-time-pill">…</span><span class="sys-time-val"><span class="sys-time-line" id="sys-time-val"></span><span class="sys-time-line sys-time-utc" id="sys-time-utc"></span><span class="sys-time-hint" id="sys-time-hint" hidden></span><span class="sys-time-cmd" id="sys-time-cmd" hidden></span></span></span></td></tr>
         </table>
-        <p class="muted sys-info" id="sys-info">Expand to load system information.</p>
         {% if network_dash %}
-          <p class="muted">network: {{ network_dash }}</p>
+          <p class="muted sysblock">network: {{ network_dash }}</p>
         {% endif %}
+        {# Autostart: plain configuration (writes [boot] restore in local.toml) — no privilege
+           and no unit change, so unlike the power actions below it always renders. #}
+        <section class="sysautostart sysblock">
+          <p>Autostart stacks on boot:
+            <strong>{{ "on" if autostart.on else "off" }}</strong>
+            {% if not autostart.on and autostart.reason %}
+              <span class="muted">({{ autostart.reason }})</span>
+            {% endif %}
+          </p>
+          {% if autostart.last %}<p class="muted">{{ autostart.last }}</p>{% endif %}
+          <form method="post" action="{{ url_for('boot_restore_set') }}" class="act">
+            <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="from" value="dash">
+            <input type="hidden" name="restore" value="{{ "off" if autostart.on else "on" }}">
+            <button type="submit" class="act">{{ "Turn off" if autostart.on else "Turn on" }}</button>
+          </form>
+          <p class="muted">Applies at the next boot.</p>
+        </section>
         {% if power_ok.reboot or power_ok.poweroff %}
           {# Each button renders ONLY when logind authorizes ITS action (per-kind verdict —
              a box may allow reboot but not power-off); an unauthorized box shows nothing
@@ -433,6 +450,8 @@
             {% endif %}
           </div>
         {% endif %}
+        {# Host identity line stays the LAST thing in the card (system.js fills it by id). #}
+        <p class="muted sys-info" id="sys-info">Expand to load system information.</p>
       </div>
     </details>
   </div>

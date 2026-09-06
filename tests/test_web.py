@@ -61,6 +61,43 @@ def _client(tmp_path: Path, manifest: Path | None = None):
     return create_app(service_factory=factory).test_client()
 
 
+def test_dashboard_autostart_section_shows_state_and_last_result(tmp_path):
+    # Autostart is plain configuration (no privilege), so the System box always carries the
+    # switch — unlike the power actions beside it, which render only when logind allows them.
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(True).ok
+    body = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "Autostart stacks on boot:" in body and "<strong>on</strong>" in body
+    assert "no boot restore has run yet" in body          # nothing has run on a fresh root
+    assert 'name="restore" value="off"' in body and "Turn off" in body   # toggle offers the flip
+
+    assert svc.set_boot_restore(False).ok
+    body = create_app(lambda: svc).test_client().get("/").get_data(as_text=True)
+    assert "<strong>off</strong>" in body
+    assert 'name="restore" value="on"' in body and "Turn on" in body
+
+
+def test_dashboard_autostart_toggle_flips_the_setting_and_returns_to_the_dashboard(tmp_path):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(False).ok
+    c = create_app(lambda: svc).test_client()
+    token = _csrf(c, "/")
+    r = c.post("/boot-restore", data={"_csrf": token, "restore": "on", "from": "dash"})
+    assert r.status_code in (302, 303) and r.headers["Location"].endswith("/")
+    assert svc.boot_restore_enabled()[0] is True         # persisted, not just flashed
+
+
+def test_dashboard_autostart_toggle_requires_csrf(tmp_path):
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    assert svc.set_boot_restore(False).ok
+    c = create_app(lambda: svc).test_client()
+    assert c.post("/boot-restore", data={"restore": "on", "from": "dash"}).status_code == 400
+    assert svc.boot_restore_enabled()[0] is False        # unchanged
+
+
 @pytest.mark.contract
 def test_dashboard_ok_and_headers(tmp_path):
     resp = _client(tmp_path).get("/")
