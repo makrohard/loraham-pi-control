@@ -11,6 +11,7 @@
 - Unused functions and version-numbered history wording removed; the frozen unit test is named without a version.
 - **Stored passwords are masked on the stack page.** The Password section renders the value as discs instead of clear text; a *Show* button unmasks it when you need to read or hand-copy it, and the copy button puts the real password on the clipboard either way. It keeps the password off the screen — the page itself is unchanged in what it is allowed to hold.
 - **Docs consolidated** (29 → 26 files): one home per fact, no history; `docs/live-test.md` holds the dated evidence (the 0.2.10 release test, the silicon test); every doc carries a test-enforced Contents block; the hardware statement is corrected (Waveshare SX1262 433M tested on the air, 868M not tested on silicon).
+- **The README is rewritten and ground-truthed:** hardware before stacks, a collapsed stacks table with a licence column, one *Manual install* run of ten numbered steps, every happy-path click path on its own line beside a collapsed CLI equivalent, and web exposure (client certificate → policy → firewall → apply) in one place. Standard installs are pointed at the image repo. `README.de.md` follows.
 
 ## 0.2.10
 

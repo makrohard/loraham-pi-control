@@ -225,6 +225,12 @@ lhpc webserver cert revoke lhpc-laptop --confirm-label lhpc-laptop
 lhpc webserver tls-renew                                 # new server cert, same CAs
 ```
 
+**The passphrase is shown once and is never stored** — copy it when `cert issue` prints it. Lose it
+and the bundle cannot be opened: `reissue` mints a new bundle with a new passphrase for the same
+label. A bundle that reached the wrong hands is a credential to withdraw, not one to re-export —
+`revoke` it and issue a fresh one; the revocation is effective once the proxy has reloaded with the
+new CRL.
+
 Each client certificate is exported as an encrypted PKCS#12 `.p12` bundle under
 `config/tls/exports/` (0600); the private key exists only inside that bundle. The fetch
 commands in the Certificates panel (username, paths, labels) are shown only to a **trusted

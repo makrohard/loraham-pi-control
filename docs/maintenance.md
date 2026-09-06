@@ -131,7 +131,12 @@ default; everything below is about source builds and runtime load.
   `-j1`) and the MeshCom firmware (~26 min cold). The per-step build timeout defaults to 900 s;
   the manifest raises it per component (`build_timeout`, up to 28800 s for the Zero's cold QEMU
   compile) so a slow step is never silently TERM-killed. Builds are detached and survive a web-service restart; output is block-buffered off a TTY, so a
-  quiet `tail -f` is not a stalled build — judge by CPU and the growing `.pio/build/`.
+  quiet `tail -f` is not a stalled build — judge by CPU and the growing `.pio/build/`:
+
+  ```bash
+  ps -eo pcpu,etime,cmd --sort=-pcpu | head -3          # is a compiler actually running?
+  while sleep 60; do echo "$(date +%T) objs=$(find ~/loraham-pi-control/src -path '*/.pio/build/*' -name '*.o' | wc -l)"; done
+  ```
 - **Stop the web stack for heavy builds** (`systemctl --user stop lhpc-web lhpc-nginx`): the
   controller and a parallel compile competing for RAM is what triggers the OOM killer. lhpc
   biases build children toward the OOM killer so the controller survives

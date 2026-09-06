@@ -95,8 +95,8 @@ position.
 
 ## Notes
 
-- **What normal looks like.** The emulated node boots in ~1 min on a Pi 5 and ~5–6 min on a Pi
-  Zero 2W; until then the web UI at `:18083` answers 502 and the callsign stays the placeholder —
+- **What normal looks like.** The emulated node boots in about a minute on a Pi 5 and 6 to 14
+  minutes on a Pi Zero 2W ([live tests](../live-test.md)); until then the web UI at `:18083` answers 502 and the callsign stays the placeholder —
   expected, not a failure (`lhpc status` shows "post-start: … NOT applied" while the callsign push
   is outstanding). The QEMU process sits around 50 % CPU at steady state on a Pi.
 - Box→peer texts leave on MeshCom's own TX scheduling (tens of seconds); with the default
