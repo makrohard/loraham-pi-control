@@ -96,7 +96,7 @@ def test_web_and_helper_carry_the_bus_block_and_sandbox():
     # Sideband is NOT granted %h/.kivy: KIVY_HOME redirects its state into
     # {root}/state/sideband/kivy, which is already writable. Granting it here would
     # change the unit bytes and strand every installed box — see
-    # test_unit_bytes_unchanged_since_0_1_6.
+    # test_unit_bytes_are_the_frozen_render.
     assert f"ReadWritePaths={ROOT} -%h/.meshcore_nm /tmp" in web
     assert f"ReadWritePaths={ROOT} /tmp" in helper
     assert "%h/.meshcore_nm" not in helper and "%h/.kivy" not in helper
@@ -346,7 +346,7 @@ def test_verify_and_integration_cover_the_restart_units(tmp_path):
     assert U.integration(ud, ROOT)["status"] == "overridden"
 
 
-# 0.1.6's rendered unit bytes, pinned. See the frozen-template banner in updater_units.py.
+# The frozen rendered unit bytes, pinned. See the frozen-template banner in updater_units.py.
 _UNIT_BYTES_0_1_6 = {
     "lhpc-web.service":
         "1dcfc443666fd2e9780e8c32822aec3a1b3b924088c19d4c056c6e1bff5b7963",
@@ -365,8 +365,8 @@ _UNIT_BYTES_0_1_6 = {
 }
 
 
-def test_unit_bytes_unchanged_since_0_1_6():
-    """The managed units must render EXACTLY as they did in 0.1.6.
+def test_unit_bytes_are_the_frozen_render():
+    """The managed units must render EXACTLY the frozen bytes.
 
     `verify()` compares byte-for-byte, so any change — including to a COMMENT inside a
     template — makes every already-installed unit non-canonical. Boot restore then
@@ -374,7 +374,7 @@ def test_unit_bytes_unchanged_since_0_1_6():
     path repairs this: the in-process repair renders pre-update templates, and the
     systemd-helper route cannot write units at all (ProtectHome=read-only).
 
-    Caught exactly that during the 0.1.7 audit fixes: reverting an added
+    Caught exactly that during an audit fix: reverting an added
     `-%h/.kivy` write path restored the DIRECTIVE, but the reworded comment beside it
     still changed lhpc-web.service's bytes.
 
@@ -392,5 +392,5 @@ def test_unit_bytes_unchanged_since_0_1_6():
         if got != _UNIT_BYTES_0_1_6[kind]:
             drifted[kind] = got
     assert not drifted, (
-        "unit template bytes changed since 0.1.6 -> boot restore will refuse on every "
+        "unit template bytes changed -> boot restore will refuse on every "
         f"installed box: {sorted(drifted)}")

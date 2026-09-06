@@ -4,7 +4,7 @@ Covers the audit-mandated lifecycle cases: nonce'd launch ids (pid reuse can nei
 nor mis-prune records), the reserved v1 field set constructed last, boot-id-aware cessation and
 verification (foreign boot with an identical numeric starttime; unreadable current boot id stays
 conservative), compare-before-delete pruning, scope threading, and the single schema-versioned
-ownership inventory (v0 legacy + v1, integrity diagnostics, directory states).
+ownership inventory (schema v1 only, integrity diagnostics, directory states).
 """
 
 import json
@@ -48,10 +48,13 @@ def _write_record(tmp_path, rec, name=None):
     return d / name
 
 
-def _v0(pid=999999, starttime="123", **over):
+def _rec(pid=999999, starttime="123", **over):
+    """A schema-v1 ownership record; `boot_id` defaults to "" (unstamped: the boot id was
+    unreadable when it was written), so staleness is proven by process identity."""
     rec = {"launch_id": f"c__x__{pid}", "stack": "kiss", "component": "loraham-kiss-tnc",
            "band": "", "pid": pid, "role": "", "launched_at": 1000,
-           "starttime": starttime, "pgid": pid, "sid": pid}
+           "starttime": starttime, "pgid": pid, "sid": pid,
+           "version": 1, "requested_target": "kiss", "start_scope": "stack", "boot_id": ""}
     rec.update(over)
     return rec
 
@@ -102,7 +105,7 @@ def test_same_component_band_pid_relaunch_never_overwrites(tmp_path):
 
 def test_remove_record_leaves_a_replaced_record(tmp_path):
     life = _life(tmp_path)
-    old = _v0()
+    old = _rec()
     path = _write_record(tmp_path, old)
     # the same path now holds a DIFFERENT (newer) record
     newer = dict(old, launch_id="c__x__other")
@@ -114,7 +117,7 @@ def test_remove_record_leaves_a_replaced_record(tmp_path):
 
 def test_remove_record_removes_the_exact_record(tmp_path):
     life = _life(tmp_path)
-    rec = _v0()
+    rec = _rec()
     path = _write_record(tmp_path, rec)
     assert life._remove_record(dict(rec, _path=str(path))) is True
     assert not path.exists()
@@ -129,7 +132,7 @@ def test_foreign_boot_identical_starttime_is_ceased(tmp_path, monkeypatch):
     proc = _spawn()
     try:
         ident = life._proc_identity(proc.pid)
-        rec = _v0(pid=proc.pid, starttime=str(ident["starttime"]),
+        rec = _rec(pid=proc.pid, starttime=str(ident["starttime"]),
                   boot_id="00000000-dead-beef-0000-000000000000")
         monkeypatch.setattr(lifecycle_mod, "current_boot_id", lambda: "11111111-live-0000-0000-000000000000")
         assert life._original_ceased(rec) is True
@@ -144,7 +147,7 @@ def test_verify_owned_rejects_foreign_boot(tmp_path, monkeypatch):
     proc = _spawn()
     try:
         ident = life._proc_identity(proc.pid)
-        rec = _v0(pid=proc.pid, starttime=str(ident["starttime"]),
+        rec = _rec(pid=proc.pid, starttime=str(ident["starttime"]),
                   pgid=ident["pgid"], sid=ident["sid"], boot_id="aaaa")
         monkeypatch.setattr(lifecycle_mod, "current_boot_id", lambda: "bbbb")
         ok, why = life.verify_owned(rec)
@@ -160,7 +163,7 @@ def test_unreadable_boot_id_preserves_ownership(tmp_path, monkeypatch):
     proc = _spawn()
     try:
         ident = life._proc_identity(proc.pid)
-        rec = _v0(pid=proc.pid, starttime=str(ident["starttime"]),
+        rec = _rec(pid=proc.pid, starttime=str(ident["starttime"]),
                   pgid=ident["pgid"], sid=ident["sid"], boot_id="aaaa")
         monkeypatch.setattr(lifecycle_mod, "current_boot_id", lambda: "")
         ok, _why = life.verify_owned(rec)
@@ -170,10 +173,10 @@ def test_unreadable_boot_id_preserves_ownership(tmp_path, monkeypatch):
         proc.kill(); proc.wait()
 
 
-def test_legacy_record_without_boot_id_keeps_stale_detection(tmp_path):
+def test_unstamped_record_keeps_stale_detection(tmp_path):
     life = _life(tmp_path)
-    rec = _v0(pid=999999)                                # dead pid, no boot_id field
-    assert life._original_ceased(rec) is True            # proven gone via /proc as before
+    rec = _rec(pid=999999)                               # dead pid, empty boot_id
+    assert life._original_ceased(rec) is True            # proven gone via /proc
 
 
 # --- inventory: schema versions, diagnostics, directory states ----------------------------------
@@ -183,10 +186,10 @@ def test_inventory_missing_dir_is_valid_empty(tmp_path):
     assert (valid, issues, state) == ([], [], "missing")
 
 
-def test_inventory_v0_and_v1_records_valid(tmp_path):
+def test_inventory_stamped_and_unstamped_records_valid(tmp_path):
     life = _life(tmp_path)
-    _write_record(tmp_path, _v0())
-    v1 = _v0(pid=4242, version=1, requested_target="kiss", start_scope="stack", boot_id="b")
+    _write_record(tmp_path, _rec())
+    v1 = _rec(pid=4242, boot_id="b")
     v1["launch_id"] = "c__x__4242__deadbeef"
     _write_record(tmp_path, v1)
     valid, issues, state = life.owned_inventory()
@@ -196,16 +199,17 @@ def test_inventory_v0_and_v1_records_valid(tmp_path):
 
 @pytest.mark.parametrize("mutate,reason", [
     (lambda r: r.update(version=99), "unknown record version"),
+    (lambda r: r.pop("version"), "unknown record version"),   # no version field: not a v1 record
     (lambda r: r.pop("pid"), "missing field"),
     (lambda r: r.update(pid="12"), "invalid pid"),
-    (lambda r: r.update(version=1), "v1 field"),         # v1 without the reserved extras
+    (lambda r: r.pop("boot_id"), "v1 field"),            # without a reserved extra
 ])
 def test_inventory_flags_malformed_records(tmp_path, mutate, reason):
     life = _life(tmp_path)
-    bad = _v0()
+    bad = _rec()
     mutate(bad)
     _write_record(tmp_path, bad, name=f"{bad.get('launch_id', 'x')}.json")
-    good = _v0(pid=777)
+    good = _rec(pid=777)
     good["launch_id"] = "c__x__777"
     _write_record(tmp_path, good)
     valid, issues, state = life.owned_inventory()
@@ -216,7 +220,7 @@ def test_inventory_flags_malformed_records(tmp_path, mutate, reason):
 
 def test_inventory_filename_mismatch_is_integrity_issue(tmp_path):
     life = _life(tmp_path)
-    rec = _v0()
+    rec = _rec()
     _write_record(tmp_path, rec, name="not-the-launch-id.json")
     valid, issues, _state = life.owned_inventory()
     assert not valid and issues and "filename" in issues[0]["reason"]
@@ -224,8 +228,8 @@ def test_inventory_filename_mismatch_is_integrity_issue(tmp_path):
 
 def test_owned_records_filters_the_shared_inventory(tmp_path):
     life = _life(tmp_path)
-    _write_record(tmp_path, _v0())                       # kiss tnc, band ""
-    other = _v0(pid=555)
+    _write_record(tmp_path, _rec())                       # kiss tnc, band ""
+    other = _rec(pid=555)
     other.update(launch_id="d__433__555", component="loraham-kiss-serial", band="433")
     _write_record(tmp_path, other)
     recs = life.owned_records("loraham-kiss-tnc", role="")
@@ -295,7 +299,7 @@ def _drv(tmp_path, monkeypatch, *, cur_boot="CURBOOT", enabled=True, web=(True, 
 def _stub_start(record, *, ok=True, call_hook=True, summary="started"):
     def stub(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
              _before_start_locked=None, _operator=True, position=None, position_note=""):
-        # the REAL start() signature (no per-launch params since 0.2.9): a call the service
+        # the REAL start() signature (no per-launch params): a call the service
         # could not make fails here too, instead of being swallowed by a permissive stub
         record.append({"target": target, "band": band})
         if call_hook and _before_start_locked is not None:
@@ -473,9 +477,9 @@ def test_planner_conflicting_bands_on_two_records_skip():
     # valid last-start DISAGREES -> ambiguity
     ("433", MarkerView(last_start_state="valid", last_start_band="868", last_start_at=5.0),
      "", "disagree"),
-    # legacy empty band: ONE agreeing marker supplies the candidate
+    # empty record band: ONE agreeing marker supplies the candidate
     ("", MarkerView(running_band_state="valid", running_band="868"), "868", ""),
-    # legacy empty band, two disagreeing markers -> ambiguity
+    # empty record band, two disagreeing markers -> ambiguity
     ("", MarkerView(running_band_state="valid", running_band="433",
                     last_start_state="valid", last_start_band="868", last_start_at=5.0),
      "", "disagree"),
@@ -750,41 +754,28 @@ def test_daemon_reconcile_runs_after_client_stacks(tmp_path, monkeypatch):
     assert [c["target"] for c in calls] == ["kiss", "daemon"]
 
 
-# --- classifier: legacy scope proof -------------------------------------------------------------
+# --- classifier: unstamped records --------------------------------------------------------------
 
-def _legacy_candidate(tmp_path, stack="kiss", band="433", started_at=1000):
-    d = tmp_path / "state" / "last-start"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{stack}.json").write_text(json.dumps(
-        {"version": 1, "stack": stack, "band": band, "started_at": started_at,
-         "entries": {}, "hash": "x"}))
-
-
-def test_legacy_record_scope_proof_boundary(tmp_path, monkeypatch):
-    # v0 records (no scope fields) are eligible ONLY with a full-stack last-start proof whose
-    # started_at >= launched_at — EQUAL timestamps eligible (whole-second precision).
+def test_unstamped_stale_record_is_evidence_with_its_own_scope(tmp_path, monkeypatch):
+    # An empty boot stamp proves nothing about the boot; the record is evidence only once its
+    # process is provably gone, and its scope comes from its own fields (no external proof).
     svc = _drv(tmp_path, monkeypatch)
     monkeypatch.setattr(lifecycle_mod, "current_boot_id", lambda: "CURBOOT")
-    _write_record(tmp_path, _v0(pid=999999, launched_at=1000))   # dead pid -> provably stale
-    _legacy_candidate(tmp_path, started_at=1000)
+    _write_record(tmp_path, _rec(pid=999999, launched_at=1000))   # dead pid -> provably stale
     evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
     assert len(evidence) == 1 and evidence[0].start_scope == "stack"
-    # now the proof is OLDER than the launch -> scope unknown -> skipped
-    _legacy_candidate(tmp_path, started_at=999)
-    evidence, skipped, _issues, _state = svc._classify_boot_evidence("CURBOOT")
-    assert not evidence and "legacy record scope unknown" in skipped[0]["reason"]
+    assert evidence[0].requested_target == "kiss" and not skipped
 
 
-def test_legacy_live_record_is_not_evidence(tmp_path, monkeypatch):
+def test_unstamped_live_record_is_not_evidence(tmp_path, monkeypatch):
     svc = _drv(tmp_path, monkeypatch)
     proc = _spawn()
     try:
         ident = svc._lifecycle()._proc_identity(proc.pid)
-        _write_record(tmp_path, _v0(pid=proc.pid, starttime=str(ident["starttime"]),
-                                    pgid=ident["pgid"], sid=ident["sid"]))
-        _legacy_candidate(tmp_path)
+        _write_record(tmp_path, _rec(pid=proc.pid, starttime=str(ident["starttime"]),
+                                     pgid=ident["pgid"], sid=ident["sid"]))
         evidence, _sk, _is, _st = svc._classify_boot_evidence("CURBOOT")
-        assert not evidence                               # live legacy process: leave it alone
+        assert not evidence                               # live process: leave it alone
     finally:
         proc.kill(); proc.wait()
 
@@ -1230,7 +1221,7 @@ def test_inventory_unreadable_dir_is_unsafe_not_missing(tmp_path, monkeypatch):
     import errno
     from lhpc.core import runtime_fs
     life = _life(tmp_path)
-    _write_record(tmp_path, _v0())
+    _write_record(tmp_path, _rec())
     def denied(paths, d):
         raise OSError(errno.EACCES, "denied")
     monkeypatch.setattr(runtime_fs, "scandir_nofollow", denied)

@@ -378,12 +378,6 @@ class FirewallOpsMixin:
         return (_fw.HELPER_DEST, _fw.CANDIDATE_DEST, _fw.META_DEST, _fw.SNAPSHOT_DEST,
                 *self._fw_unit_paths())
 
-    def _fw_all_artifacts(self):
-        """Every root artifact lhpc may leave behind — the required set PLUS the optional
-        transition record and the journal. Used by uninstall so no residual (a stray journal,
-        a half-written snapshot) is ever reported clean."""
-        return (*self._fw_required_artifacts(), _fw.TRANSITION_DEST, _fw.JOURNAL_DEST)
-
     def _fw_integration_state(self) -> str:
         """'absent' (nothing installed), 'present' (every required artifact present AND no
         interrupted-op journal), or 'partial' (some required artifact missing, OR a journal is
@@ -1360,10 +1354,6 @@ def _atomic_write_script(path, text, mode=0o755):
     except OSError:
         pass
     return path
-
-
-def meta_proto(ep):
-    return "tcp"
 
 
 def _mode_label(mode):

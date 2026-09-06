@@ -24,7 +24,7 @@ def _paths(tmp_path: Path) -> Paths:
 def test_defaults_loaded(tmp_path):
     cfg = load_config(_paths(tmp_path))
     assert cfg.get("web", "port") == 8770
-    assert cfg.get("install", "source_strategy") == "adopt"
+    assert cfg.get("install", "adopt_search_root") == ""
 
 
 def test_operator_absent_by_default(tmp_path):
@@ -42,7 +42,7 @@ def test_local_overrides_merge(tmp_path):
     assert cfg.operator.callsign == "OE1XYZ"
     assert cfg.operator.configured
     assert cfg.get("web", "port") == 9999          # override wins
-    assert cfg.get("install", "source_strategy") == "adopt"  # default preserved
+    assert cfg.get("install", "adopt_search_root") == ""     # default preserved
 
 
 def test_stack_config_roundtrip(tmp_path):
@@ -766,29 +766,29 @@ def test_operator_save_refuses_when_local_has_unsupported(tmp_path):
 def test_remote_patch_rejects_foreign_component(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n'); before = p.read_text()
-    # meshcore-pi is NOT a component of meshcom -> reject, zero mutation
-    r = svc.save_config_bundle("meshcom", values={}, remotes={"meshcore-pi": "https://evil/x.git"})
+    p.write_text('[remotes]\n"meshcore-node" = "https://b/mc.git"\n'); before = p.read_text()
+    # meshcore-node is NOT a component of meshcom -> reject, zero mutation
+    r = svc.save_config_bundle("meshcom", values={}, remotes={"meshcore-node": "https://evil/x.git"})
     assert not r.ok and p.read_text() == before
 
 
 def test_remote_patch_own_component_preserves_others(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n')
+    p.write_text('[remotes]\n"meshcore-node" = "https://b/mc.git"\n')
     assert svc.save_config_bundle("meshcom", values={},
                                   remotes={"meshcom-bridge": "https://c/br.git"}).ok
     rem = tomllib.loads(p.read_text())["remotes"]
-    assert rem["meshcom-bridge"] == "https://c/br.git" and rem["meshcore-pi"] == "https://b/mc.git"
+    assert rem["meshcom-bridge"] == "https://c/br.git" and rem["meshcore-node"] == "https://b/mc.git"
 
 
 def test_remote_clear_own_preserves_other_components(tmp_path):
     svc = _svc_config_bundle(tmp_path)
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('[remotes]\n"meshcom-bridge" = "https://c/br.git"\n"meshcore-pi" = "https://b/mc.git"\n')
+    p.write_text('[remotes]\n"meshcom-bridge" = "https://c/br.git"\n"meshcore-node" = "https://b/mc.git"\n')
     assert svc.save_config_bundle("meshcom", values={}, remotes={"meshcom-bridge": ""}).ok
     rem = tomllib.loads(p.read_text())["remotes"]
-    assert "meshcom-bridge" not in rem and rem["meshcore-pi"] == "https://b/mc.git"
+    assert "meshcom-bridge" not in rem and rem["meshcore-node"] == "https://b/mc.git"
 
 
 def test_save_operator_config_patches_and_preserves_extra_keys(tmp_path):
@@ -847,13 +847,13 @@ def test_component_remote_set_and_clear_preserve_others(tmp_path):
     from lhpc.core import config as cfg
     paths = _svc_config_bundle(tmp_path)._paths
     p = _local(tmp_path); p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text('[remotes]\n"meshcore-pi" = "https://b/mc.git"\n')
+    p.write_text('[remotes]\n"meshcore-node" = "https://b/mc.git"\n')
     cfg.save_component_remote(paths, "loraham-daemon", "https://x/y.git")
     rem = tomllib.loads(p.read_text())["remotes"]
-    assert rem["loraham-daemon"] == "https://x/y.git" and rem["meshcore-pi"] == "https://b/mc.git"
+    assert rem["loraham-daemon"] == "https://x/y.git" and rem["meshcore-node"] == "https://b/mc.git"
     cfg.save_component_remote(paths, "loraham-daemon", "")     # clear
     rem = tomllib.loads(p.read_text())["remotes"]
-    assert "loraham-daemon" not in rem and rem["meshcore-pi"] == "https://b/mc.git"
+    assert "loraham-daemon" not in rem and rem["meshcore-node"] == "https://b/mc.git"
 
 
 def test_audit_config_lock_is_bounded(tmp_path):
@@ -917,13 +917,6 @@ def test_arbitrary_absolute_rejected(tmp_path):
     for raw in ("/etc/passwd", "{home}/x", "../../escape/x.conf"):
         dest = _svc_config_containment(tmp_path)._resolve_config_dest(_comp(), raw)
         assert dest.status == "failed" and dest.policy == "reject"
-
-
-def test_linked_source_is_readonly(tmp_path, monkeypatch):
-    from lhpc.core.lifecycle import Lifecycle
-    monkeypatch.setattr(Lifecycle, "is_linked_source", lambda self, c: True)
-    dest = _svc_config_containment(tmp_path)._resolve_config_dest(_comp(), "conf/x.conf")
-    assert dest.status == "linked-readonly"
 
 
 def test_source_config_through_symlinked_parent_rejected(tmp_path):

@@ -109,8 +109,7 @@ class OperatorConfig:
 # SERVED band. `unset` (default) = NO hardware configured yet — the daemon refuses to start until the
 # operator picks a setup in the daemon Hardware settings. Illegal board combinations (Waveshare+Uputronics,
 # two Waveshare) are simply ABSENT from this catalog, so they can never be selected. The daemon's
-# `--hw loraham` is our original LoRaHAM_Pi dual-module board (renamed from `legacy`, which the daemon
-# removed entirely — a stored `legacy` now fails the daemon's usage check, hence the migration below).
+# `--hw loraham` is our original LoRaHAM_Pi dual-module board.
 # Each entry: (label, {band: "--hw" wire preset}). Insertion order = UI display order.
 HW_SETUPS: dict = {
     "unset": ("Not configured", {}),
@@ -830,12 +829,6 @@ def load_config(paths: Paths, defaults_path: Path | None = None) -> Config:
         diagnostics.append(f"ignored non-table [radio] (got {type(radio_raw).__name__}); using unset")
         radio_raw = {}
     hardware = radio_raw.get("hardware", HW_DEFAULT)
-    # MIGRATION: the daemon renamed the dual-module `--hw` preset `legacy` -> `loraham` and removed
-    # `legacy` entirely (it now fails the daemon usage check). A stored `legacy` -> the `loraham` setup
-    # so existing installs keep working instead of refusing to start.
-    if hardware == "legacy":
-        diagnostics.append("migrated radio.hardware 'legacy' -> 'loraham' (daemon renamed the --hw preset)")
-        hardware = "loraham"
     if hardware not in HW_SETUPS:
         diagnostics.append(f"ignored invalid radio.hardware {hardware!r}; using {HW_DEFAULT}")
         hardware = HW_DEFAULT
@@ -1364,18 +1357,13 @@ def save_hardware_setup(paths: Paths, setup_id: str) -> Path:
         return _write_local_tables(paths, path, {"radio": {"hardware": setup_id}})
 
 
-def save_install_config(paths: Paths, *, adopt_search_root: str | None = None,
-                        source_strategy: str | None = None) -> Path:
+def save_install_config(paths: Paths, *, adopt_search_root: str | None = None) -> Path:
     """Persist install-channel settings into the runtime-local layer; patches only the
     named `[install]` keys. Used by the test lab to point adoption at its materialized
     fake sources — the values are ordinary, operator-settable config."""
     updates = {}
     if adopt_search_root is not None:
         updates["adopt_search_root"] = adopt_search_root
-    if source_strategy is not None:
-        if source_strategy not in ("adopt", "copy", "link"):
-            raise ConfigError(f"invalid source_strategy {source_strategy!r}")
-        updates["source_strategy"] = source_strategy
     path = paths.runtime_root / "config" / "local.toml"
     with config_lock(paths):
         return _write_local_tables(paths, path, {"install": updates})

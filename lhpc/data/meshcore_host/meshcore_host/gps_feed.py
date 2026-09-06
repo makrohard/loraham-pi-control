@@ -47,10 +47,6 @@ class GpsFeed:
         self._stale_handle: Optional[asyncio.TimerHandle] = None
         self._have_position = False
 
-    @property
-    def has_position(self) -> bool:
-        return self._have_position
-
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.get_running_loop().create_task(

@@ -76,8 +76,8 @@
   // fires exactly when the details population may have changed (radio-mode flip added or
   // removed monitors), so index-keyed state silently opened the wrong panels — e.g. it
   // could pop the collapsed System box open and start its polling unrequested. Elements
-  // without an id are deliberately not persisted; the legacy index-array format is
-  // ignored and removed once.
+  // without an id are deliberately not persisted; anything but an id-keyed object is
+  // ignored and removed.
   try {
     var saved = JSON.parse(sessionStorage.getItem("dashDetails") || "null");
     sessionStorage.removeItem("dashDetails");

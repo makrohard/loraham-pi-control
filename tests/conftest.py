@@ -167,7 +167,7 @@ def _default_hardware(request, monkeypatch):
 # Shared because two modules need it (gps + doctor). It lives HERE, not in a test module, so
 # nothing has to import one test module from another: `from tests.test_gps import ...` only
 # resolved because the local lane runs `python -m pytest`, which puts the working directory on
-# sys.path. CI runs the `pytest` console script, which does not — so 0.1.8 collected fine on
+# sys.path. CI runs the `pytest` console script, which does not — so a module once collected fine on
 # both boxes and died on collection in CI.
 
 class _FakeGpsd:

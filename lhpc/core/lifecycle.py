@@ -285,7 +285,7 @@ class Lifecycle:
                 continue
             if req.module:
                 # In-process import PROBE (find_spec, no subprocess) — used for a toolkit that ships
-                # as a python module rather than a header/binary (e.g. tkinter from python3-tk).
+                # as a python module rather than a header/binary (e.g. gi from python3-gi).
                 if not module_present(req.module):
                     missing.append(req)
                 continue
@@ -323,17 +323,6 @@ class Lifecycle:
 
     def source_dir(self, comp: Component) -> Path:
         return self.paths.resolve_source(comp.source.path) if comp.source else self.paths.runtime_root
-
-    def is_linked_source(self, comp: Component) -> bool:
-        """True when a component's runtime source is a SYMLINK to an external working
-        tree (adopt-by-link). Such a tree is read-only to LHPC: it may be observed and
-        its binary launched, but LHPC must never build/test/write into it."""
-        if not comp.source:
-            return False
-        try:
-            return self.source_dir(comp).is_symlink()
-        except OSError:
-            return False
 
     def logs_dir(self) -> Path:
         return self.paths.under("logs")
@@ -378,11 +367,6 @@ class Lifecycle:
         step and WRITTEN only after the LAST step succeeds, so a build killed mid-way (e.g. a
         half-populated venv) can never read "built" — the marker is `is_built`'s gate."""
         base = log_base or f"build-{comp.id}"
-        if self.is_linked_source(comp):       # never build INTO an external linked tree
-            return JobResult(name=base, state=JobState.FAILED, returncode=1,
-                             log_path="", tail=["BLOCKED: source is a linked external "
-                             "tree — build it yourself in that checkout (lhpc never "
-                             "writes into a linked source)"])
         eff_timeout = timeout if timeout is not None else (comp.build_timeout or self.BUILD_TIMEOUT_S)
         src, runtime = str(self.source_dir(comp)), str(self.paths.runtime_root)
         # A re-build must NEVER inherit a prior run's completion marker: invalidate it up front, FAIL
@@ -970,7 +954,7 @@ class Lifecycle:
     _OWNED_V1_EXTRA = ("requested_target", "start_scope", "boot_id")
 
     def _validate_owned_record(self, name: str, rec) -> str:
-        """"" when valid (v0 or v1), else a short reason. `name` is the filename leaf."""
+        """"" when valid (schema v1), else a short reason. `name` is the filename leaf."""
         if not isinstance(rec, dict):
             return "not a JSON object"
         for k in self._OWNED_V0_KEYS:
@@ -986,8 +970,6 @@ class Lifecycle:
         if name != f"{rec['launch_id']}.json":
             return "filename does not match launch_id"
         version = rec.get("version")
-        if version is None:
-            return ""                                   # v0 legacy — valid as-is
         if version != 1:
             return f"unknown record version {version!r}"
         for k in self._OWNED_V1_EXTRA:
@@ -1371,8 +1353,7 @@ class Lifecycle:
           1. the EXACT band's log, when the caller knows the band (the RX/TX feed, `?band=`);
           2. else the NEWEST `start-<id>-*.log` — a band-less caller (`lhpc logs`, the GUI "logs"
              link) has no band to offer and must not come up empty for a banded component;
-          3. else the legacy band-less name — still being written by a pre-upgrade process that
-             has not been restarted since the rename.
+          3. else the band-agnostic name `start-<id>.log` (what a band-less start writes).
 
         Returns None when nothing exists. Symlinked entries are skipped (`runtime_fs.tail` would
         refuse them anyway); the read stays no-follow.
@@ -1401,8 +1382,8 @@ class Lifecycle:
                 newest, newest_mtime = p, mtime
         if newest is not None:
             return newest
-        legacy = d / f"start-{comp.id}.log"
-        return legacy if legacy.is_file() else None
+        plain = d / f"start-{comp.id}.log"
+        return plain if plain.is_file() else None
 
     def _newest_job_log(self, comp_id: str,
                         kinds=("start", "build", "test", "post", "adopt")) -> Path | None:
@@ -1489,10 +1470,6 @@ class Lifecycle:
         if not comp.test_argv:
             return None
         eff_timeout = timeout if timeout is not None else (comp.test_timeout or self.TEST_TIMEOUT_S)
-        if self.is_linked_source(comp):       # never run tests INTO an external linked tree
-            return JobResult(name=base, state=JobState.FAILED, returncode=1,
-                             log_path="", tail=["BLOCKED: source is a linked external "
-                             "tree — test it yourself in that checkout"])
         src = str(self.source_dir(comp))
         try:
             argv = commands.build_step_argv({"argv": list(comp.test_argv)},

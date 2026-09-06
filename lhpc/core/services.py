@@ -1547,7 +1547,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                               if any(c2.id == comp.id for c2 in st2.components)), None)
                 # Announce the clone log BEFORE the (possibly minutes-long, off-TTY-silent)
                 # adoption — same copy-pasteable watch line the auto-install run emits.
-                if comp.source and comp.source.strategy != "link":
+                if comp.source:
                     extra_out.append(f"  [log] {comp.id} -> tail -f "
                                      f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                 result = self._adopt_dev_fallback(

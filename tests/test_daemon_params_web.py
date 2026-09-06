@@ -416,7 +416,7 @@ def test_daemon_params_band_chooser_rendered(tmp_path):
 
 
 def test_a_start_applies_the_saved_daemon_params_and_nothing_else(tmp_path):
-    # 0.2.9: Settings is the only place daemon parameters change; a start applies the SAVED
+    # Settings is the only place daemon parameters change; a start applies the SAVED
     # per-band values. `_daemon_param_applies` has no per-launch input any more.
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)

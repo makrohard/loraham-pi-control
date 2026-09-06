@@ -1,8 +1,7 @@
 """Descriptor-anchored mutation authority for MANAGED runtime source trees.
 
-Separate from `runtime_fs` on purpose: managed sources include *linked external* checkouts
-that are observe-only, so their mutation must never follow a symlink into an external target
-or recurse outside the held source parent. This module reuses `runtime_fs`'s validated
+Separate from `runtime_fs` on purpose: a managed-source mutation must never follow a symlink
+out of the tree or recurse outside the held source parent. This module reuses `runtime_fs`'s validated
 parent-walk primitive but owns the source-specific operations (recursive removal today;
 candidate/rename/activation are added incrementally).
 
@@ -26,7 +25,6 @@ from .paths import PathContainmentError, Paths
 __all__ = [
     "AtomicRenameUnavailable",
     "CandidateHandle",
-    "LinkHandle",
     "ManagedSourceTransaction",
     "PathContainmentError",
     "SourceLeafHandle",
@@ -207,17 +205,6 @@ def _ident_cmp(st, ident) -> bool:
     return len(ident) < 3 or st.st_ctime_ns == ident[2]
 
 
-def leaf_ident_at(parent_fd: int, name: str, *, with_ctime: bool = False):
-    """No-follow [dev, ino] (or [dev, ino, ctime_ns] when `with_ctime`) of leaf `name` under
-    `parent_fd`, or None when absent/unreadable. The v5 (with_ctime) form is the strict identity
-    evidence the crash-recovery journal persists; the 2-element form is the live/in-process one."""
-    try:
-        st = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except OSError:
-        return None
-    return _ident_of_stat(st, with_ctime=with_ctime)
-
-
 def ident_matches(parent_fd: int, name: str, ident) -> bool:
     """Leaf `name` still has the recorded identity — dev+ino, plus ctime_ns when `ident` is v5
     (3-element). Length-tolerant so both live [dev,ino] and journal [dev,ino,ctime_ns] idents work."""
@@ -311,23 +298,6 @@ class CandidateHandle:
             except OSError:
                 pass
             self.fd = -1
-
-
-class LinkHandle:
-    """Identity of a link-strategy staging leaf: its no-follow device/inode, the exact stored
-    link target string (`readlink`), and the validated local target path. Activation proves
-    the leaf is still THIS symlink (unswapped) before promoting it; there is no fd to retain
-    (a symlink cannot hold a directory fd). Provenance evaluates only `local_target`."""
-
-    def __init__(self, name: str, st_dev: int, st_ino: int, target: str, local_target: str):
-        self.name = name
-        self.st_dev = st_dev
-        self.st_ino = st_ino
-        self.target = target
-        self.local_target = local_target
-
-    def close(self) -> None:      # no retained fd — symmetry with CandidateHandle
-        pass
 
 
 class ManagedSourceTransaction:
@@ -453,44 +423,11 @@ class ManagedSourceTransaction:
         cannot be redirected by a parent-path swap."""
         return f"{self.pinned_path()}/{name}"
 
-    def create_link(self, target, name: str) -> LinkHandle:
-        """Create the link-strategy runtime symlink leaf `name` -> `target` via the held fd and
-        capture a `LinkHandle` recording its no-follow device/inode, the exact readlink string,
-        and the validated local target — so activation can prove the leaf is still OUR symlink
-        (not swapped) before promoting it."""
-        os.symlink(os.fspath(target), name, dir_fd=self.fd)
-        st = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
-        link = os.readlink(name, dir_fd=self.fd)
-        handle = LinkHandle(name, st.st_dev, st.st_ino, link, os.fspath(target))
-        self._handles.append(handle)
-        return handle
-
-    def verify_link(self, handle: LinkHandle, name: str | None = None) -> bool:
-        """The link leaf `name` (default the created name; the DEST name after the activation
-        rename) is STILL our exact symlink: same no-follow device/inode, still a symlink, its
-        readlink still equals the recorded target, and that target resolves to a directory."""
-        leaf = name or handle.name
-        try:
-            st = os.stat(leaf, dir_fd=self.fd, follow_symlinks=False)
-        except OSError:
-            return False
-        if (not _stat.S_ISLNK(st.st_mode) or st.st_dev != handle.st_dev
-                or st.st_ino != handle.st_ino):
-            return False
-        try:
-            if os.readlink(leaf, dir_fd=self.fd) != handle.target:
-                return False
-            tst = os.stat(leaf, dir_fd=self.fd, follow_symlinks=True)   # target resolves...
-        except OSError:
-            return False
-        return _stat.S_ISDIR(tst.st_mode)                              # ...to a directory
-
     def usable(self, name: str) -> bool:
-        """Active-source usability via the held fd: child `name` resolves (a linked source's
-        symlink IS followed here — deliberately, to confirm the target is a directory) to a
-        real directory. A dangling symlink / regular file / absent leaf is NOT usable."""
+        """Active-source usability via the held fd: child `name` is a real directory
+        (no-follow). A symlink / regular file / absent leaf is NOT usable."""
         try:
-            st = os.stat(name, dir_fd=self.fd, follow_symlinks=True)
+            st = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
         except OSError:
             return False
         return _stat.S_ISDIR(st.st_mode)
@@ -692,8 +629,7 @@ def detach_and_remove(paths: Paths, path: Path, handle: SourceLeafHandle,
       2. atomically DETACH it to a controller-owned quarantine name (NOREPLACE rename);
       3. re-prove the QUARANTINED leaf is the captured one — a substitution that raced the
          rename is put BACK (NOREPLACE) and reported; nothing is deleted;
-      4. only then recursively remove the quarantined tree (or unlink the symlink leaf —
-         a linked source's external target is never touched).
+      4. only then recursively remove the quarantined tree.
 
     Returns (ok, message). On any unproven step the substituted/quarantined leaf is RETAINED
     as evidence and (False, truthful-message) is returned — never a false success.

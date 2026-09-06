@@ -52,7 +52,7 @@ def test_migrated_daemon_run_is_structured_no_shell(tmp_path):
                                 OperatorConfig(), str(tmp_path), str(tmp_path))
     assert "/bin/sh" not in argv and "sh" != argv[0]
     assert argv[:3] == ["loraham_daemon/loraham_daemon", "--radio", "433"]
-    assert "--debug" not in argv                                 # the setter-less flag is retired (0.2.9)
+    assert "--debug" not in argv                                 # the setter-less flag is retired
 
 
 # --- ownership-race: direct exec records the real executable ------------------

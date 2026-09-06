@@ -184,13 +184,13 @@ def unpruned_consumed(journal: dict) -> list[dict]:
 class Evidence:
     """ONE classified ownership record, as the service-side classifier hands it over. The
     classifier has already established: role == "", record verifies as NOT live, the record is
-    foreign-boot (stamped) or legacy-provably-stale, and the identifiers are well-typed."""
+    foreign-boot (stamped) or provably stale (unstamped), and the identifiers are well-typed."""
     launch_id: str
     stack: str
     component: str
     band: str                    # the record's own band ("" for band-less)
     launched_at: float
-    start_scope: str = ""        # "" for legacy v0 records
+    start_scope: str = ""        # "stack" / "component" / "" (never widened)
     requested_target: str = ""
 
 
@@ -224,7 +224,7 @@ def _band_candidates(ev: Evidence, meta: StackMeta, mk: MarkerView) -> tuple[str
     """Resolve the band for one stack item -> (band, "") or ("", ambiguity_reason).
 
     The ownership record's band is authoritative; valid markers are CONSISTENCY checks. Markers
-    SUPPLY the candidate only for a legacy record whose own band is empty. Any unsafe source
+    SUPPLY the candidate only for a record whose own band is empty. Any unsafe source
     blocks; any two valid disagreeing sources block. Never fall back to another band."""
     if mk.running_band_state == "unsafe" or mk.last_start_state == "unsafe":
         return "", "unsafe band marker"
@@ -286,9 +286,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta],
                                  "reason": "no main-component evidence",
                                  "evidence_ids": ev_ids})
             continue
-        # scope rule: v1 requires an explicit full-stack scope; the classifier has already
-        # resolved legacy records (start_scope=="" only survives classification when a matching
-        # full-stack last-start record proved the scope).
+        # scope rule: only an explicit full-stack scope restores the stack.
         scoped = [e for e in mains if e.start_scope == "stack"
                   and e.requested_target == stack_id]
         if not scoped:

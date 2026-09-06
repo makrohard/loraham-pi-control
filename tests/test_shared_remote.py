@@ -100,7 +100,7 @@ def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", time.time(),
-                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+                                       "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     res = _svc(tmp_path).uninstall("kiss", apply=True)
     assert not res.ok
     assert any("conflicting effective remotes" in d for d in res.details)
@@ -119,7 +119,7 @@ def test_confirm_known_working_blocked_by_conflicting_shared_remotes(tmp_path):
                                     "source_rel": "src/loraham-kiss-tnc", "strategy": ""}}
     assert known_working.write_candidate(paths, "kiss", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", _URL_A, "dev", "a" * 40, time.time(), "", "",
+        "src/loraham-kiss-tnc", _URL_A, "dev", "a" * 40, time.time(), "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc", "--config", "X"]})  # kiss RUNNING
     res = svc.confirm_known_working("kiss")

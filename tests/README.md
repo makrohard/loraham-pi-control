@@ -82,7 +82,7 @@ Tests are grouped by SUBJECT into ~90 files. Notable consolidated homes:
 | `test_config.py` | layered config: bundle, containment, fail-closed, safety, stable, typed |
 | `test_webserver.py` | web console: apply, nginx, evidence, gui, service, serve, blockers, corrections, hardening, cli |
 | `test_stackweb.py` | per-stack web exposure: config, service, verify |
-| `test_source.py` | managed source: registry, fs, selection, check, transactions, linked, snapshot cache, race-safe destructive ops |
+| `test_source.py` | managed source: registry, fs, selection, check, transactions, snapshot cache, race-safe destructive ops |
 | `test_probes.py` | probes: process/net, unix sockets, systemd, source |
 | `test_runtime_fs.py` | anchored runtime FS, hardening, wrapper-anchored, path containment, containment |
 | `test_binary_channel.py` | binary channel: receipt, status, predicates, hmac+firewall |

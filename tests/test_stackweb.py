@@ -1845,7 +1845,7 @@ def test_bulk_route_requires_csrf_and_maps_the_phrase(tmp_path, monkeypatch):
     assert seen["confirm"] is True and seen["confirm_public"] is True
 
 
-# ---- 0.2.9: the Password section shows the stored password (safely) ----------------------------
+# ---- the Password section shows the stored password (safely) ----------------------------
 
 def _pw_file(tmp_path, text=b"s3cret-shown-here\n", mode=0o600):
     f = tmp_path / "state" / "graywolf" / "graywolf-admin.txt"
@@ -1857,7 +1857,7 @@ def _pw_file(tmp_path, text=b"s3cret-shown-here\n", mode=0o600):
 
 def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path):
     """The stack page shows the stored web-UI password itself (an authenticated page; product
-    decision 0.2.9) with a copy button, plus `nano <path>` to edit the file — never a `cat`."""
+    decision) with a copy button, plus `nano <path>` to edit the file — never a `cat`."""
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     assert svc.ui_credentials("kiss") == {}          # only declared where it applies

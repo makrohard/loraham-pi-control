@@ -57,7 +57,7 @@ def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
-                                       "", tuple(comps)))
+                                       tuple(comps)))
 
 
 def _seed_kiss(tmp_path):
@@ -182,43 +182,6 @@ def test_clean_allows_dirty_tree_but_still_requires_ownership(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "user.txt").exists()
 
 
-def test_clean_linked_source_unlinks_leaf_only(tmp_path):
-    import time as _t
-    external = tmp_path / "external"
-    external.mkdir()
-    (external / "keep").write_text("x")
-    (tmp_path / "src").mkdir(parents=True)
-    (tmp_path / "src" / "loraham-kiss-tnc").symlink_to(external)
-    # an UNREGISTERED symlink at a non-link source is refused even by Clean
-    res0 = _svc(tmp_path).clean("kiss", apply=True, purge=True)
-    assert not res0.ok
-    assert (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()
-    # a REGISTERED link record makes it LHPC's leaf -> removed (leaf only)
-    # a LEGACY (v1-style) link record without a recorded target stays NON-DESTRUCTIVE
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "link", ("loraham-kiss-tnc",)))
-    import json as _json
-    rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
-    legacy = _json.loads(rp.read_text()); legacy["version"] = 1; legacy.pop("link_target")
-    rp.write_text(_json.dumps(legacy))
-    res_legacy = _svc(tmp_path).clean("kiss", apply=True, purge=True)
-    assert not res_legacy.ok
-    assert any("non-destructive" in d for d in res_legacy.details)
-    assert (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()      # leaf retained
-    # a CURRENT record with the exact link target authorizes leaf-only removal
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "link", ("loraham-kiss-tnc",),
-                                       link_target=str(external)))
-    res = _svc(tmp_path).clean("kiss", apply=True, purge=True)
-    assert res.ok, res.details
-    assert not (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()
-    assert (external / "keep").exists()                               # target untouched
-
-
 def test_clean_component_target_refused(tmp_path):
     svc = _svc(tmp_path)
     res = svc.clean("loraham-kiss-tnc", apply=True, purge=True)
@@ -231,7 +194,7 @@ def test_clean_refuses_identity_drift(tmp_path):
     _seed_kiss(tmp_path)
     # re-register with an exact commit, then fake a DIFFERENT actual HEAD
     _own2 = source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                           "a" * 40, time.time(), "", "",
+                                           "a" * 40, time.time(), "",
                                            ("loraham-kiss-tnc", "loraham-kiss-serial"))
     assert source_registry.write_record(Paths(runtime_root=tmp_path), _own2)
     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc",

@@ -163,7 +163,7 @@ class Requirement:
     provisioned: bool = False   # provisioned INTO the runtime root by the build/setup step (a managed
     #                             tool like the in-root qemu / PlatformIO venv): still checked at START,
     #                             but EXCLUDED from the INSTALL gate — it does not exist until `lhpc build`.
-    module: str = ""            # an importable TOP-LEVEL python module (e.g. "tkinter", shipped by
+    module: str = ""            # an importable TOP-LEVEL python module (e.g. "gi", shipped by
     #                             python3-tk): probed in-process with importlib.util.find_spec, never a
     #                             subprocess — this is evaluated on every dependency/status GET.
     gui: bool = False           # a GUI-ONLY dependency (a GUI application's toolkit, e.g. GTK dev headers
@@ -353,6 +353,7 @@ class FileConfig:
     params: tuple[FileParam, ...] = ()
 
 
+
 @dataclass(frozen=True)
 class SourceSpec:
     """A local source checkout the controller tracks against a pinned commit."""
@@ -363,7 +364,6 @@ class SourceSpec:
     remote: str = ""
     branch: str = ""
     local_dir: str = ""          # dir name under the adopt search root (defaults to basename(path))
-    strategy: str = ""           # "" (use config default), "copy", or "link" (symlink in place)
     artifact: bool = False       # single-file/artifact-style source: EVERY selector resolves to
                                  # the same declared artifact (default-branch HEAD); no fake
                                  # pin/branch/tag semantics are invented for it

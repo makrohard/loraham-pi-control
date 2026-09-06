@@ -70,7 +70,7 @@ _DROPIN_DIRS = ("/usr/lib/systemd/user", "/etc/systemd/user")   # ~/.config/syst
 # a new writable path, redirect it into {root} with an environment variable instead — that is why
 # Sideband's Kivy state goes to KIVY_HOME={root}/state/sideband/kivy rather than ~/.kivy.
 #
-# tests/test_updater_units.py::test_unit_bytes_unchanged_since_0_1_6 enforces this.
+# tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render enforces this.
 
 _WEB = """\
 # LoRaHAM Pi Control web console — CANONICAL managed unit (generated; do not hand-edit).

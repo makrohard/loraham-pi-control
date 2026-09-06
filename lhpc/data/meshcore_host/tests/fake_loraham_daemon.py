@@ -1,6 +1,6 @@
 """Scriptable fake LoRaHAM daemon (framed data + config Unix sockets).
 
-Adapted from meshcore-pi/tests/fake_loraham_daemon.py (same wire protocol), extended
+A fake LoRaHAM daemon speaking the real wire protocol, extended
 with a configurable TX_RESULT delay and raw-frame injection for malformed-stream tests.
 """
 

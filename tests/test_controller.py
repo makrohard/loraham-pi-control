@@ -385,17 +385,19 @@ def test_status_view_identity_not_applicable_shape(tmp_path):
     assert v["status"] == "not_applicable" and v["ok"] is False
 
 
-def test_status_view_legacy_identity_without_status(tmp_path):
-    """A legacy cache (identity has no `status`) is mapped from `ok` (True->ok, False->unsafe)."""
+def test_status_view_identity_without_status_is_unchecked(tmp_path):
+    """The writer always records a `status`; an identity record without one renders unchecked."""
     paths = Paths(runtime_root=tmp_path)
     _cache_path(tmp_path).write_text(json.dumps(
-        {"local": {}, "upstream": {}, "identity": {"ok": True, "reason": "", "checked_at": 3}}))
-    assert selfupdate.status_view(paths)["identity"]["status"] == "ok"
+        {"schema_version": 1, "local": {}, "upstream": {},
+         "identity": {"ok": True, "reason": "", "checked_at": 3}}))
+    assert selfupdate.status_view(paths)["identity"] is None
 
 
-def test_legacy_envelope_reads_unchecked(tmp_path):
+def test_envelope_without_identity_reads_unchecked(tmp_path):
     paths = Paths(runtime_root=tmp_path)
-    _cache_path(tmp_path).write_text(json.dumps({"local": {}, "upstream": {}, "checked_at": 1}))
+    _cache_path(tmp_path).write_text(json.dumps(
+        {"schema_version": 1, "local": {}, "upstream": {}, "checked_at": 1}))
     assert selfupdate.status_view(paths)["identity"] is None      # no identity -> unchecked
 
 
@@ -592,10 +594,10 @@ def test_valid_current_envelope_still_parses(tmp_path):
     assert selfupdate.status_view(paths)["branch"] == "main"
 
 
-def test_legacy_envelope_without_schema_version_accepted(tmp_path):
+def test_envelope_without_schema_version_rejected(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     _cache_path(tmp_path).write_text(json.dumps({"local": {"head": "x"}, "upstream": {}, "checked_at": 1}))
-    assert selfupdate.read_cache(paths) != {}           # legacy is readable
+    assert selfupdate.read_cache(paths) == {}           # not a current envelope
     assert selfupdate.status_view(paths)["identity"] is None   # rendered as unchecked
 
 
@@ -662,7 +664,8 @@ def _seed_available_cache(tmp_path):
     from lhpc.core.paths import Paths
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     selfupdate.write_cache(Paths(runtime_root=tmp_path),
-                           {"local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
+                           {"schema_version": 1,
+                            "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa",
                                       "branch": "main"}, "upstream": {}, "checked_at": 1})
 
 

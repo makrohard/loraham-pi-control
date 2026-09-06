@@ -91,7 +91,7 @@ def test_default_build_timeout_is_hardware_realistic(tmp_path, monkeypatch):
 
 def _receipt(svc, comp) -> str:
     """The exact marker content is_built expects: the static text plus the consumed-source lines
-    (meshcore-node consumes the pinned repeater checkout via build_requires since 0.2.8)."""
+    (meshcore-node consumes the pinned repeater checkout via build_requires)."""
     from lhpc.core.lifecycle import BUILD_MARKER_TEXT
     return BUILD_MARKER_TEXT + svc._consumed_source_lines(comp)
 

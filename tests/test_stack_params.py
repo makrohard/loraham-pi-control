@@ -994,7 +994,7 @@ def test_empty_non_default_override_is_kept(tmp_path):
 
 
 
-# ---- 0.2.9 audit: an invalid SAVED launch value refuses before any mutation -------------------
+# ---- an invalid SAVED launch value refuses before any mutation -------------------
 
 def _spy_stops(monkeypatch):
     from lhpc.core.services import ControllerService as _CS

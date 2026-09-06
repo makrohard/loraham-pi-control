@@ -5,7 +5,7 @@ repo root is importable and `tests` resolves as a namespace package. CI runs the
 script, which does not — the editable install is no help either, since its finder exposes only
 `lhpc` (verified: `import tests` fails from any other directory). A module that reaches outside
 the import surface CI actually has therefore collects fine here and dies there — which is what
-happened to 0.1.8: green on both boxes, `ModuleNotFoundError: No module named 'tests'` in CI.
+happened once: green on both boxes, `ModuleNotFoundError: No module named 'tests'` in CI.
 """
 from __future__ import annotations
 

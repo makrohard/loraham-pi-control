@@ -1,11 +1,8 @@
 """The persistent MeshCore node identity.
 
 MeshCore's private key IS the node's on-air identity: every advert is signed with it and
-contacts recognise the node by the matching public key. The pinned `meshcore-pi` mints a
-fresh random key whenever its config carries no `privatekey`, so before this module the
-identity rotated on every config regeneration — live-found on a box that minted three
-different keys in one afternoon — and could only be pinned by hand-editing the upstream
-template, which any source refresh then discarded.
+contacts recognise the node by the matching public key, so it must survive every config
+regeneration and source refresh.
 
 LHPC therefore owns the key: it lives at `<runtime>/config/secrets/meshcore_identity.key`
 (0600, outside the managed source tree) and is injected into the generated TOML as a
@@ -31,7 +28,7 @@ from . import runtime_fs
 from .paths import PathContainmentError, Paths
 
 IDENTITY_FILENAME = "meshcore_identity.key"
-# The openHop repeater's OWN secrets (0.2.8): a second node identity — the repeater is a distinct
+# The openHop repeater's OWN secrets: a second node identity — the repeater is a distinct
 # MeshCore node — and the dashboard admin password LHPC mints (upstream would otherwise start with
 # a default and ask for a setup wizard). Same store, same 0600 rules, same minted-once contract.
 REPEATER_IDENTITY_FILENAME = "openhop_repeater_identity.key"
@@ -42,15 +39,11 @@ REPEATER_ADMIN_FILENAME = "openhop_repeater_admin.txt"
 SEED_LEN = 32
 MESHCORE_KEY_LEN = 64
 
-# Where a generated config carries the key: the openHop-backed host reads
-# `[identity] key`; the retired meshcore-pi generation wrote
-# `[device.companion] privatekey`, and configs written by it are still the
-# prime adoption candidates during migration.
-_KEY_LOCATIONS = ((("identity",), "key"),
-                  (("device", "companion"), "privatekey"))
+# Where a generated config carries the key: the openHop-backed host reads `[identity] key`.
+_KEY_LOCATIONS = ((("identity",), "key"),)
 
-# meshcore-pi reserves node IDs 0x00 and 0xff (the first public-key byte), and retries
-# generation until the key avoids them. We mint to the same rule.
+# openHop reserves node IDs 0x00 and 0xff (the first public-key byte) and retries generation
+# until the key avoids them. We mint to the same rule.
 _RESERVED_IDS = (0x00, 0xFF)
 
 
@@ -138,7 +131,7 @@ def _read_secret(paths: Paths, filename: str = IDENTITY_FILENAME, *, normalize=N
 
 
 def candidate_key(paths: Paths, path: Path) -> str:
-    """`[device.companion] privatekey` from one TOML candidate.
+    """`[identity] key` from one TOML candidate.
 
     Returns "" when the file is missing or simply carries no key (a commented-out template
     line reads as absent, which is correct — it is not a key). Raises when the file HAS a

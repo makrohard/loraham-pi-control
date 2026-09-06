@@ -2695,7 +2695,7 @@ def test_a_restricted_live_endpoint_still_reads_lan_exposed(tmp_path):
 
 
 def test_stack_start_gate_judges_the_saved_scope_only(tmp_path, monkeypatch):
-    # 0.2.9: a start runs exactly the saved configuration, so the gate's launch plan IS the saved
+    # a start runs exactly the saved configuration, so the gate's launch plan IS the saved
     # scope — a saved loopback kiss passes, a saved exposure with firewall changes pending refuses.
     svc = _svc(tmp_path)
     monkeypatch.setattr(svc, "_fw_integration_state", lambda: "present")

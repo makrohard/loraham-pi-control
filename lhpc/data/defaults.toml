@@ -13,11 +13,8 @@ port = 8770
 update_check_hours = 12
 
 [install]
-# How `lhpc install` obtains a component's source into the runtime root:
-#   "adopt" — copy the operator's locally verified checkout (default here, since
-#             the stacks are present and tested locally), then verify the pin.
-#   "clone" — git clone the component's remote and check out its pinned commit.
-source_strategy = "adopt"
+# `lhpc install` clones the component's remote and checks out its pinned commit; a verified
+# local checkout under `adopt_search_root` is used as a fallback when one is configured.
 # Where "adopt" looks for existing local checkouts (operator-overridable).
 # Local adoption fallback: DISABLED by default (containment — LHPC never reads
 # outside the runtime root). When set, the directory MUST lie inside the runtime

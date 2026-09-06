@@ -322,7 +322,7 @@ def test_reconcile_absent_installs_unowned_blocks_orphan_blocks(tmp_path):
     import shutil
     shutil.rmtree(dest)                                          # orphaned record
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "", "",
+        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "",
         ("loraham-kiss-tnc",)))
     action, why = svc._reconcile_group("src/loraham-kiss-tnc", comp)
     assert action == "blocked" and "orphaned" in why.lower()
@@ -335,7 +335,7 @@ def test_reconcile_valid_identity_updates_dirty_blocks(tmp_path):
     head = _make_repo(dest, remote=remote)
     paths = Paths(runtime_root=tmp_path)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", remote, "backfilled", head, time.time(), "", "",
+        "src/loraham-kiss-tnc", remote, "backfilled", head, time.time(), "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=paths)
     comp = next(c for s in svc.stacks() if s.id == "kiss"
@@ -453,14 +453,12 @@ def test_log_chunk_byte_cap(tmp_path):
 @pytest.mark.needs_session
 def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
     # A benign non-mutating adopt outcome (status "skipped") must NOT mark a stack FAIL.
-    # Linked stacks WITH declared build/test work are truthfully BLOCKED (their required
-    # work is refused by design); everything else is success — never a fail row.
     monkeypatch.setattr(
         Installer, "adopt_source",
         lambda self, comp, force=False, source="pinned", pinned_expected=None,
         locked=False:
         PlanAction("adopt", "", f"adopt {comp.id}", status="skipped",
-                   detail="linked dev tree — left as-is"))
+                   detail="left as-is"))
     monkeypatch.setattr(ControllerService, "missing_system_deps", lambda self, t: [])
     # A "happy" run means the SYSTEM prerequisites are met too. Without this the post-provision
     # readiness gate (which asks the REAL missing_requirements) blocks every row under a bare
@@ -479,44 +477,10 @@ def test_skipped_adopt_is_not_a_failure(tmp_path, monkeypatch):
     st = svc.auto_install_status()
     rows = {x["id"]: x for x in st["stacks"]}
     assert not any(x["status"] == "fail" for x in st["stacks"])  # skipped is never FAIL
-    # CONTAINMENT: the shipped manifest has NO linked components — meshcom/meshcore are
-    # ordinary managed-clone rows now (all-success run).
     for sid in ("meshcom", "meshcore", "daemon"):
         assert rows[sid]["status"] == "success"
-        assert "linked external tree" not in rows[sid]["detail"]
     assert st["state"] == "completed" and r.ok
 
-
-@pytest.mark.needs_session
-def test_linked_stack_with_work_still_blocks(tmp_path, monkeypatch):
-    # The linked-blocked semantics survive for SYNTHETIC linked components (legacy
-    # manifests / direct construction) even though the shipped manifest has none.
-    import dataclasses
-    _happy_ops(monkeypatch)
-    real_scope = ControllerService._auto_install_scope
-    def scope(self):
-        out = []
-        for st, w in real_scope(self):
-            if st.id == "meshcore":
-                linked = tuple(dataclasses.replace(
-                    c, source=dataclasses.replace(c.source, strategy="link"))
-                    for c in w.source)
-                w = dataclasses.replace(w, source=linked, build=linked,
-                                        test=tuple(c for c in linked if c.test_argv))
-            out.append((st, w))
-        return out
-    monkeypatch.setattr(ControllerService, "_auto_install_scope", scope)
-    svc = _svc(tmp_path)
-    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
-    st = svc.auto_install_status()
-    rows = {x["id"]: x for x in st["stacks"]}
-    assert rows["meshcore"]["status"] == "blocked"
-    assert "linked external tree" in rows["meshcore"]["detail"]
-    assert rows["meshcore"]["tests"]["detail"] == "skipped (linked source)"
-    assert st["state"] == "completed-with-failures" and not r.ok
-
-
-# --- M2 correction: truthful terminal status ----------------------------------------------
 
 def _stub_frozen(monkeypatch):
     """Deterministic plan-time freezing for FakeSystem tests (no real ls-remote)."""
@@ -1009,34 +973,6 @@ def test_recovery_reason_from_stale_lease_with_absent_marker(tmp_path):
     assert "acknowledge" in reason and "lease" in reason
     ack = svc.auto_install_ack()
     assert ack.ok and svc.auto_install_recovery_reason() == ""
-
-
-@pytest.mark.needs_session
-def test_linked_stack_without_declared_work_is_success(tmp_path, monkeypatch):
-    # A linked stack with NO declared build/test work stays SUCCESS when its auto-install work
-    # (source adoption) genuinely completed.
-    import dataclasses
-    _happy_ops(monkeypatch)
-    real_scope = ControllerService._auto_install_scope
-    def scope(self):
-        out = []
-        for st, w in real_scope(self):
-            if st.id in ("meshcom", "meshcore"):
-                strip = lambda c: (dataclasses.replace(  # noqa: E731
-                    c, build_steps=(), test_argv=(), build_cmd="", test_cmd="")
-                    if c.source and (c.source.strategy or "") == "link" else c)
-                w = dataclasses.replace(w, source=tuple(strip(c) for c in w.source),
-                                        build=tuple(strip(c) for c in w.build),
-                                        test=tuple(strip(c) for c in w.test))
-            out.append((st, w))
-        return out
-    monkeypatch.setattr(ControllerService, "_auto_install_scope", scope)
-    svc = _svc(tmp_path)
-    r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)
-    st = svc.auto_install_status()
-    rows = {x["id"]: x["status"] for x in st["stacks"]}
-    assert rows["meshcom"] == "success" and rows["meshcore"] == "success"
-    assert st["state"] == "completed" and r.ok
 
 
 @pytest.mark.needs_session
@@ -1544,9 +1480,9 @@ def test_residual_spawning_none_uses_ordinary_ack(tmp_path):
 
 # ---- frozen identity on link/copy/fallback adoption paths ----------------------------------
 
-def _frozen_env(tmp_path, strategy=""):
+def _frozen_env(tmp_path):
     """Real local checkout at commit A with a second commit B available; installer with
-    no remote (forces link/fallback paths)."""
+    no remote (forces the local-fallback path)."""
     local = tmp_path / "rt" / "local" / "app"
     sha_a = _make_repo(local)
     (local / "file.txt").write_text("v2\n")
@@ -1554,8 +1490,7 @@ def _frozen_env(tmp_path, strategy=""):
     _git(local, "commit", "-qm", "v2")
     sha_b = _git(local, "rev-parse", "HEAD")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app",
-                                       strategy=strategy, branch="master"))
+                     source=SourceSpec(path="src/app", local_dir="app", branch="master"))
     cfg = Config(values={"install": {"adopt_search_root": str(tmp_path / "rt" / "local")}})
     stacks = (Stack(id="s", name="s", main="app", components=(comp,)),)
     inst = _Inst(Paths(runtime_root=tmp_path / "rt"), stacks, cfg, RealSystem())
@@ -1563,34 +1498,15 @@ def _frozen_env(tmp_path, strategy=""):
     return inst, comp, local, sha_a, sha_b
 
 
-def test_linked_dev_wrong_frozen_commit_refused(tmp_path):
-    # Local checkout IS on the configured branch but at B; the frozen plan says A:
-    # branch membership must not substitute for commit equality — refused pre-activation.
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="link")
-    _git(local, "branch", "-m", "master")                        # ensure branch name
-    a = inst.adopt_source(comp, source="dev", pinned_expected=(sha_a, "frozen dev"))
-    assert a.status == "failed" and "does not satisfy" in a.detail
-    assert not (tmp_path / "rt" / "src" / "app").exists()        # nothing activated
-
-
-def test_linked_stable_wrong_frozen_commit_refused(tmp_path):
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="link")
-    _git(local, "tag", "v1.0")                                   # exact tag at B
-    object.__setattr__(comp.source, "pin_tag", "v1.0") if False else None
-    a = inst.adopt_source(comp, source="stable", pinned_expected=(sha_a, "frozen stable"))
-    assert a.status == "failed"                                  # tag name never suffices
-    assert not (tmp_path / "rt" / "src" / "app").exists()
-
-
 def test_copy_fallback_wrong_frozen_commit_refused(tmp_path):
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="")
+    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path)
     a = inst.adopt_source(comp, source="dev", pinned_expected=(sha_a, "frozen dev"))
     assert a.status == "failed"
     assert not (tmp_path / "rt" / "src" / "app").exists()
 
 
 def test_artifact_fallback_wrong_frozen_commit_refused(tmp_path):
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="")
+    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path)
     art = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                     source=SourceSpec(path="src/app", local_dir="app", artifact=True))
     stacks = (Stack(id="s", name="s", main="app", components=(art,)),)
@@ -1603,27 +1519,20 @@ def test_artifact_fallback_wrong_frozen_commit_refused(tmp_path):
     assert not (tmp_path / "rt" / "src" / "app").exists()
 
 
-def test_exact_frozen_link_and_copy_succeed_with_registry_commit(tmp_path):
-    # Exact-match frozen adoptions activate, and the registry records the frozen commit.
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="link")
+def test_exact_frozen_copy_succeeds_with_registry_commit(tmp_path):
+    # An exact-match frozen adoption activates, and the registry records the frozen commit.
+    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path)
     a = inst.adopt_source(comp, source="dev", pinned_expected=(sha_b, "frozen dev"))
     assert a.status == "done", a.detail
-    assert "frozen dev" in a.detail or "dev" in a.detail
     rec = source_registry.read_record(inst.paths, "src/app")
     assert rec is not None and rec.resolved_commit == sha_b      # actual frozen commit
-    # copy strategy, exact match, after removing the link cleanly
-    inst2, comp2, local2, s2a, s2b = _frozen_env(tmp_path / "c2", strategy="")
-    a2 = inst2.adopt_source(comp2, source="dev", pinned_expected=(s2b, "frozen dev"))
-    assert a2.status == "done", a2.detail
-    rec2 = source_registry.read_record(inst2.paths, "src/app")
-    assert rec2 is not None and rec2.resolved_commit == s2b
 
 
 def test_local_advance_after_plan_still_frozen(tmp_path):
     # The checkout moves AFTER the plan froze B: adopting with frozen B still succeeds
     # (tree at B) but a LATER adoption after the tree moved to C is refused — every
     # path stays constrained to the original frozen identity.
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="link")
+    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path)
     a = inst.adopt_source(comp, source="dev", pinned_expected=(sha_b, "frozen"))
     assert a.status == "done"
     (local / "file.txt").write_text("v3\n")
@@ -1725,7 +1634,7 @@ def test_artifact_resolution_failure_refuses_before_marker(tmp_path, monkeypatch
 def test_pinned_artifact_fallback_frozen_commit_enforced(tmp_path):
     # A pinned auto-install artifact link/copy fallback at the WRONG commit is refused; the exact
     # matching checkout succeeds and the registry records the verified frozen commit.
-    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path, strategy="")
+    inst, comp, local, sha_a, sha_b = _frozen_env(tmp_path)
     art = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                     source=SourceSpec(path="src/app", local_dir="app", artifact=True))
     stacks = (Stack(id="s", name="s", main="app", components=(art,)),)
@@ -2304,7 +2213,7 @@ def test_sourceless_row_keeps_an_inert_version_and_never_skews_the_summary(tmp_p
 def test_gui_optional_component_skips_without_skipping_voice(tmp_path, monkeypatch):
     """Voice on a headless box (no GTK headers): the OPTIONAL GTK component is dropped by the GUI
     preflight, but the stack itself INSTALLS — the terminal variant (loraham-voice-cli) makes Voice
-    a first-class headless stack, mirroring meshcore-nodegui's optional-GUI pattern."""
+    a first-class headless stack, mirroring the optional-GUI pattern."""
     _happy_ops(monkeypatch)
     svc = _svc(tmp_path)                              # FakeSystem: no GTK headers
     r = svc.auto_install(apply=True, tests=False, emit=lambda s: None)

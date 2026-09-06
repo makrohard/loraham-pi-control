@@ -62,7 +62,7 @@ def _own(tmp_path, rel, comps=("x",)):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
-                                       "", tuple(comps)))
+                                       tuple(comps)))
 
 
 @pytest.mark.contract
@@ -164,7 +164,7 @@ def test_uninstall_refuses_identity_drift(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                       "a" * 40, _t.time(), "", "", ("loraham-kiss-tnc",)))
+                                       "a" * 40, _t.time(), "", ("loraham-kiss-tnc",)))
     svc = _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc",
                          _KISS_REMOTE, head="b" * 40)        # HEAD drifted a… -> b…
     res = svc.uninstall("kiss", apply=True)
@@ -172,49 +172,6 @@ def test_uninstall_refuses_identity_drift(tmp_path):
     assert any("identity drift" in d for d in res.details)
     assert (tmp_path / "src" / "loraham-kiss-tnc").exists()   # tree unchanged
 
-
-def test_uninstall_linked_source_unlinks_leaf_only(tmp_path):
-    # A REGISTERED linked source (symlink into an external tree): uninstall drops only the
-    # leaf; the external target is never touched. An UNREGISTERED symlink at a non-link
-    # source is refused (not an LHPC adoption).
-    import time as _t
-    external = tmp_path / "external-tree"
-    external.mkdir()
-    (external / "keep.txt").write_text("external")
-    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "src" / "loraham-kiss-tnc").symlink_to(external)
-    # unregistered symlink at a non-link source -> refused, leaf + target untouched
-    svc = _svc(tmp_path)
-    res = svc.uninstall("kiss", apply=True)
-    assert not res.ok
-    assert (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()
-    # a REGISTERED link record makes it LHPC's leaf -> removed (leaf only)
-    # a LEGACY (v1-style) link record without a recorded target stays NON-DESTRUCTIVE
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "link", ("loraham-kiss-tnc",)))
-    import json as _json
-    rp = source_registry.record_path(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
-    legacy = _json.loads(rp.read_text()); legacy["version"] = 1; legacy.pop("link_target")
-    rp.write_text(_json.dumps(legacy))
-    res_legacy = _svc(tmp_path).uninstall("kiss", apply=True)
-    assert not res_legacy.ok
-    assert any("non-destructive" in d for d in res_legacy.details)
-    assert (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()      # leaf retained
-    # a CURRENT record with the exact link target authorizes leaf-only removal
-    assert source_registry.write_record(
-        Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "link", ("loraham-kiss-tnc",),
-                                       link_target=str(external)))
-    res2 = _svc(tmp_path).uninstall("kiss", apply=True)
-    assert res2.ok, res2.details
-    assert not (tmp_path / "src" / "loraham-kiss-tnc").is_symlink()
-    assert (external / "keep.txt").exists()                     # external target untouched
-
-
-# --- M2: update requires the affected stacks stopped ----------------------------------------
 
 def test_update_refuses_while_target_running(tmp_path):
     _mksrc(tmp_path, "LoRaHAM_Daemon")
@@ -270,7 +227,7 @@ def test_stale_record_never_authorizes_a_future_tree(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", _KISS_REMOTE, "pinned",
-                                       "a" * 40, _t.time(), "", "", ("loraham-kiss-tnc",)))
+                                       "a" * 40, _t.time(), "", ("loraham-kiss-tnc",)))
     _mksrc(tmp_path, "loraham-kiss-tnc")                                # a NEW unrelated tree
     (tmp_path / "src" / "loraham-kiss-tnc" / "new.txt").write_text("x")
     svc = _svc(tmp_path)                                                # git queries unanswered
@@ -291,7 +248,7 @@ def _seed_shared(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+                                       "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     return dest
 
 
@@ -387,7 +344,7 @@ def test_adopt_over_shrunk_record_restores_manifest_membership(tmp_path):
     comp = next(c for s in svc.stacks() if s.id == "kiss"
                 for c in s.components if c.id == "loraham-kiss-tnc")
     inst = Installer(svc._paths, svc.stacks(), Config(values={}), svc._system)
-    meta = inst._txn_meta(comp, comp.source, "pinned", "", str(tmp_path))
+    meta = inst._txn_meta(comp, comp.source, "pinned", str(tmp_path))
     assert set(meta["components"]) >= {"loraham-kiss-tnc", "loraham-kiss-serial"}  # merged back
 
 

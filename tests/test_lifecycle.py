@@ -218,14 +218,14 @@ def test_start_writes_a_band_suffixed_log_only_when_banded(tmp_path):
     stack = Stack(id="s", name="s", components=(comp,))
     banded = life.start(stack, comp, band="868")
     assert not banded.ok and banded.log_path.endswith("logs/start-c-868.log")
-    plain = life.start(stack, comp)                            # band-agnostic -> legacy name
+    plain = life.start(stack, comp)                            # band-agnostic -> plain name
     assert not plain.ok and plain.log_path.endswith("logs/start-c.log")
 
 
-def test_start_log_resolves_exact_band_then_newest_then_legacy(tmp_path):
+def test_start_log_resolves_exact_band_then_newest_then_plain(tmp_path):
     # The daemon runs one instance PER BAND at once, so each band gets its own captured log.
     # A band-less reader (`lhpc logs`, the GUI "logs" link) has no band to offer and must still
-    # find something — the newest band's log — before falling back to the pre-rename name.
+    # find something — the newest band's log — before falling back to the band-agnostic name.
     import os
     life = _life(FakeSystem().system, tmp_path)
     comp = _start_log_comp()

@@ -127,7 +127,7 @@ def test_superseded_receipt_is_not_on_binary_channel(tmp_path, monkeypatch):
     source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
         selector="pinned", resolved_commit="c" * 40, adopted_at=1.0, txn_id="txn-x",
-        strategy="adopt", components=("loraham-daemon",)))
+        components=("loraham-daemon",)))
     assert svc.binary_receipt_state("daemon")[0] == "superseded"
     assert svc.on_binary_channel("daemon") is False
     assert svc.binary_covers("loraham-daemon") is False
@@ -426,8 +426,7 @@ def _receipt(tmp_path, **over):
 def _write_registry(tmp_path, source_rel, txn_id):
     rec = source_registry.RegistryRecord(
         source_rel=source_rel, remote="https://example.invalid/demo.git", selector="pinned",
-        resolved_commit="d" * 40, adopted_at=1000.0, txn_id=txn_id, strategy="adopt",
-        components=("demo-main",))
+        resolved_commit="d" * 40, adopted_at=1000.0, txn_id=txn_id, components=("demo-main",))
     assert source_registry.write_record(_paths(tmp_path), rec)
 
 
@@ -683,7 +682,7 @@ def test_superseded_receipt_falls_back_to_git_probe(tmp_path, monkeypatch):
     source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
         selector="pinned", resolved_commit="c" * 40, adopted_at=1.0, txn_id="txn-1",
-        strategy="adopt", components=("loraham-daemon",)))
+        components=("loraham-daemon",)))
     svc._snapshot_state.cache = None
     # receipt superseded -> the ordinary git probe answers again
     assert _cs(svc, "daemon", "loraham-daemon").source_state is not SourceState.BINARY

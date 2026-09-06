@@ -513,7 +513,7 @@ class WebserverOpsMixin:
         return path, True, first, ""
 
     def ui_credentials(self, stack_id: str, component_id: str = "") -> dict:
-        """A stack's SELF-GENERATED web-UI login, ready to render on the stack page (0.2.9:
+        """A stack's SELF-GENERATED web-UI login, ready to render on the stack page (
         the Password section SHOWS the stored password — the page is authenticated, and the
         value never enters a marker, a log, a flash, an ActionResult or a JSON API).
 
@@ -1389,19 +1389,6 @@ class WebserverOpsMixin:
         from . import pki as _pki
         removed = _pki.discard_export(self._paths, label)
         return ActionResult(True, f"export {'discarded' if removed else 'already absent'} for '{label}'")
-
-    def webserver_applied_access_mode(self) -> str:
-        """The console access mode nginx last ACTIVATED — '' when unknown. The FALLBACK for
-        the /stacks fetch-command gate when the monitor itself failed for unrelated reasons
-        (the primary source is `applied_access_mode` in the monitor view); fail-closed either
-        way. REVIEW-FOUND origin: gating on `desired` treated an unauthenticated remote client
-        as trusted the moment the operator SAVED a cert policy, before Apply enforced it."""
-        from . import webserver as _ws
-        try:
-            return str((_ws.read_applied(self._paths).get("console") or {})
-                       .get("access_mode") or "")
-        except (OSError, PathContainmentError):
-            return ""
 
     def webserver_server_ca_bytes(self) -> bytes | None:
         """The server TLS CA certificate, or None. PUBLIC material (no key) — the browser

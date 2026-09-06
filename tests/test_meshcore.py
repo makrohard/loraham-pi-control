@@ -27,7 +27,7 @@ LAT, LON = "51.4779", "-0.0015"
 # node into a test: it is that node's on-air identity, and a test file is public.
 KEY = "3459f3299360660522b94692c0ab9c23ee24eca9b849175327265d67fe04b93f"
 
-# update_toml contract tests still exercise the historical meshcore-pi template
+# update_toml contract tests exercise a small TOML template with a commented example key
 # shape; the LIVE base is the lhpc-shipped asset (lhpc/data/bases/meshcore.toml).
 TEMPLATE = """interfaces = ["loraham868"]
 
@@ -49,12 +49,12 @@ def _svc(tmp_path):
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
-def _legacy_config(tmp_path, key: str) -> None:
-    """A meshcore-pi-era generated config still holding the identity — the
-    migration case the adoption candidates must keep covering."""
-    gen = tmp_path / "config" / "files" / "meshcore-pi.toml"
+def _generated_with_key(tmp_path, key: str) -> None:
+    """The generated config holding the identity at its `[identity] key` location — the
+    adoption case the candidates must keep covering (a secret file not yet minted)."""
+    gen = tmp_path / "config" / "files" / "meshcore.toml"
     gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text(f'[device.companion]\nprivatekey = "{key}"\n')
+    gen.write_text(f'[identity]\nkey = "{key}"\n')
 
 
 def _generated(tmp_path) -> str:
@@ -82,7 +82,7 @@ def _coords(text: str) -> list:
 
 @pytest.mark.contract
 def test_identity_is_stable_across_regeneration(tmp_path):
-    # The bug: meshcore-pi mints a fresh key when its config has none, so every
+    # The bug guarded against: a host that mints a fresh key when its config has none, so every
     # regeneration silently changed the node's public key.
     svc = _svc(tmp_path)
     svc.write_config_files("meshcore")
@@ -106,24 +106,13 @@ def test_identity_survives_losing_the_generated_config_and_the_source(tmp_path):
 
 @pytest.mark.contract
 def test_existing_key_is_adopted_not_rotated(tmp_path):
-    # An install upgrading from the meshcore-pi era may hold its identity only in that
-    # generation's config file. Migration must keep that node on the air, not re-mint.
+    # A generated config that already holds the identity (no secret file yet) must keep
+    # that node on the air: the key is adopted into the secret, never re-minted.
     svc = _svc(tmp_path)
-    _legacy_config(tmp_path, KEY)
+    _generated_with_key(tmp_path, KEY)
     svc.write_config_files("meshcore")
     assert _key_in(_generated(tmp_path)) == KEY
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
-
-
-@pytest.mark.contract
-def test_adopt_prefers_the_generated_config_over_the_legacy_file(tmp_path):
-    other = "11" * 32
-    svc = _svc(tmp_path)
-    _legacy_config(tmp_path, other)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
-    gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text(f'[identity]\nkey = "{KEY}"\n')
-    assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == KEY
 
 
 @pytest.mark.contract
@@ -138,11 +127,12 @@ def test_a_commented_template_key_reads_as_absent(tmp_path):
 @pytest.mark.safety("meshcore-identity")
 def test_a_candidate_without_a_key_falls_through_to_the_next(tmp_path):
     svc = _svc(tmp_path)
-    gen = tmp_path / "config" / "files" / "meshcore.toml"
-    gen.parent.mkdir(parents=True, exist_ok=True)
-    gen.write_text('[companion]\nname = "x"\n')                # no key at all
-    _legacy_config(tmp_path, KEY)                               # legacy file has it
-    assert mi.adopt_identity(svc._paths, svc.meshcore_identity_candidates()) == KEY
+    first = tmp_path / "config" / "files" / "first.toml"
+    second = tmp_path / "config" / "files" / "second.toml"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    first.write_text('[companion]\nname = "x"\n')                 # no key at all
+    second.write_text(f'[identity]\nkey = "{KEY}"\n')            # the next candidate has it
+    assert mi.adopt_identity(svc._paths, (first, second)) == KEY
 
 
 @pytest.mark.safety("meshcore-identity")
@@ -150,7 +140,7 @@ def test_an_invalid_candidate_key_blocks_instead_of_minting(tmp_path):
     # The dangerous confusion: treating "present but malformed" as "absent" would mint a NEW
     # identity over the one the operator was trying to keep.
     svc = _svc(tmp_path)
-    _legacy_config(tmp_path, "deadbeef")
+    _generated_with_key(tmp_path, "deadbeef")
     with pytest.raises(mi.MeshCoreIdentityError):
         mi.ensure_identity(svc._paths, svc.meshcore_identity_candidates())
     assert not mi.secret_path(svc._paths).exists()
@@ -287,7 +277,7 @@ def test_clean_purge_adopts_the_key_before_removing_the_source(tmp_path):
 @pytest.mark.safety("meshcore-identity")
 def test_uninstall_adopts_the_key_before_removing_the_source(tmp_path):
     svc = _svc(tmp_path)
-    _legacy_config(tmp_path, KEY)
+    _generated_with_key(tmp_path, KEY)
     svc.uninstall("meshcore", apply=True)
     assert mi.secret_path(svc._paths).read_text().strip() == KEY
 
@@ -541,7 +531,7 @@ def _snapshot(svc, states: dict):
 
 @pytest.mark.contract
 def test_an_absent_optional_component_does_not_sink_the_stack_badge(tmp_path):
-    # Live find: the whole stack rolled up "not-installed" although meshcore-pi was
+    # Live find: the whole stack rolled up "not-installed" although the node was
     # installed and merely stopped — only the never-cloned optional GUI was missing.
     svc = _svc(tmp_path)
     snap, ss = _snapshot(svc, {"meshcore-node": RunState.STOPPED,
@@ -607,28 +597,3 @@ def test_meshcore_daemon_defaults_match_what_the_pin_applies():
     from lhpc.core import daemon_params
     assert daemon_params.default_value("meshcore", "868", "POWER") == "14"
     assert daemon_params.default_value("meshcore", "868", "PREAMBLE") == "16"
-
-
-@pytest.mark.contract
-def test_a_linked_source_does_not_block_maintenance_on_the_base_template(tmp_path, monkeypatch):
-    """AUDIT-FOUND: adopting meshcore-pi BY LINK made install/update/uninstall/clean refuse.
-
-    `_resolve_config_dest` only applies its linked-readonly guard when `not for_base`, so the
-    BASE template still resolved to a path inside the symlinked checkout. Every runtime read
-    is descriptor-anchored (O_NOFOLLOW per component), so reading it raised
-    PathContainmentError -> MeshCoreIdentityError -> the identity guard refused the operation.
-    Uninstall and clean were refused too, so the operator could not even back out.
-
-    The generated config stays scannable; only the linked base is skipped.
-    """
-    from lhpc.core.lifecycle import Lifecycle
-    svc = _svc(tmp_path)
-    monkeypatch.setattr(Lifecycle, "is_linked_source", lambda self, c: True)
-
-    cands = svc.meshcore_identity_candidates()
-    # No candidate may point into the linked source tree...
-    assert not [p for p in cands if "src" in p.parts], cands
-    # ...but the generated {runtime} config stays scannable, so a normal upgrade still adopts.
-    assert [p.name for p in cands] == ["meshcore.toml"]
-    # With nothing generated yet, adoption is a clean "no key here", not a refusal.
-    assert mi.adopt_identity(svc._paths, cands) == ""

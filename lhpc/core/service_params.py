@@ -163,7 +163,7 @@ class ParamsConfigMixin:
     def _has_daemon_params(self, target: str) -> bool:
         """True when `target` gets a daemon-param panel: a daemon-client stack/component, the daemon
         component, or the daemon stack. Owner-stack scoped, so a direct daemon-backed COMPONENT
-        target (e.g. meshcom-qemu, meshcore-pi) resolves through its owning stack."""
+        target (e.g. meshcom-qemu, meshcore-node) resolves through its owning stack."""
         from . import daemon_params
         return daemon_params.is_client(self._owner_stack_id(target)) or self._is_daemon_target(target)
 
@@ -723,7 +723,7 @@ class ParamsConfigMixin:
 
     def gui_skipped_stack(self, stack) -> bool:
         """True when a MANDATORY component of the stack is GUI-unavailable — the whole stack is then
-        recorded skipped. An OPTIONAL one (meshcore-nodegui) only removes itself: MeshCore stays
+        recorded skipped. An OPTIONAL one (the voice GTK app) only removes itself: the stack stays
         fully usable headless through its CLI."""
         skip = set(self.gui_unavailable_components(stack))
         return any(c.id in skip and not (c.optional or c.gui_optional)
@@ -1349,7 +1349,7 @@ class ParamsConfigMixin:
                             next_commands=[f"lhpc stack start {target}"])
 
     def operator_callsign_correction(self) -> str:
-        """A VALIDATED base-callsign suggestion derived from a legacy stored global, or ""
+        """A VALIDATED base-callsign suggestion derived from a non-base stored global, or ""
         when no valid base can be derived (the card then shows a generic example instead —
         a printed remedy must never itself fail validation)."""
         from . import validators
@@ -1362,7 +1362,7 @@ class ParamsConfigMixin:
 
     def operator_callsign_legacy(self) -> bool:
         """True when a STORED global operator callsign is not a valid BASE callsign (a
-        pre-upgrade value carrying an SSID/suffix): it no longer inherits, and the global
+        hand-edited value carrying an SSID/suffix): it does not inherit, and the global
         card shows the correction. Read-only."""
         from . import validators
         call = str(self.config().operator.callsign or "").strip()
@@ -1529,7 +1529,6 @@ class ParamsConfigMixin:
         if fc is None:
             return ()
         out = []
-        linked = bool(comp.source) and self._lifecycle().is_linked_source(comp)
         for raw, is_base in ((fc.path, False), (fc.base, True)):
             if not raw:
                 continue
@@ -1538,32 +1537,12 @@ class ParamsConfigMixin:
             # (correctly) refuse containment — which must not block adoption.
             if is_base and raw.startswith("{asset}"):
                 continue
-            # A LINKED source is a symlink into someone's checkout, and every runtime read is
-            # descriptor-anchored (O_NOFOLLOW per component), so reading through it raises
-            # PathContainmentError rather than returning "no key". `_resolve_config_dest`
-            # only applies its linked-readonly guard when `not for_base`, so the BASE
-            # candidate must be skipped here — otherwise adopt_identity turns that read
-            # error into a refusal and blocks install/update/uninstall/clean outright,
-            # leaving an operator with a linked meshcore-pi no way out. The generated config
-            # (the first candidate) still covers the normal upgrade.
-            if is_base and linked:
-                continue
             try:
                 dest = self._resolve_config_dest(comp, raw, for_base=is_base)
             except (OSError, PathContainmentError, ValueError):
                 continue
             if dest.status == "ok" and dest.path is not None:
                 out.append(dest.path)
-        # LEGACY: an install upgrading from the meshcore-pi era may hold its identity
-        # only in that generation's config file, which the current manifest no longer
-        # names. candidate_key() knows its `[device.companion] privatekey` location, so
-        # keep the file as a last candidate for the rescue path.
-        try:
-            legacy = self._paths.under("config", "files", "meshcore-pi.toml")
-        except (OSError, PathContainmentError, ValueError):
-            return tuple(out)
-        if legacy.exists() and legacy not in out:
-            out.append(legacy)
         return tuple(out)
 
     def meshcore_position(self, target: str) -> tuple[dict | None, str]:
@@ -2574,7 +2553,7 @@ class ParamsConfigMixin:
                            position: dict | None = None) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
-        linked-readonly / no-base / failed) so an auto-start can block on a generation
+        no-base / failed) so an auto-start can block on a generation
         failure rather than silently launching with stale or absent configuration.
 
         `overrides` ({param_name: value}, this launch only, never persisted) is the inherited
@@ -2722,9 +2701,7 @@ class ParamsConfigMixin:
             if fc.fmt in ("toml-update", "yaml-update", "ini-update"):
                 base = self._resolve_config_dest(c, fc.base, for_base=True)
                 if base.status != "ok":
-                    written.append(ConfigWrite(c.id, base.detail_path,
-                                   "failed" if base.status != "linked-readonly" else base.status,
-                                   base.detail))
+                    written.append(ConfigWrite(c.id, base.detail_path, "failed", base.detail))
                     continue
                 try:
                     base_text = self._read_contained(c, base)
@@ -2761,9 +2738,9 @@ class ParamsConfigMixin:
         """Resolve a FileConfig path/base into one of four policies:
           * asset    — `{asset}/...`: a template SHIPPED as lhpc package data (bases only);
           * runtime  — `{runtime}/...` only, resolved through `Paths.under` (containment);
-          * source   — a RELATIVE path under the managed source root (rejects linked);
+          * source   — a RELATIVE path under the managed source root;
           * (reject) — an arbitrary absolute path, unknown placeholder, or traversal.
-        Returns a small result with `.status` ("ok"/"failed"/"linked-readonly"),
+        Returns a small result with `.status` ("ok"/"failed"),
         `.policy`, `.path`, `.detail`, `.detail_path`."""
         from types import SimpleNamespace
         if raw == "{asset}" or raw.startswith("{asset}/"):
@@ -2798,10 +2775,6 @@ class ParamsConfigMixin:
         if not c.source:
             return SimpleNamespace(status="failed", policy="reject", path=None, detail_path=raw,
                                    detail="a relative config path requires a managed source")
-        if not for_base and self._lifecycle().is_linked_source(c):
-            return SimpleNamespace(status="linked-readonly", policy="source", path=None,
-                                   detail="linked source is read-only — generate config in your checkout",
-                                   detail_path=raw)
         src_dir = self._paths.resolve_source(c.source.path)
         return SimpleNamespace(status="ok", policy="source", path=src_dir / raw,
                                detail="", detail_path=raw)
@@ -2917,18 +2890,14 @@ class ParamsConfigMixin:
                             next_commands=[f"lhpc stack start {target}"])
 
     def _daemon_feed_source(self, band: str) -> Path | None:
-        """The SINGLE feed source log for a band, or None. EXACTLY ONE file, never a concatenation:
-        the per-band log `logs/start-<daemon>-<band>.log` when it exists, else the legacy band-less
-        `start-<daemon>.log` (a pre-upgrade daemon not restarted since the rename). Reading both would
-        double-count, because the band-agnostic tokens ([TX], [RX], TXOK, ...) match either band."""
-        for name in (f"start-{self.DAEMON_ID}-{band}.log", f"start-{self.DAEMON_ID}.log"):
-            try:
-                p = self._paths.under("logs", name)
-            except PathContainmentError:
-                continue
-            if p.is_file():
-                return p
-        return None
+        """The SINGLE feed source log for a band, or None: the per-band log
+        `logs/start-<daemon>-<band>.log` (the daemon runs one instance per band). Never a
+        concatenation — the band-agnostic tokens ([TX], [RX], TXOK, ...) match either band."""
+        try:
+            p = self._paths.under("logs", f"start-{self.DAEMON_ID}-{band}.log")
+        except PathContainmentError:
+            return None
+        return p if p.is_file() else None
 
     def _daemon_feed_floor_path(self, band: str) -> Path:
         return self._paths.under("state", f"daemon-feed-floor-{band}")

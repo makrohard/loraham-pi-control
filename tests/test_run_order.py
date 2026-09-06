@@ -909,7 +909,7 @@ def _band_svc(tmp_path, cmdlines, socks, bands):
                             paths=Paths(runtime_root=tmp_path))
     _cfg.save_hardware_setup(svc._paths, "loraham")
     svc._invalidate_config()
-    set_call(svc)                    # the plan enforces the saved identity (0.2.9)
+    set_call(svc)                    # the plan enforces the saved identity
     for sid, b in bands.items():
         svc._set_running_band(sid, b)
     return svc
@@ -990,7 +990,7 @@ def test_restart_is_refused_by_the_dependency_band_rule_before_its_stop(tmp_path
     assert svc.running_band("graywolf", "") == "433"
 
 
-# ---- 0.2.9 audit: restart cascade is ONE contract (plan, lock bundle, stop leg) -------------------
+# ---- restart cascade is ONE contract (plan, lock bundle, stop leg) -------------------
 
 def _kiss_with_graywolf_running(tmp_path, monkeypatch):
     """A NON-daemon provider (kiss) with a live dependent (graywolf) on the 433 chain. graywolf's

@@ -72,9 +72,9 @@ shortcut:
 
 - **Native stacks** (kiss=C, graywolf=binary, meshtastic=`meshtasticd`, meshcom=qemu, chat,
   voice) — a browser can't execute machine code, only WebAssembly. **Simulated.**
-- **Python stacks** (Reticulum/rns, lxmd, nomadnet, sideband, meshcore-pi) — verified they
+- **Python stacks** (Reticulum/rns, lxmd, nomadnet, sideband, the MeshCore host) — verified they
   can't run either: `RNS.Reticulum()` needs OS network-interface enumeration + threads
-  (crashes in the sandbox), meshcore-pi's `aioble` (Bluetooth) has no Pyodide wheel, and the
+  (crashes in the sandbox), the MeshCore host's `aioble` (Bluetooth) has no Pyodide wheel, and the
   GUI/TUI ones (nomadnet, sideband) need a terminal/display. **Simulated.**
 - **daemon** — the one piece that's **simulated but LIVE**: an in-memory model
   (`lhpc_demo/daemon_sim.py`) feeds the console's real radio panels with time-varying

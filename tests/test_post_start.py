@@ -230,7 +230,7 @@ def test_optional_post_start_success_is_scheduled(tmp_path):
 
 @pytest.mark.needs_session
 def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatch):
-    # Start runs exactly the SAVED configuration (0.2.9: there are no per-launch values): the
+    # Start runs exactly the SAVED configuration (there are no per-launch values): the
     # value saved in Settings is what the launch and the post-start push carry.
     svc = _kiss_svc(tmp_path)
     svc.save_config("kiss", {"tx_freq": "434.500"})
@@ -1014,7 +1014,8 @@ def _sidecar_svc(tmp_path, steps, alive_pid=None):
     rec = {"launch_id": "meshcom-qemu__x__post-99999999", "stack": "meshcom",
            "component": "meshcom-qemu", "band": "", "pid": alive_pid or 99999999,
            "role": "post", "launched_at": 1000, "result_path": str(result),
-           "log_path": str(tmp_path / "logs" / "post-u1.log")}
+           "log_path": str(tmp_path / "logs" / "post-u1.log"),
+           "version": 1, "requested_target": "", "start_scope": "", "boot_id": ""}
     if alive_pid:
         # _original_ceased treats a starttime mismatch as confirmed pid reuse -> record the
         # LIVE starttime so the runner reads as still alive (retry window active).

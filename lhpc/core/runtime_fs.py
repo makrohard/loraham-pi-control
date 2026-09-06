@@ -17,7 +17,7 @@ Guarantees (Linux):
   * deletions are containment- and no-follow-checked, relative to the held parent fd.
 
 This is for RUNTIME STATE only. Source-tree reads/writes are a separate policy and must
-not be routed here (a linked external source is never a runtime-state target).
+not be routed here.
 """
 
 from __future__ import annotations

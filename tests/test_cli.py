@@ -484,7 +484,7 @@ def test_config_ambiguous_param_refuses_without_mutating():
 @pytest.mark.contract
 def test_stack_restart_is_a_command(tmp_path, monkeypatch, capsys):
     _rt(monkeypatch, tmp_path, capsys)
-    # The PLAN enforces the saved identity (0.2.9): without a callsign the restart is refused
+    # The PLAN enforces the saved identity: without a callsign the restart is refused
     # before anything runs, with the `lhpc config` remedy — the same truth the web shows.
     assert main(["stack", "restart", "meshcom"]) == 1
     out = capsys.readouterr().out

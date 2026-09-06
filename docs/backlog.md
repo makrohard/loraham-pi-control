@@ -23,7 +23,7 @@ What exists today is *detection*, not repair: verification runs out of process
 against the new checkout, and a failure makes the update visibly partial instead
 of silently disabling boot restore.
 
-**Holding the line:** `tests/test_updater_units.py::test_unit_bytes_unchanged_since_0_1_6`
+**Holding the line:** `tests/test_updater_units.py::test_unit_bytes_are_the_frozen_render`
 pins the rendered bytes of all seven units.
 
 **Workaround for new writable paths:** redirect the state into the runtime root

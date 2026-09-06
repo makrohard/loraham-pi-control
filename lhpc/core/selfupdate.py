@@ -383,17 +383,16 @@ def _valid_section(sec, fields) -> bool:
 
 
 def _valid_cache(data) -> bool:
-    """Schema-validate a decoded cache envelope: the root must be a dict; a present
-    `schema_version` must be exactly the current one (an unknown/future version is rejected;
-    a LEGACY envelope with none is accepted and renders as unchecked); a present `checked_at`
-    must be an int (never a bool); and every consumed `local`/`upstream`/`identity` field
-    must match its type. Unknown extra fields are ignored, not rendered."""
+    """Schema-validate a decoded cache envelope: the root must be a dict; `schema_version`
+    must be present and exactly the current one (an absent, unknown or future version is
+    rejected and renders as unchecked); a present `checked_at` must be an int (never a bool);
+    and every consumed `local`/`upstream`/`identity` field must match its type. Unknown extra
+    fields are ignored, not rendered."""
     if not isinstance(data, dict):
         return False                                      # scalar / list / wrong root shape
-    if "schema_version" in data:                          # absent = legacy envelope (allowed)
-        sv = data["schema_version"]
-        if not _is_int(sv) or sv != CACHE_SCHEMA_VERSION:
-            return False                                  # unknown/future version, or "1"/true
+    sv = data.get("schema_version")
+    if not _is_int(sv) or sv != CACHE_SCHEMA_VERSION:
+        return False                                      # absent/unknown/future, or "1"/true
     if "checked_at" in data and not _is_int(data["checked_at"]):
         return False
     return (_valid_section(data.get("local"), _LOCAL_FIELDS)
@@ -702,8 +701,8 @@ def status_view(paths: Paths) -> dict:
     up = up if isinstance(up, dict) else {}
     # CACHED-ONLY: `is_git`/`available` come from the cached `local.is_git` written by the last
     # refresh (local_state) — NEVER a live `repo_root()`/`.git` probe here, so every GET stays
-    # read-only. Absent (no cache yet, or a legacy cache without the field) -> unavailable/unknown
-    # until the startup or explicit "check for updates" refresh populates it. `version` is the
+    # read-only. Absent (no cache yet) -> unavailable/unknown until the startup or explicit
+    # "check for updates" refresh populates it. `version` is the
     # in-process running version (not a source-tree probe), fine for display.
     is_git = bool(local.get("is_git") is True)
     version = __version__
@@ -748,9 +747,9 @@ def status_view(paths: Paths) -> dict:
 def _identity_view(raw):
     """Bounded, shape-safe controller-identity verdict from the cached envelope: a dict
     `{checked_at:int, ok:bool, status:str, reason:str}` or None ('unchecked/unknown').
-    `status` is one of `ok` / `unsafe` / `not_applicable` (defaulted from `ok` for a legacy
-    two-state cache), so presentation can render the NEUTRAL not-self-hosted case distinctly
-    from a genuine security failure."""
+    `status` is one of `ok` / `unsafe` / `not_applicable` (anything else renders as
+    'unchecked'), so presentation can render the NEUTRAL not-self-hosted case distinctly from a
+    genuine security failure."""
     if not isinstance(raw, dict):
         return None
     ok = raw.get("ok")
@@ -759,7 +758,7 @@ def _identity_view(raw):
         return None
     status = raw.get("status")
     if status not in ("ok", "unsafe", "not_applicable"):
-        status = "ok" if ok else "unsafe"                 # legacy cache without a status field
+        return None
     return {"ok": ok, "status": status,
             "reason": str(reason)[:200] if isinstance(reason, str) else "",
             "checked_at": int(raw["checked_at"]) if isinstance(raw.get("checked_at"), int) else 0}

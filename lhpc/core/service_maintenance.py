@@ -400,7 +400,7 @@ class MaintenanceOpsMixin:
             composition (never re-computed while iterating; a concurrent confirmation
             cannot alter this operation);
           * components are grouped by shared source path; every targeted consumer of a path
-            must resolve to the SAME source identity — strategy, artifact form, normalized
+            must resolve to the SAME source identity — artifact form, normalized
             effective remote, and (for 'pinned') the same frozen commit/fallback;
           * incompatible resolutions block BEFORE any candidate/source/registry/config
             mutation.
@@ -431,7 +431,7 @@ class MaintenanceOpsMixin:
                                 "known working (operator-confirmed composition)")
                 else:
                     resolved = ("", "fallback: manifest pin — no known-working record")
-            ident = (sel, spec.strategy or "", bool(spec.artifact),
+            ident = (sel, bool(spec.artifact),
                      source_registry.norm_remote(self._effective_remote(comp)), resolved)
             by_path.setdefault(spec.path, []).append((st, comp, sel, ident, resolved))
         groups, conflicts = [], []
@@ -441,7 +441,7 @@ class MaintenanceOpsMixin:
             if len(idents) > 1:
                 who = ", ".join(f"{st.id}/{c.id}" for st, c, _, _, _ in members)
                 conflicts.append(f"shared source {path!r}: targeted consumers ({who}) "
-                                 "resolve to incompatible source identities (selector/strategy/"
+                                 "resolve to incompatible source identities (selector/"
                                  "remote/known-working) — resolve or re-confirm before "
                                  "installing/updating")
                 continue
@@ -489,27 +489,6 @@ class MaintenanceOpsMixin:
                                    artifact_note=self.ARTIFACT_MISSING_NOTE,
                                    artifact_repair=self.binary_artifact_repair)
         return deps.grouped(report)
-
-    def _declared_dep_commands(self) -> list[str]:
-        """EVERY declared SYSTEM (sudo/apt-level) dependency remediation command — the controller's own
-        apt deps (git, nginx, python3-venv, ...) plus every stack component's `require` install (apt,
-        OBS repo, SPI/config.txt, group grants, service-disable). Order: controller deps, then manifest
-        order. Includes SATISFIED deps too — this is a fresh-install PRE-CLONE bootstrap, not a gap
-        report. Venv-level `python -m pip install` commands are EXCLUDED: the venv does not exist before
-        the clone, and install.sh provisions those into the venv it creates (never a bare/global pip).
-        `provisioned` requires are EXCLUDED for the same reason one step further out: they are
-        materialised INTO the runtime root by `lhpc build`, so their remediation ("lhpc build <stack>")
-        is an lhpc command that does not exist yet at bootstrap time — emitting it would put a
-        `command not found` into a script whose whole job is to run before lhpc is installed."""
-        core, _gui, _gps = self._declared_dep_scopes()
-        return core
-
-    def _declared_gui_dep_commands(self) -> list[str]:
-        """The GUI-ONLY remediation commands — everything the headless-safe default bootstrap must
-        NOT run, and that `bootstrap-deps.sh --with-gui` installs instead. CORE WINS: a command also
-        declared by any non-GUI requirement is absent from this list (see `_declared_dep_scopes`)."""
-        _core, gui, _gps = self._declared_dep_scopes()
-        return gui
 
     def _declared_dep_scopes(self) -> tuple[list[str], list[str], list[str]]:
         """Split every declared remediation command into (core, gui-only, gps-only).
@@ -1285,8 +1264,7 @@ class MaintenanceOpsMixin:
             if rec is None or not rec.resolved_commit:
                 return None                              # unprovable component -> no composition
             entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
-                             "remote": rec.remote, "source_rel": rel,
-                             "strategy": rec.strategy}
+                             "remote": rec.remote, "source_rel": rel}
         return entries or None
 
     def _capture_start_composition(self, stack_id: str, band: str) -> None:
@@ -1321,8 +1299,7 @@ class MaintenanceOpsMixin:
             if rec is None or not rec.resolved_commit:
                 return None
             entries[c.id] = {"commit": rec.resolved_commit, "selector": rec.selector,
-                             "remote": rec.remote, "source_rel": c.source.path,
-                             "strategy": rec.strategy}
+                             "remote": rec.remote, "source_rel": c.source.path}
         if not entries:
             return None
         return {"hash": known_working.composition_hash(entries), "entries": entries,
@@ -1411,7 +1388,7 @@ class MaintenanceOpsMixin:
         try:
             with self._source_operation_guard(src_paths or [stack_id], op="confirm"):
                 # HANDLE-BOUND confirmation: every candidate source leaf is captured
-                # no-follow; ownership/origin/HEAD/link identity and the candidate-marker
+                # no-follow; ownership/origin/HEAD identity and the candidate-marker
                 # commit are verified AGAINST THOSE HANDLES; the same handles are re-proven
                 # immediately before the composition record is written. Any replacement,
                 # mismatch, or capture failure writes NOTHING.
@@ -1694,7 +1671,7 @@ class MaintenanceOpsMixin:
             if rec is None:
                 return False, [f"  [refused] {path}: {why}"]
             final_check = None
-            if rec.strategy != "link" and not allow_dirty:
+            if not allow_dirty:
                 dirty = inst.dirty_report(Path(handle.pinned_path()), path)
                 if dirty:
                     return False, ([f"  [refused] {path}: local changes present — " "not removed (use Clean to remove anyway)", *dirty.lines()])
@@ -1917,7 +1894,13 @@ class MaintenanceOpsMixin:
         from . import reslock, runtime_fs, updater_units
         from .service_base import _guard_owner_ints, _proc_ceased
         guard = self._paths.under(updater_units.UNINSTALL_GUARD)
-        payload = json.dumps({"pid": pid, "nonce": nonce, "start_time": start_time})
+        try:                                      # write int-typed; `0` stays allowed here (an
+            pid_i = int(str(pid).strip())         # unreadable /proc/$$/stat is unprovable, which
+            start_i = int(str(start_time).strip())  # recovery refuses — the claim must not)
+        except (TypeError, ValueError):
+            return ActionResult(False, "Could not claim the uninstall guard: the owner identity "
+                                "(pid, start time) must be decimal integers.")
+        payload = json.dumps({"pid": pid_i, "nonce": nonce, "start_time": start_i})
         # ONE per-root lock serializes EVERY guard operation (claim/reclaim/release/recovery): the
         # prove-stale-then-remove sequences below must act on the SAME guard they inspected — without
         # the lock a concurrent claim could replace the guard between the proof and the unlink.
@@ -2157,8 +2140,7 @@ class MaintenanceOpsMixin:
         store, its components' logs + job logs (never an active job's), and registry records.
         Gates: a STACK target only; refused while anything runs; `apply` additionally requires
         `purge` (CLI double flag; the web adds a typed confirm). local.toml, secrets, and every
-        other stack are untouched. All removal is descriptor-anchored/no-follow; a linked
-        source loses only its runtime symlink leaf."""
+        other stack are untouched. All removal is descriptor-anchored/no-follow."""
         if (_r := self._controller_refusal(target)) is not None:
             return _r
         from . import known_working, reslock, source_fs, source_registry

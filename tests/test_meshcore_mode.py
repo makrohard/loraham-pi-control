@@ -401,12 +401,12 @@ def test_a_client_start_is_judged_by_the_mode_the_running_node_was_launched_with
     assert svc._meshcore_mode_refusal("meshcore-webui") is None   # 5000 is live: allowed
 
 
-# --- an interactive SERVICE keeps its auto-start tick (0.2.7 behaviour) --------------------------------
+# --- an interactive SERVICE keeps its auto-start tick --------------------------------
 
 def test_an_interactive_service_keeps_its_settings_tick(tmp_path):
     svc = _svc(tmp_path)
     settings = {o["id"]: o for o in svc.config_view("reticulum")["optional"]}
-    assert settings["nomadnet"]["startable"] is True           # Settings tick, as in 0.2.7
+    assert settings["nomadnet"]["startable"] is True           # Settings tick
     nomadnet = svc.stack("reticulum").component("nomadnet")
     assert svc.optional_role(nomadnet) == "tickable"          # planned, printed as MANUAL_REQUIRED
     svc.save_config("reticulum", {"autostart_nomadnet": "on"})

@@ -1197,12 +1197,6 @@ class LifecycleOpsMixin:
                         record(comp, stack, Outcome.BLOCKED,
                                f"config generation failed ({bad.path}: {bad.detail})")
                         continue
-                    linked = next((w for w in mine if w.status == "linked-readonly"), None)
-                    if linked:
-                        record(comp, stack, Outcome.MANUAL_REQUIRED,
-                               f"linked source is read-only — generate {comp.id}'s config in "
-                               f"your own checkout ({linked.path})")
-                        continue
                 record(comp, stack, Outcome.SKIPPED,
                        "GUI toolkit not installed — headless-safe default (--with-gui "
                        "installs it on a machine with a display)" if _toolkit_missing else
@@ -1267,8 +1261,8 @@ class LifecycleOpsMixin:
                                f"complete ({_why}) — resolve that first")
                         continue
                 # Its OWN required runtime config (the voice fallback shares the owner's and
-                # declares none): if generation fails, or the source is a read-only linked
-                # tree, DO NOT write the marker and DO NOT present a command as ready-to-run.
+                # declares none): if generation fails, DO NOT write the marker and DO NOT
+                # present a command as ready-to-run.
                 if comp.config_file:
                     cw = self.write_config_files(comp.id, cfg_band, _comp_overrides(comp.id),
                                                  position=position)
@@ -1278,12 +1272,6 @@ class LifecycleOpsMixin:
                         record(comp, stack, Outcome.BLOCKED,
                                f"interactive start blocked — required config could not be "
                                f"generated ({bad.path}: {bad.detail})")
-                        continue
-                    linked = next((w for w in mine if w.status == "linked-readonly"), None)
-                    if linked:
-                        record(comp, stack, Outcome.MANUAL_REQUIRED,
-                               f"linked source is read-only — generate {comp.id}'s config in "
-                               f"your own checkout before starting it ({linked.path})")
                         continue
                 # The manual command must be genuinely READY TO RUN. An interactive
                 # component's pre_steps otherwise never execute: their only caller is
@@ -1360,15 +1348,6 @@ class LifecycleOpsMixin:
                 if bad:
                     record(comp, stack, Outcome.BLOCKED,
                            f"config generation failed ({bad.path}: {bad.detail})")
-                    continue
-                # A linked external source is read-only to lhpc: it cannot generate the
-                # required config, so the operator must provide it in their own checkout.
-                # This is MANUAL_REQUIRED, never a silent start with absent config.
-                linked = next((w for w in mine if w.status == "linked-readonly"), None)
-                if linked:
-                    record(comp, stack, Outcome.MANUAL_REQUIRED,
-                           f"linked source is read-only — generate {comp.id}'s config in "
-                           f"your own checkout ({linked.path})")
                     continue
             # COMPONENT-scoped launch config (this component's OWN run params from the owner-stack
             # store) so a stored sibling run parameter can never leak into another component's argv
@@ -1499,8 +1478,8 @@ class LifecycleOpsMixin:
                     and r.component in nonmain_interactive_ids \
                     and (r.summary or "").startswith("interactive —"):
                 # interactive sidecar whose command WAS presented: that IS the outcome.
-                # Other MANUAL_REQUIRED shapes (e.g. linked-readonly config, where no
-                # marker/command exists) still block like any failure.
+                # Other MANUAL_REQUIRED shapes (no marker/command presented) still block
+                # like any failure.
                 return False
             if r.outcome == Outcome.SKIPPED and r.component in gui_optional_ids:
                 return False          # gui_optional: headless display-skip is accepted
@@ -2871,7 +2850,7 @@ class LifecycleOpsMixin:
         # explicitly instead of letting the build discover it. `Lifecycle.build` joins the
         # source path lexically and hands it to Popen as `cwd`, so an absent directory
         # surfaced as a bare rc-127 "Build FAILED", indistinguishable from a missing tool.
-        # ORDER MATTERS: after the GUI preflight, a direct `lhpc build meshcore-nodegui` on a
+        # ORDER MATTERS: after the GUI preflight, a direct `lhpc build loraham-voice` on a
         # headless box returned the GUI no-work SUCCESS instead of saying it is not installed.
         # APPLY ONLY: a dry run executes nothing, so there is no cwd to be wrong and no
         # reason to refuse a plan. Gating it too would stop the console planning a build for
@@ -2947,7 +2926,7 @@ class LifecycleOpsMixin:
             gui_dropped[:] = sorted(c.id for _, c in buildable if c.id in gui_skip)
             buildable = [(s, c) for s, c in buildable if c.id not in gui_skip]
             if not buildable:
-                # EVERY requested component was skipped (e.g. a direct `lhpc build meshcore-nodegui`
+                # EVERY requested component was skipped (e.g. a direct `lhpc build loraham-voice`
                 # on a headless box). This is NOT a build: return a typed skipped/no-work result and
                 # execute no build step, no marker mutation and no source lock. Reporting "succeeded"
                 # here would claim an artifact that was never produced.
@@ -4704,7 +4683,7 @@ class LifecycleOpsMixin:
                 r = self._system.runner.run(
                     ["git", "-C", str(src), "rev-parse", "HEAD"], 5.0)
                 sha = (r.stdout or "").strip() if getattr(r, "returncode", 1) == 0 else ""
-            # An unreadable HEAD (not a repo, linked source) is recorded as such: the
+            # An unreadable HEAD (not a repo) is recorded as such: the
             # marker then only matches while it STAYS unreadable — any later real SHA
             # is a change and forces the rebuild.
             lines.append(f"consumed {cid} {sha or 'unknown'}\n")

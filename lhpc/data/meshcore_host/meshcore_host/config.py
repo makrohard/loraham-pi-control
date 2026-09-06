@@ -2,7 +2,7 @@
 
 The host app takes concrete values only — LHPC's config generation owns policy (which
 preset, which band, identity/secret placement, GPS plan). RF presets are resolved here
-so the manifest's `preset` enum keeps meaning the same thing it meant for meshcore-pi.
+so the manifest's `preset` enum keeps one meaning across releases.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Same presets the meshcore-pi integration exposed (values must stay in lockstep with
+# The presets the manifest exposes (values must stay in lockstep with
 # the LoRaHAM daemon band plan; eu_uk_narrow matches the T-Deck MeshCore firmware).
 RF_PRESETS = {
     "eu_uk_long": {
@@ -111,13 +111,6 @@ def _table(doc: dict, name: str) -> dict:
     value = doc.get(name, {})
     if not isinstance(value, dict):
         raise ConfigError(f"[{name}] must be a table")
-    return value
-
-
-def _req_str(table: dict, key: str, section: str) -> str:
-    value = table.get(key)
-    if not isinstance(value, str) or not value:
-        raise ConfigError(f"[{section}] {key} must be a non-empty string")
     return value
 
 

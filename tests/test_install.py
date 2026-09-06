@@ -135,19 +135,6 @@ def test_adopt_refuses_overwrite_without_force(tmp_path):
     assert action.status == "skipped"
 
 
-def test_adopt_link_strategy_symlinks_in_place(tmp_path):
-    _make_repo(tmp_path / "rt" / "local" / "myrepo")
-    comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/myrepo", local_dir="myrepo", strategy="link"))
-    inst = _installer(tmp_path / "rt", _stack(comp), tmp_path / "rt" / "local")
-    # A linked external tree is an explicit MUTABLE dev checkout (it has no pin to satisfy
-    # the production-safe 'pinned' default), so the operator selects 'dev' explicitly.
-    action = inst.adopt_source(comp, source="dev")
-    dest = tmp_path / "rt" / "src" / "myrepo"
-    assert action.status == "done"
-    assert dest.is_symlink() and dest.resolve() == (tmp_path / "rt" / "local" / "myrepo")
-
-
 def test_plan_install_reports_present_and_absent(tmp_path):
     head = _make_repo(tmp_path / "rt" / "local" / "myrepo")
     comp = Component(id="s-c", name="c", kind=ComponentKind.SERVICE,

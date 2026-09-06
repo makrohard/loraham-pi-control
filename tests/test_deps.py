@@ -33,7 +33,7 @@ def _own(tmp_path, rel, comps):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord(f"src/{rel}", "", "backfilled", "", time.time(), "",
-                                       "", tuple(comps)))
+                                       tuple(comps)))
 
 
 def test_daemon_reports_radiolib_build_dep(tmp_path):
@@ -183,7 +183,7 @@ def test_radiolib_built_state_is_honest(tmp_path):
 
 
 def test_venv_component_built_state_uses_venv_bin_not_exec_name(tmp_path):
-    # REGRESSION: meshcore-pi compiles an in-tree venv via build_steps; its exec_name is "python"
+    # REGRESSION: a stack that compiles an in-tree venv via build_steps; its exec_name is "python"
     # (a process-match NAME), so is_built must NOT key on a bogus <src>/python. It now gates on the
     # `build_marker` (written ONLY after the LAST build step succeeds), NOT the venv interpreter —
     # because the interpreter exists after step 1 (python -m venv), long before the pip installs
@@ -406,7 +406,7 @@ def test_build_steps_provision_managed_tools_in_root(tmp_path):
 # from the host, which would make these tests pass for the wrong reason on either kind of box.
 
 def _scopes(tmp_path):
-    # (core, gui, gps) since 0.1.8 — GPS deps are a third, separately opt-in bucket
+    # (core, gui, gps) — GPS deps are a third, separately opt-in bucket
     # (`--with-gps`), because gpsd is only needed for a receiver on THIS box.
     core, gui, _gps = _svc(tmp_path)._declared_dep_scopes()
     return core, gui
@@ -590,7 +590,7 @@ def test_meshcore_is_fully_headless_after_the_webui_migration(tmp_path, monkeypa
 def test_voice_stack_stays_available_when_gtk_is_absent(tmp_path):
     # The GTK app is an OPTIONAL component since the terminal variant exists: without GTK
     # headers only that component is skipped — the stack itself is NOT gui-skipped and
-    # installs/builds headless through loraham-voice-cli (meshcore-nodegui pattern).
+    # installs/builds headless through loraham-voice-cli (the optional-GUI pattern).
     svc = _svc(tmp_path)                              # FakeSystem: no gtk headers
     st = svc.stack("voice")
     assert svc.gui_skipped_stack(st) is False
@@ -650,7 +650,7 @@ def test_skipped_is_a_valid_marker_status_and_not_a_failure(tmp_path):
 
 
 def test_direct_build_of_a_skipped_component_is_typed_no_work_not_success(tmp_path, monkeypatch):
-    """`lhpc build meshcore-nodegui` on a headless box where it IS installed: every requested
+    """`lhpc build loraham-voice` on a headless box where it IS installed: every requested
     component is skipped, so the result must be an explicit no-work/skipped outcome — never
     "succeeded"/"built" — and it must not execute a build step, mutate a marker or take a lock."""
     svc = _svc(tmp_path)

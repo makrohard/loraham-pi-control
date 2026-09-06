@@ -31,8 +31,7 @@ def test_packaged_meshcom_host_test_is_recognized_at_component_level():
     # The managed-qemu path is FORWARDED so the self-boot finds the in-root source build
     # (fresh install: clean PATH, no ~/.espressif — live find on the Pi 5 reinstall).
     assert qemu.test_argv[1] == "--qemu" and "tool-cache/qemu-xtensa" in qemu.test_argv[2]
-    testable = [c for c in stacks["meshcom"].components
-                if c.test_argv and (getattr(c.source, "strategy", "") or "") != "link"]
+    testable = [c for c in stacks["meshcom"].components if c.test_argv]
     assert testable, "meshcom must have at least one testable component"
 
 

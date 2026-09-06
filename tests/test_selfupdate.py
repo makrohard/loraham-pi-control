@@ -172,12 +172,12 @@ def test_status_view_no_check_is_grey(env, monkeypatch):
     assert v["available"] is False and v["is_git"] is False
 
 
-def test_status_view_legacy_cache_without_is_git_is_unavailable(env, monkeypatch):
-    # A pre-existing cache written before `is_git` existed in `local` must render unavailable
-    # (never a live fallback), per the backward-compat requirement.
+def test_status_view_cache_without_is_git_is_unavailable(env, monkeypatch):
+    # A cache whose `local` lacks `is_git` renders unavailable (never a live fallback).
     monkeypatch.setattr(selfupdate, "repo_root",
                         lambda: (_ for _ in ()).throw(AssertionError("live repo_root on a GET")))
-    selfupdate.write_cache(env["paths"], {"local": {"head": "a" * 40, "head_short": "aaaaaaaaa",
+    selfupdate.write_cache(env["paths"], {"schema_version": 1,
+                                          "local": {"head": "a" * 40, "head_short": "aaaaaaaaa",
                                                     "branch": "main"},
                                           "upstream": {}, "checked_at": 1})
     v = selfupdate.status_view(env["paths"])
@@ -686,7 +686,8 @@ def test_dirty_refusal_names_the_paths_but_keeps_the_message_single_line(tmp_pat
 
 
 def test_cache_read_write_roundtrip(env):
-    selfupdate.write_cache(env["paths"], {"local": {"is_git": True, "version": "9.9"}, "checked_at": 1})
+    selfupdate.write_cache(env["paths"], {"schema_version": 1, "local": {"is_git": True, "version": "9.9"},
+                                          "checked_at": 1})
     assert selfupdate.read_cache(env["paths"])["local"]["version"] == "9.9"
 
 

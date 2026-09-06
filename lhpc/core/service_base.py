@@ -54,11 +54,13 @@ def _proc_start_time(pid: int) -> int:
 
 
 def _guard_owner_ints(rec: dict) -> tuple[int, int]:
-    """STRICT (pid, start_time) extraction from an uninstall-guard owner record. Accepts ints and
-    legacy DECIMAL strings, and the legacy `started` key alongside `start_time`; REJECTS booleans
-    (json true would int() to 1), any non-decimal value, and non-positive pid/start times (the shell
-    fallback writes start 0 when /proc/$$/stat was unreadable — that is UNPROVABLE, not pid-reuse-
-    safe evidence). Raises ValueError on anything rejected — callers keep the guard."""
+    """STRICT (pid, start_time) extraction from an uninstall-guard owner record. Accepts ints
+    and DECIMAL STRINGS — the guard is written by `uninstall.sh` (integers) and by the controller
+    claim, which wrote the shell's argument strings verbatim up to 0.2.10, so a guard left behind
+    by an interrupted uninstall must stay readable across the upgrade. REJECTS booleans (json true
+    would int() to 1), any non-decimal value, and non-positive pid/start times (the shell fallback
+    writes start 0 when /proc/$$/stat was unreadable — that is UNPROVABLE, not pid-reuse-safe
+    evidence). Raises ValueError on anything rejected — callers keep the guard."""
     def _strict(v) -> int:
         if isinstance(v, bool):
             raise ValueError("boolean is not an identity value")  # noqa: TRY004
@@ -71,8 +73,7 @@ def _guard_owner_ints(rec: dict) -> tuple[int, int]:
         if i <= 0:
             raise ValueError("non-positive identity value")
         return i
-    start_raw = rec["start_time"] if "start_time" in rec else rec["started"]
-    return _strict(rec["pid"]), _strict(start_raw)
+    return _strict(rec["pid"]), _strict(rec["start_time"])
 
 
 def _proc_ceased(pid, start_time) -> bool:
@@ -112,7 +113,7 @@ class ConfigWrite:
 
     component: str
     path: str
-    status: str            # "written" | "linked-readonly" | "no-base" | "failed"
+    status: str            # "written" | "no-base" | "failed"
     detail: str = ""
 
 

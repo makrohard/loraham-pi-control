@@ -22,7 +22,7 @@ def test_single_daemon_with_radio_run_param():
     radio = next(p for p in d.run_params if p.name == "radio")
     # `--radio both` was removed: lhpc runs one process per band, so the daemon offers only 433/868.
     assert radio.choices == ("433", "868") and radio.default == "433"
-    # 0.2.9: the daemon's `debug` flag had no setter left (its only one was the retired start
+    # the daemon's `debug` flag has no setter (its only one was the retired start
     # page) — a knob the capability model advertises must be settable, so it is gone.
     assert not any(p.name == "debug" for p in d.run_params)
     # Provides both band sockets/radios.
@@ -416,7 +416,7 @@ def test_voice_terminal_variant_shape():
 
 
 def test_the_meshtastic_cli_is_an_on_demand_component_not_a_start_hint():
-    """0.2.9: the managed CLI is listed on the Dashboard as an interactive on-demand component
+    """The managed CLI is listed on the Dashboard as an interactive on-demand component
     (like the MeshCore CLI) with its copyable launch line; the start-time hint is gone."""
     from lhpc.core.model import ComponentKind
     comps = _index(load_manifest())

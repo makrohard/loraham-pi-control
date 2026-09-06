@@ -1108,7 +1108,7 @@ def test_recover_reports_failure_when_terminal_rewrite_fails(tmp_path, monkeypat
 
 
 def test_the_meshcom_password_section_follows_the_hmac_state(tmp_path):
-    """0.2.9: MeshCom's Password section is the HMAC password — present while enabled (the first
+    """MeshCom's Password section is the HMAC password — present while enabled (the first
     line of `config/secrets/xr_pw`), with the HMAC actions as the way to change it; 'Enable it
     first' while disabled; never an edit command (the firmware bakes the secret at build)."""
     from lhpc.adapters.web.app import create_app

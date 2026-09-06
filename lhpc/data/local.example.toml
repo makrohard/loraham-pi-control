@@ -17,7 +17,6 @@
 # update_check_hours = 12  # background update-check cadence (1..168; 0 = off)
 
 [install]
-# source_strategy = "adopt"     # or "clone"
 # adopt_search_root = ""   # optional in-root fallback dir; outside-root values are refused
 
 # Per-component source overrides, e.g. pin a different local path or branch:

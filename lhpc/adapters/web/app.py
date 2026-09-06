@@ -763,7 +763,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_wide_reads():
         """The evidence a whole Apps/Dashboard render shares — ONE firewall status and ONE
         /proc/net/tcp listener snapshot — passed down the existing `listeners=`/`fw_status=`
-        seams instead of being re-read per stack (10–13× per page before 0.2.9). Fail-soft."""
+        seams instead of being re-read once per stack. Fail-soft."""
         try:
             fw = service.firewall_status()
         except Exception:
@@ -1366,7 +1366,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def _render_confirm(op: str, target: str, band: str, source: str, frm: str, plan=None):
         """The confirmation page. For start/restart it is rendered ONLY for a consequential choice
         (a resource conflict that stops another stack's owner, dependents a restart takes down) —
-        a routine Start/Restart runs directly (0.2.9: Start means start). Install/update/clean
+        a routine Start/Restart runs directly (Start means start). Install/update/clean
         keep their confirmation (source selector, typed clean)."""
         if plan is None:
             plan = service.run_action(op, target, apply=False, source=source, band=band)

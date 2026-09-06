@@ -133,7 +133,7 @@ def test_graywolf_shows_injected_station(chain):
 @pytest.mark.covers("stack:meshcore#configure", "stack:meshcore#start",
                     "stack:meshcore#stop")
 def test_meshcore_real_process_over_fake_868(chain):
-    """Real meshcore-pi (python venv) starts against the fake 868 daemon and stops
+    """The real MeshCore host (python venv) starts against the fake 868 daemon and stops
     verified — the second real stack family on the chain."""
     run_lhpc(chain.env, "install", "meshcore", "--yes", check=True, timeout=900)
     run_lhpc(chain.env, "build", "meshcore", "--yes", check=True, timeout=900)

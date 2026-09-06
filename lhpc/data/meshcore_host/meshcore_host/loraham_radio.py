@@ -2,7 +2,7 @@
 
 Implements openHop's ``LoRaRadio`` contract (``openhop_core.hardware.base``) on top of the
 LoRaHAM daemon's framed data + config Unix sockets, so an openHop Companion node can use
-the daemon-owned radio exactly the way meshcore-pi's ``lorahaminterface`` did.
+the daemon-owned radio through the LoRaHAM daemon's sockets.
 
 This adapter is deliberately MeshCore-protocol agnostic: it moves opaque RF payload bytes
 and per-packet RSSI/SNR between the daemon and openHop. Packet parsing, routing, ACK/PATH/
@@ -212,7 +212,7 @@ class LoRaHAMRadio(_LoRaRadioBase):
         self._connected = False
         self._pending_tx_result: Optional[asyncio.Future] = None
 
-        # Rolling duty-cycle accounting (same shape as meshcore-pi): the last 5 TX
+        # Rolling duty-cycle accounting: the last 5 TX
         # timestamps and airtimes bound the on-air share to `airtime_dutycycle` percent.
         # DELIBERATELY separate from openHop's dispatcher TX budget: that leaky bucket
         # is active only while client-repeat is enabled (prefs.client_repeat), while

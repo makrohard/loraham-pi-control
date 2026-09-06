@@ -739,7 +739,7 @@ def _config_bytes(svc):
 
 
 def test_identity_is_not_saved_when_admission_refuses(tmp_path, monkeypatch):
-    # AUDIT-FOUND (0.2.8): the identity was written BEFORE task admission. 0.2.9 removed the save
+    # AUDIT-FOUND: the identity was written BEFORE task admission. The start flow removed the save
     # from the start, but the contract stays: a start/restart refused by a pending self-update/
     # uninstall/power operation changes NOTHING — configuration included.
     import json
@@ -1105,7 +1105,7 @@ def test_a_presented_interactive_command_is_a_live_identity_consumer(tmp_path, m
 def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
     """AUDIT-FOUND, twice. First: the `DE <call>` suffix was CONDITIONAL, so a box with no identity
     transmitted a bare frame. Then: the daemon/kiss fallback took the stored global VERBATIM, so a
-    0.2.5 box holding a placeholder or malformed global transmitted `DE N0CALL`.
+    box holding a placeholder or malformed global transmitted `DE N0CALL`.
 
     The spy is on `Lifecycle.run_daemon_tx_test` — the object that actually drives RF. The previous
     version of this test spied on ControllerService, which production never calls, so its
@@ -1124,7 +1124,7 @@ def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "daemon_view", lambda self, b: _Ready())
 
-    # every global a 0.2.5 box could legitimately hold that this version will not transmit under
+    # every global an older box could legitimately hold that this version will not transmit under
     for bad in ("", "N0CALL", "XX0XXA-12", "TOOLONGCALL99", "xx"):
         cfgmod.save_operator_config(svc._paths, bad)
         svc._invalidate_config()
@@ -1144,7 +1144,7 @@ def test_a_tx_test_is_never_unidentified(tmp_path, monkeypatch):
 def test_a_legacy_global_does_not_fake_a_restart_requirement(tmp_path, monkeypatch):
     """REVIEW-FOUND: the two sides of the "did anything change?" comparison resolved the global
     differently — the stored side through raw `{callsign}` substitution, the submitted side through
-    validated inheritance. With a legacy SSID-bearing global (the state every 0.2.5 installation
+    validated inheritance. With a legacy SSID-bearing global (the state an older installation
     upgrades from) or a hand-edited lowercase one, a save that wrote NOTHING still flagged the
     running stack restart-required and told the operator to restart."""
     from lhpc.core import config as cfgmod
@@ -1201,11 +1201,11 @@ def test_the_apply_hint_agrees_with_the_restart_marker(tmp_path, monkeypatch):
 
 def test_an_old_versions_candidate_cannot_delete_a_pinned_identity(tmp_path):
     """AUDIT-FOUND: the identity exclusion lived only where candidates are CHOSEN. On the real
-    0.2.5 -> this-version crossing the choosing is done by the OLD code, which has no such rule,
+    old-version -> this-version crossing the choosing is done by the OLD code, which has no such rule,
     so a deliberately pinned local callsign equal to the global was deleted by the very update
     that ships the rule. The applier must drop it.
 
-    Covers EVERY legacy representation 0.2.5 could emit — scoped and flat, run and file, banded
+    Covers EVERY legacy representation an old version could emit — scoped and flat, run and file, banded
     and band-less — and asserts that unrelated parameters are NOT exempted."""
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
@@ -1274,7 +1274,7 @@ def test_required_post_start_runs_under_the_documented_cap(tmp_path):
 def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     """AUDIT-FOUND: `effective_identity` returns "" BOTH when no local value exists and when an
     explicit one exists but the current rules reject it. TX treated those alike and fell back to
-    the global, so a chat stack pinned to a 0.2.5-era `XX0XXA-99` transmitted as `XX0XXA` — a
+    the global, so a chat stack pinned to an old-style `XX0XXA-99` transmitted as `XX0XXA` — a
     different on-air identity than the operator configured. The precedence contract is
     explicit local > global, and an INVALID explicit local refuses."""
     from lhpc.core import config as cfgmod
@@ -1290,7 +1290,7 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(type(svc), "daemon_view", lambda self, b: _Ready())
     cfgmod.save_operator_config(svc._paths, "XX0XXA")
     svc._invalidate_config()
-    # a value 0.2.5 accepted that the current APRS rule rejects, persisted directly
+    # a value an old version accepted that the current APRS rule rejects, persisted directly
     cfgmod.save_stack_config(svc._paths, "chat", {"file_call": "XX0XXA-99"}, "")
     svc._invalidate_config()
     assert svc.effective_identity("chat", "433") == ""          # invalid -> no effective value
@@ -1300,7 +1300,7 @@ def test_tx_refuses_a_legacy_invalid_local_identity(tmp_path, monkeypatch):
 
 
 
-# ---- 0.2.9: the identity is SAVED configuration; the plan and the apply judge it alike ----------
+# ---- the identity is SAVED configuration; the plan and the apply judge it alike ----------
 
 def _web(svc, monkeypatch):
     import re

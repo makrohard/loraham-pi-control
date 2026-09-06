@@ -298,39 +298,13 @@ async def test_corrupt_queued_row_does_not_block_the_queue(tmp_path, daemon):
     await app.stop()
 
 
-async def test_persisted_node_name_never_overrides_configuration(tmp_path, daemon):
-    """LHPC owns the node name (meshcore.toml). A legacy `node_name` row written by an older
-    build must NOT resurrect and override the configured name on restart, and must be purged
-    from the store so it can never override again. Mirrors the radio/GPS ownership exclusions."""
-    import json
-    import sqlite3
+def test_node_name_is_not_a_persisted_pref():
+    """LHPC owns the node name (meshcore.toml): it is never persisted, so a restore can never
+    override the configured name. Mirrors the radio/GPS ownership exclusions."""
+    from meshcore_host.persistence import PERSISTED_PREFS, PERSISTED_PREFS_HEX
 
-    from meshcore_host.persistence import CompanionStore
+    assert "node_name" not in PERSISTED_PREFS + PERSISTED_PREFS_HEX
 
-    key_file, _ = write_identity(tmp_path)
-    # Simulate an OLD database that persisted node_name (a build before the ownership fix).
-    legacy = CompanionStore(db_path(tmp_path))
-    legacy.open()
-    legacy._db().execute(
-        "INSERT INTO prefs (key, value) VALUES (?, ?)", ("node_name", json.dumps("OLD-NAME"))
-    )
-    legacy.close()
-
-    # Boot with a DIFFERENT configured name; restore must keep the configured one.
-    app = await start_app(tmp_path, daemon, key_file, name="NEW-NAME")
-    try:
-        assert app.companion.prefs.node_name == "NEW-NAME", \
-            "a persisted node_name must never override the LHPC-configured name"
-    finally:
-        await app.stop()
-
-    # The legacy row is gone, so it can never override on a later restart either.
-    conn = sqlite3.connect(db_path(tmp_path))
-    try:
-        row = conn.execute("SELECT value FROM prefs WHERE key = 'node_name'").fetchone()
-    finally:
-        conn.close()
-    assert row is None, "legacy node_name row must be purged on restore"
 
 
 async def test_unrestorable_channel_fails_closed_and_is_preserved(tmp_path, daemon):

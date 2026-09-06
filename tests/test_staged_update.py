@@ -1,5 +1,5 @@
 """P0.4 — updates stage into a candidate dir and activate atomically; a failed
-acquisition never destroys the active source; dirty/linked trees are not overwritten."""
+acquisition never destroys the active source; dirty trees are not overwritten."""
 
 from lhpc.core.install import Installer
 from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
@@ -56,7 +56,7 @@ def _register(rt, commit="abc123", remote="https://example/repo.git"):
     from lhpc.core import source_registry
     from lhpc.core.paths import Paths
     assert source_registry.write_record(Paths(runtime_root=rt), source_registry.RegistryRecord(
-        "src/repo", remote, "dev", commit, _t.time(), "", "", ("c",)))
+        "src/repo", remote, "dev", commit, _t.time(), "", ("c",)))
 
 
 def test_failed_clone_leaves_active_source_intact(tmp_path):

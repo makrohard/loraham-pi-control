@@ -172,6 +172,30 @@ def test_uninstall_guard_stale_owner_is_reclaimed(tmp_path):
     assert svc.controller_uninstall_guard_release("NEW").ok                      # now owned by NEW
 
 
+def test_uninstall_guard_written_by_an_older_release_stays_recoverable(tmp_path):
+    # Releases up to 0.2.10 wrote the owner identity as the shell's argument STRINGS. A guard left
+    # behind by an interrupted uninstall must stay readable after the upgrade, or the documented
+    # escape (`lhpc self-update --recover-request`) can never clear it.
+    import json
+
+    from lhpc.core import updater_units
+    svc = _svc(tmp_path)
+    guard = svc._paths.under(updater_units.UNINSTALL_GUARD)
+    guard.parent.mkdir(parents=True, exist_ok=True)
+    guard.write_text(json.dumps({"pid": "1073741824", "nonce": "OLD", "start_time": "1"}))
+    r = svc.controller_uninstall_guard_claim("222", "NEW", "2")
+    assert r.ok and r.data.get("reclaimed"), r.summary        # proven dead -> reclaimed, not stranded
+    assert json.loads(guard.read_text())["pid"] == 222        # the new record is int-typed
+
+
+def test_uninstall_guard_claim_accepts_an_unprovable_start_time(tmp_path):
+    # `uninstall.sh` writes start 0 when /proc/$$/stat is unreadable (hidepid=2). The claim must
+    # still succeed — 0 is judged UNPROVABLE at recovery time, which keeps the guard.
+    svc = _svc(tmp_path)
+    assert svc.controller_uninstall_guard_claim("1073741824", "N", "0").ok
+    assert not svc._recover_uninstall_guard().ok               # unprovable -> guard retained
+
+
 def test_uninstall_guard_claim_refuses_symlink(tmp_path):
     import os
     from lhpc.core import updater_units

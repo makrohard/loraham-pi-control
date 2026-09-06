@@ -78,7 +78,7 @@ are the current rules.
   orphan. A `.prev` with no valid journal remains an unowned orphan that blocks (never
   blind-deleted); a failed `.prev` removal retains the journal + `.prev` and returns
   recovery-required for normal recovery to retry. `pinned` must resolve to the exact
-  configured commit; dirty or linked working trees are never overwritten. Tests: `tests/test_staged_update.py`, `tests/test_source.py`.
+  configured commit; dirty working trees are never overwritten. Tests: `tests/test_staged_update.py`, `tests/test_source.py`.
 
 ## Uninstall protection
 - Uninstall refuses while a target component is running, never removes a source

@@ -45,7 +45,7 @@ FLUSH_INTERVAL_S = 30.0
 # moving coordinate would resurrect it as a stale static position after restart.
 # node_name is EXCLUDED for the same ownership reason as the radio and GPS settings above:
 # LHPC configures the node name (meshcore.toml), so a persisted value must never override the
-# configured one after a rename. A legacy row written by an older build is purged on restore.
+# configured one after a rename.
 PERSISTED_PREFS = (
     "adv_type",
     "multi_acks", "telemetry_mode_base", "telemetry_mode_location",
@@ -55,9 +55,6 @@ PERSISTED_PREFS = (
 )
 # bytes-typed pref persisted hex-encoded.
 PERSISTED_PREFS_HEX = ("default_scope_key",)
-# Prefs once persisted but now configuration-owned: a stale row must not resurrect a value LHPC
-# owns (e.g. node_name), so it is deleted on restore rather than applied.
-_LEGACY_PREFS = ("node_name",)
 
 
 class StoreError(RuntimeError):
@@ -165,12 +162,6 @@ class CompanionStore:
                     "SELECT idx, name, secret FROM channels"
                 ).fetchall()
                 pref_rows = db.execute("SELECT key, value FROM prefs").fetchall()
-                # Purge legacy configuration-owned pref rows (e.g. node_name from an older build)
-                # so an existing DB can never override LHPC configuration. The apply loop below
-                # already ignores keys outside PERSISTED_PREFS; this also cleans the stored row.
-                # (autocommit: the connection is opened with isolation_level=None.)
-                for legacy_key in _LEGACY_PREFS:
-                    db.execute("DELETE FROM prefs WHERE key = ?", (legacy_key,))
         except sqlite3.Error as exc:
             raise StoreError(f"cannot read companion database: {exc}") from exc
 

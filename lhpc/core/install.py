@@ -75,7 +75,7 @@ class DirtyReport:
 
 
 class _Substituted(Exception):
-    """Internal signal: the staging candidate/link leaf no longer matches the captured
+    """Internal signal: the staging candidate leaf no longer matches the captured
     identity handle (it was swapped). The transaction retains the substituted leaf + journal
     as evidence and returns recovery-required — it NEVER recursively deletes the substitute."""
 
@@ -314,8 +314,7 @@ class Installer:
           * "stable" — the latest release tag;
           * "pinned" — the manifest's pinned known-good commit.
         It clones from GitHub for that version and, on failure, falls back to the
-        operator's local checkout. Components with a `link` strategy (prebuilt
-        venvs/artifacts) are linked to the local working tree instead.
+        operator's local checkout.
         Never alters the local source; refuses to overwrite unless forced.
         """
         spec = comp.source
@@ -383,30 +382,9 @@ class Installer:
             return action
         had_prior = kind != "absent"
         if kind == "symlink":
-            # A symlink leaf is legitimate ONLY for the declared link strategy — and a linked
-            # source is never updated in place (skip). Any other symlink (dangling, unknown,
-            # injected) is NOT an installable destination: refuse with zero mutation.
-            if (spec.strategy or "") == "link":
-                # FROZEN auto-install IDENTITY: even the leave-as-is skip must prove the linked
-                # tree is exactly at the frozen commit — a moved external checkout is a
-                # refusal, never a silent success under a frozen plan.
-                if pinned_expected is not None and pinned_expected[0]:
-                    head = self.system.runner.run(
-                        ["git", "-C", str(dest), "rev-parse", "HEAD"], 5.0)
-                    if head.returncode != 0 or \
-                            head.stdout.strip() != pinned_expected[0]:
-                        action.status = "failed"
-                        action.detail = (
-                            "linked tree is not at the auto-install-frozen commit "
-                            f"{pinned_expected[0][:9]} — refusing (frozen plan is "
-                            "authoritative; update the external checkout)")
-                        return action
-                    action.status, action.detail = "skipped", (
-                        "linked dev tree — left as-is (exact auto-install-frozen commit "
-                        f"{pinned_expected[0][:9]} verified)")
-                    return action
-                action.status, action.detail = "skipped", "linked dev tree — left as-is"
-                return action
+            # CONTAINMENT: a symlink (dangling, unknown, injected) is NOT an installable
+            # destination — a managed source is a directory under the runtime root. Refuse
+            # with zero mutation.
             action.status = "failed"
             action.detail = ("destination is an unexpected symlink leaf — not an LHPC "
                              "adoption; refusing (nothing renamed or deleted)")
@@ -470,10 +448,9 @@ class Installer:
                         "refusing (LHPC never touches anything outside the root)")
                     return action
                 local = search / spec.adopt_dir
-            strategy = spec.strategy or self.config.get("install", "source_strategy", "adopt")
             # The INDEX + SOURCE-PATH locks are already held by adopt_source across candidate
             # creation, verification, activation, and cleanup.
-            return self._stage_and_activate(comp, source, action, dest, spec, local, strategy,
+            return self._stage_and_activate(comp, source, action, dest, spec, local,
                                             had_prior=had_prior, prior=prior,
                                             pinned_expected=pinned_expected)
         finally:
@@ -504,7 +481,7 @@ class Installer:
         return "", "fallback: manifest pin — no known-working record"
 
     def _stage_and_activate(self, comp: Component, source: str, action: PlanAction,
-                            dest: Path, spec, local: Path | None, strategy: str,
+                            dest: Path, spec, local: Path | None,
                             had_prior: bool = False, prior=None,
                             pinned_expected: tuple | None = None) -> PlanAction:
         """Create, verify, and atomically activate a candidate under ONE held source-parent
@@ -545,57 +522,32 @@ class Installer:
                     return action
                 # (2-3) Exclusive candidate creation + staging, all through the held FD.
                 desc, handle = self._stage_candidate(txn, comp, source, dest, staging, spec,
-                                                     local, strategy, action,
-                                                     expected_pin=expected)
+                                                     local, action, expected_pin=expected)
                 if desc is None:
                     return action          # `_stage_candidate` recorded the typed failure
-                # Provenance path per handle type:
-                #  * CandidateHandle -> the candidate FD-pinned path (follows the inode through
-                #    the activation rename);
-                #  * LinkHandle -> the VERIFIED external target (`local_target`), evaluated only
-                #    after the leaf is proven to still be OUR captured symlink (never a
-                #    staging/dest symlink whose identity has not just been proven).
-                is_link = isinstance(handle, source_fs.LinkHandle)
-
-                def _prov_path(leaf_name: str) -> str | None:
-                    if is_link:
-                        if not txn.verify_link(handle, leaf_name):
-                            return None                       # unproven link leaf -> block
-                        return str(handle.local_target)
-                    return handle.pinned_path()
-
-                # (4) Candidate/link provenance gate.
-                pre_pinned = _prov_path(staging.name)
-                if pre_pinned is None:
-                    action.status, action.detail = "failed", (
-                        "recovery-required: link staging leaf identity could not be proven "
-                        "(evidence retained)")
-                    return action
+                # (4) Candidate provenance gate, on the candidate FD-pinned path (it follows the
+                # inode through the activation rename).
+                pre_pinned = handle.pinned_path()
                 pre = provenance.evaluate(self.system.runner, pre_pinned, spec, source, trusted,
                                           expected_commit=expected)
                 if not pre.ok:
-                    # Handle-safe cleanup: a candidate/link substituted during provenance is
+                    # Handle-safe cleanup: a candidate substituted during provenance is
                     # retained as evidence, never deleted. dest untouched either way.
                     self._cleanup_owned_staging(txn, handle, staging.name)
                     action.status, action.provenance = "failed", pre.status
                     action.detail = f"provenance blocked before activation: {pre.detail} [{pre.status}]"
                     return action
                 # (5-9) Activate + final provenance (post-rename, on the VERIFIED active leaf)
-                # + cleanup — all under the SAME held FD. For a link, `_activate_held` has
-                # already proven the active leaf is our captured symlink before this runs.
+                # + cleanup — all under the SAME held FD.
                 def _post_ok() -> bool:
-                    p = _prov_path(dest.name)
-                    return p is not None and provenance.evaluate(
-                        self.system.runner, p, spec, source, trusted,
+                    return provenance.evaluate(
+                        self.system.runner, handle.pinned_path(), spec, source, trusted,
                         expected_commit=expected).ok
                 # Ownership metadata rides in the journal (v3) so the registry record is part
                 # of the SAME durable transaction: written after the activation rename, and
                 # completable by recovery from the journal alone.
-                meta = self._txn_meta(comp, spec, source, strategy, pre_pinned)
+                meta = self._txn_meta(comp, spec, source, pre_pinned)
                 meta["had_prior"] = bool(had_prior)
-                if is_link:
-                    # durable link identity: the EXACT runtime symlink target
-                    meta["link_target"] = handle.target
                 # FINAL dirty recheck, run immediately before the prior is archived: a
                 # tracked or non-ignored untracked file created AFTER the initial check
                 # (e.g. while the candidate was cloning/building) must block the archive.
@@ -677,7 +629,7 @@ class Installer:
 
     def _cleanup_owned_staging(self, txn, handle, staging_name: str) -> str:
         """THE authoritative handle-safe staging cleanup. Removes the staging leaf ONLY when it
-        still matches its `CandidateHandle`/`LinkHandle`; a substituted replacement is RETAINED
+        still matches its `CandidateHandle`; a substituted replacement is RETAINED
         as evidence, never recursively deleted merely because it kept the expected name. Returns
         'removed' | 'absent' | 'identity-lost'."""
         from . import source_fs
@@ -695,35 +647,12 @@ class Installer:
         return "removed"
 
     def _stage_candidate(self, txn, comp, source: str, dest: Path, staging: Path, spec,
-                         local: Path | None, strategy: str, action,
-                         expected_pin: str = ""):
+                         local: Path | None, action, expected_pin: str = ""):
         """Stage the candidate through the held transaction. Returns `(desc, handle)` — a
-        description plus the `CandidateHandle` (a retained FD on the candidate dir; None for
-        the link strategy, whose leaf is a symlink). On failure returns `(None, None)` with a
-        typed failure recorded on `action`. Git/copy write ONLY through the candidate FD-pinned
-        path (`handle.pinned_path()`), never the mutable candidate leaf name."""
-        if strategy == "link":
-            if local is None:
-                action.status, action.detail = "failed", (
-                    "link strategy requires a configured IN-ROOT adopt_search_root — "
-                    "no local checkout configured")
-                return None, None
-            if not local.is_dir():
-                action.status, action.detail = "failed", f"local checkout not found: {local}"
-                return None, None
-            # A linked checkout must STILL satisfy the requested version (same policy as
-            # copy/clone) — never report a version-selected adoption it cannot prove.
-            if not self._fallback_satisfies(spec, local, source, expected_pin):
-                action.status, action.detail = "failed", (
-                    f"linked checkout does not satisfy the requested {source} version "
-                    "(link strategy cannot prove it) — active source untouched")
-                return None, None
-            try:
-                lh = txn.create_link(local, staging.name)  # symlink leaf + captured identity
-            except OSError as exc:
-                action.status, action.detail = "failed", str(exc)
-                return None, None
-            return "linked local dev", lh
+        description plus the `CandidateHandle` (a retained FD on the candidate dir). On failure
+        returns `(None, None)` with a typed failure recorded on `action`. Git/copy write ONLY
+        through the candidate FD-pinned path (`handle.pinned_path()`), never the mutable
+        candidate leaf name."""
         # Clone / copy: EXCLUSIVELY create the empty candidate dir via the held FD (any
         # pre-existing leaf of any kind fails closed) and RETAIN its fd, then write INTO the
         # candidate FD-pinned path — Git/copy never re-resolve the leaf by name.
@@ -814,7 +743,7 @@ class Installer:
 
     def _fallback_satisfies(self, spec, local: Path, source: str,
                             expected_pin: str = "") -> bool:
-        """A local-fallback / linked checkout may activate only if it PROVABLY satisfies
+        """A local-fallback checkout may activate only if it PROVABLY satisfies
         the requested version — fail closed:
           * an ARTIFACT source is the same declared artifact for every selector — any local
             copy of it satisfies (there are no version semantics to prove);
@@ -828,7 +757,7 @@ class Installer:
         so it is rejected rather than reported as a successful selected adoption."""
         run = self.system.runner.run
         if expected_pin:
-            # FROZEN auto-install IDENTITY: link/copy/local fallback may activate ONLY at exactly
+            # FROZEN auto-install IDENTITY: the copy/local fallback may activate ONLY at exactly
             # the frozen commit, for EVERY selector — branch/tag/artifact shortcuts never
             # substitute. A non-Git tree has no verifiable identity: refuse.
             head = run(["git", "-C", str(local), "rev-parse", "HEAD"], 5.0)
@@ -913,23 +842,21 @@ class Installer:
                     out.append(c.id)
         return tuple(out)
 
-    def _txn_meta(self, comp, spec, source: str, strategy: str, git_path: str) -> dict:
+    def _txn_meta(self, comp, spec, source: str, git_path: str) -> dict:
         """The ownership metadata carried by the v3 journal — the AUTHORITY recovery uses to
         complete the registry record. `git_path` points at the staged tree (candidate FD-pinned
-        path, or a link's external target)."""
+        path)."""
         head = self.system.runner.run(["git", "-C", git_path, "rev-parse", "HEAD"], 5.0)
         return {
             "selector": source,
             "resolved_commit": (head.stdout or "").strip() if head.returncode == 0 else "",
             "remote": self.config.remotes.get(comp.id) or spec.remote or "",
-            "strategy": strategy if strategy == "link" else (spec.strategy or ""),
             # LIVE membership merge: an updated shared checkout factually serves every
             # DECLARED consumer again, PLUS whoever the existing record already lists —
             # a departure (uninstall of one sharer) survives unrelated re-adopts only
             # until the checkout is genuinely refreshed for everyone.
             "components": sorted(set(self._path_consumers(spec.path))
                                  | self._record_members(spec.path)),
-            "link_target": "",           # set by the caller for link-strategy staging
         }
 
     def _record_members(self, source_rel: str) -> set:
@@ -940,21 +867,17 @@ class Installer:
     @staticmethod
     def _valid_meta(meta) -> bool:
         """Strict validation of a v3 journal's ownership metadata (untrusted persisted input).
-        `had_prior` (update vs fresh-install evidence for recovery rollback) must be a bool
-        when present; an older v3 journal without it stays valid (recovery then treats the
-        transaction conservatively, as an update)."""
+        `had_prior` (update vs fresh-install evidence for recovery rollback) is a required
+        bool."""
         if not isinstance(meta, dict):
             return False
-        for f in ("selector", "resolved_commit", "remote", "strategy"):
+        # A journal written by <= 0.2.10 also carries `strategy`; it is ignored, not required.
+        for f in ("selector", "resolved_commit", "remote"):
             if not isinstance(meta.get(f), str):
                 return False
-        # "legacy" accepted on READ: a journal written by an interrupted <=0.1.4 transaction must
-        # stay recoverable after the selector rename (source_registry normalizes it on read).
-        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled", "legacy"):
+        if meta["selector"] not in ("pinned", "dev", "stable", "backfilled"):
             return False
-        if "had_prior" in meta and not isinstance(meta["had_prior"], bool):
-            return False
-        if "link_target" in meta and not isinstance(meta["link_target"], str):
+        if not isinstance(meta.get("had_prior"), bool):
             return False
         comps = meta.get("components")
         return isinstance(comps, list) and all(isinstance(c, str) and c for c in comps)
@@ -970,9 +893,8 @@ class Installer:
         return source_registry.write_record(self.paths, source_registry.RegistryRecord(
             source_rel=self._source_rel(dest), remote=meta["remote"],
             selector=meta["selector"], resolved_commit=meta["resolved_commit"],
-            adopted_at=_time.time(), txn_id=txn_id, strategy=meta["strategy"],
-            components=tuple(meta["components"]),
-            link_target=meta.get("link_target", "")))
+            adopted_at=_time.time(), txn_id=txn_id,
+            components=tuple(meta["components"])))
 
     # -- source activation transaction (durable + recoverable) -------------
 
@@ -1114,27 +1036,24 @@ class Installer:
         return True
 
     @staticmethod
-    def _v5_leaf_ident(txn, handle, name):
+    def _v5_leaf_ident(handle):
         """Ctime-hardened [dev, ino, ctime_ns] for a captured leaf, from a FRESH view of its inode at
         THIS moment — NOT the stale creation-time handle ctime (a candidate dir's ctime changes as it
-        is populated, and a rename bumps ctime). A dir handle's retained fd follows the inode through
-        renames, so `fstat` gives the live ctime; a symlink handle (fd < 0) is lstat'd by its CURRENT
-        name. Returns None if unreadable (the caller then records no ident and recovery retains)."""
+        is populated, and a rename bumps ctime). The handle's retained fd follows the inode through
+        renames, so `fstat` gives the live ctime. Returns None if unreadable (the caller then records
+        no ident and recovery retains)."""
         try:
-            if getattr(handle, "fd", -1) >= 0:
-                ctime = os.fstat(handle.fd).st_ctime_ns
-            else:
-                ctime = os.stat(name, dir_fd=txn.fd, follow_symlinks=False).st_ctime_ns
+            ctime = os.fstat(handle.fd).st_ctime_ns
         except OSError:
             return None
         return [handle.st_dev, handle.st_ino, ctime]
 
-    def _v5_idents(self, txn, handle, prior, cand_name, prior_name):
-        """The journal idents dict — candidate (at `cand_name`) and archived prior (at `prior_name`),
-        each ctime-hardened from a FRESH view at this journal transition (see `_v5_leaf_ident`)."""
+    def _v5_idents(self, handle, prior):
+        """The journal idents dict — candidate and archived prior, each ctime-hardened from a FRESH
+        view at this journal transition (see `_v5_leaf_ident`)."""
         return {
-            "candidate": (self._v5_leaf_ident(txn, handle, cand_name) if handle is not None else None),
-            "prev": (self._v5_leaf_ident(txn, prior, prior_name) if prior is not None else None),
+            "candidate": (self._v5_leaf_ident(handle) if handle is not None else None),
+            "prev": (self._v5_leaf_ident(prior) if prior is not None else None),
         }
 
     def _managed_source_dests(self) -> set:
@@ -1538,7 +1457,7 @@ class Installer:
                 # low-level entry produces journals current recovery can act on — there is
                 # no journal generation without identity evidence anymore.
                 meta = {"selector": "backfilled", "resolved_commit": "", "remote": "",
-                        "strategy": "", "components": [dest.name or "src"],
+                        "components": [dest.name or "src"],
                         "had_prior": txn.leaf_kind(dest.name) != "absent"}
                 try:
                     if txn.leaf_kind(dest.name) == "dir":
@@ -1559,7 +1478,7 @@ class Installer:
     def _rollback_bad_active(self, txn, dest: Path, prev: Path, handle=None) -> str:
         """Undo a just-completed activation (post-activation provenance failure, or an
         ownership-record persistence failure) via the held FD. `dest` is removed ONLY after
-        re-proving it is still our captured candidate/link handle — never a pathname-only
+        re-proving it is still our captured candidate handle — never a pathname-only
         `rmtree(dest.name)` of an unverified replacement. On identity loss the destination,
         `.prev`, and journal are RETAINED. Returns a PROVEN outcome:
           * 'restored-prior' — the archived prior is back in place and usable;
@@ -1597,12 +1516,9 @@ class Installer:
             return "recovery-required"                   # rollback unproven -> retain everything
 
     def _verify_staged(self, txn, handle, name: str) -> bool:
-        """Identity re-check of the staging/active leaf (candidate dir OR link) by NAME."""
-        from . import source_fs
+        """Identity re-check of the staging/active candidate leaf by NAME."""
         if handle is None:
             return True
-        if isinstance(handle, source_fs.LinkHandle):
-            return txn.verify_link(handle, name)
         return txn.verify_candidate(handle, name)
 
     def _activate_held(self, txn, dest: Path, staging: Path, verify_active=None, handle=None,
@@ -1620,14 +1536,14 @@ class Installer:
         idents = None
         if meta is not None:
             # v5 ctime-hardened idents: candidate still at `staging`, prior still at `dest`.
-            idents = self._v5_idents(txn, handle, prior, staging.name, dest.name)
+            idents = self._v5_idents(handle, prior)
         jh = self._create_journal(dest, prev, staging, meta, idents)
         if jh is None:
             return "recovery-required"
         try:
             archived = False
             try:
-                # Candidate/link identity BEFORE archiving anything — a substituted staging leaf
+                # Candidate identity BEFORE archiving anything — a substituted staging leaf
                 # blocks immediately with dest untouched.
                 if not self._verify_staged(txn, handle, staging.name):
                     raise _Substituted()
@@ -1675,7 +1591,7 @@ class Installer:
                     # ctime, so the journal must record the .prev's CURRENT ctime for recovery to
                     # re-prove it. (Candidate is untouched — still at `staging`.)
                     if jh.get("idents") is not None:
-                        jh["idents"] = self._v5_idents(txn, handle, prior, staging.name, prev.name)
+                        jh["idents"] = self._v5_idents(handle, prior)
                     if not self._update_journal(jh, dest, prev, staging, "prior-archived"):
                         raise _JournalLost()
                     # SECOND dirty scan THROUGH THE CAPTURED PRIOR HANDLE, after the archive
@@ -1698,7 +1614,7 @@ class Installer:
                             return "dirty"               # truthful refusal; prior restored
                         return "recovery-required"
                 # TIGHT re-check IMMEDIATELY before promotion (bounded only by kernel rename
-                # atomicity): a substituted candidate/link leaf is never promoted.
+                # atomicity): a substituted candidate leaf is never promoted.
                 if not self._verify_staged(txn, handle, staging.name):
                     raise _Substituted()
                 # (5) candidate -> dest, ATOMICALLY refusing to replace an injected leaf
@@ -1721,14 +1637,14 @@ class Installer:
                 # REFRESH the candidate ident: candidate -> dest renamed it, bumping its ctime, so
                 # the journal records the active leaf's CURRENT ctime. (Prior untouched — at `.prev`.)
                 if jh.get("idents") is not None:
-                    jh["idents"] = self._v5_idents(txn, handle, prior, dest.name, prev.name)
+                    jh["idents"] = self._v5_idents(handle, prior)
                 if not self._update_journal(jh, dest, prev, staging, "activated"):
                     raise _JournalLost()
-                # POST-rename: the ACTIVE leaf must be exactly our captured candidate/link.
+                # POST-rename: the ACTIVE leaf must be exactly our captured candidate.
                 if not self._verify_staged(txn, handle, dest.name):
                     raise _Substituted()
             except (_Substituted, _JournalLost):
-                # A substituted candidate/link leaf OR a lost-ownership journal: RETAIN the
+                # A substituted candidate leaf OR a lost-ownership journal: RETAIN the
                 # substitute + journal as evidence (never remove them); restore the prior where
                 # a slot was freed. recovery-required.
                 if archived and txn.leaf_kind(dest.name) == "absent":
@@ -1756,7 +1672,7 @@ class Installer:
                         return "recovery-required"
                 return "failed-clean" if jh["marker"].remove() else "recovery-required"
             # (8) confirm the active source is a USABLE DIRECTORY (held FD), then verify final
-            # provenance — which can take time, so a candidate/link swap can occur DURING it.
+            # provenance — which can take time, so a candidate swap can occur DURING it.
             if not txn.usable(dest.name):
                 return "recovery-required"
             if verify_active is not None and not verify_active():
@@ -1770,7 +1686,7 @@ class Installer:
                     return "provenance-blocked" if jh["marker"].remove() else "recovery-required"
                 return "recovery-required"
             # Provenance SUCCEEDED, but re-verify the ACTIVE leaf is STILL our captured
-            # candidate/link (a swap during provenance evaluation) BEFORE any `.prev`/journal
+            # candidate (a swap during provenance evaluation) BEFORE any `.prev`/journal
             # removal. On mismatch: retain journal + `.prev` + substituted active leaf.
             if not self._verify_staged(txn, handle, dest.name):
                 return "recovery-required"

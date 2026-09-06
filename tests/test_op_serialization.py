@@ -29,7 +29,7 @@ def _seed_kiss_env(tmp_path):
     dest.mkdir(parents=True)
     (dest / "code.c").write_text("v1")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "", "",
+        "src/loraham-kiss-tnc", "", "backfilled", "", time.time(), "",
         ("loraham-kiss-tnc", "loraham-kiss-serial")))
     assert known_working.write_candidate(
         paths, "kiss", {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "dev",

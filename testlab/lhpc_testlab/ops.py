@@ -189,7 +189,7 @@ def reset(svc) -> ActionResult:
                             details=details)
     svc._invalidate_config()
     details.append(f"  callsign: {_CALLSIGN}")
-    # Node identities NEVER inherit the callsign (identity rule since 0.2.6): a start without
+    # Node identities NEVER inherit the callsign (identity rule): a start without
     # them is refused. Seed every node field the product enforces, asked from the product
     # itself, so a lane can start any stack and a new identity field seeds itself.
     seeded, failed = _seed_node_identities(svc)
@@ -229,8 +229,7 @@ def reset(svc) -> ActionResult:
     details.append("  graywolf igate ENFORCED -> local sink (overlay render)")
     save_install_config(
         svc._paths,
-        adopt_search_root=str(svc._paths.under("state", "testlab", "adopt")),
-        source_strategy="copy")
+        adopt_search_root=str(svc._paths.under("state", "testlab", "adopt")))
     svc._invalidate_config()
     svc._manifest_path = overlay
     svc._stacks = None

@@ -154,8 +154,8 @@ class BootRestoreOpsMixin:
 
     def _classify_boot_evidence(self, cur_boot: str):
         """(evidence, skipped, integrity_issues, dir_state). Same-boot stamped records are NEVER
-        evidence; legacy (v0) records must be provably stale AND scope-proven via a matching
-        full-stack last-start candidate (started_at >= launched_at, whole-second precision)."""
+        evidence; a record whose boot stamp is empty (the boot id was unreadable when it was
+        written) is evidence only when its process is provably gone (`verify_owned`)."""
         life = self._lifecycle()
         valid, issues, dir_state = life.owned_inventory()
         evidence, skipped = [], []
@@ -166,32 +166,16 @@ class BootRestoreOpsMixin:
             if rec_boot:
                 if rec_boot == cur_boot:
                     continue                        # same-boot: never restore evidence
-                scope = rec.get("start_scope", "")
-                req = rec.get("requested_target", "")
             else:
                 ok, _why = life.verify_owned(rec)
                 if ok:
-                    continue                        # legacy record of a LIVE process
-                scope, req = "", ""
-                cand = None
-                try:
-                    cand = known_working.read_candidate(self._paths, rec.get("stack", ""))
-                except (OSError, PathContainmentError):
-                    cand = None
-                if (cand and isinstance(cand.get("started_at"), (int, float))
-                        and cand["started_at"] >= rec.get("launched_at", 0)):
-                    scope, req = "stack", rec.get("stack", "")
-                else:
-                    skipped.append({"stack": rec.get("stack", "?"),
-                                    "reason": "legacy record scope unknown "
-                                              "(no matching full-stack last-start)",
-                                    "evidence_ids": [rec["launch_id"]]})
-                    continue
+                    continue                        # unstamped record of a LIVE process
             evidence.append(Evidence(
                 launch_id=rec["launch_id"], stack=rec.get("stack", ""),
                 component=rec.get("component", ""), band=rec.get("band", ""),
                 launched_at=float(rec.get("launched_at", 0)),
-                start_scope=scope, requested_target=req))
+                start_scope=rec.get("start_scope", ""),
+                requested_target=rec.get("requested_target", "")))
         # OPERATOR STOP INTENT beats leftover evidence: an unverified stop retains ownership
         # records (correct for the live system), which after a reboot read exactly like
         # "was running at shutdown" — restoring them resurrects a stack the operator

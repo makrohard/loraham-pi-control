@@ -970,7 +970,8 @@ def _write_selfcache(tmp_path, local, upstream):
     from lhpc.core.paths import Paths
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     selfupdate.write_cache(Paths(runtime_root=tmp_path),
-                           {"local": local, "upstream": upstream, "checked_at": 1})
+                           {"schema_version": 1, "local": local, "upstream": upstream,
+                            "checked_at": 1})
 
 
 @pytest.mark.parametrize("upstream, wants_link", [
@@ -1146,6 +1147,7 @@ def test_last_apply_success_suppressed_failure_shown(tmp_path):
 
     def _cache(ok):
         selfupdate.write_cache(Paths(runtime_root=tmp_path), {
+            "schema_version": 1,
             "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
             "upstream": {}, "checked_at": 1,
             "last_apply": {"ok": ok, "finished_at": 2,
@@ -1264,6 +1266,7 @@ def test_self_update_last_apply_renders_prewrap(tmp_path):
     from lhpc.core.paths import Paths
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     selfupdate.write_cache(Paths(runtime_root=tmp_path), {
+            "schema_version": 1,
         "local": {"is_git": True, "head": "a" * 40, "head_short": "aaaaaaaaa", "branch": "main"},
         "upstream": {}, "checked_at": 1,
         "last_apply": {"ok": False, "summary": "Update could not be applied — the local branch has "
@@ -1334,7 +1337,7 @@ def _seed_kw_offer(tmp_path, commit="a" * 40):
                                 "source_rel": "src/LoRaHAM_Daemon"}}
     assert known_working.write_candidate(paths, "chat", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "", "",
+        "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "",
         ("loraham-chat",)))
     return paths, entries
 
@@ -1433,7 +1436,7 @@ def _seed_clean_target(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
-                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+                                       "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
 
 
 def _bind_web_identity(client_factory_svc, dest, remote):
@@ -1573,15 +1576,9 @@ def test_daemon_feed_uses_exactly_one_source_file(tmp_path):
     svc = _feed_svc(tmp_path)
     d = tmp_path / "logs"
     (d / "start-loraham-daemon-868.log").write_text("[TX868] frame TXOK=1\n")
-    (d / "start-loraham-daemon.log").write_text("[TX] legacy frame TXOK=1\n")
-    assert svc.daemon_feed("868") == ["[TX868] frame TXOK=1"]     # legacy line absent, no dupes
+    (d / "start-loraham-daemon.log").write_text("[TX] band-less frame TXOK=1\n")
+    assert svc.daemon_feed("868") == ["[TX868] frame TXOK=1"]     # band-less file never read
 
-
-def test_daemon_feed_falls_back_to_legacy_band_less_log(tmp_path):
-    # Migration: a daemon still running from before the rename keeps writing the band-less name.
-    svc = _feed_svc(tmp_path)
-    (tmp_path / "logs" / "start-loraham-daemon.log").write_text("boot\n[TX] frame TXOK=1\n")
-    assert svc.daemon_feed("868") == ["[TX] frame TXOK=1"]
 
 
 def test_clear_daemon_feed_hides_prior_activity_but_shows_new(tmp_path):
@@ -1640,7 +1637,7 @@ def test_logs_view_band_selects_the_per_band_process_log(tmp_path):
 
 def test_settings_page_rules_line_before_optional_component(tmp_path):
     # /stacks?cfg=meshcom: the fixture-relay settings group is separated by a rule.
-    # Named '(fixture)' since 0.1.8: production GPS comes from the global source, and
+    # Named '(fixture)': production GPS comes from the global source, and
     # this component replays a synthetic file — the name has to say so.
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
@@ -2094,7 +2091,7 @@ def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_p
     assert "mode: chat+repeater" in page                                    # the Apps-row pill
 
 
-# ---- 0.2.9: Start means start (Settings is the only place configuration changes) -------------
+# ---- Start means start (Settings is the only place configuration changes) -------------
 
 def _spy_actions(monkeypatch):
     """Record every run_action(apply=True) call as (op, target, kwargs) and stub it."""

@@ -126,7 +126,7 @@ def _seed_running_chat(tmp_path, commit="a" * 40):
                                 "source_rel": "src/LoRaHAM_Daemon"}}
     assert known_working.write_candidate(paths, "chat", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", "",
+        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "",
         ("loraham-chat",)))
     return paths, entries
 
@@ -150,7 +150,7 @@ def test_offer_hidden_when_stopped_recorded_or_changed(tmp_path):
     known_working.clear_candidate(paths, "chat")
     _seed_running_chat(tmp_path)                                  # fresh candidate (commit a…)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", "b" * 40, time.time(), "", "",
+        "src/LoRaHAM_Daemon", "", "dev", "b" * 40, time.time(), "",
         ("loraham-chat",)))
     svc2 = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     assert svc2.known_working_offer("chat") is None
@@ -187,7 +187,7 @@ def _seed_registry_only_chat(tmp_path, commit="a" * 40):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", "",
+        "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "",
         ("loraham-chat",)))
     return paths
 
@@ -350,15 +350,14 @@ def test_confirm_refuses_changed_remote(tmp_path):
 def _mk_stack(*comps):
     from lhpc.core.model import Component, ComponentKind, SourceSpec, Stack
     out = []
-    for cid, path, remote, strategy in comps:
+    for cid, path, remote in comps:
         out.append(Component(id=cid, name=cid, kind=ComponentKind.SERVICE,
-                             source=SourceSpec(path=path, remote=remote, strategy=strategy)))
+                             source=SourceSpec(path=path, remote=remote)))
     return Stack(id="s", name="s", main=out[0].id, components=tuple(out))
 
 
-def _entry(commit, path, remote="", strategy=""):
-    return {"commit": commit, "selector": "dev", "remote": remote,
-            "source_rel": path, "strategy": strategy}
+def _entry(commit, path, remote=""):
+    return {"commit": commit, "selector": "dev", "remote": remote, "source_rel": path}
 
 
 _EFF = lambda c: (c.source.remote if c.source else "") or ""
@@ -368,8 +367,8 @@ def test_resolver_skips_newest_incomplete_uses_older_complete(tmp_path):
     # NEWEST record lacks a currently required component; an OLDER record covers the exact
     # current set -> the older complete one is selected (never a per-component mix).
     paths = Paths(runtime_root=tmp_path)
-    stack = _mk_stack(("a", "src/a", "https://github.com/x/a.git", ""),
-                      ("b", "src/b", "https://github.com/x/b.git", ""))
+    stack = _mk_stack(("a", "src/a", "https://github.com/x/a.git"),
+                      ("b", "src/b", "https://github.com/x/b.git"))
     known_working.record(paths, "s",
                          {"a": _entry("1" * 40, "src/a", "https://github.com/x/a.git"),
                           "b": _entry("2" * 40, "src/b", "https://github.com/x/b.git")},
@@ -392,11 +391,11 @@ def test_resolver_component_removed_then_readded(tmp_path):
                          {"confirmed_at": 1.0})
     known_working.record(paths, "s", {"a": _entry("3" * 40, "src/a")},
                          {"confirmed_at": 2.0})
-    stack_b_readded = _mk_stack(("a", "src/a", "", ""), ("b", "src/b", "", ""))
+    stack_b_readded = _mk_stack(("a", "src/a", ""), ("b", "src/b", ""))
     got = known_working.compatible_composition(paths, stack_b_readded, _EFF)
     assert got and got["a"]["commit"] == "1" * 40 and got["b"]["commit"] == "2" * 40
     # while b was absent from the manifest, the a-only record was the compatible one
-    stack_a_only = _mk_stack(("a", "src/a", "", ""))
+    stack_a_only = _mk_stack(("a", "src/a", ""))
     got2 = known_working.compatible_composition(paths, stack_a_only, _EFF)
     assert got2 and got2["a"]["commit"] == "3" * 40
 
@@ -407,29 +406,26 @@ def test_resolver_identity_mismatches_are_ineligible(tmp_path):
                          {"a": _entry("1" * 40, "src/a", "https://github.com/x/a.git")},
                          {"confirmed_at": 1.0})
     # remote mismatch
-    st = _mk_stack(("a", "src/a", "https://github.com/OTHER/a.git", ""))
+    st = _mk_stack(("a", "src/a", "https://github.com/OTHER/a.git"))
     assert known_working.compatible_composition(paths, st, _EFF) is None
     # source-path mismatch
-    st = _mk_stack(("a", "src/moved-a", "https://github.com/x/a.git", ""))
-    assert known_working.compatible_composition(paths, st, _EFF) is None
-    # strategy mismatch
-    st = _mk_stack(("a", "src/a", "https://github.com/x/a.git", "link"))
+    st = _mk_stack(("a", "src/moved-a", "https://github.com/x/a.git"))
     assert known_working.compatible_composition(paths, st, _EFF) is None
     # matching identity -> eligible
-    st = _mk_stack(("a", "src/a", "https://github.com/x/a.git", ""))
+    st = _mk_stack(("a", "src/a", "https://github.com/x/a.git"))
     got = known_working.compatible_composition(paths, st, _EFF)
     assert got and got["a"]["commit"] == "1" * 40
 
 
-def test_resolver_pre_identity_record_is_history_only(tmp_path):
-    # An OLDER record without the full identity fields (no `strategy`) stays loadable as
-    # history but is INELIGIBLE for source selection until re-confirmed.
+def test_resolver_stale_identity_record_is_history_only(tmp_path):
+    # A record whose source identity no longer matches the manifest stays loadable as history
+    # but is INELIGIBLE for source selection until re-confirmed.
     paths = Paths(runtime_root=tmp_path)
     known_working.record(paths, "s",
                          {"a": {"commit": "1" * 40, "selector": "dev", "remote": "",
-                                "source_rel": "src/a"}},          # legacy shape, no strategy
+                                "source_rel": "src/moved-a"}},    # records a path that moved
                          {"confirmed_at": 1.0})
-    st = _mk_stack(("a", "src/a", "", ""))
+    st = _mk_stack(("a", "src/a", ""))
     assert known_working.compatible_composition(paths, st, _EFF) is None   # ineligible
     assert known_working.load(paths, "s")                                  # still visible
     assert known_working.newest_commit_for(paths, "s", "a") == "1" * 40    # history intact
@@ -444,7 +440,7 @@ def test_no_complete_record_means_whole_stack_fallback_never_mixed(tmp_path):
     paths = Paths(runtime_root=tmp_path / "rt")
     known_working.record(paths, "s", {"a": _entry("1" * 40, "src/a")},
                          {"confirmed_at": 1.0})                        # covers only a
-    stack = _mk_stack(("a", "src/a", "", ""), ("b", "src/b", "", ""))
+    stack = _mk_stack(("a", "src/a", ""), ("b", "src/b", ""))
     inst = Installer(paths, (stack,), Config(values={}), RealSystem())
     for comp in stack.components:
         commit, label = inst._pinned_expected(comp)
@@ -628,7 +624,7 @@ def _seed_reticulum_sources(tmp_path, *, with_sideband: bool):
     for i, (cid, rel) in enumerate(rels.items()):
         (tmp_path / rel).mkdir(parents=True, exist_ok=True)
         assert source_registry.write_record(paths, source_registry.RegistryRecord(
-            rel, "", "dev", chr(ord("a") + i) * 40, time.time(), "", "", (cid,)))
+            rel, "", "dev", chr(ord("a") + i) * 40, time.time(), "", (cid,)))
     return paths
 
 

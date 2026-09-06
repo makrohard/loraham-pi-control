@@ -140,14 +140,6 @@ def plan_stack_exposure(swc, console_port: int, other_ports=()) -> dict:
             "cidrs": list(swc.allowed_cidrs), "no_auth": no_auth, "cleartext": cleartext}
 
 
-def _is_public_default_route(cidr: str) -> bool:
-    try:
-        net = ipaddress.ip_network(cidr, strict=False)
-    except ValueError:
-        return False
-    return net.prefixlen == 0        # 0.0.0.0/0 (or ::/0) — the whole internet
-
-
 def cidr_set_is_public(cidrs) -> bool:
     """Does the SET of allowed CIDRs cover an entire address family?
 

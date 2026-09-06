@@ -897,19 +897,13 @@ def _manifest_dict():
     return tomllib.load(open(asset_path("manifest.example.toml"), "rb"))
 
 
-def test_shipped_manifest_has_zero_link_strategies():
-    d = _manifest_dict()
-    for st in d["stack"]:
-        for c in st.get("component", []):
-            assert c.get("source", {}).get("strategy", "") != "link", \
-                f"{c['id']}: link strategy shipped"
-    stacks = manifest_mod.load_manifest()                        # and it LOADS
-    assert len(stacks) == 9
-
-
-def test_link_strategy_refused_at_manifest_load(tmp_path):
+@pytest.mark.parametrize("strategy", ["link", "adopt", "copy", "bogus"])
+def test_source_strategy_refused_at_manifest_load(tmp_path, strategy):
+    # There is no per-source strategy any more — every source is a managed clone under the
+    # root — so a manifest declaring one fails at load instead of silently meaning nothing.
+    # That includes `adopt`/`copy`, which used to be accepted without changing anything.
     bad = tmp_path / "m.toml"
-    bad.write_text('''
+    bad.write_text(f'''
 [[stack]]
 id = "s"
 name = "s"
@@ -923,9 +917,9 @@ main = "c"
   run = "true"
     [stack.component.source]
     path = "src/c"
-    strategy = "link"
+    strategy = "{strategy}"
 ''')
-    with pytest.raises(manifest_mod.ManifestError, match="link.*not permitted"):
+    with pytest.raises(manifest_mod.ManifestError, match="source.strategy is not a manifest field"):
         manifest_mod.load_manifest(bad)
 
 
@@ -977,7 +971,7 @@ def test_python_stacks_have_in_tree_venv_build_steps():
             assert steps[1]["argv"][0] == ".venv/bin/pip", cid
     # meshcom-qemu is self-sufficient from a FRESH clone: the MANAGED tools (a PlatformIO venv + the
     # source-built headless qemu, both INSIDE the runtime root) are provisioned first, then the workspace
-    # setup scripts run before build.sh (live finding: linked trees carried a pre-built .work/).
+    # setup scripts run before build.sh (live finding: dev checkouts carried a pre-built .work/).
     q_steps = [st["argv"][0] for st in comps["meshcom-qemu"]["build_steps"]]
     assert q_steps == ["python3", "{runtime}/build/tools/platformio/.venv/bin/pip", "scripts/build-qemu.sh",
                        "scripts/setup.sh", "scripts/apply-overlay.sh",

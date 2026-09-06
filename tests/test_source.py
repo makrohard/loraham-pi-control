@@ -1,4 +1,4 @@
-"""Managed source: registry, fs, selection, check, transactions, linked source, snapshot cache, and race-safe destructive operations."""
+"""Managed source: registry, fs, selection, check, transactions, snapshot cache, and race-safe destructive operations."""
 
 
 from __future__ import annotations
@@ -649,33 +649,6 @@ def test_candidate_verify_detects_replacement_directory(tmp_path):
         assert txn.verify_candidate(h) is False                # inode differs -> refused
 
 
-def test_link_handle_detects_symlink_retarget(tmp_path):
-    paths, root, src = _new_txn_candidate(tmp_path)
-    d1 = tmp_path / "d1"; d1.mkdir(); d2 = tmp_path / "d2"; d2.mkdir()
-    with source_fs.ManagedSourceTransaction(paths, src) as txn:
-        h = txn.create_link(d1, ".app.candidate")
-        assert txn.verify_link(h, ".app.candidate")             # the captured symlink
-        os.unlink(src / ".app.candidate"); os.symlink(d2, src / ".app.candidate")  # retargeted
-        assert txn.verify_link(h, ".app.candidate") is False    # dev/ino + readlink differ
-
-
-def test_link_handle_detects_file_replacement(tmp_path):
-    paths, root, src = _new_txn_candidate(tmp_path)
-    d1 = tmp_path / "d1"; d1.mkdir()
-    with source_fs.ManagedSourceTransaction(paths, src) as txn:
-        h = txn.create_link(d1, ".app.candidate")
-        os.unlink(src / ".app.candidate"); (src / ".app.candidate").write_text("evil")
-        assert txn.verify_link(h, ".app.candidate") is False    # not a symlink anymore
-
-
-def test_link_handle_detects_dangling_target(tmp_path):
-    paths, root, src = _new_txn_candidate(tmp_path)
-    tgt = tmp_path / "gone"                                     # does not exist -> dangling
-    with source_fs.ManagedSourceTransaction(paths, src) as txn:
-        h = txn.create_link(tgt, ".app.candidate")
-        assert txn.verify_link(h, ".app.candidate") is False    # target not a directory
-
-
 def _quarantine(tmp_path, populate, name="quarantine"):
     """(parent_fd, leaf_path, ident) for a POPULATED directory leaf, bound exactly the way the
     transaction binds `.prev`: the v5 identity is captured LAST (creating a child bumps the
@@ -774,8 +747,7 @@ def test_record_roundtrip_and_remove(tmp_path):
     (tmp_path / "rt").mkdir()
     rec = source_registry.RegistryRecord(
         source_rel="src/app", remote="https://github.com/x/y.git", selector="pinned",
-        resolved_commit="a" * 40, adopted_at=1.0, txn_id="t" * 64, strategy="",
-        components=("app", "app2"))
+        resolved_commit="a" * 40, adopted_at=1.0, txn_id="t" * 64, components=("app", "app2"))
     assert source_registry.write_record(paths, rec)
     got = source_registry.read_record(paths, "src/app")
     assert got == rec
@@ -988,7 +960,7 @@ def test_recovery_of_rolled_back_state_writes_no_record(tmp_path):
         "prev_rel": rel(dest.with_name(".app.prev")), "candidate_rel": cand_rel,
         "txn_id": inst._txn_id(cand_rel),
         "meta": {"selector": "stable", "resolved_commit": "f" * 40,
-                 "remote": "", "strategy": "", "components": ["app"]},
+                 "remote": "", "strategy": "", "components": ["app"], "had_prior": True},
         "idents": {"candidate": None, "prev": None}}))
     msgs = inst.recover_source_activations()
     assert any("active source intact" in m for m in msgs)
@@ -1100,34 +1072,34 @@ def test_registered_record_wins_over_backfill(tmp_path):
     comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
     _make_repo_source_registry(dest)
     rec = source_registry.RegistryRecord("src/app", "https://github.com/x/y.git", "pinned",
-                                         "a" * 40, 1.0, "t" * 64, "", ("app",))
+                                         "a" * 40, 1.0, "t" * 64, ("app",))
     assert source_registry.write_record(inst.paths, rec)
     got, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
                                                   comp, dest)
     assert got == rec and why == "registered"                           # no git needed
 
 
-def test_backfill_linked_source(tmp_path):
-    # backfill-link is legitimate ONLY for a manifest-declared link strategy; a symlink at
-    # a non-link source is refused (not an LHPC adoption).
+def test_symlink_at_source_destination_is_refused(tmp_path):
+    # CONTAINMENT: a managed source is a DIRECTORY under the runtime root. A symlink at its
+    # destination is never an LHPC adoption: refused (nothing registered) without a record,
+    # and refused as identity drift when a record for a managed directory exists. The
+    # symlink and its target are never touched.
+    import time as _t
     comp, inst, dest = _svc_bits(tmp_path, "https://github.com/x/y.git")
     external = tmp_path / "external"
-    head = _make_repo_source_registry(external)
+    _make_repo_source_registry(external)
     dest.parent.mkdir(parents=True)
-    os.symlink(str(external), dest)                                     # linked adoption leaf
+    os.symlink(str(external), dest)
     rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
                                                   comp, dest)
-    assert rec is None and "unexpected symlink" in why                  # non-link comp: refused
-    link_comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                          source=SourceSpec(path="src/app", local_dir="app",
-                                            remote="https://github.com/x/y.git",
-                                            strategy="link"))
-    rec, why = source_registry.verify_or_backfill(inst.paths, inst.system, inst.config,
-                                                  link_comp, dest)
-    assert rec is not None and why == "backfilled-link"
-    assert rec.strategy == "link" and rec.link_target == str(external)
-    assert rec.resolved_commit == ""          # the external tree is mutable — never pinned
-    assert head                               # (sanity: the external repo exists)
+    assert rec is None and "symlink leaf" in why
+    assert source_registry.read_record(inst.paths, "src/app") is None      # nothing registered
+    assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
+        "src/app", "https://github.com/x/y.git", "backfilled", "", _t.time(), "", ("app",)))
+    rec2, why2 = source_registry.verify_identity(inst.paths, inst.system, inst.config,
+                                                 comp, dest)
+    assert rec2 is None and "identity drift" in why2 and "symlink" in why2
+    assert dest.is_symlink() and os.readlink(dest) == str(external)         # untouched
 
 
 def test_dirty_report_untracked_blocks_but_artifacts_do_not(tmp_path):
@@ -1447,28 +1419,6 @@ def test_backfill_never_registers_substituted_leaf(tmp_path):
         handle.close()
 
 
-def test_link_target_substitution_blocks_destructive_ops(tmp_path):
-    # A registered link whose runtime symlink was RE-POINTED is identity drift.
-    import time as _t
-    comp, inst, dest = _svc_bits(tmp_path, "")
-    target_a = tmp_path / "target-a"; target_a.mkdir()
-    target_b = tmp_path / "target-b"; target_b.mkdir()
-    dest.parent.mkdir(parents=True)
-    os.symlink(str(target_a), dest)
-    assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "backfilled", "", _t.time(), "", "link", ("app",),
-        link_target=str(target_a)))
-    rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
-                                               comp, dest)
-    assert rec is not None and why == "verified"                     # genuine target ok
-    dest.unlink()
-    os.symlink(str(target_b), dest)                                  # RE-POINTED
-    rec2, why2 = source_registry.verify_identity(inst.paths, inst.system, inst.config,
-                                                 comp, dest)
-    assert rec2 is None and "link target" in why2
-    assert dest.is_symlink() and os.readlink(dest) == str(target_b)  # untouched
-
-
 def test_non_git_directory_is_never_destructively_authorized(tmp_path):
     # A registered path occupied by a clean NON-git directory with nothing provable
     # (no commit, no origin) is NOT ownership — refuse destructive authorization.
@@ -1477,7 +1427,7 @@ def test_non_git_directory_is_never_destructively_authorized(tmp_path):
     dest.mkdir(parents=True)
     (dest / "replaced.txt").write_text("manually placed")
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        "src/app", "", "backfilled", "", _t.time(), "", "", ("app",)))
+        "src/app", "", "backfilled", "", _t.time(), "", ("app",)))
     rec, why = source_registry.verify_identity(inst.paths, inst.system, inst.config,
                                                comp, dest)
     assert rec is None and "unprovable" in why
@@ -1517,29 +1467,43 @@ def test_dirty_carveout_is_exact_leaf_only(tmp_path):
     assert not inst.dirty_report(dest, "src/app")                    # clean again
 
 
-def test_pre_015_legacy_selector_reads_as_backfilled(tmp_path):
-    # Releases <= 0.1.4 wrote pre-registry adoptions with selector "legacy" (renamed to
-    # "backfilled" in 0.1.5). Upgrading must keep those records VALID — an "unsafe" read here
-    # blocks update/uninstall/clean on the source with no operator-visible cause. The value is
-    # normalized in memory only (reads never rewrite the file); a later record rewrite
-    # (update_components) persists the new name.
+def test_a_final_0_2_10_record_and_journal_still_read_after_strategy_removal(tmp_path):
+    """0.2.10 wrote a `strategy` field into both the ownership record and the transaction
+    journal's meta. The field no longer exists; a record or journal that still carries it must
+    read as an ordinary unknown extra, so a clean or interrupted 0.2.10 install stays usable."""
     paths = Paths(runtime_root=tmp_path)
     rel = "src/app"
     rp = source_registry.record_path(paths, rel)
     rp.parent.mkdir(parents=True, exist_ok=True)
     rp.write_text(json.dumps({
-        "version": 1, "source_rel": rel, "remote": "https://example.invalid/app.git",
+        "version": 2, "source_rel": rel, "remote": "https://example.invalid/app.git",
+        "selector": "pinned", "resolved_commit": "a" * 40, "adopted_at": 1700000000.0,
+        "txn_id": "t" * 64, "strategy": "adopt", "components": ["app"],   # 0.2.10 shape
+    }))
+    state, rec, reason = source_registry.record_state(paths, rel)
+    assert state == "valid", reason
+    assert rec.selector == "pinned" and rec.components == ("app",)
+    assert not hasattr(rec, "strategy")               # read, ignored, never resurrected
+
+    inst = _inst(tmp_path, _comp("src/app"))
+    assert inst._valid_meta({"selector": "pinned", "resolved_commit": "a" * 40, "remote": "",
+                             "strategy": "copy", "components": ["app"], "had_prior": True})
+
+
+def test_unknown_selector_is_unsafe(tmp_path):
+    # Only the four selectors current writers emit are valid; anything else (incl. a value an
+    # old release wrote) reads as "unsafe", so the operator resolves the record by hand.
+    paths = Paths(runtime_root=tmp_path)
+    rel = "src/app"
+    rp = source_registry.record_path(paths, rel)
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    rp.write_text(json.dumps({
+        "version": 2, "source_rel": rel, "remote": "https://example.invalid/app.git",
         "selector": "legacy", "resolved_commit": "", "adopted_at": 1700000000.0,
         "txn_id": "", "strategy": "adopt", "components": ["app"],
     }))
     state, rec, reason = source_registry.record_state(paths, rel)
-    assert state == "valid", reason
-    assert rec.selector == "backfilled"
-    on_disk = json.loads(rp.read_text())
-    assert on_disk["selector"] == "legacy"          # read paths never mutate the record
-    # A rewrite through the normal membership path persists the normalized selector.
-    assert source_registry.update_components(paths, rel, ["app", "other"])
-    assert json.loads(rp.read_text())["selector"] == "backfilled"
+    assert state == "unsafe" and rec is None and "strict validation" in reason
 
 
 # ===== merged from test_source_selection.py =====
@@ -1667,7 +1631,7 @@ def _journal(inst, dest, prev, staging, state, version=5):
     if version in (4, 5):
         ct = version == 5
         payload["meta"] = {"selector": "backfilled", "resolved_commit": "", "remote": "",
-                           "strategy": "", "components": [dest.name]}
+                           "strategy": "", "components": [dest.name], "had_prior": True}
         payload["idents"] = {"candidate": _ident_of(staging, ctime=ct),
                              "prev": _ident_of(prev, ctime=ct)}
     inst._journal_path(dest).write_text(json.dumps(payload))
@@ -1777,7 +1741,7 @@ def test_shared_source_serializes_on_one_lock(tmp_path):
     from lhpc.core import reslock
     inst = _inst_source_txn(tmp_path)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     inst.paths.under("src", "app").mkdir(parents=True)               # overwrite target
     with reslock.operation_lock(inst.paths, inst._source_lock_key("src/app"), "update", "x"):
@@ -1862,7 +1826,7 @@ def test_adopt_blocks_when_recovery_required(tmp_path):
         "version": 2, "state": "prior-archived",
         "source_rel": "../escape", "prev_rel": "../escape", "candidate_rel": "../escape"}))
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
@@ -1900,7 +1864,7 @@ def test_adopt_blocked_by_filename_mismatch_journal(tmp_path):
         "source_rel": "src/other", "prev_rel": "src/.other.prev",
         "candidate_rel": "src/.other.candidate-1-2"}))
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
@@ -1996,38 +1960,6 @@ def test_build_launcher_lock_contends_with_operation_lock(tmp_path):
     assert r.returncode == 3 and "another source operation is in progress" in r.stderr
 
 
-def test_link_pinned_mismatch_rejected(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")            # HEAD != the wrong pin below
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app-src",
-                                       strategy="link", pin_commit="deadbeef" * 5))
-    action = inst.adopt_source(comp, source="pinned")
-    assert action.status == "failed" and "does not satisfy" in action.detail
-    assert not inst.paths.under("src", "app").exists()       # nothing linked
-
-
-def test_link_pinned_match_links(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app-src",
-                                       strategy="link", pin_commit=head))
-    action = inst.adopt_source(comp, source="pinned")
-    assert action.status == "done"
-    assert (inst.paths.runtime_root / "src" / "app").is_symlink()
-
-
-def test_link_dev_default_links(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app-src", strategy="link"))
-    action = inst.adopt_source(comp, source="dev")          # dev w/o branch -> permissive
-    assert action.status == "done"
-    assert (inst.paths.runtime_root / "src" / "app").is_symlink()
-
-
 def test_malformed_journal_blocks_unrelated_source(tmp_path):
     # A malformed journal with NO safely derivable source must block ALL source mutation,
     # even for an unrelated source.
@@ -2036,7 +1968,7 @@ def test_malformed_journal_blocks_unrelated_source(tmp_path):
     d = inst.paths.under("state", "source-txn"); d.mkdir(parents=True, exist_ok=True)
     (d / "garbage.json").write_text("{ not valid json")          # unparseable -> retained
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status == "failed" and "recovery-required" in action.detail
@@ -2048,7 +1980,7 @@ def test_adopt_blocked_while_index_lock_held(tmp_path):
     inst = _inst_source_txn(tmp_path)
     inst.paths.under("src", "app").mkdir(parents=True)
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     with reslock.operation_lock(inst.paths, inst._index_key(), "recover", "x"):
         action = inst.adopt_source(comp, force=True)
@@ -2068,15 +2000,6 @@ def test_selector_without_its_target_rejected(tmp_path, mode):
     assert action.status == "failed" and "does not satisfy" in action.detail
 
 
-def test_link_pinned_without_pin_rejected(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _local_repo(tmp_path, "app-src")
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app-src", strategy="link"))
-    action = inst.adopt_source(comp, source="pinned")
-    assert action.status == "failed" and "does not satisfy" in action.detail
-
-
 def test_valid_target_journal_recovered_through_adopt(tmp_path):
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
@@ -2084,7 +2007,7 @@ def test_valid_target_journal_recovered_through_adopt(tmp_path):
     staging = src / ".app.candidate-1-2"; staging.mkdir(); (staging / "m").write_text("NEW")
     _journal(inst, dest, src / ".app.prev", staging, "prior-archived")   # interrupted activation
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=False)
     # Recovery COMPLETED the interrupted activation under the index lock, then adopt
@@ -2102,7 +2025,7 @@ def test_adopt_target_does_not_self_contend(tmp_path):
     dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
     _journal(inst, dest, src / ".app.prev", src / ".app.candidate-1-2", "prior-archived")
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src"))
+                     source=SourceSpec(path="src/app", local_dir="app-src"))
     (tmp_path / "rt" / "app-src").mkdir(parents=True)
     action = inst.adopt_source(comp, force=True)
     assert action.status != "failed" or "in progress" not in action.detail
@@ -2486,7 +2409,7 @@ def _register_tree(inst, dest, comp, remote=""):
                           capture_output=True, text=True, env=env).stdout.strip()
     rel = str(dest.relative_to(inst.paths.runtime_root))
     assert source_registry.write_record(inst.paths, source_registry.RegistryRecord(
-        rel, remote, "backfilled", head, _t.time(), "", "", (comp.id,)))
+        rel, remote, "backfilled", head, _t.time(), "", (comp.id,)))
     return head
 
 
@@ -2499,7 +2422,7 @@ def test_provenance_not_ok_blocks_activation_prior_intact(tmp_path, monkeypatch)
     (active / "OLD").write_text("keep")                  # a prior active source
     comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
                      source=SourceSpec(path="src/app", local_dir="app-src",
-                                       strategy="link", pin_commit=head))
+                                       pin_commit=head))
     _register_tree(inst, active, comp)                   # identity gate passes -> reaches provenance
     monkeypatch.setattr(provenance, "evaluate", lambda *a, **k: provenance.ProvenanceResult(
         provenance.UNVERIFIED_BLOCKED, False, False, "forced block"))
@@ -2764,48 +2687,6 @@ def test_candidate_substitution_is_recovery_required_and_preserved(tmp_path):
     assert inst._journal_path(dest).exists()                  # journal retained
 
 
-def test_link_substitution_pre_archive_blocks(tmp_path):
-    import os
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
-    src = inst.paths.under("src"); src.mkdir(parents=True)
-    inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
-    dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
-    tgt = tmp_path / "ext"; tgt.mkdir()
-    staging = src / ".app.candidate-1-2"; os.symlink(tgt, staging)
-    bad = source_fs.LinkHandle(".app.candidate-1-2", -1, -1, str(tgt), str(tgt))  # wrong ino
-    with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
-        outcome = inst._activate_held(txn, dest, staging, handle=bad)
-    assert outcome == "recovery-required"
-    assert (dest / "m").read_text() == "LIVE"                 # dest never archived
-    assert staging.is_symlink()                               # substituted leaf retained
-    assert inst._journal_path(dest).exists()
-
-
-def test_link_substitution_after_archive_restores_prior(tmp_path, monkeypatch):
-    import os
-    from lhpc.core import source_fs
-    inst = _inst_source_txn(tmp_path)
-    src = inst.paths.under("src"); src.mkdir(parents=True)
-    inst.paths.under("state", "source-txn").mkdir(parents=True, exist_ok=True)
-    dest = src / "app"; dest.mkdir(); (dest / "m").write_text("LIVE")
-    tgt = tmp_path / "ext"; tgt.mkdir()
-    staging = src / ".app.candidate-1-2"; os.symlink(tgt, staging)
-    st = os.lstat(staging)
-    lh = source_fs.LinkHandle(".app.candidate-1-2", st.st_dev, st.st_ino,
-                              os.readlink(staging), str(tgt))
-    calls = {"n": 0}
-    monkeypatch.setattr(type(inst), "_verify_staged",
-                        lambda self, txn, h, name: (calls.__setitem__("n", calls["n"] + 1)
-                                                    or calls["n"] == 1))   # pass then fail
-    with source_fs.ManagedSourceTransaction(inst.paths, dest.parent) as txn:
-        outcome = inst._activate_held(txn, dest, staging, handle=lh)
-    assert outcome == "recovery-required"
-    assert (dest / "m").read_text() == "LIVE"                 # prior RESTORED via held FD
-    assert staging.is_symlink()                               # substituted leaf retained
-    assert inst._journal_path(dest).exists()                  # journal retained
-
-
 def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch):
     inst = _inst_source_txn(tmp_path)
     src = inst.paths.under("src"); src.mkdir(parents=True)
@@ -2818,18 +2699,6 @@ def test_journal_ownership_lost_before_update_rolls_back(tmp_path, monkeypatch):
     assert outcome == "recovery-required"
     assert (dest / "m").read_text() == "LIVE"                 # prior restored
     assert inst._journal_path(dest).exists()                  # journal retained
-
-
-def test_normal_link_activation_still_succeeds(tmp_path):
-    inst = _inst_source_txn(tmp_path)
-    _, head = _local_repo(tmp_path, "app-src")
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", strategy="link", local_dir="app-src",
-                                       pin_commit=head))
-    action = inst.adopt_source(comp, source="pinned")
-    dest = inst.paths.under("src") / "app"                    # plain join (leaf is a symlink)
-    assert action.status == "done" and dest.is_symlink() and dest.is_dir()
-    assert not inst._journal_path(dest).exists()              # journal cleared on success
 
 
 def test_cleanup_owned_staging_removes_intact_retains_substituted(tmp_path):
@@ -2918,7 +2787,7 @@ def test_v3_journal_generation_blocked_with_substituted_leaves(tmp_path):
         "prev_rel": rel(prev), "candidate_rel": rel(staging),
         "txn_id": inst._txn_id(rel(staging)),
         "meta": {"selector": "dev", "resolved_commit": "a" * 40, "remote": "",
-                 "strategy": "", "components": ["app"]}}))
+                 "strategy": "", "components": ["app"], "had_prior": True}}))
     msgs = inst.recover_source_activations()
     assert any("generation" in m and "recovery-required" in m for m in msgs)
     assert (dest / "m").read_text() == "SUBSTITUTED DEST"       # nothing touched
@@ -2946,7 +2815,7 @@ def test_v5_inode_recycling_forged_ctime_prior_not_restored(tmp_path):
         "prev_rel": rel(prev), "candidate_rel": rel(staging),
         "txn_id": inst._txn_id(rel(staging)),
         "meta": {"selector": "backfilled", "resolved_commit": "", "remote": "",
-                 "strategy": "", "components": ["app"]},
+                 "strategy": "", "components": ["app"], "had_prior": True},
         "idents": {"candidate": None, "prev": forged}}))
     msgs = inst.recover_source_activations()
     assert any("substituted" in m and "recovery-required" in m for m in msgs)   # ctime mismatch caught
@@ -2976,65 +2845,6 @@ def test_v4_journal_retained_as_unprovable_not_restored(tmp_path):
 def _life(tmp_path):
     return Lifecycle(Paths(runtime_root=tmp_path), (), Config(operator=OperatorConfig()),
                      FakeSystem().system)
-
-
-def _linked_comp(tmp_path):
-    external = tmp_path / "external-checkout"
-    external.mkdir()
-    (external / "marker").write_text("untouched")
-    (tmp_path / "src").mkdir()
-    os.symlink(external, tmp_path / "src" / "app")     # adopt-by-link
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     build_steps=({"argv": ["true"]},), test_argv=("true",),
-                     source=SourceSpec(path="src/app"))
-    return comp, external
-
-
-def test_build_blocked_on_linked_source_without_modifying_it(tmp_path):
-    life = _life(tmp_path)
-    comp, external = _linked_comp(tmp_path)
-    assert life.is_linked_source(comp) is True
-    res = life.build(comp)
-    assert not res.ok and any("BLOCKED" in t for t in res.tail)
-    assert (external / "marker").read_text() == "untouched"
-    assert sorted(p.name for p in external.iterdir()) == ["marker"]   # no LHPC files
-
-
-def test_host_test_blocked_on_linked_source(tmp_path):
-    life = _life(tmp_path)
-    comp, external = _linked_comp(tmp_path)
-    res = life.host_test(comp)
-    assert res is not None and not res.ok and any("BLOCKED" in t for t in res.tail)
-    assert sorted(p.name for p in external.iterdir()) == ["marker"]
-
-
-def test_generated_config_not_written_into_linked_source(tmp_path):
-    # A file-config component whose source is a linked external tree must not receive
-    # a generated config file; write_config_files skips it with a manual note.
-    import os
-    from lhpc.core.services import ControllerService
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    # Find a real file-config component and link its source outside the runtime root.
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    target = None
-    for s in svc.stacks():
-        for c in s.components:
-            if c.config_file and c.source:
-                target, comp = s.id, c
-                break
-        if target:
-            break
-    if target is None:
-        return                       # no file-config component to exercise
-    external = tmp_path / "ext"
-    external.mkdir()
-    link = tmp_path / comp.source.path
-    link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(external, link)
-    svc.write_config_files(target)
-    # nothing generated inside the external tree
-    assert not any(p for p in external.rglob("*") if p.is_file())
 
 
 def test_write_config_files_returns_structured_results(tmp_path):
@@ -3093,34 +2903,6 @@ def test_start_blocks_when_generated_config_write_fails(tmp_path, monkeypatch):
     res = svc.start("voice", apply=True)
     assert any(r.component == "loraham-voice" and r.outcome == Outcome.BLOCKED
                and "config generation failed" in (r.summary or "") for r in res.results), \
-        _outcomes(res)
-
-
-def test_start_linked_readonly_config_is_manual_required(tmp_path, monkeypatch):
-    from conftest import real_spawn
-    from lhpc.core.services import ControllerService, ConfigWrite
-    from lhpc.core.lifecycle import Lifecycle
-    from lhpc.core.paths import Paths
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.outcomes import Outcome
-    STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"   # voice requires DIRECT -> gate clears
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock": STATUS,
-                                   "/tmp/loraconf868.sock": STATUS},
-                     paths={"/usr/include/gtk-3.0/gtk/gtk.h"}).system   # desktop-shaped: keep the GTK app
-    (tmp_path / "src" / "LoRaHAM_Voice").mkdir(parents=True)
-    svc = ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
-    monkeypatch.setattr(type(svc), "is_installed", lambda self, t: True)
-    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
-    monkeypatch.setattr(type(svc), "_running_conflicts", lambda self, c, b: False)
-    monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, c: [])
-    monkeypatch.setattr(type(svc), "_lifecycle", lambda self: Lifecycle(
-        self._paths, self.stacks(), self.config(), self._system, spawn=real_spawn))
-    monkeypatch.setattr(type(svc), "write_config_files", lambda self, t, b="", overrides=None, **kw: [
-        ConfigWrite("loraham-voice", "/ext/voice.conf", "linked-readonly", "read-only")])
-    set_call(svc)
-    res = svc.start("voice", apply=True)
-    assert any(r.component == "loraham-voice" and r.outcome == Outcome.MANUAL_REQUIRED
-               and "linked source is read-only" in (r.summary or "") for r in res.results), \
         _outcomes(res)
 
 
@@ -3399,7 +3181,7 @@ def _svc_env(tmp_path):
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", time.time(),
-                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
+                                       "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     from lhpc.core.probes.backends import CommandResult
     real_run = svc._system.runner.run
@@ -3781,7 +3563,7 @@ def test_uninstall_dirty_after_detach_restores_source(tmp_path, monkeypatch):
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "backfilled", head, time.time(), "", "",
+                                       "backfilled", head, time.time(), "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
     rec_before = source_registry.read_record(svc._paths, "src/loraham-kiss-tnc")
@@ -3814,7 +3596,7 @@ def test_uninstall_dirty_after_detach_reoccupied_is_recovery(tmp_path, monkeypat
         Paths(runtime_root=tmp_path),
         source_registry.RegistryRecord("src/loraham-kiss-tnc",
                                        "https://github.com/makrohard/loraham-kiss-tnc.git",
-                                       "backfilled", head, time.time(), "", "",
+                                       "backfilled", head, time.time(), "",
                                        ("loraham-kiss-tnc", "loraham-kiss-serial")))
     svc = ControllerService(system=RealSystem(), paths=Paths(runtime_root=tmp_path))
 
@@ -4346,7 +4128,7 @@ def _count_calls(monkeypatch, owner, name):
 
 
 def test_a_render_reads_firewall_status_and_listeners_once(tmp_path, monkeypatch):
-    # Before 0.2.9 a /stacks render called firewall_status() 10–13× and tcp_listeners() once per
+    # A /stacks render once called firewall_status() 10–13× and tcp_listeners() once per
     # TCP endpoint; both are now render-wide reads passed down the existing seams.
     from lhpc.core.probes.backends import FakeSystem as _FS
     fw = _count_calls(monkeypatch, ControllerService, "firewall_status")

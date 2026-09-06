@@ -1,4 +1,4 @@
-"""Proxied web page per COMPONENT (0.2.8): a stack may carry several web UIs, each its own page
+"""Proxied web page per COMPONENT: a stack may carry several web UIs, each its own page
 with its own `[stackweb]` policy, port, nginx block, panel and credentials. The stack's first web
 component (manifest order, the stack's `main` sorted last) keeps the STACK id as its page id — so every policy saved before pages existed is still
 valid and the four shipped stacks render byte-identical (test_stackweb.py) — and any further one is

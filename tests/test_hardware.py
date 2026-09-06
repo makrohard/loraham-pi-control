@@ -85,19 +85,6 @@ def test_config_bad_value_is_diagnostic_and_falls_open_to_unset(tmp_path):
     assert any("radio.hardware" in d for d in c.diagnostics)
 
 
-def test_migrates_legacy_hw_preset_to_loraham(tmp_path):
-    # The daemon renamed --hw `legacy` -> `loraham` and removed `legacy` (it now fails the daemon
-    # usage check). A stored [radio].hardware="legacy" must migrate to the `loraham` setup so an
-    # existing install keeps working instead of reading as unconfigured / launching --hw legacy.
-    p = Paths(runtime_root=tmp_path)
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text('[radio]\nhardware = "legacy"\n')
-    c = config.load_config(p)
-    assert c.radio.hardware == "loraham"
-    assert c.radio.hw_preset("433") == "loraham" and c.radio.hw_preset("868") == "loraham"
-    assert any("legacy" in d and "loraham" in d for d in c.diagnostics)
-
-
 @pytest.mark.contract
 def test_save_rejects_invalid_setup(tmp_path):
     with pytest.raises(config.ConfigError):

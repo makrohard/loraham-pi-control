@@ -262,7 +262,7 @@ def test_source_unknown_on_git_error():
 
 
 def test_source_probe_is_two_subprocesses_and_parses_status_v2():
-    """0.2.9: ONE `git status --porcelain=v2 --branch` (HEAD + tracked dirtiness) plus
+    """ONE `git status --porcelain=v2 --branch` (HEAD + tracked dirtiness) plus
     `git describe` — never a third `rev-parse`. Detached HEAD keeps its oid; an unborn branch
     or a timeout is UNKNOWN, never a guessed clean."""
     from lhpc.core.probes.source import parse_status_v2

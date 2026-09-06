@@ -25,13 +25,6 @@ from .paths import PathContainmentError, Paths
 
 REGISTRY_VERSION = 2
 _SELECTORS = ("pinned", "dev", "stable", "backfilled")
-# READ compatibility: releases <= 0.1.4 wrote pre-registry adoptions with selector "legacy"
-# (renamed to "backfilled"). Stored records are UNTRUSTED persistent state we must keep
-# readable across upgrades — accept the historical value on read and normalize it to
-# "backfilled" in the in-memory record, so any later record rewrite persists the new name.
-# Writers use _SELECTORS only; "legacy" is never written again.
-_SELECTORS_READ = (*_SELECTORS, "legacy")
-_STRATEGIES = ("", "adopt", "copy", "link")
 
 
 @dataclass(frozen=True)
@@ -42,10 +35,7 @@ class RegistryRecord:
     resolved_commit: str       # exact commit adopted ("" when the tree is not a git checkout)
     adopted_at: float
     txn_id: str                # source-transaction id ("" for backfilled records)
-    strategy: str              # "" (config default) | adopt | copy | link
     components: tuple[str, ...]  # every manifest component consuming this source path
-    link_target: str = ""      # link strategy: the EXACT validated runtime symlink target
-    version: int = REGISTRY_VERSION  # records loaded from disk keep their on-disk version
 
 
 def registry_dir(paths: Paths) -> Path:
@@ -61,18 +51,16 @@ def record_path(paths: Paths, source_rel: str) -> Path:
 
 
 def _valid(d: object, source_rel: str) -> bool:
-    # v1 (no link_target) records stay READABLE — but strategy identities they cannot prove
-    # keep them NON-DESTRUCTIVE (see verify_identity) until re-adopted/re-confirmed.
-    if not isinstance(d, dict) or d.get("version") not in (1, REGISTRY_VERSION):
+    if not isinstance(d, dict) or d.get("version") != REGISTRY_VERSION:
         return False
-    if d.get("version") == REGISTRY_VERSION and not isinstance(d.get("link_target"), str):
-        return False
-    for f in ("source_rel", "remote", "selector", "resolved_commit", "txn_id", "strategy"):
+    # A record written by <= 0.2.10 also carries `strategy`; it is read as an unknown extra
+    # field and ignored, like any other. Nothing validates or persists it any more.
+    for f in ("source_rel", "remote", "selector", "resolved_commit", "txn_id"):
         if not isinstance(d.get(f), str):
             return False
     if d["source_rel"] != source_rel:                       # record must describe ITS path
         return False
-    if d["selector"] not in _SELECTORS_READ or d["strategy"] not in _STRATEGIES:
+    if d["selector"] not in _SELECTORS:
         return False
     if not isinstance(d.get("adopted_at"), (int, float)) or isinstance(d.get("adopted_at"), bool):
         return False
@@ -86,8 +74,8 @@ def write_record(paths: Paths, rec: RegistryRecord) -> bool:
     payload = {
         "version": REGISTRY_VERSION, "source_rel": rec.source_rel, "remote": rec.remote,
         "selector": rec.selector, "resolved_commit": rec.resolved_commit,
-        "adopted_at": rec.adopted_at, "txn_id": rec.txn_id, "strategy": rec.strategy,
-        "components": list(rec.components), "link_target": rec.link_target,
+        "adopted_at": rec.adopted_at, "txn_id": rec.txn_id,
+        "components": list(rec.components),
     }
     try:
         runtime_fs.write_marker(paths, record_path(paths, rec.source_rel),
@@ -125,12 +113,9 @@ def record_state(paths: Paths, source_rel: str) -> tuple:
                                 "validation — resolve it manually")
     rec = RegistryRecord(
         source_rel=d["source_rel"], remote=d["remote"],
-        # pre-0.1.5 "legacy" reads as "backfilled" (see _SELECTORS_READ) — normalized in memory
-        # only; a rewrite (update_components) persists the new name, reads never mutate the file.
-        selector=("backfilled" if d["selector"] == "legacy" else d["selector"]),
+        selector=d["selector"],
         resolved_commit=d["resolved_commit"], adopted_at=float(d["adopted_at"]),
-        txn_id=d["txn_id"], strategy=d["strategy"], components=tuple(d["components"]),
-        link_target=d.get("link_target", ""), version=int(d.get("version", 1)))
+        txn_id=d["txn_id"], components=tuple(d["components"]))
     return "valid", rec, ""
 
 
@@ -212,20 +197,11 @@ def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
                 return None, ("ownership verified but the record could not be persisted — "
                               "refusing")
             return record, None
-        if handle.kind == "symlink":
-            # A linked adoption: LHPC owns only the symlink leaf — legitimate ONLY when the
-            # manifest declares the link strategy. The EXACT captured target becomes part of
-            # the durable identity.
-            if (spec.strategy or "") != "link":
-                return None, ("unexpected symlink at a non-linked source destination — "
-                              "not an LHPC adoption; refusing")
-            rec = RegistryRecord(rel, expected, "backfilled", "", time.time(), "",
-                                 "link", comps, link_target=handle.target)
-            got, err = _persist(rec)
-            return (got, "backfilled-link") if err is None else (None, err)
         if handle.kind != "dir":
+            # CONTAINMENT: a managed source is a directory under the runtime root. A symlink
+            # (or any other leaf) at its destination is not an LHPC adoption.
             return None, (f"no ownership record and the destination is a {handle.kind} "
-                          "leaf — refusing")
+                          "leaf, not a managed source directory — refusing")
         pinned = Path(handle.pinned_path())
         if not (pinned / ".git").exists():
             return None, "no ownership record and not a git checkout — refusing (unknown tree)"
@@ -240,7 +216,7 @@ def verify_or_backfill(paths: Paths, system, config, comp, dest: Path,
             return None, (f"origin remote {actual!r} does not match the configured remote "
                           f"{expected!r} — not an LHPC-adopted tree")
         rec = RegistryRecord(rel, expected, "backfilled", _head(system, pinned), time.time(), "",
-                             spec.strategy or "", comps)
+                             comps)
         got, err = _persist(rec)
         return (got, "backfilled") if err is None else (None, err)
     finally:
@@ -258,10 +234,8 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
     the caller must fail closed.
 
       * registry PRESENT-BUT-UNSAFE -> BLOCK (never treated as absent);
-      * `link`: the leaf must be a symlink whose EXACT readlink equals the recorded
-        `link_target`; a v1 link record without a recorded target is
-        NON-DESTRUCTIVE until re-adopted/re-confirmed;
-      * managed directory: at least ONE positive proof must succeed — HEAD equals the
+      * the leaf must be a DIRECTORY (a symlink or any other leaf is identity drift);
+      * at least ONE positive proof must succeed — HEAD equals the
         recorded resolved commit, or the actual origin matches the recorded/effective
         remote. Path + leaf kind alone (a non-Git directory with nothing provable) is NOT
         ownership: destructive authorization is refused (re-adopt or remove manually);
@@ -286,28 +260,6 @@ def verify_identity(paths: Paths, system, config, comp, dest: Path,
             kind = source_fs.leaf_kind(paths, dest)   # descriptor-proven, no-follow
         except PathContainmentError as exc:
             return None, f"source parent unsafe: {exc}"
-    if rec.strategy == "link":
-        # A LINKED adoption: LHPC's identity is the runtime symlink LEAF itself, INCLUDING
-        # its exact target — a re-pointed symlink is drift. The external target tree stays
-        # out of scope (mutable dev checkout, never LHPC's to pin or remove).
-        if kind != "symlink":
-            return None, (f"identity drift: recorded a LINKED source but the leaf is "
-                          f"{kind} — refusing")
-        if rec.version < 2 or not rec.link_target:
-            return None, ("v1 link record without a recorded link target — "
-                          "non-destructive until re-adopted (re-run install/adopt)")
-        if handle is not None:
-            actual_target = handle.target
-        else:
-            try:
-                import os as _os
-                actual_target = _os.readlink(dest)
-            except OSError:
-                return None, "identity drift: link target unreadable — refusing"
-        if actual_target != rec.link_target:
-            return None, (f"identity drift: link target {actual_target!r} != recorded "
-                          f"{rec.link_target!r} — refusing")
-        return rec, "verified"
     if kind != "dir":
         return None, (f"identity drift: recorded a managed directory but the leaf is "
                       f"{kind} — refusing")

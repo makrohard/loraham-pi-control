@@ -766,7 +766,7 @@ def _stub_adopt(svc, monkeypatch, *, records=True):
                 source_rel=comp.source.path,
                 remote=comp.source.remote or "https://example.invalid/x.git",
                 selector=selector, resolved_commit="e" * 40, adopted_at=1.0,
-                txn_id="txn-" + comp.id, strategy="adopt", components=(comp.id,)))
+                txn_id="txn-" + comp.id, components=(comp.id,)))
         return _Adopted()
     monkeypatch.setattr(ControllerService, "_adopt_dev_fallback", _adopt)
 
@@ -844,7 +844,7 @@ def test_superseded_receipt_is_retired_on_a_switch(tmp_path, monkeypatch):
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel="src/loraham-daemon", remote="https://example.invalid/d.git",
         selector="pinned", resolved_commit="d" * 40, adopted_at=1.0, txn_id="later",
-        strategy="adopt", components=("loraham-daemon",)))
+        components=("loraham-daemon",)))
     svc.invalidate_snapshot()
     assert brx.receipt_state(svc._paths, "daemon")[0] == "superseded"
     _stub_adopt(svc, monkeypatch)
@@ -1218,7 +1218,7 @@ def _checkout(svc, tmp_path, rel, comp_id, *, commits=2, remote=None, dirty=Fals
     head = _git(svc, d, "rev-parse", "HEAD")
     assert source_registry.write_record(svc._paths, source_registry.RegistryRecord(
         source_rel=rel, remote=origin, selector="pinned", resolved_commit=head,
-        adopted_at=1.0, txn_id="txn-" + comp_id, strategy="adopt", components=(comp_id,)))
+        adopted_at=1.0, txn_id="txn-" + comp_id, components=(comp_id,)))
     if dirty:
         (d / "operator-notes.txt").write_text("mine")
     return head
@@ -1247,7 +1247,7 @@ def _stub_adopt_binary_switch_selector(svc, monkeypatch, *, fail_paths=(), recor
             source_registry.write_record(svc._paths, source_registry.RegistryRecord(
                 source_rel=path, remote=comp.source.remote or "https://x.invalid/r.git",
                 selector=selector, resolved_commit="e" * 40, adopted_at=2.0,
-                txn_id="txn-new-" + comp.id, strategy="adopt", components=(comp.id,)))
+                txn_id="txn-new-" + comp.id, components=(comp.id,)))
         return _Adopted_binary_switch_selector()
     monkeypatch.setattr(ControllerService, "_adopt_dev_fallback", _adopt)
     return seen

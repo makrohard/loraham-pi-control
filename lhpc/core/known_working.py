@@ -47,7 +47,7 @@ def candidate_path(paths: Paths, stack_id: str) -> Path:
 
 def composition_hash(entries: dict) -> str:
     """Identity of a composition: SHA-256 over the COMPLETE sorted source identity of every
-    entry — component id, commit, source path, NORMALIZED remote, and strategy — not just
+    entry — component id, commit, source path and NORMALIZED remote — not just
     `component=commit`. Two starts are ONE composition only when their full source identities
     coincide."""
     from . import source_registry
@@ -56,6 +56,8 @@ def composition_hash(entries: dict) -> str:
         e = entries[c] or {}
         parts.append("|".join((
             c, e.get("commit", ""), e.get("source_rel", ""),
+            # `strategy` is no longer written; reading it as "" keeps a record stored before
+            # its removal hashing to the same value it always did.
             source_registry.norm_remote(e.get("remote", "")), e.get("strategy", ""))))
     blob = ";".join(parts)
     return hashlib.sha256(("lhpc-composition:v2:" + blob).encode("utf-8")).hexdigest()
@@ -155,13 +157,10 @@ def compatible_composition(paths: Paths, stack, effective_remote) -> dict | None
         eligible = True
         for cid, e in entries.items():
             spec = current[cid].source
-            if "strategy" not in e or not e.get("commit"):
+            if not e.get("commit"):
                 eligible = False                       # pre-identity record -> re-confirm first
                 break
             if e.get("source_rel") != spec.path:
-                eligible = False
-                break
-            if e.get("strategy", "") != (spec.strategy or ""):
                 eligible = False
                 break
             if (source_registry.norm_remote(e.get("remote", ""))

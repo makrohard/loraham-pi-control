@@ -250,7 +250,7 @@ def test_web_install_noop_admits_not_blocked(tmp_path, monkeypatch):
     assert d["state"] == "done" and d["admitted"] is True
 
 
-# ---- 0.2.9: the detached web Start/Restart (`_stack-start` runner + `spawn_start_job`) ---------
+# ---- the detached web Start/Restart (`_stack-start` runner + `spawn_start_job`) ---------
 
 _SLOG = "web-start-kiss.log"
 

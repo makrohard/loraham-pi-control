@@ -253,12 +253,6 @@ def _validate_endpoint(cid: str, e) -> None:
 
 def _validate_component(comp) -> None:
     cid = comp.id
-    if comp.source and (comp.source.strategy or "") == "link":
-        # CONTAINMENT: external link sources are not permitted — every source lives
-        # under the runtime root as a managed clone. (The link machinery stays in code
-        # so a LEGACY runtime symlink leaf is still recognized and refused safely.)
-        raise ManifestError(f'{cid}: strategy="link" (external link source) is not '
-                            "permitted — every source lives under the runtime root")
     runnable = bool(comp.run_argv)
     if comp.readiness and comp.readiness not in _READINESS:
         raise ManifestError(f"{cid}: unknown readiness {comp.readiness!r} "
@@ -391,7 +385,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
         if not c.source or not c.source.path:
             continue
         ident = (c.source.artifact, c.source.pin_commit, c.source.pin_tag,
-                 c.source.branch, c.source.remote, c.source.strategy)
+                 c.source.branch, c.source.remote)
         prev = by_path.get(c.source.path)
         if prev is None:
             by_path[c.source.path] = (cid, ident)
@@ -597,7 +591,7 @@ def _is_simple(cmd: str) -> bool:
 
 
 def _tok(t: str) -> str:
-    """Map a legacy `{name}` placeholder to a structured token form."""
+    """Map a `{name}` placeholder to its structured token form."""
     if t.startswith("{") and t.endswith("}") and t.count("{") == 1 and "/" not in t:
         name = t[1:-1]
         if name == "callsign":
@@ -609,9 +603,10 @@ def _tok(t: str) -> str:
 
 
 def _derive_structured(raw: dict) -> None:
-    """Fill structured run/build/test fields from simple legacy command strings, so
-    every shipped component executes shell-free. Commands with shell syntax must be
-    migrated to explicit run_argv/build_steps in the manifest (no shell fallback)."""
+    """Fill structured run/build/test fields from the `run`/`build`/`test` command shorthand —
+    a current authoring form for plain shell-free commands — so every shipped component executes
+    shell-free. A command with shell syntax is written as explicit run_argv/build_steps in the
+    manifest instead (no shell fallback)."""
     if not raw.get("run_argv") and _is_simple(raw.get("run", "")):
         raw["run_argv"] = [_tok(t) for t in raw["run"].split()]
         raw.setdefault("run_cwd", "{source}")
@@ -820,6 +815,11 @@ def _parse_firewall_meta(raw) -> FirewallMeta | None:
 def _parse_source(raw: dict | None) -> SourceSpec | None:
     if not raw:
         return None
+    if "strategy" in raw:
+        # There is no per-source strategy: every managed source is a clone under the runtime
+        # root. Refuse rather than accept a key that would silently mean nothing.
+        raise ManifestError("source.strategy is not a manifest field — every managed source is "
+                            "a clone under the runtime root; remove it")
     return SourceSpec(
         path=raw.get("path", ""),
         pin_commit=raw.get("pin_commit", ""),
@@ -827,6 +827,5 @@ def _parse_source(raw: dict | None) -> SourceSpec | None:
         remote=raw.get("remote", ""),
         branch=raw.get("branch", ""),
         local_dir=raw.get("local_dir", ""),
-        strategy=raw.get("strategy", ""),
         artifact=bool(raw.get("artifact", False)),
     )

@@ -269,7 +269,7 @@ def test_self_update_apply_contends_typed(held_admission):
 
 
 def test_restart_hook_fires_before_the_stop_and_a_refusal_stops_nothing(tmp_path, monkeypatch):
-    """0.2.9: the detached web restart's admission hook runs at the restart transaction's
+    """The detached web restart's admission hook runs at the restart transaction's
     pre-mutation boundary — under admission + config + lifecycle locks, after preflight — and
     BEFORE `stop()`. A refusing (superseded) hook leaves the running stack untouched: no stop, no
     start. The hook is never handed to the nested start."""

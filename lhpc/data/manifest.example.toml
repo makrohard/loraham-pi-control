@@ -1766,7 +1766,7 @@ main = "meshcom-qemu"
   build = 'env XR_HOST=10.0.2.2 XR_PORT=7000 XR_PASSWORD="$(cat {runtime}/config/secrets/xr_pw 2>/dev/null)" scripts/build.sh --env qemu-headless-extradio-gpsd'
   # SELF-SUFFICIENT fresh clone: the workspace (.work/ MeshCom firmware + overlay +
   # OpenETH vendor) is prepared by the repo's own pinned setup scripts before build.sh —
-  # a linked dev tree used to carry a pre-built .work/, a managed clone must not.
+  # a managed clone carries no pre-built .work/.
   # The firmware source MUST be the external-radio feature branch: the default
   # (upstream icssw-org pinned tag) has NO external-radio transport, so the extradio
   # build boots with "LoRa radio disabled (no backend)" and never talks to the bridge —
@@ -2103,7 +2103,7 @@ main = "meshcore-node"
   # early — `build_marker` is written ONLY after the LAST step succeeds and gates `is_built`.
   bin = ".venv/bin/python"
   build_marker = ".venv/.lhpc-build-complete"
-  # venv + pip installs overran the 600 s default on a Pi Zero 2W for meshcore-pi already;
+  # venv + pip installs overran the 600 s default on a Pi Zero 2W for the MeshCore host already;
   # give the build the same room.
   build_timeout = 1800.0
   test_timeout = 900.0
@@ -3225,7 +3225,7 @@ note = "Python headers. Sideband is the ONE component here that needs a compiler
 # the only `gui = true` require here is python3-dev (a COMPILER need for materialyoucolor). A build
 # that installs python3-dev for unrelated reasons — loraham-images does, for Reticulum's spidev/gpiod
 # C extensions — therefore satisfied the whole gate and Sideband installed on a HEADLESS image
-# (verified: lite shipped `sideband stopped/src match` while voice and meshcore-nodegui correctly
+# (verified: lite shipped `sideband stopped/src match` while voice's GTK app correctly
 # showed not-applicable/src missing). Voice gates on libgtk-3-dev;
 # this is the equivalent for Kivy. Be precise about WHAT IT DETECTS: libx11-dev is a -dev package and
 # is NOT on a stock Raspberry Pi OS Desktop (which ships libx11-6/libx11-data). It is present exactly

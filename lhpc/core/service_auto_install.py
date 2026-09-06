@@ -43,13 +43,6 @@ def _recover_cmd_hint(reason: str) -> str:
     return f"{reason} — run `{_RECOVER_CMD}{flag}` to clear it (or acknowledge in the web console)"
 
 
-def _is_linked(comp) -> bool:
-    """Is this component adopted as a LINK to an external checkout (lhpc never builds/tests into
-    one)? A SOURCE-LESS component is never linked — asking `comp.source.strategy` about one is the
-    deref that the work partition exists to prevent."""
-    return bool(comp.source) and (comp.source.strategy or "") == "link"
-
-
 @dataclass(frozen=True)
 class StackWork:
     """The DISJOINT work lists for one auto-install row.
@@ -78,10 +71,6 @@ class StackWork:
                    build=tuple(c for c in comps if c.build_steps or c.build_cmd),
                    test=tuple(c for c in comps if c.test_argv or c.test_cmd),
                    skipped=tuple(c.id for c in stack.components if c.id in skip))
-
-    @property
-    def any_work(self) -> bool:
-        return bool(self.source or self.build or self.test)
 
 
 class AutoInstallOpsMixin:
@@ -836,7 +825,6 @@ class AutoInstallOpsMixin:
         rows = []
         for st, _comps in scope:
             testable = any(c.test_argv and not c.test_requires_running
-                           and not _is_linked(c)
                            for c in st.components)
             deps = []
             for dep in sorted(edges.get(st.id, set())):
@@ -1235,7 +1223,7 @@ class AutoInstallOpsMixin:
                     # before ANY source path, lock or mutation for this row. A stack whose MANDATORY
                     # component needs an absent GUI toolkit is recorded `skipped` (an accepted
                     # outcome, never `success`); a stack that merely loses an OPTIONAL GUI component
-                    # (meshcore-nodegui) proceeds with the rest — MeshCore stays usable via its CLI.
+                    # (the voice GTK app) proceeds with the rest — MeshCore stays usable via its CLI.
                     if w.skipped:
                         r["skipped_components"] = list(w.skipped)
                         # IMMUTABLE: the verdict comes ONLY from the frozen plan (`w.skipped`, decided
@@ -1320,18 +1308,16 @@ class AutoInstallOpsMixin:
                             else:
                                 # Announce the clone log BEFORE the (possibly minutes-long,
                                 # off-TTY-silent) adoption so the operator has a copy-pasteable
-                                # watch command while it runs. A link-strategy adoption never
-                                # clones -> no log to announce.
-                                if comp.source and comp.source.strategy != "link":
-                                    emit(f"  [log] {comp.id} -> tail -f "
-                                         f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
+                                # watch command while it runs.
+                                emit(f"  [log] {comp.id} -> tail -f "
+                                     f"{self._paths.under('logs', f'adopt-{comp.id}.log')}")
                                 a = self._adopt_dev_fallback(
                                     inst, st, comp, selector, resolved,
                                     force=(action == "update"), locked=True)
                                 emit(f"  [{a.status}] {path}: {a.detail}")
                                 # every non-failed adopt outcome is OK: done (mutated),
-                                # exists (already healthy), skipped (benign no-op, e.g.
-                                # a linked dev tree left as-is) — only "failed" fails.
+                                # exists (already healthy), skipped (benign no-op) — only
+                                # "failed" fails.
                                 processed[path] = (a.status != "failed",
                                                    f"{action}: {a.detail}")
                                 if a.status == "done" and action == "update":
@@ -1347,30 +1333,9 @@ class AutoInstallOpsMixin:
                         bw()
                         continue
                     # (mandatory system-dep gate already ran BEFORE source adoption, above)
-                    # LINKED external trees: adoption may be a truthful no-op, but a
-                    # linked stack with DECLARED build/test work that auto-install intentionally
-                    # refuses to execute is NOT a success — the row is blocked and the
-                    # run cannot end fully `completed`.
-                    linked_with_work = [c.id for c in w.source
-                                        if (c.source.strategy or "") == "link"
-                                        and (c.build_steps or c.test_argv)]
-                    if linked_with_work:
-                        r["status"] = "blocked"
-                        r["detail"] = ("sources linked ✓ — linked external tree: "
-                                       "build/test must be performed in that checkout "
-                                       f"({', '.join(linked_with_work)}); deliberate "
-                                       "skip, LHPC never writes into your dev trees")
-                        r["tests"] = {"ran": False, "ok": None,
-                                      "detail": "skipped (linked source)"}
-                        failed_stacks.add(st.id)
-                        emit(f"  [blocked] {st.id}: {r['detail']}")
-                        bw()
-                        continue
-                    linked = [c.id for c in w.source
-                              if (c.source.strategy or "") == "link"]
-                    buildable = [c for c in w.build if c.build_steps and not _is_linked(c)]
+                    buildable = [c for c in w.build if c.build_steps]
                     # Password-auth by DEFAULT — at the LAST safe point: sources adopted, all refusals passed,
-                    # and there is an actual NON-LINKED build to perform. Enable atomically (override + xr_pw,
+                    # and there is an actual build to perform. Enable atomically (override + xr_pw,
                     # one rollback-safe txn) so THIS build bakes the shared secret; the write reuses the
                     # boundary's EXCLUSIVE config lock. FAIL CLOSED: on failure mark the row fail + skip the
                     # build (never bake an empty password as success); do NOT roll HMAC back if a later build
@@ -1404,10 +1369,7 @@ class AutoInstallOpsMixin:
                             failed_stacks.add(st.id)
                             bw()
                             continue
-                    elif linked:
-                        r["detail"] = ("linked external tree — LHPC never builds/tests "
-                                       "into it (build it in that checkout)")
-                    testable = [c for c in w.test if c.test_argv and not _is_linked(c)]
+                    testable = [c for c in w.test if c.test_argv]
                     # Integration tests that need the stack RUNNING can't run in a build sweep
                     # (nothing is started) — they are DEFERRED, never failed, here.
                     auto = [c for c in testable if not c.test_requires_running]

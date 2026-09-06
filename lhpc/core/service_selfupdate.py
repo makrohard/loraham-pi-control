@@ -323,9 +323,9 @@ class SelfUpdateOpsMixin:
         that drifted for some OTHER reason, never units whose template changed in the
         update being applied.
 
-        What makes that acceptable TODAY is an invariant, not a mechanism: 0.1.8 does not
-        change any unit's bytes (see tests/test_updater_units.py::
-        test_unit_bytes_unchanged_since_0_1_6). The moment a release does change them,
+        What makes that acceptable TODAY is an invariant, not a mechanism: no release so far
+        has changed any unit's bytes (see tests/test_updater_units.py::
+        test_unit_bytes_are_the_frozen_render). The moment a release does change them,
         this is not enough — a real two-stage migration is required, and until it exists
         the verification below is what turns a silent boot-restore outage into a visible
         partial update. See docs/backlog.md.
@@ -1022,20 +1022,20 @@ class SelfUpdateOpsMixin:
             guard_res = ActionResult(False, f"Uninstall-guard recovery failed unexpectedly: {exc}",
                                      data={"guard": "error"})
         if guard_res is None:
-            return req_res                          # no guard: exact legacy behavior + wording
+            return req_res                          # no guard: request-only result and wording
         ok = req_res.ok and guard_res.ok
         return ActionResult(ok, f"{req_res.summary} {guard_res.summary}",
                             data={**req_res.data, **guard_res.data})
 
     def _recover_uninstall_guard(self):
-        """Release a STALE uninstall guard, identity-proven: accepts the controller schema
-        (`start_time`), the legacy shell-fallback field (`started`), and legacy DECIMAL strings;
-        REJECTS booleans, non-decimal values, and non-positive pid/start times (strict
-        `_guard_owner_ints`) — malformed/unprovable keeps the guard with its path named. The whole
+        """Release a STALE uninstall guard, identity-proven: `pid` + `start_time` as integers or
+        decimal strings (the form releases up to 0.2.10 wrote); REJECTS booleans, any non-decimal
+        value and non-positive pid/start times (strict `_guard_owner_ints`) — malformed/unprovable
+        keeps the guard with its path named. The whole
         read -> prove -> unlink sequence runs under the ONE per-root guard lock that also serializes
         claim/reclaim/release, so the guard proven stale is GUARANTEED to be the same guard removed —
         recovery can never delete a replacement guard a concurrent uninstall just claimed. Returns
-        None when no guard exists (callers keep legacy request-only wording)."""
+        None when no guard exists (callers keep the request-only wording)."""
         from . import reslock, runtime_fs, updater_units
         from .paths import PathContainmentError
         from .service_base import _guard_owner_ints
@@ -1073,7 +1073,7 @@ class SelfUpdateOpsMixin:
                                 "retry.", data={"guard": "contended"})
 
     def _recover_update_state(self) -> ActionResult:
-        """The request/in-flight half of recovery (legacy semantics + wording, unchanged)."""
+        """The request/in-flight half of recovery."""
         from . import runtime_fs, updater_units
         state = self.classify_request()
         if state == "absent":
