@@ -46,7 +46,7 @@ URLs in the console's own pages keep working once the tunnel is up.
 | KISS TNC (an APRS client on your machine) | `127.0.0.1:8001` | `ssh -N -L 8001:127.0.0.1:8001 lhpc@lhpc-e293.local` | KISS over TCP at `127.0.0.1:8001` |
 | Reticulum TCP interface (another RNS node of yours) | `127.0.0.1:4242` | `ssh -N -L 4242:127.0.0.1:4242 lhpc@lhpc-e293.local` | a `TCPClientInterface` to `127.0.0.1:4242` |
 
-The daemon, chat, igate and voice have no TCP port: chat and the voice terminal are run in an SSH
+The daemon, chat and voice have no TCP port: chat and the voice terminal are run in an SSH
 session on the box itself (`ssh -t lhpc@lhpc-e293.local` and the command shown on the Dashboard).
 
 ## Everything at once

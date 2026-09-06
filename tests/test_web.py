@@ -195,9 +195,9 @@ def test_config_page_route_gone_content_on_stack(tmp_path):
     # The standalone Config page (menu hub + per-stack GET) moved into the stack Settings section.
     c = _client(tmp_path)
     assert c.get("/config").status_code == 404                         # config hub page gone
-    assert c.get("/stacks/igate/config").status_code == 302            # GET config page gone (POST save remains)
-    body = c.get("/stacks?open=igate").get_data(as_text=True)     # content now on the stack page (lazy body)
-    assert 'id="stack-settings-igate"' in body and ">Settings<" in body
+    assert c.get("/stacks/kiss/config").status_code == 302            # GET config page gone (POST save remains)
+    body = c.get("/stacks?open=kiss").get_data(as_text=True)     # content now on the stack page (lazy body)
+    assert 'id="stack-settings-kiss"' in body and ">Settings<" in body
 
 
 def test_server_forced_open_marks_data_force_open(tmp_path):
@@ -216,11 +216,11 @@ def test_inst_query_forces_and_scrolls_to_install_panel(tmp_path):
     # ?inst=<sid> opens the row AND that stack's Install panel, and marks it data-force-scroll so a
     # refused start lands ON the Install/Build buttons instead of the last saved scroll position.
     c = _client(tmp_path)
-    body = c.get("/stacks?inst=igate").get_data(as_text=True)
+    body = c.get("/stacks?inst=kiss").get_data(as_text=True)
     doc = parse(body)
-    panel = doc.by_id("stack-install-igate")
+    panel = doc.by_id("stack-install-kiss")
     assert panel.has_attr("open") and panel["data-force-open"] == "1" and panel["data-force-scroll"] == "1"
-    assert doc.by_id("stackrow-igate")["data-force-open"] == "1"          # the row is forced too
+    assert doc.by_id("stackrow-kiss")["data-force-open"] == "1"          # the row is forced too
     # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to. A non-targeted
     # (closed) stack's body is lazy-loaded, so its Install panel is absent from this response —
     # which is a fortiori not forced/scrolled.
@@ -516,16 +516,16 @@ def test_action_unknown_op_rejected(tmp_path):
 
 @pytest.mark.contract
 def test_start_uninstalled_stack_redirects_to_app_page(tmp_path):
-    # Fresh runtime: igate source absent -> starting it refuses and forwards to IGATE's OWN Install
+    # Fresh runtime: kiss source absent -> starting it refuses and forwards to KISS's OWN Install
     # section (which has the Install button) with a warning — not to whatever row the page last had
     # open (the daemon's, restored from sessionStorage).
     c = _real_app(tmp_path)
     token = _csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "igate"})
+    r = c.post("/action", data={"_csrf": token, "op": "start", "target": "kiss"})
     assert r.status_code == 302
     loc = r.headers["Location"]
-    assert loc.endswith("#stack-install-igate")     # anchor + data-force-scroll land on Install
-    assert "open=igate" in loc and "inst=igate" in loc   # force the row AND the Install panel
+    assert loc.endswith("#stack-install-kiss")     # anchor + data-force-scroll land on Install
+    assert "open=kiss" in loc and "inst=kiss" in loc   # force the row AND the Install panel
 
 
 def test_install_confirm_shows_missing_system_deps(tmp_path):
@@ -541,7 +541,7 @@ def test_install_runs_as_live_logged_job(tmp_path):
     c = _real_app(tmp_path)
     token = _csrf(c)
     r = c.post("/action", data={"_csrf": token, "op": "install",
-                                "target": "igate", "confirmed": "yes"})
+                                "target": "kiss", "confirmed": "yes"})
     assert r.status_code == 302 and "/logs/" in r.headers["Location"]
     assert "job=" in r.headers["Location"]
 
@@ -762,13 +762,13 @@ def test_stacks_pages_show_true_daemon_both_vs_meshtastic868(tmp_path):
 
 # --- Start-confirm "Stack parameters" panel + CALL/node enforcement + Save -------------------
 
-def _install_igate(tmp_path):
-    # igate shares LoRaHAM_Daemon source; create its built binary so the start-confirm renders.
+def _install_chat(tmp_path):
+    # chat builds from the LoRaHAM_Daemon source; create its built binary so the start-confirm renders.
     from lhpc.core.services import ControllerService as _CS
     svc = _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    srcdir = svc._lifecycle().source_dir(svc.stack("igate").main_component)
+    srcdir = svc._lifecycle().source_dir(svc.stack("chat").main_component)
     srcdir.mkdir(parents=True, exist_ok=True)
-    (srcdir / "loraham_igate").write_text("#!/bin/sh\n")
+    (srcdir / "loraham_chat").write_text("#!/bin/sh\n")
     return _real_app(tmp_path)
 
 
@@ -900,27 +900,27 @@ def test_settings_apps_ids_unique(tmp_path):                                 # (
 
 def test_settings_cfg_query_opens(tmp_path):                                 # (4)
     c = _client(tmp_path)
-    assert parse(c.get("/stacks?cfg=igate").get_data(as_text=True)) \
-        .by_id("stack-settings-igate").has_attr("open")                 # ?cfg=<id> forces it open
+    assert parse(c.get("/stacks?cfg=kiss").get_data(as_text=True)) \
+        .by_id("stack-settings-kiss").has_attr("open")                 # ?cfg=<id> forces it open
     # By default the row is closed, so its body (and this Settings panel) is lazy-loaded, i.e. absent —
     # never auto-open.
     assert parse(c.get("/stacks").get_data(as_text=True)) \
-        .by_id("stack-settings-igate") is None
+        .by_id("stack-settings-kiss") is None
 
 
 def test_settings_embedded_post_persists(tmp_path):                          # (5)
-    from lhpc.core.services import ControllerService
+    from lhpc.core.config import load_stack_config
     c = _real_app(tmp_path)
     tok = _csrf(c)
-    r = c.post("/stacks/igate/config", data={"_csrf": tok, "band": "", "c_call": "XX0XXA-7"})
+    r = c.post("/stacks/chat/config", data={"_csrf": tok, "band": "", "f_call": "XX0XXA-7"})
     assert r.status_code in (200, 302)
-    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.stack_config("igate").get("call") == "XX0XXA-7"   # embedded form persists (unique->flat)
+    assert load_stack_config(Paths(runtime_root=tmp_path), "chat").get("file_call") == "XX0XXA-7"
+    # embedded form persists (unique config-file param -> flat `file_<name>` key)
 
 
 @pytest.mark.parametrize("client_kind,path,status", [
     pytest.param("app", "/config", 404, id="config-hub-page-removed"),
-    pytest.param("app", "/stacks/igate/config", 302, id="per-stack-config-GET-removed-post-save-remains"),
+    pytest.param("app", "/stacks/kiss/config", 302, id="per-stack-config-GET-removed-post-save-remains"),
     pytest.param("daemon", "/daemon/433", 404, id="old-per-band-daemon-monitor-page-removed"),
     pytest.param("app", "/self-update", 404, id="standalone-self-update-page-removed"),
 ])
@@ -940,13 +940,13 @@ def test_settings_partial_loads_and_renders(tmp_path):                       # (
         return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     app = create_app(service_factory=factory)
     svc = factory()
-    with app.test_request_context("/stacks/igate?cfg=1"):
+    with app.test_request_context("/stacks/chat?cfg=1"):
         tmpl = app.jinja_env.get_template("_stack_settings.html")   # TemplateNotFound if absent
-        html = tmpl.render(stack=svc.stack("igate"), view=svc.config_view("igate"),
-                           config_groups=svc.config_param_groups("igate"),
+        html = tmpl.render(stack=svc.stack("chat"), view=svc.config_view("chat"),
+                           config_groups=svc.config_param_groups("chat"),
                            settings_id="stack-settings")
     assert '<summary>Settings</summary>' in html and 'id="stack-settings"' in html
-    assert 'name="c_call"' in html                            # component-aware field rendered
+    assert 'name="f_call"' in html                            # component-aware field rendered
 
 
 # --- Settings reset button: exact "Reset to defaults" text for every stack/band --------------
@@ -1335,7 +1335,7 @@ def _seed_kw_offer(tmp_path, commit="a" * 40):
     assert known_working.write_candidate(paths, "chat", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
         "src/LoRaHAM_Daemon", "", "dev", commit, _t.time(), "", "",
-        ("loraham-chat", "loraham-igate")))
+        ("loraham-chat",)))
     return paths, entries
 
 
@@ -1559,7 +1559,7 @@ def _feed_svc(tmp_path):
 
 def test_daemon_feed_keeps_a_tx_buried_under_log_chatter(tmp_path):
     # THE BUG: the feed tailed 400 lines and filtered AFTERWARDS, so "recent" meant "within the last
-    # 400 log lines", not recent in time. A chatty igate (beacons + digipeat + RX) buried a
+    # 400 log lines", not recent in time. A chatty graywolf (beacons + digipeat + RX) buried a
     # seconds-old TX; a quiet chat did not. Filter FIRST, then keep the last N matches.
     svc = _feed_svc(tmp_path)
     body = ("noise\n" * 1500) + "[TX868] one frame TXOK=1\n" + ("noise\n" * 800)
@@ -1847,7 +1847,7 @@ def test_dash_originated_action_returns_to_dashboard(tmp_path):
     # Dashboard (root), never to /stacks.
     c = _real_app(tmp_path)
     token = _csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "igate",
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
                                 "from": "dash", "confirmed": "yes"})
     assert r.status_code == 302
     assert r.headers["Location"].endswith("/")         # dashboard root, not a /stacks anchor
@@ -1858,11 +1858,11 @@ def test_stacks_originated_action_returns_to_its_stack_row(tmp_path):
     # No from=dash -> the action returns to the acting stack's row on /stacks.
     c = _real_app(tmp_path)
     token = _csrf(c)
-    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "igate",
+    r = c.post("/action", data={"_csrf": token, "op": "stop", "target": "kiss",
                                 "confirmed": "yes"})
     assert r.status_code == 302
     loc = r.headers["Location"]
-    assert "/stacks" in loc and "open=igate" in loc
+    assert "/stacks" in loc and "open=kiss" in loc
 
 
 def test_dashboard_wsbox_collapsed_with_firewall_line(tmp_path):
@@ -2121,10 +2121,10 @@ def _spy_spawns(monkeypatch, admission="admitted", reason=""):
     return spawns
 
 
-def _igate_ready(tmp_path):
-    """igate installed + built, with an operator callsign the plan accepts."""
+def _chat_ready(tmp_path):
+    """chat installed + built, with an operator callsign the plan accepts."""
     from lhpc.core.services import ControllerService as _CS
-    c = _install_igate(tmp_path)
+    c = _install_chat(tmp_path)
     _CS(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path)).set_operator_identity(
         callsign="XX0XXA")
     return c
@@ -2134,15 +2134,15 @@ def test_routine_start_runs_with_no_page_between(tmp_path, monkeypatch):
     # Click Start -> the plan finds no consequential choice -> the start is spawned as a tracked
     # job -> back where the operator came from at once, "follow it in the banner" flashed. No
     # confirmation page, no per-launch inputs, no synchronous run.
-    c = _igate_ready(tmp_path)
+    c = _chat_ready(tmp_path)
     calls = _spy_actions(monkeypatch)
     spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
-    assert spawns == [("start", "igate", "", False, False)] and calls == []
+    assert spawns == [("start", "chat", "", False, False)] and calls == []
     page = c.get("/").get_data(as_text=True)
-    assert "Starting &#39;igate&#39; — follow it in the banner" in page
+    assert "Starting &#39;chat&#39; — follow it in the banner" in page
 
 
 def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch):
@@ -2162,49 +2162,49 @@ def test_routine_restart_runs_with_no_page_between(tmp_path, monkeypatch):
 def test_a_crafted_post_with_the_old_launch_fields_changes_nothing(tmp_path, monkeypatch):
     # p_<name>/pf_<name>/dp_<band>_<PARAM>/opt_start_<id>/_save fields are simply not read.
     from lhpc.core.config import load_stack_config
-    c = _igate_ready(tmp_path)
+    c = _chat_ready(tmp_path)
     spawns = _spy_spawns(monkeypatch)
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate",
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat",
                                 "confirmed": "yes", "_params": "1", "_save": "all",
                                 "_save_then_start": "1", "p_call": "ZZ9ZZZ-1",
                                 "p_tx_freq": "434.500", "dp_433_SF": "10",
                                 "opt_start_x": "on"})
     assert r.status_code == 302 and len(spawns) == 1
-    cfg = load_stack_config(Paths(runtime_root=tmp_path), "igate")
+    cfg = load_stack_config(Paths(runtime_root=tmp_path), "chat")
     assert "call" not in cfg and "tx_freq" not in cfg and "dp_433_SF" not in cfg
 
 
 def test_identity_refusal_sends_the_operator_to_the_settings_row(tmp_path, monkeypatch):
     # No callsign anywhere -> the PLAN refuses before anything runs; the operator lands on the
     # stack's Settings with the offending row marked (`?cfg=` force-open + `?bad=` highlight).
-    c = _install_igate(tmp_path)
+    c = _install_chat(tmp_path)
     calls = _spy_actions(monkeypatch)
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat"})
     assert r.status_code == 302 and calls == []
     loc = r.headers["Location"]
-    assert "/stacks?" in loc and "cfg=igate" in loc and "bad=c_call" in loc
-    assert loc.endswith("#stack-settings-igate")
+    assert "/stacks?" in loc and "cfg=chat" in loc and "bad=f_call" in loc
+    assert loc.endswith("#stack-settings-chat")
     page = c.get(loc.split("#")[0]).get_data(as_text=True)
     assert "callsign is required" in page                      # the refusal, flashed
     row = page
-    assert 'id="stack-settings-igate" open data-force-open="1"' in row
+    assert 'id="stack-settings-chat" open data-force-open="1"' in row
     assert 'class="advrow field-bad"' in row or 'class=" field-bad"' in row
-    assert 'name="c_call"' in row.split("field-bad", 1)[1][:600]   # the marked row IS the field
+    assert 'name="f_call"' in row.split("field-bad", 1)[1][:600]   # the marked row IS the field
     # No persisted refusal state: a second plain page load shows nothing marked.
-    assert "field-bad" not in c.get("/stacks?open=igate").get_data(as_text=True)
+    assert "field-bad" not in c.get("/stacks?open=chat").get_data(as_text=True)
 
 
 def test_a_refused_plan_flashes_where_the_operator_came_from(tmp_path, monkeypatch):
     from lhpc.core.services import ControllerService, ActionResult
-    c = _igate_ready(tmp_path)
+    c = _chat_ready(tmp_path)
     monkeypatch.setattr(ControllerService, "run_action",
                         lambda self, op, target, apply=False, **k: ActionResult(
-                            False, "Cannot start 'igate': radio hardware not set",
+                            False, "Cannot start 'chat': radio hardware not set",
                             details=["  set it under Settings"]))
     tok = _csrf(c)
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
     assert r.status_code == 302 and r.headers["Location"].endswith("/")
     page = c.get("/").get_data(as_text=True)
     assert "radio hardware not set" in page and "set it under Settings" in page
@@ -2330,14 +2330,14 @@ def test_row_open_indicator_and_settings_highlight_assets():
 
 
 def test_a_blocked_or_pending_spawn_flashes_and_returns(tmp_path, monkeypatch):
-    c = _igate_ready(tmp_path)
+    c = _chat_ready(tmp_path)
     tok = _csrf(c)
-    _spy_spawns(monkeypatch, admission="blocked", reason="a start of 'igate' is already in progress")
-    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    _spy_spawns(monkeypatch, admission="blocked", reason="a start of 'chat' is already in progress")
+    r = c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
     assert r.status_code == 302
     assert "already in progress" in c.get("/").get_data(as_text=True)
     _spy_spawns(monkeypatch, admission="pending")
-    c.post("/action", data={"_csrf": tok, "op": "start", "target": "igate", "from": "dash"})
+    c.post("/action", data={"_csrf": tok, "op": "start", "target": "chat", "from": "dash"})
     assert "admission not yet confirmed" in c.get("/").get_data(as_text=True)
 
 

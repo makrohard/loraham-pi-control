@@ -2183,7 +2183,7 @@ class LifecycleOpsMixin:
 
     def stop_dependents(self, target: str, bands=None) -> list[str]:
         """Running stacks that would be orphaned if `target` stops (they depend on one of
-        its components) — e.g. stopping the daemon orphans kiss/igate/…
+        its components) — e.g. stopping the daemon orphans kiss/…
 
         When `bands` is given (the radio band(s) actually being stopped), a dependent is
         included ONLY if it is running on one of those bands: stopping the daemon's 433
@@ -3843,7 +3843,7 @@ class LifecycleOpsMixin:
         if not bands:
             return ActionResult(
                 False, f"Cannot TX-test '{target}': no daemon-served radio is READY on "
-                f"{' or '.join(wanted)} MHz. A daemon stack (chat/igate/kiss/meshcom/meshcore) needs the "
+                f"{' or '.join(wanted)} MHz. A daemon stack (chat/kiss/meshcom/meshcore) needs the "
                 f"daemon started + RADIO=READY first; a stack that drives its OWN radio (e.g. meshtastic) "
                 f"is not daemon-TX-testable — verify its TX from its own app/logs instead.",
                 next_commands=[f"lhpc status {target}"])
@@ -5177,7 +5177,7 @@ class LifecycleOpsMixin:
                 "startable": startable,
                 "interactive": interactive,
                 # Two+ stacks sharing one radio (e.g. a manually-started chat plus a
-                # running iGate) fight over the daemon's tuning — flag it red. Stacks that
+                # running chat) fight over the daemon's tuning — flag it red. Stacks that
                 # reach RF THROUGH another one are filtered out first: they are its client,
                 # not its rival (see _radio_competitors).
                 "conflict": self._radio_competitors(

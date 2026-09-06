@@ -8,7 +8,7 @@
 # inode pre-check passes on overlay/dynamic-inode filesystems that report df -i favail as 0.)
 FROM mcr.microsoft.com/devcontainers/python:3.13-trixie
 
-# Toolchain for the SOURCE stacks (kiss/chat/igate gcc, RadioLib cmake stub, socat serial,
+# Toolchain for the SOURCE stacks (kiss/chat gcc, RadioLib cmake stub, socat serial,
 # graywolf .deb unpack, binary-channel zstd, git, gpsd binary for the require probe), the
 # real nginx for the stackweb proxies, and the GUI/desktop runtime (Xvfb + software GL +
 # SDL2 + a null ALSA default) so the GTK (voice) and Kivy (sideband) apps launch headless.

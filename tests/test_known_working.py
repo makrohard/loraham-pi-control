@@ -127,7 +127,7 @@ def _seed_running_chat(tmp_path, commit="a" * 40):
     assert known_working.write_candidate(paths, "chat", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
         "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", "",
-        ("loraham-chat", "loraham-igate")))
+        ("loraham-chat",)))
     return paths, entries
 
 
@@ -151,7 +151,7 @@ def test_offer_hidden_when_stopped_recorded_or_changed(tmp_path):
     _seed_running_chat(tmp_path)                                  # fresh candidate (commit a…)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
         "src/LoRaHAM_Daemon", "", "dev", "b" * 40, time.time(), "", "",
-        ("loraham-chat", "loraham-igate")))
+        ("loraham-chat",)))
     svc2 = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
     assert svc2.known_working_offer("chat") is None
 
@@ -188,7 +188,7 @@ def _seed_registry_only_chat(tmp_path, commit="a" * 40):
     (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True, exist_ok=True)
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
         "src/LoRaHAM_Daemon", "", "dev", commit, time.time(), "", "",
-        ("loraham-chat", "loraham-igate")))
+        ("loraham-chat",)))
     return paths
 
 

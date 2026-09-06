@@ -27,7 +27,7 @@ node's info, an HTTP answer, `rnstatus` counters). Log greps are not evidence.
 | Radio | LoRaHAM daemon serving 433 and 868; record `lhpc hardware` at the start of the run |
 | Channels | `pinned` = the manifest pins (the known-working line, main); `dev` = the branch tip and the default install for every stack without a published binary; `binary` for daemon, meshtastic and meshcom. All three are covered, see [Coverage](#coverage) |
 | Console | left running for the light stacks; **stopped for the heavy compiles** (`systemctl --user stop lhpc-web lhpc-nginx`), as [field-notes](field-notes.md#build-durations--memory-pressure-512-mb-zero-2-w) require on 512 MB |
-| Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, igate, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
+| Radio budget | one stack per band at a time: 433 belongs to the daemon chain (kiss, graywolf, meshcom), 868 to one of meshtastic / MeshCore / Reticulum. Stop the previous owner before starting the next |
 
 ## Procedure per stack
 
@@ -58,14 +58,13 @@ t lhpc stack stop <stack> --yes               # 6. stop; `lhpc status` shows not
 ## Matrix
 
 Order matters: light stacks first, the heavy compiles last, MeshCom from source as the very last
-row. A stack that shares a source with an earlier row (chat, igate and voice share the daemon's
+row. A stack that shares a source with an earlier row (chat and voice share the daemon's
 sources) is still purged and reinstalled on its own.
 
 | # | stack | channel | build | start | evidence |
 |---|---|---|---|---|---|
 | 1 | `daemon` | binary | — | both bands | `lhpc status daemon`: READY on 433 and 868; `lhpc daemon 433` answers |
 | 2 | `chat` | pinned | daemon sources | interactive | the printed command runs in a terminal and exits cleanly |
-| 3 | `igate` | pinned | daemon sources | 433 | verified; needs the daemon's 433 |
 | 4 | `voice` | pinned | `loraham-voice-cli` (GTK variant skipped on Lite) | interactive | the terminal variant's printed command runs; GTK reported skipped, not failed |
 | 5 | `kiss` | pinned | `loraham-kiss-tnc` | 433 | verified; TCP `127.0.0.1:8001` answers |
 | 6 | `graywolf` | fetched release | — | 433 (needs kiss) | verified; web UI `127.0.0.1:8080` answers; the KISS client is held |
@@ -90,7 +89,6 @@ all-stacks install (and the image builder) uses.
 |---|---|---|---|
 | daemon | row 1 | row 11 | auto-install (binary is its default) |
 | chat | — | row 2 | auto-install |
-| igate | — | row 3 | auto-install |
 | voice | — | row 4 | auto-install |
 | kiss | — | row 5 | auto-install |
 | graywolf | — (fetched release) | row 6 | auto-install |

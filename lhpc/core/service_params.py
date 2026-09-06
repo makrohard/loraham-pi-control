@@ -2291,7 +2291,7 @@ class ParamsConfigMixin:
         parameters."""
         # `_config_band` maps to the per-band CONFIG STORE. The DAEMON has no such store yet
         # genuinely operates per band, so flattening there would DISCARD an explicit `--band 433`.
-        # Only the daemon keeps the raw hint: a FIXED-band client (chat/igate/meshcom on 433,
+        # Only the daemon keeps the raw hint: a FIXED-band client (chat/meshcom on 433,
         # meshcore on 868) also has no store, and honouring a raw band for it would ensure, lock
         # and clear the daemon on a band the node cannot run on (review-found) — it flattens, as
         # it always did, and the fixed band its manifest declares is what actually runs.

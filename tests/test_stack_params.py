@@ -57,7 +57,7 @@ def _lock_is_held(svc, key: str) -> bool:
 
 def test_identity_field_map(tmp_path):
     svc = _svc(tmp_path)
-    exp = {"igate": ("call", "run", "licensed"), "chat": ("call", "file", "licensed"),
+    exp = {"graywolf": ("call", "run", "licensed"), "chat": ("call", "file", "licensed"),
            "voice": ("callsign", "file", "licensed"), "meshcom": ("mc_callsign", "run", "licensed"),
            "meshtastic": ("node_name", "run", "unlicensed"),
            "meshcore": ("node_name", "file", "unlicensed")}
@@ -82,18 +82,18 @@ def _seed_raw(svc, stack_id, values, band=None):
 
 def test_licensed_refuses_empty_and_n0call(tmp_path):
     svc = _svc(tmp_path)
-    assert svc.enforce_identity("igate")[0] is False                       # empty operator callsign
+    assert svc.enforce_identity("chat")[0] is False                        # empty operator callsign
     for bad in ("", "N0CALL", "n0call-1"):
-        _seed_raw(svc, "igate", {"call": bad})
-        assert svc.enforce_identity("igate")[0] is False, bad
-    _seed_raw(svc, "igate", {"call": "XX0XXA-10"})
-    assert svc.enforce_identity("igate")[0] is True
+        _seed_raw(svc, "chat", {"file_call": bad})
+        assert svc.enforce_identity("chat")[0] is False, bad
+    _seed_raw(svc, "chat", {"file_call": "XX0XXA-10"})
+    assert svc.enforce_identity("chat")[0] is True
 
 
 def test_licensed_default_uses_operator_callsign(tmp_path):
     svc = _svc(tmp_path)
     save_operator_config(svc._paths, "XX0XXA"); svc._invalidate_config()
-    assert svc.enforce_identity("igate")[0] is True       # default {callsign} -> XX0XXA
+    assert svc.enforce_identity("chat")[0] is True        # default {callsign} -> XX0XXA
 
 
 def test_identity_hint_leads_with_the_local_field(tmp_path):
@@ -103,7 +103,6 @@ def test_identity_hint_leads_with_the_local_field(tmp_path):
     svc = _svc(tmp_path)
     for target, frag in (("meshcom", "lhpc config meshcom mc_callsign"),
                          ("chat", "lhpc config chat call"),
-                         ("igate", "lhpc config igate call"),
                          ("voice", "lhpc config voice callsign"),
                          ("graywolf", "lhpc config graywolf call")):
         hint = svc._identity_config_hints(target)[0]
@@ -152,7 +151,7 @@ def test_meshcore_file_node_uses_the_saved_value(tmp_path):
 def test_identity_fields_name_the_settings_row(tmp_path):
     # `field` is the Settings form field (`c_`/`f_`) — the row a refused start highlights.
     svc = _svc(tmp_path)
-    idr = svc._identity_fields("igate")
+    idr = svc._identity_fields("graywolf")
     assert len(idr) == 1 and idr[0]["name"] == "call" and idr[0]["field"] == "c_call"
     assert svc._identity_fields("daemon") == []                            # daemon exempt
     vrows = svc._identity_fields("voice")
@@ -179,7 +178,7 @@ def test_start_blocks_licensed_without_call_backstop(tmp_path):
     # Direct/CLI start (authoritative) refuses a licensed stack with no callsign, carrying the
     # field(s) to highlight; nothing is launched.
     svc = _svc(tmp_path)
-    res = svc.start("igate", apply=True)
+    res = svc.start("graywolf", apply=True)
     assert not res.ok and "callsign" in res.summary.lower()
     assert res.data.get("enforce_fields") == ["c_call"]
 
@@ -187,7 +186,7 @@ def test_start_blocks_licensed_without_call_backstop(tmp_path):
 def test_start_licensed_with_call_passes_enforcement(tmp_path):
     svc = _svc(tmp_path)
     set_call(svc)
-    res = svc.start("igate", apply=True)                                   # not blocked by enforcement
+    res = svc.start("graywolf", apply=True)                                   # not blocked by enforcement
     assert "callsign is required" not in res.summary
 
 
@@ -451,21 +450,21 @@ def test_public_restart_invalid_identity_no_lock(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
     # a SAVED N0CALL / an empty local with no global: the preflight refuses before any lock/stop
     # side effect (no _Seam raised), naming the Settings row.
-    _seed_raw(svc, "igate", {"call": "N0CALL"})
-    res = svc.restart("igate", apply=True)
+    _seed_raw(svc, "graywolf", {"call": "N0CALL"})
+    res = svc.restart("graywolf", apply=True)
     assert res.ok is False and "callsign" in (res.summary + str(res.details)).lower()
     assert res.data.get("enforce_fields") == ["c_call"]
-    _seed_raw(svc, "igate", {"call": ""})
-    res = svc.restart("igate", apply=True)
+    _seed_raw(svc, "graywolf", {"call": ""})
+    res = svc.restart("graywolf", apply=True)
     assert res.ok is False and res.data.get("enforce_fields") == ["c_call"]
 
 
 @pytest.mark.contract
 def test_public_restart_valid_reaches_lock_seam(tmp_path, monkeypatch):
     svc = _restart_lock_seam(tmp_path, monkeypatch)
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-10"}).ok
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-10"}).ok
     with pytest.raises(_Seam):                                             # preflight passed
-        svc.restart("igate", apply=True)
+        svc.restart("graywolf", apply=True)
 
 
 def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
@@ -474,11 +473,11 @@ def test_restart_impl_validates_before_its_stop(tmp_path, monkeypatch):
         raise _Seam()
     monkeypatch.setattr(svc, "stop", seam)                                 # stop() is the seam
     # an unusable SAVED identity -> typed failure BEFORE stop()
-    _seed_raw(svc, "igate", {"call": "N0CALL"})
-    assert svc._restart_impl("igate", apply=True).ok is False
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-10"}).ok
+    _seed_raw(svc, "graywolf", {"call": "N0CALL"})
+    assert svc._restart_impl("graywolf", apply=True).ok is False
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-10"}).ok
     with pytest.raises(_Seam):                                             # valid -> reaches stop()
-        svc._restart_impl("igate", apply=True)
+        svc._restart_impl("graywolf", apply=True)
 
 
 # --- Area 2: direct component targets use the OWNER stack for persistence --------------------
@@ -542,11 +541,11 @@ def test_config_guard_held_across_applied_start(tmp_path, monkeypatch):
     seen = {}
     def spy(*a, **k):
         seen["exclusive"] = _exclusive_available(svc._paths)       # inside the start (after identity)
-        seen["call"] = svc.stack_config("igate").get("call")
+        seen["call"] = svc.stack_config("graywolf").get("call")
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
-        svc.start("igate", apply=True)
+        svc.start("graywolf", apply=True)
     assert seen["exclusive"] is False                             # a save would BLOCK mid-start
     assert seen["call"] == "XX0XXA"                               # config read is the stable snapshot
     assert _exclusive_available(svc._paths) is True               # released afterwards
@@ -562,12 +561,12 @@ def test_direct_start_impl_and_restart_impl_hold_config_guard(tmp_path, monkeypa
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
-        svc._start_impl("igate", apply=True)                     # DIRECT internal call
+        svc._start_impl("graywolf", apply=True)                     # DIRECT internal call
     assert held["v"] is False                                    # guard held — cannot be bypassed
     monkeypatch.setattr(svc, "stop", lambda *a, **k: ActionResult(True, "stopped"))
     held.clear()
     with pytest.raises(_Seam):
-        svc._restart_impl("igate", apply=True)                   # DIRECT internal restart
+        svc._restart_impl("graywolf", apply=True)                   # DIRECT internal restart
     assert held["v"] is False
 
 
@@ -577,24 +576,24 @@ def test_competing_save_blocks_until_start_completes_then_succeeds(tmp_path, mon
     set_call(svc)
     done = threading.Event()
     def spy(*a, **k):
-        threading.Thread(target=lambda: (svc.save_config_bundle("igate", values={"call": "DJ0XYZ"}),
+        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "DJ0XYZ"}),
                                          done.set())).start()
         time.sleep(0.3)
         assert not done.is_set()                                 # competing save BLOCKED during start
-        assert svc.stack_config("igate").get("call") == "XX0XXA" # generation would read the stable value
+        assert svc.stack_config("graywolf").get("call") == "XX0XXA" # generation would read the stable value
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
-        svc.start("igate", apply=True)
+        svc.start("graywolf", apply=True)
     done.wait(3)                                                  # after the guard released, save runs
-    assert done.is_set() and svc.stack_config("igate").get("call") == "DJ0XYZ"
+    assert done.is_set() and svc.stack_config("graywolf").get("call") == "DJ0XYZ"
 
 
 def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, monkeypatch):
     import threading, time
     from lhpc.core.services import ActionResult
     svc = _svc(tmp_path)
-    svc.save_config_bundle("igate", values={"call": "XX0XXA-5"})  # valid persisted call
+    svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"})  # valid persisted call
     stops = []
     monkeypatch.setattr(svc, "stop",
                         lambda *a, **k: (stops.append(1), ActionResult(True, "stopped"))[1])
@@ -602,15 +601,15 @@ def test_restart_not_stopped_then_failed_by_concurrent_invalid_save(tmp_path, mo
     def spy(*a, **k):
         # a competing save flipping the call to N0CALL must be BLOCKED for the whole restart, so the
         # restart's start still sees the VALID call — it never stops then rejects the target.
-        threading.Thread(target=lambda: (svc.save_config_bundle("igate", values={"call": "XX0XXB-5"}),
+        threading.Thread(target=lambda: (svc.save_config_bundle("graywolf", values={"call": "XX0XXB-5"}),
                                          saved.set())).start()
         time.sleep(0.3)
         assert not saved.is_set()
-        assert svc.stack_config("igate").get("call") == "XX0XXA-5"
+        assert svc.stack_config("graywolf").get("call") == "XX0XXA-5"
         raise _Seam()
     monkeypatch.setattr(svc, "_ensure_daemon", spy)
     with pytest.raises(_Seam):
-        svc.restart("igate", apply=True)
+        svc.restart("graywolf", apply=True)
     assert stops == [1]                                           # stopped ONCE (reached the start)
     saved.wait(3)
     assert saved.is_set()                                        # invalid save applied only AFTER restart
@@ -909,10 +908,10 @@ def test_config_view_identity_and_values_per_component(tmp_path):
 def test_config_unique_fields_stay_bare_and_flat(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    for f in svc.config_param_fields("igate"):
+    for f in svc.config_param_fields("kiss"):
         assert "__" not in f["field"] and "." not in f["key"]        # bare fields/keys preserved
-    assert svc.save_stack_config("igate", {"call": "XX0XXA-9"}).ok    # canonical delegate
-    assert cfgmod.load_stack_config(svc._paths, "igate").get("call") == "XX0XXA-9"   # flat key
+    assert svc.save_stack_config("kiss", {"kiss_port": "8002"}).ok    # canonical delegate
+    assert cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", "")).get("kiss_port") == "8002"   # flat key
 
 
 def test_save_stack_config_rejects_unqualified_dup_and_unknown(tmp_path):
@@ -932,19 +931,19 @@ def test_save_stack_config_rejects_unqualified_dup_and_unknown(tmp_path):
 def test_config_stores_overrides_only(tmp_path):
     from lhpc.core import config as cfgmod
     svc = _svc(tmp_path)
-    p = next(pp for pp in svc.run_params_for("igate") if pp.name == "tx_freq")
+    p = next(pp for pp in svc.run_params_for("kiss") if pp.name == "tx_freq")
     default = svc._param_default_canon(p, "", "")
     # saving the current default persists NOTHING, yet the effective value is still the default
-    assert svc.save_config_bundle("igate", values={"tx_freq": default}).ok
-    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "igate")
-    assert svc.stack_config("igate")["tx_freq"] == default
+    assert svc.save_config_bundle("kiss", values={"tx_freq": default}).ok
+    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", ""))
+    assert svc.stack_config("kiss")["tx_freq"] == default
     # saving a real override persists it and survives reload
-    assert svc.save_config_bundle("igate", values={"tx_freq": "434.500"}).ok
-    assert cfgmod.load_stack_config(svc._paths, "igate").get("tx_freq") == "434.500"
-    assert svc.stack_config("igate")["tx_freq"] == "434.500"
+    assert svc.save_config_bundle("kiss", values={"tx_freq": "434.500"}).ok
+    assert cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", "")).get("tx_freq") == "434.500"
+    assert svc.stack_config("kiss")["tx_freq"] == "434.500"
     # saving it back to the default clears the stored override again
-    assert svc.save_config_bundle("igate", values={"tx_freq": default}).ok
-    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "igate")
+    assert svc.save_config_bundle("kiss", values={"tx_freq": default}).ok
+    assert "tx_freq" not in cfgmod.load_stack_config(svc._paths, "kiss", svc._config_band("kiss", ""))
 
 
 def test_value_at_old_default_follows_new_default(tmp_path):
@@ -1012,28 +1011,28 @@ def test_an_invalid_saved_run_param_refuses_plan_apply_and_restart_before_the_st
     apply alike, so the refusal comes before owner stops, config generation or the stop leg."""
     svc = _svc(tmp_path)
     set_call(svc)
-    _seed_raw(svc, "igate", {"tx_freq": "banana"})                  # past the validating bundle
+    _seed_raw(svc, "kiss", {"tx_freq": "banana"})                  # past the validating bundle
     stops = _spy_stops(monkeypatch)
-    plan = svc.start("igate", apply=False)
-    assert not plan.ok and "invalid saved configuration for loraham-igate" in plan.summary
-    assert "banana" in plan.summary and plan.next_commands == ["lhpc config igate"]
-    res = svc.start("igate", apply=True, stop_owners=True)
+    plan = svc.start("kiss", apply=False)
+    assert not plan.ok and "invalid saved configuration for loraham-kiss-tnc" in plan.summary
+    assert "banana" in plan.summary and plan.next_commands == ["lhpc config kiss"]
+    res = svc.start("kiss", apply=True, stop_owners=True)
     assert not res.ok and "invalid saved configuration" in res.summary
-    res = svc.restart("igate", apply=True)
-    assert not res.ok and "Cannot restart 'igate': invalid saved configuration" in res.summary
+    res = svc.restart("kiss", apply=True)
+    assert not res.ok and "Cannot restart 'kiss': invalid saved configuration" in res.summary
     assert stops == []                                               # nothing was ever stopped
     # a valid value passes the same seam
-    _seed_raw(svc, "igate", {"tx_freq": "434.500"})
-    assert svc._saved_launch_refusal("igate", "", "start") is None
+    _seed_raw(svc, "kiss", {"tx_freq": "434.500"})
+    assert svc._saved_launch_refusal("kiss", "", "start") is None
     # the daemon's stored file is NOT a launch input (its argv is rebuilt per band at spawn): a
     # stale key there (a `radio` choice the manifest no longer has) refuses no client start
     _seed_raw(svc, "daemon", {"radio": "both"})
-    assert svc._saved_launch_refusal("igate", "", "start") is None
-    assert svc.start("igate", apply=False).ok
+    assert svc._saved_launch_refusal("kiss", "", "start") is None
+    assert svc.start("kiss", apply=False).ok
 
 
 def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(tmp_path, monkeypatch):
-    # meshtastic (marked running on 433) owns that radio; igate has an invalid saved value: the
+    # meshtastic (marked running on 433) owns that radio; kiss has an invalid saved value: the
     # owner stop that `stop_owners=True` would run must not happen for a start that cannot launch.
     from lhpc.core import config as _cfg
     svc = ControllerService(system=FakeSystem(cmdlines_data={200: ["meshtasticd"]}).system,
@@ -1042,9 +1041,9 @@ def test_an_invalid_target_start_with_a_conflicting_owner_never_stops_the_owner(
     _cfg.save_hardware_setup(svc._paths, "loraham"); svc._invalidate_config()
     set_call(svc)
     svc._set_running_band("meshtastic", "433")
-    assert [b.get("holder_stack") for b in svc.run_blockers("igate")], "precondition: an owner"
-    _seed_raw(svc, "igate", {"tx_freq": "banana"})
+    assert [b.get("holder_stack") for b in svc.run_blockers("kiss")], "precondition: an owner"
+    _seed_raw(svc, "kiss", {"tx_freq": "banana"})
     stops = _spy_stops(monkeypatch)
-    res = svc.start("igate", apply=True, stop_owners=True)
+    res = svc.start("kiss", apply=True, stop_owners=True)
     assert not res.ok and "invalid saved configuration" in res.summary, res.summary
     assert stops == []

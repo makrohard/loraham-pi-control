@@ -35,11 +35,10 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 | Stack | Band | Was es ist | Doku |
 |---|---|---|---|
 | `daemon` | 433 + 868 | LoRaHAM-Daemon — besitzt die Funkgeräte, stellt pro Band Sockets bereit | [daemon](docs/stacks/daemon.md) |
-| `chat` | 433 | APRS-/Chat-TUI (lokal oder über SSH) | [aprs](docs/stacks/aprs.md) |
-| `igate` | 433 | APRS-iGate — **veraltet**, stattdessen `graywolf` | [aprs](docs/stacks/aprs.md) |
+| `chat` | 433 | APRS-/Chat-TUI (lokal oder über SSH) | [chat](docs/stacks/chat.md) |
 | `voice` | 433 / 868 | LoRa-Sprache — GTK-App auf Desktop, ncurses-Terminal auf Lite | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS-TNC über TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
-| `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) — ersetzt `igate` | [graywolf](docs/stacks/graywolf.md) |
+| `graywolf` | über `kiss` | Graywolf-APRS-Station (Web-UI, Digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, steuert das Funkgerät direkt | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom-Firmware in QEMU, an den Daemon gebrückt | [meshcom](docs/stacks/meshcom.md) |
 | `meshcore` | 868 | MeshCore auf openHop — Chat-Node (TCP 5000) und/oder Repeater (Dashboard :8000), per `mode` | [meshcore](docs/stacks/meshcore.md) |
@@ -151,7 +150,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 # lhpc selbst + Fetch-/TLS-Werkzeuge (nginx nur, wenn du die Web-Konsole willst)
 sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx iw ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
-sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate / voice (Terminal)
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / voice (Terminal)
 sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses-Terminal-UI — keine grafischen Pakete)
 sudo apt install -y --no-install-recommends socat                                       # kiss
 sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
@@ -288,10 +287,6 @@ lhpc install daemon
 # chat — APRS-/Chat-TUI
 lhpc install chat
 lhpc build chat
-
-# igate — APRS-iGate — VERALTET: bekannte Fehler, ungepflegt; stattdessen graywolf
-lhpc install igate
-lhpc build igate
 
 # voice — LoRa-Sprache (Terminal-Variante baut headless; die GTK-App braucht --with-gui)
 lhpc install voice
@@ -541,7 +536,7 @@ Betriebsmodell und Ein-Klick-Mechanik: [`docs/deployment.md`](docs/deployment.md
 | Verstehen | [Architektur](docs/architecture.md) |
 | Benutzen | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Wartung](docs/maintenance.md) · [Feldnotizen](docs/field-notes.md) |
 | Web-Konsole & Fernzugriff | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
-| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/chat.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
 | Referenz & Richtlinien | [Härtung](docs/hardening-0.1.md) · [Provenienz](docs/provenance.md) |
 
 Gesamtindex: [`docs/README.md`](docs/README.md).

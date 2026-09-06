@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:        # a release branch is checked by dispatching on its ref
 
 # Least privilege: the workflow only needs to read the repository.
 permissions:

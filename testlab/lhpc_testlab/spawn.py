@@ -17,9 +17,7 @@ from . import rules, scenarios
 def _shim_env(paths, argv, env):
     """Per-process env injection, scoped to exactly the spawn:
       * the reticulum node gets the fake spidev/gpiod modules on PYTHONPATH (the venv
-        build keeps importing the real system bindings);
-      * the deprecated igate gets the APRS-IS DNS interposer on LD_PRELOAD, so it
-        connects to the lab's local sink and can NEVER reach the live ham network.
+        build keeps importing the real system bindings).
     """
     import os
     joined = " ".join(str(a) for a in argv)
@@ -30,12 +28,6 @@ def _shim_env(paths, argv, env):
             base = dict(os.environ if env is None else env)
             prior = base.get("PYTHONPATH", "")
             base["PYTHONPATH"] = f"{shims}:{prior}" if prior else str(shims)
-    elif "loraham_igate" in joined:
-        so = paths.under("state", "testlab", "aprs-redirect.so")
-        if so.exists():
-            base = dict(os.environ if env is None else env)
-            prior = base.get("LD_PRELOAD", "")
-            base["LD_PRELOAD"] = f"{so}:{prior}" if prior else str(so)
     return base if base is not None else env
 
 
@@ -52,15 +44,6 @@ def make_wrap_spawn(paths):
             if verdict == "deny":
                 scenarios.log_event(paths,
                                     f"DENIED spawn: {' '.join(map(str, argv))[:200]}")
-                return None
-            # SAFETY: the deprecated igate may only run behind the APRS-IS DNS
-            # interposer. If the .so is missing (build failed), REFUSE the spawn — it
-            # must never reach the live ham network, redirect-or-nothing.
-            if ("loraham_igate" in " ".join(str(a) for a in argv)
-                    and not paths.under("state", "testlab",
-                                        "aprs-redirect.so").exists()):
-                scenarios.log_event(paths, "REFUSED igate: APRS redirect .so absent "
-                                           "(would reach live APRS-IS)")
                 return None
             return real_spawn(argv, log_path, cwd=cwd,
                               env=_shim_env(paths, argv, env))

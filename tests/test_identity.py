@@ -20,7 +20,7 @@ def _svc(tmp_path):
 
 
 # ===== Licensed-stack validation examples (brief table, verbatim) =====
-# columns: value, global, chat/igate/graywolf (APRS), voice, meshcom
+# columns: value, global, chat/graywolf (APRS), voice, meshcom
 @pytest.mark.parametrize("value,g,aprs,voice,mc", [
     ("XX0XXA",        True,  True,  True,  True),
     ("XX0XXA-10",     False, True,  True,  True),
@@ -91,7 +91,7 @@ def test_unlicensed_validation_table(fn, value, ok):
 
 # ===== Effective-identity precedence (the shared resolution path) =====
 
-LICENSED = ("chat", "igate", "voice", "graywolf", "meshcom")
+LICENSED = ("chat", "voice", "graywolf", "meshcom")
 
 
 def test_local_overrides_global_and_inheritance_is_never_persisted(tmp_path):
@@ -107,7 +107,7 @@ def test_local_overrides_global_and_inheritance_is_never_persisted(tmp_path):
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-10"}).ok
     row = svc.identity_resolution("chat")[0]
     assert (row["source"], row["effective"]) == ("local", "XX0XXA-10")
-    assert svc.identity_resolution("igate")[0]["source"] == "global"
+    assert svc.identity_resolution("graywolf")[0]["source"] == "global"
     # clearing the local value returns to inheritance
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     assert svc.identity_resolution("chat")[0]["source"] == "global"
@@ -211,7 +211,7 @@ def test_global_card_renders_and_never_marked_required(tmp_path):
     app = create_app(lambda: svc)
     html = app.test_client().get("/stacks").get_data(as_text=True)
     assert "Global operator callsign" in html
-    assert "Licensed stacks (chat, iGate," in html
+    assert "Licensed stacks (chat," in html
     card = html.split("Global operator callsign", 1)[1].split("</details>", 1)[0]
     assert "field-bad" not in card and 'class="req"' not in card
 
@@ -746,17 +746,17 @@ def test_identity_is_not_saved_when_admission_refuses(tmp_path, monkeypatch):
     from lhpc.core import lifecycle as lcmod
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-5"}).ok
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"}).ok
     before = _config_bytes(svc)
     (svc._paths.runtime_root / "state").mkdir(exist_ok=True)
     svc._power_pending_path().write_text(json.dumps(
         {"kind": "poweroff", "boot_id": "boot-1", "requested_uptime": 100.0}))
     monkeypatch.setattr(lcmod, "current_boot_id", lambda: "boot-1")
     for op in (svc.start, svc.restart):
-        r = op("igate", apply=True)
+        r = op("graywolf", apply=True)
         assert not r.ok and r.data.get("admission_blocked")
         assert _config_bytes(svc) == before                  # byte-identical, nothing written
-    assert svc._stored_param_value("igate", "run", "igate", "call") == "XX0XXA-5"
+    assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == "XX0XXA-5"
 
 
 def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_path, monkeypatch):
@@ -1350,34 +1350,35 @@ def test_an_inherited_identity_is_the_only_launch_time_overlay(tmp_path):
     # (materialized for this launch, never persisted) — and nothing else.
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
-    run_values, file_values = svc._materialize_inherited_identity("igate", "")
+    run_values, file_values = svc._materialize_inherited_identity("graywolf", "")
     assert run_values == {"call": "XX0XXA"} and file_values == {}
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""  # not persisted
+    assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == ""  # not persisted
     # a saved local override needs no overlay
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-5"}).ok
-    assert svc._materialize_inherited_identity("igate", "") == ({}, {})
-    assert svc.identity_resolution("igate")[0]["effective"] == "XX0XXA-5"
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-5"}).ok
+    assert svc._materialize_inherited_identity("graywolf", "") == ({}, {})
+    assert svc.identity_resolution("graywolf")[0]["effective"] == "XX0XXA-5"
 
 
 def test_the_launch_carries_the_inherited_callsign(tmp_path, monkeypatch):
     # The four invariants, #1: licensed stack, empty local field, valid global -> the process
     # is launched WITH the inherited callsign.
     from lhpc.core.lifecycle import Lifecycle, StartLaunch
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    (tmp_path / "src" / "LoRaHAM_Daemon" / "loraham_igate").write_text("#bin")
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)        # the TNC graywolf runs through
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
+    monkeypatch.setattr(type(svc), "is_built", lambda self, c: True)
     seen = {}
     def stub(self, stack, comp, cfg, band="", **_scope):
         seen[comp.id] = dict(cfg)
         return StartLaunch(True, "log", "")
     monkeypatch.setattr(Lifecycle, "start", stub)
     monkeypatch.setattr(type(svc), "_ensure_daemon", lambda self, *a, **k: ([], True))
+    monkeypatch.setattr(type(svc), "_ready_endpoints_present", lambda self, c: (True, []))
     monkeypatch.setattr(type(svc), "_run_post_start",
                         lambda self, *a, **k: (None, ""))
-    res = svc.start("igate", apply=True)
-    assert seen.get("loraham-igate", {}).get("call") == "XX0XXA", (res.summary, seen)
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == ""
+    res = svc.start("graywolf", apply=True)
+    assert seen.get("graywolf", {}).get("call") == "XX0XXA", (res.summary, seen)
+    assert svc._stored_param_value("graywolf", "run", "graywolf", "call") == ""
 
 
 def test_an_unlicensed_identity_never_inherits(tmp_path):

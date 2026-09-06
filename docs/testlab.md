@@ -17,7 +17,7 @@ That's the whole thing — you do three clicks and nothing on a command line:
    You'll see this happen in the terminal; you don't type anything.
 3. The **LHPC console opens in a browser tab by itself** (port 8770). Done — you're in.
 
-The console comes up fast; every other stack (kiss, graywolf, igate, meshcore, reticulum,
+The console comes up fast; every other stack (kiss, graywolf, meshcore, reticulum,
 voice, sideband, meshcom, meshtastic) then **installs and builds in the background** so it
 becomes startable without holding up the web. Populate prefers our aarch64 `lhpc-binaries`
 wherever a stack ships one — nothing compiles on the Pi/CI — and falls back to source
@@ -52,8 +52,8 @@ Never real in the lab: `sudo`, `apt`, `nft`, host shutdown — the lab user is
 unprivileged with no sudo (that privilege drop, not an argv filter, is the safety
 boundary), and the lab runner refuses direct host mutators with a typed message.
 
-`igate` is redirected to a LOCAL APRS-IS sink (an LD_PRELOAD DNS interposer) so it starts
-without ever reaching the live ham network. meshtastic and reticulum run against
+Graywolf's iGate is forced to a LOCAL APRS-IS sink by the manifest overlay, so the lab never
+reaches the live ham network. meshtastic and reticulum run against
 simulated radios (meshtastic's upstream `sim` radio via our binary; reticulum's fake
 spidev/gpiod shims); voice and sideband are GTK/Kivy GUIs that LAUNCH headless under
 Xvfb (not remotely viewable). `chat`, `nomadnet` and voice's terminal variant are interactive TUIs LHPC never

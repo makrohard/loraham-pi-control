@@ -408,26 +408,13 @@ def _prepare_pyshims(svc, details: list) -> None:
 
 
 def _prepare_aprs_sink(svc, details: list) -> None:
-    """igate SAFETY: compile the APRS-IS DNS interposer (LD_PRELOADed into igate by the
-    spawn guard) and start the local sink on 127.0.0.1:14580, so the deprecated igate
-    connects to the lab, never euro.aprs2.net."""
-    import shutil
-    import subprocess
-    gcc = shutil.which("gcc") or shutil.which("cc")
-    so = svc._paths.under("state", "testlab", "aprs-redirect.so")
-    if gcc and not so.exists():
-        try:
-            runtime_fs.ensure_dir(svc._paths, so.parent)
-            subprocess.run([gcc, "-shared", "-fPIC", "-o", str(so),
-                            str(data_path("aprs-redirect.c"))], check=True,
-                           capture_output=True, timeout=60)
-        except Exception as exc:
-            details.append(f"  aprs redirect: build failed ({exc})")
+    """Start the local APRS-IS sink on 127.0.0.1:14580 — Graywolf's iGate is forced to it by
+    the manifest overlay, so the lab never reaches the live APRS network."""
     pid = svc._lifecycle()._spawn(
         [sys.executable, str(data_path("aprs_sink.py"))],
         svc._paths.under("logs", "testlab-aprs-sink.log"))
     details.append(f"  aprs-is sink: {'up' if pid else 'SPAWN FAILED'} "
-                   "(igate stays off the live network)")
+                   "(graywolf stays off the live network)")
 
 
 # Headless stacks that `populate` installs+builds so every non-desktop-GUI stack is
@@ -436,7 +423,7 @@ def _prepare_aprs_sink(svc, details: list) -> None:
 # x86 binary, so populate SOURCE-builds them (meshcom's qemu-xtensa compiles in ~minutes on
 # x86). voice & sideband run headless under Xvfb. Interactive/desktop pieces (nomadnet,
 # lxmd TUIs) are intentionally excluded.
-_POPULATE_STACKS = ("kiss", "graywolf", "igate", "meshcore", "reticulum",
+_POPULATE_STACKS = ("kiss", "graywolf", "meshcore", "reticulum",
                     "voice", "sideband", "meshcom", "meshtastic")
 
 

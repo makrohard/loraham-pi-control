@@ -99,7 +99,7 @@ class InvalidBand(ValueError):
 def _prefer_run_socket(run: str, tmp: str) -> str:
     """The daemon serves its sockets under /run/loraham (systemd) or /tmp (direct/user start via
     LORAHAM_SOCKET_DIR). Prefer /run/loraham when the socket EXISTS there, else the /tmp fallback —
-    mirrors the daemon's clients (lorachat/igate) so lhpc connects to whichever the running daemon
+    mirrors the daemon's clients (lorachat) so lhpc connects to whichever the running daemon
     actually created. A local stat only; no network/subprocess."""
     import os
     import stat as _stat

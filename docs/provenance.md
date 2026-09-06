@@ -25,7 +25,7 @@ stack. `pinned` is the known-working line you choose explicitly.
 
 An **unpinned** component cannot be installed as `pinned` — with no configured pin it is
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
-a missing pin or signature. An **artifact** source (`artifact = true`: chat, igate, voice,
+a missing pin or signature. An **artifact** source (`artifact = true`: chat, voice,
 meshtastic base) resolves every selector to the same declared artifact (`artifact-head`).
 `strategy = "link"` is NO LONGER ACCEPTED at manifest load (containment: every source lives
 under the runtime root as a managed clone). The link machinery is retained so a LEGACY

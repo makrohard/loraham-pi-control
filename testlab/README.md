@@ -39,8 +39,8 @@ lhpc-testlab status | lhpc-testlab check
 
 A fake `loraham_daemon` (full v112 wire protocol) → real **kiss** TNC → real **graywolf**
 (+ web UI); real **meshcore**; **reticulum** (fake spidev/gpiod shims); **meshtastic**
-(upstream `sim` radio); **meshcom** (QEMU ESP32); **igate** (redirected to a local
-APRS-IS sink — never the live ham network); **voice**/**sideband** (headless under Xvfb).
+(upstream `sim` radio); **meshcom** (QEMU ESP32); **voice**/**sideband** (headless under Xvfb).
+Graywolf's iGate is forced to a local APRS-IS sink — never the live ham network.
 `chat`/`nomadnet` are interactive TUIs LHPC never auto-spawns.
 
 ## How it plugs into lhpc

@@ -173,7 +173,7 @@ def test_start_and_restart_are_job_ops(tmp_path):
     paths = Paths(runtime_root=tmp_path)
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
     a = "c" * 32
-    assert jobresult.reserve(paths, "web-start-igate.log", a, "start", "igate", "igate", [])
+    assert jobresult.reserve(paths, "web-start-kiss.log", a, "start", "kiss", "kiss", [])
     assert jobresult.reserve(paths, "web-restart-chat.log", a, "restart", "chat", "chat", [])
     assert not jobresult.reserve(paths, "web-stop-chat.log", a, "stop", "chat", "chat", [])
-    assert jobresult.read_one(paths, "web-start-igate.log")["op"] == "start"
+    assert jobresult.read_one(paths, "web-start-kiss.log")["op"] == "start"

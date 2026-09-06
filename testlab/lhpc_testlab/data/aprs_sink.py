@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Test-lab fake APRS-IS server: 127.0.0.1:14580, accepts the igate login, sends a
+"""Test-lab fake APRS-IS server: 127.0.0.1:14580, accepts the APRS-IS login, sends a
 server banner, and drains everything sent. Nothing leaves the box. Run detached by
-`lhpc-testlab reset` (only when igate is present)."""
+`lhpc-testlab reset`."""
 import socket
 import sys
 

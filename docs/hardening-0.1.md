@@ -52,7 +52,7 @@ are the current rules.
   the controller's, and the process to be an LHPC-owned session leader. Any mismatch
   → no signal, reported `unverified`/`manual-required` with an exact-PID hint. After
   SIGTERM it waits for **verified cessation** before clearing the record (no
-  auto-SIGKILL). The daemon/iGate run without `-d` so LHPC owns the real session
+  auto-SIGKILL). The daemon runs without `-d` so LHPC owns the real session
   leader (not a self-daemonized re-PID). Process scanning detects manual processes
   but never authorizes a kill. Tests: `tests/test_process_ownership.py`.
 
@@ -82,8 +82,8 @@ are the current rules.
 
 ## Uninstall protection
 - Uninstall refuses while a target component is running, never removes a source
-  still referenced by another component (shared checkout — chat/iGate share
-  `LoRaHAM_Daemon`; kiss/serial-kiss share `loraham-kiss-tnc`), and never deletes
+  still referenced by another component (shared checkout — kiss/serial-kiss share
+  `loraham-kiss-tnc`), and never deletes
   config, secrets or profiles. Tests: `tests/test_uninstall_safety.py`.
 
 ## GET no-network guarantee

@@ -168,17 +168,6 @@ def test_clean_allows_dirty_tree_but_still_requires_ownership(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "user.txt").exists()
 
 
-def test_clean_keeps_shared_source(tmp_path):
-    # chat + igate share src/LoRaHAM_Daemon: cleaning CHAT keeps the shared checkout.
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    _own(tmp_path, "LoRaHAM_Daemon", ("loraham-chat", "loraham-igate"))
-    svc = _svc(tmp_path)
-    res = svc.clean("chat", apply=True, purge=True)
-    assert res.ok, res.details
-    assert (tmp_path / "src" / "LoRaHAM_Daemon").exists()
-    assert any("kept" in d and "shared" in d for d in res.details)
-
-
 def test_clean_linked_source_unlinks_leaf_only(tmp_path):
     import time as _t
     external = tmp_path / "external"

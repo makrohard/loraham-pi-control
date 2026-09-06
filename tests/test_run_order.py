@@ -4,9 +4,12 @@ from __future__ import annotations
 import pytest
 
 from lhpc.core.paths import Paths
-from lhpc.core.probes.backends import FakeSystem
+from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ActionResult, ControllerService
 from conftest import set_call
+
+# The kiss TNC is endpoint-ready: a healthy kiss needs its 127.0.0.1:8001 listener present.
+_KISS_LISTENER = Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)
 
 
 def _svc(tmp_path):
@@ -60,7 +63,7 @@ def test_radio_overview_maps_stacks_to_bands(tmp_path):
     assert set(by_band) == {"433", "868"}
     s433 = {s["id"] for s in by_band["433"]["startable"]}
     s868 = {s["id"] for s in by_band["868"]["startable"]}
-    assert {"igate", "kiss", "meshcom"} <= s433
+    assert {"kiss", "meshcom"} <= s433
     assert {"meshtastic", "meshcore"} <= s868
     assert "daemon" not in s433 and "daemon" not in s868   # daemon is the radio itself
     # interactive stacks (chat/voice) sit in the dropdown until "run", then become
@@ -125,11 +128,11 @@ def test_stop_daemon_cascades_to_dependents(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    fake = FakeSystem(cmdlines_data={4242: ["loraham_igate", "-c", "X"]})
+    fake = FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    assert "igate" in svc.stop_dependents("daemon")          # igate depends on daemon
-    assert "igate" in svc.stop("daemon", apply=False).data["dependents"]  # plan surfaces it
+    assert "kiss" in svc.stop_dependents("daemon")           # kiss depends on daemon
+    assert "kiss" in svc.stop("daemon", apply=False).data["dependents"]  # plan surfaces it
 
 
 def test_blockers_only_real_band_conflicts(tmp_path):
@@ -159,12 +162,13 @@ def test_same_frequency_blocks_second_stack(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
-    # iGate (433) is running; starting another 433 stack must be blocked by it.
-    fake = FakeSystem(cmdlines_data={4242: ["loraham_igate", "-c", "X"]})
+    # kiss (433) is running; starting another 433 stack must be blocked by it.
+    fake = FakeSystem(cmdlines_data={4242: ["loraham-kiss-tnc", "--config", "X"]})
     (tmp_path / "x").mkdir()
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
-    bl = svc.run_blockers("kiss")
-    assert any(b["holder_stack"] == "igate" and "433" in b["resource"] for b in bl)
+    svc._set_running_band("kiss", "433")             # kiss is band-switchable: pin it to 433
+    bl = svc.run_blockers("meshcom")
+    assert any(b["holder_stack"] == "kiss" and "433" in b["resource"] for b in bl)
     # An 868 stack is unaffected by a 433 occupant.
     assert svc.run_blockers("meshcore") == []
 
@@ -378,7 +382,7 @@ def test_client_stop_releases_daemon_only_when_unused(tmp_path, monkeypatch):
     dsid, rel = svc._daemon_bands_to_release(voice, "voice", {"433"})
     assert dsid == "daemon" and rel == ["433"]
     # another 433 stack still depends on the daemon -> do NOT release
-    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["igate"])
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, t, bands=None: ["kiss"])
     _, rel2 = svc._daemon_bands_to_release(voice, "voice", {"433"})
     assert rel2 == []
     # stopping the daemon stack itself never "releases" a daemon
@@ -685,42 +689,44 @@ def test_daemon_perband_stop_locks_band_and_both_collateral(tmp_path):
 
 # --- A4: no-side-effect Start for already-healthy targets -----------------------------------
 
-def _healthy_igate(tmp_path):
+def _healthy_kiss(tmp_path):
     _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
     return ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_igate", "-c", "X"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDY}).system, paths=Paths(runtime_root=tmp_path))
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+                       200: ["loraham-kiss-tnc", "--config", "X"]},
+        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf433.sock": _RDY}).system,
+        paths=Paths(runtime_root=tmp_path))
 
 
 def test_healthy_client_start_sends_no_daemon_set(tmp_path):
-    svc = _healthy_igate(tmp_path)
+    svc = _healthy_kiss(tmp_path)
     set_call(svc)
-    res = svc.start("igate", apply=True)
+    res = svc.start("kiss", apply=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("sent" in d.lower() or "serving" in d for d in res.details)   # no CONF SET
 
 
 def test_healthy_start_with_saved_fsk_sends_no_set(tmp_path):
-    svc = _healthy_igate(tmp_path)
+    svc = _healthy_kiss(tmp_path)
     set_call(svc)
-    assert svc.save_daemon_params("igate", "433", {"MODE": "FSK"}).ok
-    res = svc.start("igate", apply=True)
+    assert svc.save_daemon_params("kiss", "433", {"MODE": "FSK"}).ok
+    res = svc.start("kiss", apply=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert not any("MODE" in d or "sent" in d.lower() for d in res.details)       # FSK not applied
 
 
 def test_stopped_client_with_ready_daemon_applies_before_launch(tmp_path):
     _RDY = b"STATUS RADIO=READY TXMODE=MANAGED\n"
-    svc = ControllerService(system=FakeSystem(       # daemon ready 433; igate NOT running
+    svc = ControllerService(system=FakeSystem(       # daemon ready 433; kiss NOT running
         cmdlines_data={100: ["loraham_daemon", "--radio", "433"]},
         unix_replies={"/tmp/loraconf433.sock": _RDY}).system, paths=Paths(runtime_root=tmp_path))
     set_call(svc)
-    res = svc.start("igate", apply=True)
+    res = svc.start("kiss", apply=True)
     text = "\n".join(res.details)
     assert "daemon already serving 433" in text and "sent" in text.lower()        # params applied
-    igate_line = next((i for i, d in enumerate(res.details) if "loraham-igate" in d), None)
+    kiss_line = next((i for i, d in enumerate(res.details) if "loraham-kiss-tnc" in d), None)
     apply_line = next((i for i, d in enumerate(res.details) if "sent" in d.lower()), None)
-    assert apply_line is not None and igate_line is not None and apply_line < igate_line  # before launch
+    assert apply_line is not None and kiss_line is not None and apply_line < kiss_line  # before launch
 
 
 # --- P1: topology-based lifecycle band resolution -------------------------------------------
@@ -875,11 +881,13 @@ def test_whole_daemon_stop_cascades_unknown_band_dependent(tmp_path, monkeypatch
 
 def test_healthy_start_stop_owners_stops_no_owner(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
-        cmdlines_data={100: ["loraham_daemon", "--radio", "433"], 200: ["loraham_igate", "-c", "X"]},
-        unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
+        cmdlines_data={100: ["loraham_daemon", "--radio", "433"],
+                       200: ["loraham-kiss-tnc", "--config", "X"]},
+        listeners=[_KISS_LISTENER], unix_replies={"/tmp/loraconf433.sock": _RDYP1}).system,
+        paths=Paths(runtime_root=tmp_path))
     calls = _spy_stop(monkeypatch)
     set_call(svc)
-    res = svc.start("igate", apply=True, stop_owners=True)
+    res = svc.start("kiss", apply=True, stop_owners=True)
     assert res.ok and all(r.outcome.value == "already_healthy" for r in res.results)
     assert calls == []                                # no owner stopped
 

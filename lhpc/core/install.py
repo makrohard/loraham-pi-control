@@ -1018,7 +1018,7 @@ class Installer:
 
     def _source_lock_key(self, source_path: str) -> str:
         # THE canonical source lock — by the managed source PATH (not component id), so
-        # every consumer of one shared checkout (chat + igate -> src/LoRaHAM_Daemon)
+        # every consumer of one shared checkout (kiss-tnc + kiss-serial -> src/loraham-kiss-tnc)
         # serialises on the same lock.
         from . import reslock
         return reslock.source_lock_key(source_path)

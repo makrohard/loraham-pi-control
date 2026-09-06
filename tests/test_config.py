@@ -103,11 +103,11 @@ def test_config_view_splits_basic_advanced_and_operator(tmp_path):
     # global operator callsign is edited only on its own card / `lhpc config operator`;
     # stack pages carry the per-stack identity params instead.
     assert "operator" not in svc.config_view("voice")
-    # iGate now edits its callsign in its own config -> no shared Operator box, but its run
-    # params still split into basic/advanced.
-    igate = svc.config_view("igate")
-    assert "operator" not in igate
-    params = igate["components"][0]["params"]
+    # A plain daemon client has no shared Operator box either, and its run params still
+    # split into basic/advanced.
+    kiss = svc.config_view("kiss")
+    assert "operator" not in kiss
+    params = kiss["components"][0]["params"]
     assert any(p.advanced for p in params) and any(not p.advanced for p in params)
 
 
@@ -119,30 +119,20 @@ def test_save_config_writes_operator_and_params(tmp_path):
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
     assert svc.set_operator_identity(callsign="xx0xxb").ok
     assert svc.config().operator.callsign == "XX0XXB"   # normalised upper
-    r = svc.save_config("igate", {"tx_freq": "434.000"})
+    r = svc.save_config("kiss", {"tx_freq": "434.000"})
     assert r.ok
-    assert svc.config_view("igate")["values"]["tx_freq"] == "434.000"
+    assert svc.config_view("kiss")["values"]["tx_freq"] == "434.000"
 
 
 def test_save_warns_apply_workflow_and_reset(tmp_path):
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
     svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    r = svc.save_config("igate", {"tx_freq": "434.000"})    # start-time change
+    r = svc.save_config("kiss", {"tx_freq": "434.000"})    # start-time change
     assert r.ok and any("Run" in d or "Restart" in d for d in r.details)
-    assert svc.stack_config("igate")["tx_freq"] == "434.000"
-    rr = svc.reset_config("igate")                          # back to running defaults
-    assert rr.ok and svc.stack_config("igate")["tx_freq"] == "433.900"
-
-
-def test_igate_params_match_source_options(tmp_path):
-    from lhpc.core.probes.backends import FakeSystem
-    from lhpc.core.services import ControllerService
-    svc = ControllerService(system=FakeSystem().system, paths=_paths(tmp_path))
-    names = {p.name for p in svc.run_params_for("igate")}
-    # only real iGate options are exposed (verified against loraham_iGate_106.c)
-    assert {"tx_freq", "rx_freq", "lat", "lon", "symbol", "digipeat"} <= names
-    assert {"is_interval", "rf_interval", "relay", "repeater"} <= names
+    assert svc.stack_config("kiss")["tx_freq"] == "434.000"
+    rr = svc.reset_config("kiss")                           # back to running defaults
+    assert rr.ok and svc.stack_config("kiss")["tx_freq"] == "433.775"
 
 
 def test_remaining_stacks_expose_real_cli_options(tmp_path):
@@ -238,7 +228,7 @@ def test_a_group_readable_secrets_file_is_refused(tmp_path):
 
 
 def test_run_param_default_uses_operator_callsign(tmp_path):
-    # The Start-page default for an operator-token run-param (igate 'call' = '{callsign}')
+    # The Start-page default for an operator-token run-param (graywolf 'call' = '{callsign}')
     # must resolve to the configured operator callsign — matching the Config page — not
     # show the literal placeholder. A SAVED value is used verbatim.
     from lhpc.core.services import ControllerService
@@ -247,10 +237,10 @@ def test_run_param_default_uses_operator_callsign(tmp_path):
     from lhpc.core.config import save_operator_config, save_stack_config
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     save_operator_config(svc._paths, "XX0XXB"); svc._config = None
-    assert svc.stack_config("igate")["call"] == "XX0XXB"      # default substituted, not '{callsign}'
+    assert svc.stack_config("graywolf")["call"] == "XX0XXB"      # default substituted, not '{callsign}'
     # an explicitly saved value is NOT re-substituted
-    save_stack_config(svc._paths, "igate", {"call": "DK0XYZ"})
-    assert svc.stack_config("igate")["call"] == "DK0XYZ"
+    save_stack_config(svc._paths, "graywolf", {"call": "DK0XYZ"}, svc._config_band("graywolf", ""))
+    assert svc.stack_config("graywolf")["call"] == "DK0XYZ"
 
 
 def test_run_param_default_empty_when_operator_unset(tmp_path):
@@ -258,7 +248,7 @@ def test_run_param_default_empty_when_operator_unset(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    assert svc.stack_config("igate")["call"] == ""           # no '{callsign}' literal leaks
+    assert svc.stack_config("graywolf")["call"] == ""           # no '{callsign}' literal leaks
 
 
 def test_load_config_ignores_symlinked_local_toml(tmp_path):

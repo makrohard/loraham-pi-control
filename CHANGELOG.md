@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- **The `igate` stack is removed;** Graywolf replaces it (same RF↔APRS-IS job through the KISS TNC, plus a web UI). Reflash an old development image, or `lhpc clean igate --purge --yes` before an in-place update.
+
 ## 0.2.10
 
 - **Reticulum 1.5.1 → 1.5.2** — the maintenance release that fixes the 1.5.1 resource-transfer regression; nomadnet, lxmd and sideband stay.

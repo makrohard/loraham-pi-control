@@ -252,7 +252,7 @@ def test_web_install_noop_admits_not_blocked(tmp_path, monkeypatch):
 
 # ---- 0.2.9: the detached web Start/Restart (`_stack-start` runner + `spawn_start_job`) ---------
 
-_SLOG = "web-start-igate.log"
+_SLOG = "web-start-kiss.log"
 
 
 def _runner_env(monkeypatch, tmp_path):
@@ -261,10 +261,10 @@ def _runner_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LHPC_WEB_ADMIT_TIMEOUT_S", "0.5")
 
 
-def _tracked_start_attempt(svc, log=_SLOG, op="start", target="igate", attempt=_A):
+def _tracked_start_attempt(svc, log=_SLOG, op="start", target="kiss", attempt=_A):
     """What `spawn_start_job` leaves behind for its child: the reserved attempt + the job marker
     naming THIS process."""
-    assert jobresult.reserve(svc._paths, log, attempt, op, target, "igate", [])
+    assert jobresult.reserve(svc._paths, log, attempt, op, target, "kiss", [])
     ident = procident.proc_identity(os.getpid())
     assert svc._write_job_marker(log, os.getpid(), target, op, ident=ident, attempt_id=attempt)
 
@@ -289,14 +289,14 @@ def test_stack_start_runner_refuses_an_untracked_attempt(tmp_path, monkeypatch):
     _runner_env(monkeypatch, tmp_path)
     calls = []
     _stub_start(monkeypatch, calls)
-    assert jobresult.reserve(svc._paths, _SLOG, _A, "start", "igate", "igate", [])   # no job marker
-    assert main(["_stack-start", "igate", "--web-result", _SLOG, "--attempt-id", _A]) == 3
+    assert jobresult.reserve(svc._paths, _SLOG, _A, "start", "kiss", "kiss", [])   # no job marker
+    assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A]) == 3
     assert calls == []                                                 # nothing ran
     assert jobresult.read_one(svc._paths, _SLOG)["state"] == "starting"  # never admitted
     # a result name not bound to this target is refused before the gate
-    assert main(["_stack-start", "igate", "--web-result", "web-start-chat.log",
+    assert main(["_stack-start", "kiss", "--web-result", "web-start-chat.log",
                  "--attempt-id", _A]) == 3
-    assert main(["_stack-start", "igate", "--web-result", "start-igate.log",
+    assert main(["_stack-start", "kiss", "--web-result", "start-kiss.log",
                  "--attempt-id", _A]) == 3                             # the process-log namespace
 
 
@@ -306,17 +306,17 @@ def test_stack_start_runner_admits_under_the_hook_and_records_done(tmp_path, mon
     _runner_env(monkeypatch, tmp_path)
     _tracked_start_attempt(svc)
     calls = []
-    _stub_start(monkeypatch, calls, summary="Run applied for 'igate'.")
+    _stub_start(monkeypatch, calls, summary="Run applied for 'kiss'.")
     monkeypatch.setattr(ControllerService, "start_notes", lambda self, r: ["boots in ~1 min"])
-    assert main(["_stack-start", "igate", "--web-result", _SLOG, "--attempt-id", _A,
+    assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A,
                  "--band", "433", "--stop-owners"]) == 0
-    assert calls == [("start", "igate", "433", True)]
+    assert calls == [("start", "kiss", "433", True)]
     rec = jobresult.read_one(svc._paths, _SLOG)
     assert rec["state"] == "done" and rec["admitted"] is True and rec["op"] == "start"
-    assert rec["detail"] == "Run applied for 'igate'. boots in ~1 min"   # summary + start notes
+    assert rec["detail"] == "Run applied for 'kiss'. boots in ~1 min"   # summary + start notes
     item = next(t for t in svc.running_tasks() if t["kind"] == "job")
-    assert item["op"] == "start" and item["stack"] == "igate" and item["state"] == "done"
-    assert item["hint"] == rec["detail"] and item["href"] == f"/logs/igate?job={_SLOG}"
+    assert item["op"] == "start" and item["stack"] == "kiss" and item["state"] == "done"
+    assert item["hint"] == rec["detail"] and item["href"] == f"/logs/kiss?job={_SLOG}"
 
 
 def test_stack_start_runner_manual_required_only_is_done(tmp_path, monkeypatch):
@@ -325,9 +325,9 @@ def test_stack_start_runner_manual_required_only_is_done(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     _runner_env(monkeypatch, tmp_path)
     _tracked_start_attempt(svc)
-    res = (CompResult("loraham-igate", "start", Outcome.MANUAL_REQUIRED, "igate", "run it yourself"),)
+    res = (CompResult("loraham-kiss-tnc", "start", Outcome.MANUAL_REQUIRED, "kiss", "run it yourself"),)
     _stub_start(monkeypatch, [], ok=False, results=res, summary="manual start required")
-    assert main(["_stack-start", "igate", "--web-result", _SLOG, "--attempt-id", _A]) == 0
+    assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A]) == 0
     assert jobresult.read_one(svc._paths, _SLOG)["state"] == "done"
 
 
@@ -339,11 +339,11 @@ def test_stack_start_runner_typed_refusal_is_failed_and_never_admitted(tmp_path,
     _tracked_start_attempt(svc)
     monkeypatch.setattr(ControllerService, "start",
                         lambda self, target, apply=False, **k: ActionResult(
-                            False, "Cannot start 'igate': a callsign is required"))   # before the hook
-    assert main(["_stack-start", "igate", "--web-result", _SLOG, "--attempt-id", _A]) == 1
+                            False, "Cannot start 'kiss': radio hardware not set"))   # before the hook
+    assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A]) == 1
     rec = jobresult.read_one(svc._paths, _SLOG)
     assert rec["state"] == "failed" and rec["admitted"] is False
-    assert "callsign is required" in rec["detail"]
+    assert "radio hardware not set" in rec["detail"]
 
 
 def test_stack_start_runner_superseded_attempt_cancels_with_no_side_effect(tmp_path, monkeypatch):
@@ -359,14 +359,14 @@ def test_stack_start_runner_superseded_attempt_cancels_with_no_side_effect(tmp_p
     def start(self, target, apply=False, *, _before_start_locked=None, **k):
         # the newer attempt lands right before the hook fires
         assert jobresult.terminalize(svc._paths, _SLOG, _A, "failed", detail="old")
-        assert jobresult.reserve(svc._paths, _SLOG, _B, "start", "igate", "igate", [])
+        assert jobresult.reserve(svc._paths, _SLOG, _B, "start", "kiss", "kiss", [])
         r = _before_start_locked()
         if r is not None:
             return r
         launched.append(target)
         return ActionResult(True, "started")
     monkeypatch.setattr(ControllerService, "start", start)
-    assert main(["_stack-start", "igate", "--web-result", _SLOG, "--attempt-id", _A]) == 1
+    assert main(["_stack-start", "kiss", "--web-result", _SLOG, "--attempt-id", _A]) == 1
     assert launched == []
     rec = jobresult.read_one(svc._paths, _SLOG)
     assert rec["attempt_id"] == _B and rec["state"] == "starting"      # the newer attempt survives
@@ -377,7 +377,7 @@ def test_stack_start_runner_restart_path_uses_the_restart_hook(tmp_path, monkeyp
     from lhpc.core.services import ActionResult
     svc = _svc(tmp_path)
     _runner_env(monkeypatch, tmp_path)
-    log = "web-restart-igate.log"
+    log = "web-restart-kiss.log"
     _tracked_start_attempt(svc, log=log, op="restart")
     seen = {}
 
@@ -387,11 +387,11 @@ def test_stack_start_runner_restart_path_uses_the_restart_hook(tmp_path, monkeyp
         seen["cascade"] = cascade
         r = _before_restart_locked()
         assert r is None
-        return ActionResult(True, "Restarted 'igate'.")
+        return ActionResult(True, "Restarted 'kiss'.")
     monkeypatch.setattr(ControllerService, "restart", restart)
     monkeypatch.setattr(ControllerService, "start",
                         lambda self, *a, **k: (_ for _ in ()).throw(AssertionError("start called")))
-    assert main(["_stack-start", "igate", "--web-result", log, "--attempt-id", _A,
+    assert main(["_stack-start", "kiss", "--web-result", log, "--attempt-id", _A,
                  "--restart", "--cascade"]) == 0
     assert seen["hook"] is True and seen["cascade"] is True                # consent transported
     rec = jobresult.read_one(svc._paths, log)
@@ -424,13 +424,13 @@ def test_spawn_start_job_captures_then_releases_admission_before_publishing(tmp_
         return ""
     monkeypatch.setattr(ControllerService, "_track_or_terminate", publish)
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
-    log, admission, reason = svc.spawn_start_job("start", "igate", band="433", stop_owners=True)
+    log, admission, reason = svc.spawn_start_job("start", "kiss", band="433", stop_owners=True)
     assert (log, admission) == (_SLOG, "admitted"), reason
     assert seen["free"] is True                                        # released BEFORE publish
     assert seen["ident"] and procident.identity_complete(seen["ident"])  # captured before release
-    assert (seen["op"], seen["cid"], seen["ln"]) == ("start", "igate", _SLOG)
+    assert (seen["op"], seen["cid"], seen["ln"]) == ("start", "kiss", _SLOG)
     rec = jobresult.read_one(svc._paths, _SLOG)
-    assert rec["op"] == "start" and rec["stack"] == "igate" and rec["state"] == "starting"
+    assert rec["op"] == "start" and rec["stack"] == "kiss" and rec["state"] == "starting"
     assert _second_service_can_take_admission(svc)                     # nothing left held
 
 
@@ -453,15 +453,15 @@ def test_spawn_web_job_captures_then_releases_admission_before_publishing(tmp_pa
 
 def test_spawn_start_job_second_start_is_a_typed_already_in_progress(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
-    assert jobresult.reserve(svc._paths, _SLOG, _A, "start", "igate", "igate", [])   # a live attempt
+    assert jobresult.reserve(svc._paths, _SLOG, _A, "start", "kiss", "kiss", [])   # a live attempt
     spawned = []
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, *a, **k: spawned.append(1) or "")
-    log, admission, reason = svc.spawn_start_job("start", "igate")
+    log, admission, reason = svc.spawn_start_job("start", "kiss")
     assert log is None and admission == "blocked" and "already in progress" in reason
     assert spawned == []
-    assert svc.spawn_start_job("stop", "igate")[1] == "blocked"        # not a detached op
+    assert svc.spawn_start_job("stop", "kiss")[1] == "blocked"        # not a detached op
 
 
 def test_spawn_start_job_orphan_and_terminated_are_typed(tmp_path, monkeypatch):
@@ -469,15 +469,15 @@ def test_spawn_start_job_orphan_and_terminated_are_typed(tmp_path, monkeypatch):
     _fake_spawn(monkeypatch, os.getpid())
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, *a, **k: "... ORPHAN RISK; check ps.")
-    log, admission, reason = svc.spawn_start_job("start", "igate")
+    log, admission, reason = svc.spawn_start_job("start", "kiss")
     assert log is None and admission == "blocked" and "Recover" in reason
     assert jobresult.read_one(svc._paths, _SLOG)["state"] == "unsafe"
     svc2 = _svc(tmp_path / "b")
     monkeypatch.setattr(ControllerService, "_track_or_terminate",
                         lambda self, *a, **k: "spawned but ... was terminated (not left orphaned).")
-    log, admission, reason = svc2.spawn_start_job("restart", "igate")
+    log, admission, reason = svc2.spawn_start_job("restart", "kiss")
     assert log is None and admission == "blocked" and "terminated" in reason
-    assert jobresult.read_one(svc2._paths, "web-restart-igate.log")["state"] == "failed"
+    assert jobresult.read_one(svc2._paths, "web-restart-kiss.log")["state"] == "failed"
 
 
 def test_spawn_start_job_transports_the_restart_cascade_consent(tmp_path, monkeypatch):
@@ -491,7 +491,7 @@ def test_spawn_start_job_transports_the_restart_cascade_consent(tmp_path, monkey
     monkeypatch.setattr(ControllerService, "_web_admit_handshake", lambda self, log, aid: ("admitted", ""))
     assert svc.spawn_start_job("restart", "kiss", cascade=True)[1] == "admitted"
     assert "--cascade" in argvs[-1] and "--restart" in argvs[-1]
-    assert svc.spawn_start_job("start", "igate", cascade=True)[1] == "admitted"
+    assert svc.spawn_start_job("start", "kiss", cascade=True)[1] == "admitted"
     assert "--cascade" not in argvs[-1]                       # a start has no cascade
 
 

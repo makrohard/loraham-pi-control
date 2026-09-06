@@ -225,13 +225,6 @@
 "graywolf#start" = "acceptance"
 "graywolf#stop" = "acceptance"
 "graywolf#ui" = "acceptance"
-"igate#configure" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#data" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#failure" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#restart" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#start" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#stop" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
-"igate#ui" = { limitation = "deprecated; beacons to the LIVE APRS network — a lab must never feed it (use graywolf); started only against a local sink in the headless-GUI build" }
 "kiss#configure" = "acceptance"
 "kiss#data" = "acceptance"
 "kiss#failure" = { limitation = "pending" }

@@ -89,7 +89,7 @@ What it means in practice:
 
 - TX is never auto-enabled; a freshly installed/configured stack is RX-only.
 - TX happens only through an explicit `test --tx` or a stack you start that
-  transmits (e.g. iGate beacons).
+  transmits (e.g. Graywolf's beacons).
 - A `test --tx` shows band, parameters and expected RF effect, warns to use a
   **dummy load**, and confirms unless `--yes`. It sends one frame per band and
   verifies `TXOK` incremented.

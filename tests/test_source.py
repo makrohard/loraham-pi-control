@@ -1772,7 +1772,7 @@ def test_recover_refuses_non_controller_candidate_name(tmp_path):
 
 
 def test_shared_source_serializes_on_one_lock(tmp_path):
-    # chat + igate share src/LoRaHAM_Daemon; a held lock on that source path blocks
+    # kiss-tnc + kiss-serial share src/loraham-kiss-tnc; a held lock on that source path blocks
     # an update of EITHER consumer.
     from lhpc.core import reslock
     inst = _inst_source_txn(tmp_path)
@@ -4434,15 +4434,15 @@ def test_runtime_root_realpath_is_resolved_once_but_every_target_per_call(tmp_pa
 
 
 def test_components_sharing_a_checkout_and_pin_are_probed_once_per_snapshot(tmp_path):
-    # chat and igate both build from src/LoRaHAM_Daemon at the same pin: one snapshot asks git
+    # kiss-tnc and kiss-serial both build from src/loraham-kiss-tnc at the same pin: one snapshot asks git
     # about that checkout ONCE (two subprocesses), not once per component.
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.status import StatusProber
-    src = tmp_path / "src" / "LoRaHAM_Daemon"
+    src = tmp_path / "src" / "loraham-kiss-tnc"
     fake = FakeSystem(paths={str(src), str(src / ".git")}, commands=_git_src(src, "a" * 40))
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     comps = [c for s in svc.stacks() for c in s.components
-             if c.source and c.source.path == "src/LoRaHAM_Daemon"]
+             if c.source and c.source.path == "src/loraham-kiss-tnc"]
     assert len(comps) >= 2 and len({c.source.pin_commit for c in comps}) == 1   # precondition
     prober = StatusProber(fake.system, svc._paths)
     snap = prober.assess_stacks(svc.stacks())
@@ -4453,7 +4453,7 @@ def test_components_sharing_a_checkout_and_pin_are_probed_once_per_snapshot(tmp_
     assert heads == {"a" * 40}
     # a DIFFERENT pin on the same path is a different question -> its own probe
     from lhpc.core.model import SourceSpec
-    other = SourceSpec(path="src/LoRaHAM_Daemon", pin_commit="b" * 40)
+    other = SourceSpec(path="src/loraham-kiss-tnc", pin_commit="b" * 40)
     prober2 = StatusProber(fake.system, svc._paths)
     fake.system.runner.calls.clear()
     prober2._assess_source(type("C", (), {"id": "x", "source": other})())
@@ -4470,6 +4470,6 @@ def test_a_restart_plan_assesses_the_snapshot_once(tmp_path, monkeypatch):
     svc = _svc_snapshot_cache(tmp_path)
     set_call(svc)
     n.clear()
-    plan = svc.restart("igate", apply=False)
+    plan = svc.restart("kiss", apply=False)
     assert plan.ok and "dependents" in plan.data
     assert len(n) <= 2, f"restart plan assessed {len(n)}×"          # one memoized (+ one fresh recheck)

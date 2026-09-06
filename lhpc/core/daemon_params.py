@@ -1,6 +1,6 @@
 """Per-stack daemon radio-parameter catalogue and view logic (pure, no I/O).
 
-Each daemon-client stack (chat/igate/kiss/voice/meshcom/meshcore) drives the LoRaHAM daemon's
+Each daemon-client stack (chat/kiss/voice/meshcom/meshcore) drives the LoRaHAM daemon's
 radio via the CONF socket. lhpc applies this stack's configured values to the daemon ONCE, after
 the daemon is up and before the stack's own components start. The client app then SETs its own
 radio parameters (FREQ, SF, BW, CR, CRC, PREAMBLE, SYNC, POWER, TXMODE) — so those are marked
@@ -82,14 +82,13 @@ _BASE = {
           "TXQUEUE": "1", "CADMONITOR": "0", "CADRSSI": "-90", "CADTXAFTERTIMEOUT": "0"},
 }
 
-# The LoRaHAM amateur profile chat/igate/kiss all SET (band-independent).
+# The LoRaHAM amateur profile chat/kiss both SET (band-independent).
 _LORAHAM = {"TXMODE": "MANAGED", "SF": "12", "BW": "125.0", "CR": "5",
             "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "17"}
 
 # Per-stack, per-band values the app SETs (from each app's source). "*" = any band.
 STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     "chat":  {"*": dict(_LORAHAM)},
-    "igate": {"*": dict(_LORAHAM)},
     "kiss":  {"*": dict(_LORAHAM)},
     "voice": {
         "433": {"TXMODE": "DIRECT", "FREQ": "434.700", "SF": "7", "BW": "125.0", "CR": "5",
@@ -122,7 +121,7 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
 
 # Stacks that talk to the daemon (get a panel). The `daemon` stack itself is handled per-radio
 # (its base config, nothing greyed). Direct-SPI stacks (meshtastic) have no daemon panel.
-CLIENT_STACKS = ("chat", "igate", "kiss", "voice", "meshcom", "meshcore")
+CLIENT_STACKS = ("chat", "kiss", "voice", "meshcom", "meshcore")
 
 
 def is_client(stack_id: str) -> bool:

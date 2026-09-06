@@ -71,7 +71,7 @@ cannot run in a browser, so they are simulated — this is a hard WASM-sandbox l
 shortcut:
 
 - **Native stacks** (kiss=C, graywolf=binary, meshtastic=`meshtasticd`, meshcom=qemu, chat,
-  igate, voice) — a browser can't execute machine code, only WebAssembly. **Simulated.**
+  voice) — a browser can't execute machine code, only WebAssembly. **Simulated.**
 - **Python stacks** (Reticulum/rns, lxmd, nomadnet, sideband, meshcore-pi) — verified they
   can't run either: `RNS.Reticulum()` needs OS network-interface enumeration + threads
   (crashes in the sandbox), meshcore-pi's `aioble` (Bluetooth) has no Pyodide wheel, and the
