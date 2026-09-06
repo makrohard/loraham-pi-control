@@ -272,6 +272,26 @@ a.iface { text-decoration: none; color: var(--brand); }
                    border-radius: 6px; }
 .cmdbox .copybtn:hover { background: var(--line); color: var(--ink); }   /* stay neutral, not blue */
 .cmdbox pre { padding-right: 5rem; }
+/* Stored passwords render as discs until `Show` removes the class. Unmasked, the value is
+   ordinary selectable text. A browser without text-security support shows it as it did before. */
+.secretbox pre.masked { -webkit-text-security: disc; text-security: disc; }
+/* Both buttons ride in ONE flex row, so the gap holds when the copy button relabels itself
+   to "copied" and back. */
+.secretbox .secretbtns { position: absolute; top: .3rem; right: .3rem; display: flex; gap: .75rem; }
+.secretbox .copybtn, .secretbox .revealbtn { position: static; font-size: .75rem;
+                        padding: .1rem .5rem; cursor: pointer;
+                        background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+                        border-radius: 6px; }
+.secretbox .copybtn:hover, .secretbox .revealbtn:hover { background: var(--line); color: var(--ink); }
+.secretbox pre { padding-right: 12rem; }
+/* Phone: the buttons drop BELOW the value (they follow it in the DOM) instead of overlaying a
+   narrow box, and grow to a comfortable tap target. */
+@media (max-width: 480px) {
+  .secretbox .secretbtns { position: static; margin-top: .5rem; gap: 1rem; flex-wrap: wrap; }
+  .secretbox pre { padding-right: .6rem; }
+  .secretbox .copybtn, .secretbox .revealbtn { font-size: .85rem; padding: .55rem .9rem;
+                                               min-height: 2.75rem; }
+}
 .dismiss { float: right; }
 .dismiss button { padding: 0 .4rem; line-height: 1.2;
                   background: var(--surface); color: var(--ink); border: 1px solid var(--line);

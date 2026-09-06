@@ -47,7 +47,7 @@ reaches the bridge with `XR_HOST=10.0.2.2` (QEMU's user-net gateway) and `XR_POR
 at build, plus `XR_PASSWORD` = the first line of `config/secrets/xr_pw`; the bridge reads the same
 file through `--password-file`. `enable`/`renew` mint the secret, rebuild the firmware and restart
 the link (minutes); `disable` needs a typed confirmation and downgrades the link to
-unauthenticated. The stack page's **Password** section shows the stored password (copy button)
+unauthenticated. The stack page's **Password** section masks the stored password behind a *Show* toggle and a copy button
 while HMAC is enabled; it is changed only through those actions, never by editing the file, and it
 never appears in a log, marker or result. Policy: [operations](../operations.md).
 

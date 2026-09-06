@@ -191,9 +191,17 @@
    cmdbox: `.copybtn` + `data-copy`). The value appears here and NOWHERE else — never in a flash,
    a marker, a log or a JSON API. #}
 {% macro secretbox(id, text) %}
+{# The element holds the real value and CSS renders it as discs. `Show` unmasks it, which also
+   makes an ordinary select + Ctrl+C yield the value (a selection copies what is RENDERED, so it
+   yields the mask while masked); the copy button works either way. Not a secrecy boundary — the
+   page is already authenticated and `no-store`, and the value must be in the DOM to be copyable
+   at all; this only keeps it off the screen until asked for. #}
 <div class="cmdbox secretbox">
-  <button type="button" class="copybtn" data-copy="{{ id }}" title="Copy password">⧉ copy password</button>
-  <pre class="next" id="{{ id }}">{{ text }}</pre>
+  <pre class="next masked" id="{{ id }}">{{ text }}</pre>
+  <div class="secretbtns">
+    <button type="button" class="revealbtn" data-reveal="{{ id }}" title="Show the password">◉ show</button>
+    <button type="button" class="copybtn" data-copy="{{ id }}" title="Copy password">⧉ copy password</button>
+  </div>
 </div>
 {% endmacro %}
 

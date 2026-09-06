@@ -9,6 +9,7 @@
 - **Stale read tolerances removed:** ownership records need schema v1; source-registry v1 records, the `legacy` selector, journals without `had_prior`, the self-update cache without `schema_version`/`status`, `radio.hardware = "legacy"`, the band-less daemon log fallback and the MeshCore host `node_name` purge are gone. Old development state reads as invalid or is ignored; reflash or clean before an in-place update.
 - **Old MeshCore identity rescue removed:** only `config/secrets/meshcore_identity.key` and the generated config's `[identity] key` are consulted.
 - Unused functions and version-numbered history wording removed; the frozen unit test is named without a version.
+- **Stored passwords are masked on the stack page.** The Password section renders the value as discs instead of clear text; a *Show* button unmasks it when you need to read or hand-copy it, and the copy button puts the real password on the clipboard either way. It keeps the password off the screen — the page itself is unchanged in what it is allowed to hold.
 - **Docs consolidated** (29 → 26 files): one home per fact, no history; `docs/live-test.md` holds the dated evidence (the 0.2.10 release test, the silicon test); every doc carries a test-enforced Contents block; the hardware statement is corrected (Waveshare SX1262 433M tested on the air, 868M not tested on silicon).
 
 ## 0.2.10

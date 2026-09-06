@@ -80,8 +80,8 @@ latitude/longitude — graywolf's setting, not LHPC's. The model is in [GPS](../
 ## Notes
 
 - **Password.** The first start generates the admin password into the file above; the stack
-  page's **Password** section shows the stored value with a copy button and an *Edit stored
-  password file* command. LHPC owns the account — provisioning logs in with it on every start — so
+  page's **Password** section masks the stored value behind a *Show* toggle and a copy button, beside an
+  *Edit stored password file* command. LHPC owns the account — provisioning logs in with it on every start — so
   a password changed in the web UI must be written into that file (one line) or the next start
   fails. The file is written *before* the account is created, so an interrupted first start
   retries cleanly. Policy: [operations](../operations.md).

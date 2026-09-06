@@ -98,9 +98,10 @@ Callsign, passwords, HMAC keys and private keys live only in git-ignored local
 config (`~/loraham-pi-control/config/local.toml`, `config/secrets.toml` mode
 `0600`, and file-based secrets such as the MeshCom `xr_pw` and the web session
 key in `config/secrets/`, mode `0600`) — never in tracked files, status output,
-logs, task markers or web flashes. The one place a stored password is displayed is the
-stack page's authenticated Password section (a file that is not `0600` shows a reason
-instead). A stack password is changed only through that section (or `lhpc hmac`), never through
+logs, task markers or web flashes. The one place a stored password is reachable is the
+stack page's authenticated Password section, which masks the value behind a *Show* toggle and a
+copy button (a
+file that is not `0600` shows a reason instead). A stack password is changed only through that section (or `lhpc hmac`), never through
 a generic Settings save. Uninstall keeps local config by default.
 
 ## Backup & restore

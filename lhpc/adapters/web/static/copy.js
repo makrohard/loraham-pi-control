@@ -23,8 +23,21 @@
     });
   }
 
+  // Reveal/hide a masked secret: drops the class CSS masks with, so the value becomes ordinary
+  // selectable text (a hand selection copies what is rendered, so it needs the mask gone).
+  function wireReveal(btn) {
+    btn.addEventListener("click", function () {
+      var pre = document.getElementById(btn.getAttribute("data-reveal"));
+      if (!pre) return;
+      var shown = pre.classList.toggle("masked") === false;
+      btn.textContent = shown ? "◉ hide" : "◉ show";
+      btn.title = shown ? "Hide the password" : "Show the password";
+    });
+  }
+
   function init(root) {
     (root || document).querySelectorAll(".copybtn").forEach(wire);
+    (root || document).querySelectorAll(".revealbtn").forEach(wireReveal);
   }
 
   init();

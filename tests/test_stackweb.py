@@ -8,7 +8,9 @@ Three properties carry the whole feature:
 
 
 from __future__ import annotations
+
 import pathlib
+
 import pytest
 from lhpc.core import webserver, config as cfgmod
 from lhpc.core.config import StackWebConfig, WebserverConfig, ConfigError, load_config, save_stackweb_config
@@ -1870,7 +1872,15 @@ def test_password_section_shows_the_stored_value_and_an_edit_command(tmp_path):
     assert creds["edit_command"] == f"nano {f}" and creds["reason"] == ""
     body = create_app(lambda: svc).test_client().get("/stacks?open=graywolf").get_data(as_text=True)
     assert 'id="stack-password-graywolf"' in body and "<summary>Password</summary>" in body
-    assert '<pre class="next" id="uipw-graywolf">s3cret-shown-here</pre>' in body
+    # MASKED on screen by CSS; `Show` drops the class so the value becomes selectable text, and
+    # the copy button reads the element's real text either way.
+    assert '<pre class="next masked" id="uipw-graywolf">s3cret-shown-here</pre>' in body
+    assert 'class="revealbtn" data-reveal="uipw-graywolf"' in body
+    static = pathlib.Path(__file__).resolve().parents[1] / "lhpc" / "adapters" / "web" / "static"
+    css = (static / "style.css").read_text()
+    assert "text-security: disc" in css.split(".secretbox pre.masked")[1].split("}")[0]
+    assert ".secretbox .secretbtns" in css and "@media (max-width: 480px)" in css
+    assert 'data-reveal' in (static / "copy.js").read_text()      # the toggle is wired, CSP-safe
     assert "copy password" in body and f"nano {f}" in body
     assert "cat " + str(f) not in body and "not shown" not in body and "on purpose" not in body
     assert body.count("s3cret-shown-here") == 1          # the value appears ONLY in the secretbox
