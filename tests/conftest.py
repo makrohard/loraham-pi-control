@@ -268,7 +268,7 @@ def fake_gpsd():
 
 
 def set_call(svc, callsign="XX0XXA"):
-    """Configure a valid operator callsign so a LICENSED stack (chat/igate/voice/meshcom) passes
+    """Configure a valid operator callsign so a LICENSED stack (chat/graywolf/voice/meshcom) passes
     CALL-enforcement — the realistic precondition for starting one. Returns the service."""
     from lhpc.core.config import save_operator_config
     save_operator_config(svc._paths, callsign)

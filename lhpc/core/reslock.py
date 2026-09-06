@@ -49,8 +49,8 @@ def canonical_key(resource_key: str) -> str:
 
 def source_lock_key(source_path: str) -> str:
     """THE canonical lock key for a managed source checkout, derived from its path (not
-    a component id or stack target). Every operation on a shared checkout (e.g. chat and
-    igate both use `src/LoRaHAM_Daemon`) MUST contend on this one key."""
+    a component id or stack target). Every operation on a shared checkout (e.g. loraham-kiss-tnc
+    and loraham-kiss-serial both use `src/loraham-kiss-tnc`) MUST contend on this one key."""
     return f"source.{source_path}"
 
 

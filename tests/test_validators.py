@@ -24,7 +24,7 @@ def test_callsign_rejects_injection(bad):
 
 
 def test_callsign_accepts_real():
-    # APRS/AX.25 rule (chat/igate/graywolf): base 3-6 + optional SSID -1..-15, uppercased.
+    # APRS/AX.25 rule (chat/graywolf): base 3-6 + optional SSID -1..-15, uppercased.
     assert V.callsign("XX0XXA-10") == "XX0XXA-10"
     assert V.callsign("xx0xxa") == "XX0XXA"
     assert V.callsign("", allow_empty=True) == ""

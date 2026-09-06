@@ -1557,7 +1557,7 @@ class MaintenanceOpsMixin:
                 data={"changes": len(items)})
         # HARD GATE: an update swaps source trees on disk, so it requires the affected stacks
         # STOPPED — the target's components AND every other consumer of an affected SHARED
-        # source path (chat running blocks igate's update of src/LoRaHAM_Daemon). Never
+        # source path (kiss running blocks an update of src/loraham-kiss-tnc). Never
         # silently stops or restarts anything; typed refusal with the exact stop commands.
         affected = {c.source.path for _, c in items}
         # CHEAP PREFLIGHT (early typed refusal; NOT the authority — a Start may still land

@@ -38,7 +38,7 @@ def test_daemon_spi_is_cooperative():
 
 def test_every_stack_has_a_main_component():
     stacks = {s.id: s for s in load_manifest()}
-    assert set(stacks) == {"daemon", "chat", "igate", "voice", "kiss", "graywolf",
+    assert set(stacks) == {"daemon", "chat", "voice", "kiss", "graywolf",
                            "meshtastic", "meshcom", "meshcore", "reticulum"}
     for sid, s in stacks.items():
         assert s.main and s.main_component is not None, sid
@@ -122,14 +122,14 @@ def test_stack_dependencies_apps_depend_on_daemon():
     from lhpc.core.status import stack_dependencies
     deps = stack_dependencies(load_manifest())
     assert deps["daemon"] == []                 # foundation has no stack deps
-    for sid in ("chat", "igate", "kiss", "meshcom", "meshcore"):
+    for sid in ("chat", "kiss", "meshcom", "meshcore"):
         assert "daemon" in deps[sid], sid       # app stacks depend on the daemon stack
     assert deps["meshtastic"] == []             # meshtastic is direct, no daemon
 
 
-def test_native_chat_igate_are_daemon_backed():
+def test_native_chat_kiss_are_daemon_backed():
     comps = _index(load_manifest())
-    for cid in ("loraham-chat", "loraham-igate"):
+    for cid in ("loraham-chat", "loraham-kiss-tnc"):
         assert "loraham-daemon" in comps[cid].depends_on
 
 

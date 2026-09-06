@@ -33,11 +33,10 @@ bringing up a LoRaHAM / Meshtastic / MeshCom / MeshCore box on a Pi Zero 2W or P
 | Stack | Band(s) | What it is | Docs |
 |---|---|---|---|
 | `daemon` | 433 + 868 | LoRaHAM daemon — owns the radios, exposes per-band sockets | [daemon](docs/stacks/daemon.md) |
-| `chat` | 433 | APRS/chat TUI (local or over SSH) | [aprs](docs/stacks/aprs.md) |
-| `igate` | 433 | APRS iGate — **deprecated**, use `graywolf` | [aprs](docs/stacks/aprs.md) |
+| `chat` | 433 | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
 | `voice` | 433 / 868 | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
 | `kiss` | 433 / 868 | KISS TNC over TCP (xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
-| `graywolf` | via `kiss` | Graywolf APRS station (web UI, digipeater, iGate) — substitutes `igate` | [graywolf](docs/stacks/graywolf.md) |
+| `graywolf` | via `kiss` | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
 | `meshtastic` | 433 / 868 | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
 | `meshcom` | 433 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
 | `meshcore` | 868 | MeshCore on openHop — chat node (TCP 5000) and/or repeater (dashboard :8000), by `mode` | [meshcore](docs/stacks/meshcore.md) |
@@ -146,7 +145,7 @@ sudo bash bootstrap-deps.sh --spi-mode soft-cs
 # lhpc itself + fetch/TLS tools (nginx only if you want the web console)
 sudo apt install -y --no-install-recommends git python3 python3-venv python3-pip nftables nginx iw ca-certificates curl zstd
 sudo apt install -y --no-install-recommends cmake liblgpio-dev build-essential          # daemon / RadioLib
-sudo apt install -y --no-install-recommends libncurses-dev                              # chat / igate / voice (terminal)
+sudo apt install -y --no-install-recommends libncurses-dev                              # chat / voice (terminal)
 sudo apt install -y --no-install-recommends libcodec2-dev libasound2-dev                # voice (ncurses terminal UI — no graphical packages)
 sudo apt install -y --no-install-recommends socat                                       # kiss
 sudo apt install -y --no-install-recommends python3-libgpiod python3-spidev            # reticulum (direct-SPI radio, no compiler needed)
@@ -279,10 +278,6 @@ lhpc install daemon
 # chat — APRS/chat TUI
 lhpc install chat
 lhpc build chat
-
-# igate — APRS iGate — DEPRECATED: known bugs, unmaintained; use graywolf instead
-lhpc install igate
-lhpc build igate
 
 # voice — LoRa voice (terminal variant builds headless; the GTK app needs --with-gui)
 lhpc install voice
@@ -525,7 +520,7 @@ Serving model and the one-click mechanism: [`docs/deployment.md`](docs/deploymen
 | Understand it | [Architecture](docs/architecture.md) |
 | Use it | [CLI](docs/cli.md) · [Operations & safety](docs/operations.md) · [Maintenance](docs/maintenance.md) · [Field notes](docs/field-notes.md) |
 | Web console & remote access | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WiFi access point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
-| Stacks | [Adding a stack](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/aprs.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
+| Stacks | [Adding a stack](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/chat.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
 | Reference & policy | [Hardening](docs/hardening-0.1.md) · [Provenance](docs/provenance.md) |
 
 Full index: [`docs/README.md`](docs/README.md).

@@ -86,11 +86,14 @@ def _fake_life_factory(svc):
                      spawn=real_spawn)
 
 
-def _igate_svc(tmp_path):
-    from lhpc.core.probes.backends import FakeSystem
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    (tmp_path / "src" / "LoRaHAM_Daemon" / "loraham_igate").write_text("#bin")  # built
-    sys = FakeSystem(unix_replies={"/tmp/loraconf433.sock":
+def _kiss_svc(tmp_path):
+    """An installed+built kiss stack over a daemon already serving 433. The TNC is endpoint-
+    ready, so its 127.0.0.1:8001 listener is present for the post-launch readiness probe."""
+    from lhpc.core.probes.backends import FakeSystem, Listener
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-kiss-tnc" / "loraham-kiss-tnc").write_text("#bin")  # built
+    sys = FakeSystem(listeners=[Listener(family="ipv4", ip="127.0.0.1", port=8001, inode=1)],
+                     unix_replies={"/tmp/loraconf433.sock":
                                    b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system
     return ControllerService(system=sys, paths=Paths(runtime_root=tmp_path))
 
@@ -99,27 +102,27 @@ def _igate_svc(tmp_path):
 def test_start_required_post_start_failure_is_unverified(tmp_path, monkeypatch):
     # Drives ControllerService.start() and exercises the CALLER's handling of the typed
     # required-post-start result (the bug was the caller using a nonexistent Outcome.ok).
-    svc = _igate_svc(tmp_path)
+    svc = _kiss_svc(tmp_path)
     set_call(svc)
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     monkeypatch.setattr(ControllerService, "_run_post_start",
                         lambda self, *a, **k: (False, "required post-start failed (rc 7)"))
-    res = svc.start("igate", apply=True)            # must NOT raise AttributeError
+    res = svc.start("kiss", apply=True)             # must NOT raise AttributeError
     assert not res.ok
     assert any("required post-start failed" in d for d in res.details)
-    assert any(r.component == "loraham-igate" and r.outcome.value == "unverified"
+    assert any(r.component == "loraham-kiss-tnc" and r.outcome.value == "unverified"
                for r in res.results)
 
 
 @pytest.mark.needs_session
 def test_start_required_post_start_success_verifies(tmp_path, monkeypatch):
-    svc = _igate_svc(tmp_path)
+    svc = _kiss_svc(tmp_path)
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     monkeypatch.setattr(ControllerService, "_run_post_start",
                         lambda self, *a, **k: (True, "required post-start completed"))
     set_call(svc)
-    res = svc.start("igate", apply=True)
-    assert any(r.component == "loraham-igate" and r.outcome.value == "verified"
+    res = svc.start("kiss", apply=True)
+    assert any(r.component == "loraham-kiss-tnc" and r.outcome.value == "verified"
                for r in res.results)
     assert any("required post-start completed" in d for d in res.details)
 
@@ -229,8 +232,8 @@ def test_optional_post_start_success_is_scheduled(tmp_path):
 def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatch):
     # Start runs exactly the SAVED configuration (0.2.9: there are no per-launch values): the
     # value saved in Settings is what the launch and the post-start push carry.
-    svc = _igate_svc(tmp_path)
-    svc.save_config("igate", {"tx_freq": "434.500"})
+    svc = _kiss_svc(tmp_path)
+    svc.save_config("kiss", {"tx_freq": "434.500"})
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
     seen = {}
     def cap(self, life, stack, comp, comp_cfg, band, announce=None, strict=False, require_all=False):
@@ -238,7 +241,7 @@ def test_the_saved_config_reaches_the_launch_and_post_start(tmp_path, monkeypatc
         return (None, "")
     monkeypatch.setattr(ControllerService, "_run_post_start", cap)
     set_call(svc)
-    svc.start("igate", apply=True)
+    svc.start("kiss", apply=True)
     assert seen["cfg"]["tx_freq"] == "434.500"
 
 
@@ -1203,11 +1206,11 @@ def test_run_post_start_announces_detached_runner_log(tmp_path):
 @pytest.mark.needs_session
 def test_start_details_announce_start_capture_log(tmp_path, monkeypatch):
     # Item B: the start flow announces the start capture log as a copy-pasteable tail line.
-    svc = _igate_svc(tmp_path)
+    svc = _kiss_svc(tmp_path)
     set_call(svc)
     monkeypatch.setattr(ControllerService, "_lifecycle", _fake_life_factory)
-    res = svc.start("igate", apply=True)
-    assert any("[log] loraham-igate -> tail -f" in d and "start-loraham-igate" in d
+    res = svc.start("kiss", apply=True)
+    assert any("[log] loraham-kiss-tnc -> tail -f" in d and "start-loraham-kiss-tnc" in d
                for d in res.details), res.details
 
 
@@ -1882,8 +1885,8 @@ def test_running_band_marker_failure_downgrades_to_unverified(tmp_path, monkeypa
         _outcomes(res)
 
 
-def _igate_with_held_required_post_start(svc, monkeypatch):
-    """Give igate a REQUIRED post step and HOLD its execution inside the real runner seam.
+def _kiss_with_held_required_post_start(svc, monkeypatch):
+    """Give kiss-tnc a REQUIRED post step and HOLD its execution inside the real runner seam.
 
     Returns (entered, release, seen). `seen["launcher"]` is the rendered required-post launcher
     the runner was actually handed, so a test can prove WHICH identity the post step applied."""
@@ -1897,9 +1900,9 @@ def _igate_with_held_required_post_start(svc, monkeypatch):
 
     def order_with_required_post(self, t):
         return [(stack, dataclasses.replace(
-            comp, post_steps=({"kind": "exec", "argv": ["true", "--setcall", "{param:call}"],
+            comp, post_steps=({"kind": "exec", "argv": ["true", "--tx-freq", "{param:tx_freq}"],
                               "required": True},))
-            if comp.id == "loraham-igate" else comp)
+            if comp.id == "loraham-kiss-tnc" else comp)
             for stack, comp in real_order(self, t)]
 
     monkeypatch.setattr(ControllerService, "_run_order", order_with_required_post)
@@ -1931,35 +1934,36 @@ def test_a_config_save_during_required_post_start_completes_and_keeps_its_warnin
     applied it."""
     import threading
 
-    svc = _igate_svc(tmp_path)
-    set_call(svc, "XX0XXA")                                     # identity A
-    entered, release, seen = _igate_with_held_required_post_start(svc, monkeypatch)
+    svc = _kiss_svc(tmp_path)
+    set_call(svc)
+    assert svc.save_config("kiss", {"tx_freq": "433.900"}).ok   # value A
+    entered, release, seen = _kiss_with_held_required_post_start(svc, monkeypatch)
     # The main IS up once post-start begins — but not before, or the launch would be skipped as
     # already-healthy and never reach post-start at all. Liveness therefore tracks that moment.
     monkeypatch.setattr(ControllerService, "stack_running", lambda self, sid: entered.is_set())
     out = {}
 
-    t = threading.Thread(target=lambda: out.update(res=svc.start("igate", apply=True)),
+    t = threading.Thread(target=lambda: out.update(res=svc.start("kiss", apply=True)),
                          daemon=True)
     t.start()
     assert entered.wait(30), "required post-start never began executing"
     # B is saved WHILE the post step is still running on A.
-    assert svc.save_config_bundle("igate", values={"call": "XX0XXA-9"}).ok
+    assert svc.save_config_bundle("kiss", values={"tx_freq": "434.500"}).ok
     assert not release.is_set(), "the save must land DURING the post-start, not after it"
     # The save records the divergence WHILE the launch is still running on A. If this ever stops
     # holding, the test below proves nothing — so assert it here rather than infer it.
-    assert svc.restart_required("igate") is not None, "the save did not record the divergence"
+    assert svc.restart_required("kiss") is not None, "the save did not record the divergence"
     release.set()
     t.join(30)
     assert not t.is_alive(), "start never finished"
 
     assert out["res"].ok, _outcomes(out["res"])
-    assert "XX0XXA-9" not in seen["launcher"]      # the post step applied A...
-    assert "XX0XXA" in seen["launcher"]
-    assert svc._stored_param_value("igate", "run", "loraham-igate", "call") == "XX0XXA-9"
-    marker = svc.restart_required("igate")         # ...so the divergence MUST still be reported
+    assert "434.500" not in seen["launcher"]       # the post step applied A...
+    assert "433.900" in seen["launcher"]
+    assert svc._stored_param_value("kiss", "run", "loraham-kiss-tnc", "tx_freq") == "434.500"
+    marker = svc.restart_required("kiss")          # ...so the divergence MUST still be reported
     assert marker is not None, "the mid-launch save's restart-required warning was erased"
-    assert "call" in marker.get("params", {}), marker
+    assert "tx_freq" in marker.get("params", {}), marker
 
 
 @pytest.mark.needs_session
@@ -1971,10 +1975,10 @@ def test_no_config_lock_is_held_while_required_post_start_runs(tmp_path, monkeyp
 
     from lhpc.core import config as cfgmod
 
-    svc = _igate_svc(tmp_path)
+    svc = _kiss_svc(tmp_path)
     set_call(svc, "XX0XXA")
-    entered, release, _seen = _igate_with_held_required_post_start(svc, monkeypatch)
-    t = threading.Thread(target=lambda: svc.start("igate", apply=True), daemon=True)
+    entered, release, _seen = _kiss_with_held_required_post_start(svc, monkeypatch)
+    t = threading.Thread(target=lambda: svc.start("kiss", apply=True), daemon=True)
     t.start()
     assert entered.wait(30), "required post-start never began executing"
     cfgmod.save_operator_config(svc._paths, "XX0XXB")           # a real EXCLUSIVE config write
@@ -2000,10 +2004,10 @@ def test_the_start_waits_for_real_config_stability_after_post_start(tmp_path, mo
 
     from lhpc.core.config import CONFIG_LOCK_TIMEOUT_S
 
-    svc = _igate_svc(tmp_path)
+    svc = _kiss_svc(tmp_path)
     set_call(svc, "XX0XXA")
-    entered, release, _seen = _igate_with_held_required_post_start(svc, monkeypatch)
-    t = threading.Thread(target=lambda: svc.start("igate", apply=True), daemon=True)
+    entered, release, _seen = _kiss_with_held_required_post_start(svc, monkeypatch)
+    t = threading.Thread(target=lambda: svc.start("kiss", apply=True), daemon=True)
     t.start()
     assert entered.wait(30), "required post-start never began executing"
 

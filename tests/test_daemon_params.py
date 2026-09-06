@@ -6,15 +6,15 @@ from lhpc.core import daemon_control
 
 
 def test_client_stacks_and_direct_spi_excluded():
-    for s in ("chat", "igate", "kiss", "voice", "meshcom", "meshcore"):
+    for s in ("chat", "kiss", "voice", "meshcom", "meshcore"):
         assert dp.is_client(s)
     assert not dp.is_client("meshtastic")            # direct-SPI: no daemon panel
     assert not dp.is_client("daemon")
 
 
 def test_loraham_defaults_match_app_source():
-    # chat/igate/kiss set SF=12 BW=125 CR=5 CRC=1 PREAMBLE=8 SYNC=0x12 POWER=17 (from source).
-    for s in ("chat", "igate", "kiss"):
+    # chat/kiss set SF=12 BW=125 CR=5 CRC=1 PREAMBLE=8 SYNC=0x12 POWER=17 (from source).
+    for s in ("chat", "kiss"):
         assert dp.default_value(s, "433", "SF") == "12"
         assert dp.default_value(s, "433", "BW") == "125.0"
         assert dp.default_value(s, "433", "SYNC") == "0x12"

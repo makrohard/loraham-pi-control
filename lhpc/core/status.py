@@ -81,7 +81,7 @@ class StatusProber:
         # outside it, so a standalone `assess_component` still reads fresh.
         self._listeners = None
         # ONE git probe per identical (checkout, pin) for the life of this prober — several
-        # components share a checkout (chat and igate both build from src/LoRaHAM_Daemon), and the
+        # components share a checkout (loraham-kiss-tnc and loraham-kiss-serial both come from src/loraham-kiss-tnc), and the
         # probe's answer depends on nothing but the path and the pin. A prober lives for one
         # snapshot, so this needs no invalidation; a different pin is a different key.
         self._source_probes: dict = {}

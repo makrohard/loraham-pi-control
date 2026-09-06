@@ -93,7 +93,7 @@ def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path
     graywolf transmits by handing frames to loraham-kiss-tnc, which owns the tuning — so the two
     running together is the NORMAL configuration, not a conflict. Reporting it red on the
     dashboard is both wrong and the kind of warning an operator learns to ignore. Two genuinely
-    independent stacks on one band (chat + igate) must still be flagged.
+    independent stacks on one band (chat + kiss) must still be flagged.
     """
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
@@ -103,11 +103,10 @@ def test_radio_conflict_ignores_a_stack_that_reaches_rf_through_another(tmp_path
     gw = {"id": "graywolf", "name": "Graywolf APRS"}
     kiss = {"id": "kiss", "name": "LoRaHAM KISS TNC"}
     chat = {"id": "chat", "name": "LoRaHAM Chat"}
-    igate = {"id": "igate", "name": "LoRaHAM iGate"}
 
     assert names([kiss, gw]) == []                 # client + its provider: not a conflict
     assert names([gw]) == [] and names([]) == []   # nothing to fight over
-    assert sorted(names([chat, igate])) == ["LoRaHAM Chat", "LoRaHAM iGate"]   # real rivals
+    assert sorted(names([chat, kiss])) == ["LoRaHAM Chat", "LoRaHAM KISS TNC"]   # real rivals
     # A client does not mask a genuine rival sharing the same radio.
     assert "LoRaHAM Chat" in names([kiss, gw, chat])
 

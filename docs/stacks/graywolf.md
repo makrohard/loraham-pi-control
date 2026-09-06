@@ -2,9 +2,8 @@
 
 [Graywolf](https://github.com/chrissnell/graywolf) (Chris Snell, NW5W) is a full APRS
 station: AX.25 decode, digipeater, iGate, SQLite packet log and a web UI. Here it is the
-modern substitute for [`igate`](aprs.md#igate--loraham-igate), which is deprecated (known bugs,
-no visible upstream maintenance) — same job, far more of it, with an operator UI instead of CLI
-flags.
+box's APRS station, driving the radio through the KISS TNC, with an operator UI instead of
+CLI flags.
 
 It never touches the radio. Graywolf speaks KISS over TCP and the
 [KISS TNC](kiss.md) owns the band and the daemon sockets:
@@ -134,12 +133,10 @@ and a fixed-position beacon will keep beaconing those coordinates: check the bea
 
 ## Conflicts
 
-- **Replaces `igate`.** Both gate the same RF to APRS-IS; running both double-gates and
-  both retune the 433 radio. Run one.
 - **Not with `loraham-kiss-serial`.** The TNC accepts a *single* KISS client. If the socat
   PTY holds it, graywolf's dial is refused and it retries forever; if graywolf holds it,
   the PTY is dead. This is not reslock-enforced (a KISS client slot is not a declarable
-  resource) — it is an operator constraint, like `chat` vs `igate`.
+  resource) — it is an operator constraint, like `chat` vs `graywolf` on 433.
 - `chat` retunes the same radio; don't pair it with a transmitting graywolf.
 - **One band at a time.** graywolf speaks only TCP and claims no radio itself, but the band it
   is started on selects which TNC/daemon chain it uses. There is one radio, so a start on the

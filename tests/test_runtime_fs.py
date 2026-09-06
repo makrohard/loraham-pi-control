@@ -904,7 +904,7 @@ def test_shipped_manifest_has_zero_link_strategies():
             assert c.get("source", {}).get("strategy", "") != "link", \
                 f"{c['id']}: link strategy shipped"
     stacks = manifest_mod.load_manifest()                        # and it LOADS
-    assert len(stacks) == 10
+    assert len(stacks) == 9
 
 
 def test_link_strategy_refused_at_manifest_load(tmp_path):

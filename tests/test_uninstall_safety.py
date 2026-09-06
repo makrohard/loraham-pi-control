@@ -90,16 +90,6 @@ def test_uninstall_of_a_package_managed_stack_says_so_instead_of_unknown(tmp_pat
     assert "Unknown stack" in svc.uninstall("nosuchstack", apply=True).summary
 
 
-def test_uninstall_keeps_source_shared_by_another_stack(tmp_path):
-    # chat and iGate share src/LoRaHAM_Daemon. Uninstalling chat must KEEP it.
-    _mksrc(tmp_path, "LoRaHAM_Daemon")
-    svc = _svc(tmp_path)
-    res = svc.uninstall("chat", apply=True)
-    assert res.ok
-    assert (tmp_path / "src" / "LoRaHAM_Daemon").exists(), "shared source wrongly removed"
-    assert any("shared" in d.lower() and "loraham-igate" in d for d in res.details)
-
-
 def test_uninstall_keeps_source_shared_within_stack(tmp_path):
     # kiss-tnc and serial-kiss share src/loraham-kiss-tnc. Uninstalling just the
     # serial component must keep the checkout (kiss-tnc still uses it).
@@ -107,7 +97,8 @@ def test_uninstall_keeps_source_shared_within_stack(tmp_path):
     svc = _svc(tmp_path)
     res = svc.uninstall("loraham-kiss-serial", apply=True)
     assert res.ok
-    assert (tmp_path / "src" / "loraham-kiss-tnc").exists()
+    assert (tmp_path / "src" / "loraham-kiss-tnc").exists(), "shared source wrongly removed"
+    assert any("shared" in d.lower() and "loraham-kiss-tnc" in d for d in res.details)
 
 
 @pytest.mark.contract
@@ -234,13 +225,13 @@ def test_update_refuses_while_target_running(tmp_path):
 
 
 def test_update_refuses_while_shared_sibling_running(tmp_path):
-    # chat (running) and igate share src/LoRaHAM_Daemon: updating IGATE is refused
-    # because the swap would break the running chat.
-    _mksrc(tmp_path, "LoRaHAM_Daemon")
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})
-    res = svc.update("loraham-igate", apply=True)
+    # kiss-tnc (running) and kiss-serial share src/loraham-kiss-tnc: updating the SERIAL
+    # component is refused because the swap would break the running TNC.
+    _mksrc(tmp_path, "loraham-kiss-tnc")
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc", "--config", "X"]})
+    res = svc.update("loraham-kiss-serial", apply=True)
     assert not res.ok and "running" in res.summary.lower()
-    assert any("loraham-chat" in d for d in res.details)
+    assert any("loraham-kiss-tnc" in d for d in res.details)
 
 
 def test_update_proceeds_when_unrelated_stack_running(tmp_path):
@@ -289,67 +280,57 @@ def test_stale_record_never_authorizes_a_future_tree(tmp_path):
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "new.txt").exists() # tree untouched
 
 
-# --- shared-source LIVE membership accounting (chat/igate leaf, user-reported) ----------------
+# --- shared-source LIVE membership accounting (kiss-tnc/kiss-serial leaf, user-reported) -----
 
 def _seed_shared(tmp_path):
     from lhpc.core import source_registry
     import time as _t
-    dest = tmp_path / "src" / "LoRaHAM_Daemon"
+    dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     (dest / "app.c").write_text("x")
     assert source_registry.write_record(
         Paths(runtime_root=tmp_path),
-        source_registry.RegistryRecord("src/LoRaHAM_Daemon", "", "backfilled", "", _t.time(),
-                                       "", "", ("loraham-chat", "loraham-igate")))
+        source_registry.RegistryRecord("src/loraham-kiss-tnc", "", "backfilled", "", _t.time(),
+                                       "", "", ("loraham-kiss-tnc", "loraham-kiss-serial")))
     return dest
 
 
 def _members(tmp_path):
     from lhpc.core import source_registry
-    rec = source_registry.read_record(Paths(runtime_root=tmp_path), "src/LoRaHAM_Daemon")
+    rec = source_registry.read_record(Paths(runtime_root=tmp_path), "src/loraham-kiss-tnc")
     return tuple(rec.components) if rec else None
 
 
-_APPS_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
-
-
 def _shared_svc(tmp_path):
-    return _bind_identity(_svc(tmp_path), tmp_path / "src" / "LoRaHAM_Daemon",
-                          _APPS_REMOTE)
+    return _bind_identity(_svc(tmp_path), tmp_path / "src" / "loraham-kiss-tnc",
+                          _KISS_REMOTE)
 
 
 def test_sequential_uninstall_removes_shared_leaf(tmp_path):
-    # igate departs (kept + membership decremented); chat's uninstall then REMOVES the
-    # leaf — the user-reported "kept forever" accounting bug.
+    # kiss-serial departs (kept + membership decremented); the stack's uninstall then REMOVES
+    # the leaf — the user-reported "kept forever" accounting bug.
     dest = _seed_shared(tmp_path)
     svc = _shared_svc(tmp_path)
-    r1 = svc.uninstall("igate", apply=True)
+    r1 = svc.uninstall("loraham-kiss-serial", apply=True)
     assert r1.ok, r1.details
-    assert dest.exists()                                         # kept for chat
-    assert _members(tmp_path) == ("loraham-chat",)               # igate departed
+    assert dest.exists()                                         # kept for kiss-tnc
+    assert _members(tmp_path) == ("loraham-kiss-tnc",)           # kiss-serial departed
     assert any("departed" in d for d in r1.details)
-    r2 = svc.uninstall("chat", apply=True)
+    r2 = svc.uninstall("kiss", apply=True)
     assert r2.ok, r2.details
     assert not dest.exists()                                     # LAST sharer -> removed
     assert _members(tmp_path) is None                            # record dropped
-    assert not svc.is_installed("chat") and not svc.is_installed("igate")
+    assert not svc.is_installed("kiss")
 
 
-def test_sequential_clean_removes_shared_leaf(tmp_path):
+def test_mixed_uninstall_then_clean_removes_shared_leaf(tmp_path):
+    # a component departure followed by the stack purge: clean sees only the remaining live
+    # member (its own) and removes the leaf.
     dest = _seed_shared(tmp_path)
     svc = _shared_svc(tmp_path)
-    assert svc.clean("chat", apply=True, purge=True).ok
-    assert dest.exists() and _members(tmp_path) == ("loraham-igate",)
-    assert svc.clean("igate", apply=True, purge=True).ok
-    assert not dest.exists()
-
-
-def test_mixed_clean_then_uninstall_removes_shared_leaf(tmp_path):
-    dest = _seed_shared(tmp_path)
-    svc = _shared_svc(tmp_path)
-    assert svc.clean("igate", apply=True, purge=True).ok
+    assert svc.uninstall("loraham-kiss-serial", apply=True).ok
     assert dest.exists()
-    assert svc.uninstall("chat", apply=True).ok
+    assert svc.clean("kiss", apply=True, purge=True).ok
     assert not dest.exists()
 
 
@@ -358,38 +339,38 @@ def test_departure_rewrite_failure_is_truthful_incomplete(tmp_path, monkeypatch)
     dest = _seed_shared(tmp_path)
     svc = _shared_svc(tmp_path)
     monkeypatch.setattr(source_registry, "update_components", lambda *a: False)
-    r = svc.uninstall("igate", apply=True)
+    r = svc.uninstall("loraham-kiss-serial", apply=True)
     assert not r.ok                                              # INCOMPLETE, not silent
     assert any("could not be updated" in d for d in r.details)
-    assert dest.exists() and _members(tmp_path) == ("loraham-chat", "loraham-igate")
+    assert dest.exists() and _members(tmp_path) == ("loraham-kiss-tnc", "loraham-kiss-serial")
     monkeypatch.undo()
-    assert svc.uninstall("igate", apply=True).ok                 # retry converges
-    assert _members(tmp_path) == ("loraham-chat",)
+    assert svc.uninstall("loraham-kiss-serial", apply=True).ok   # retry converges
+    assert _members(tmp_path) == ("loraham-kiss-tnc",)
 
 
 def test_install_skip_rejoins_shared_membership(tmp_path):
-    # chat departs, then chat is INSTALLED again (healthy-dir skip): its membership is
-    # restored, so a later igate departure keeps the leaf for chat.
+    # kiss-serial departs, then the kiss stack is INSTALLED again (healthy-dir skip): the
+    # membership is restored, so a later kiss-serial departure keeps the leaf for kiss-tnc.
     dest = _seed_shared(tmp_path)
     svc = _shared_svc(tmp_path)
-    assert svc.uninstall("chat", apply=True).ok
-    assert _members(tmp_path) == ("loraham-igate",)
-    svc.install("chat", apply=True)
-    assert set(_members(tmp_path)) == {"loraham-chat", "loraham-igate"}   # re-joined
-    r2 = svc.uninstall("igate", apply=True)
-    assert r2.ok and dest.exists()                               # kept for chat again
-    assert _members(tmp_path) == ("loraham-chat",)
+    assert svc.uninstall("loraham-kiss-serial", apply=True).ok
+    assert _members(tmp_path) == ("loraham-kiss-tnc",)
+    svc.install("kiss", apply=True)
+    assert set(_members(tmp_path)) == {"loraham-kiss-tnc", "loraham-kiss-serial"}  # re-joined
+    r2 = svc.uninstall("loraham-kiss-serial", apply=True)
+    assert r2.ok and dest.exists()                               # kept for kiss-tnc again
+    assert _members(tmp_path) == ("loraham-kiss-tnc",)
 
 
 def test_recordless_leaf_keeps_manifest_fallback(tmp_path):
     # No ownership record (legacy/unowned): keep-decisions stay manifest-driven and the
     # ownership gates refuse removal exactly as before — never a surprise deletion.
-    dest = tmp_path / "src" / "LoRaHAM_Daemon"
+    dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     svc = _svc(tmp_path)
-    svc.uninstall("igate", apply=True)
+    svc.uninstall("loraham-kiss-serial", apply=True)
     assert dest.exists()                                         # kept (manifest fallback)
-    r2 = svc.uninstall("chat", apply=True)
+    r2 = svc.uninstall("loraham-kiss-tnc", apply=True)
     assert dest.exists()                                         # manifest fallback: kept
     assert any("kept" in d for d in r2.details)                  # never a surprise removal
 
@@ -401,13 +382,13 @@ def test_adopt_over_shrunk_record_restores_manifest_membership(tmp_path):
     from lhpc.core.config import Config
     _seed_shared(tmp_path)
     svc = _shared_svc(tmp_path)
-    assert svc.uninstall("igate", apply=True).ok
-    assert _members(tmp_path) == ("loraham-chat",)
-    comp = next(c for s in svc.stacks() if s.id == "chat"
-                for c in s.components if c.id == "loraham-chat")
+    assert svc.uninstall("loraham-kiss-serial", apply=True).ok
+    assert _members(tmp_path) == ("loraham-kiss-tnc",)
+    comp = next(c for s in svc.stacks() if s.id == "kiss"
+                for c in s.components if c.id == "loraham-kiss-tnc")
     inst = Installer(svc._paths, svc.stacks(), Config(values={}), svc._system)
     meta = inst._txn_meta(comp, comp.source, "pinned", "", str(tmp_path))
-    assert set(meta["components"]) >= {"loraham-chat", "loraham-igate"}  # merged back
+    assert set(meta["components"]) >= {"loraham-kiss-tnc", "loraham-kiss-serial"}  # merged back
 
 
 def test_auto_install_reconcile_absent_leaf_never_reports_dirty(tmp_path):

@@ -2621,7 +2621,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # Feed scan window. The RX/TX lines are a SMALL fraction of the daemon's stdout, so we must
     # scan far more than we display and filter FIRST — tailing 400 lines and filtering afterwards
-    # made "recent" mean "within the last 400 log lines", not "recent in time", and a chatty igate
+    # made "recent" mean "within the last 400 log lines", not "recent in time", and a chatty client
     # (beacons + digipeat + RX) evicted a seconds-old TX while a quiet chat kept it for minutes.
     # Bounded + no-follow; ~200 KB typical per 3 s poll, which stays cheap on a Pi.
     _FEED_SCAN_LINES = 2000

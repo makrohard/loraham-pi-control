@@ -593,7 +593,7 @@ def test_populate_installs_headless_stacks(tmp_path, monkeypatch):
     paths = make_lab_root(tmp_path, monkeypatch)
     monkeypatch.setattr(ops, "is_active", lambda svc: True)
     svc, seen = _populate_stub(paths, installed=("kiss",), binary=("graywolf",),
-                               fail_install=("igate",))
+                               fail_install=("reticulum",))
     r = ops.populate(svc)
     assert r.ok
     installed = dict(seen["install"])
@@ -603,11 +603,11 @@ def test_populate_installs_headless_stacks(tmp_path, monkeypatch):
     assert "graywolf" not in seen["build"]        # binary install is NOT built (would refuse)
     assert installed["meshcore"] == "pinned"      # source otherwise
     assert "meshcore" in seen["build"]
-    assert "igate" not in seen["build"]           # failed install -> no build, non-fatal
-    # igate still missing -> no completion marker; progress records the ready set
+    assert "reticulum" not in seen["build"]       # failed install -> no build, non-fatal
+    # reticulum still missing -> no completion marker; progress records the ready set
     assert not ops.populate_marker_path(paths).exists()
     prog = json.loads(ops.populate_progress_path(paths).read_text())
-    assert "igate" not in prog["ready"]
+    assert "reticulum" not in prog["ready"]
     assert {"kiss", "graywolf", "meshcore"} <= set(prog["ready"])
 
 
@@ -617,14 +617,14 @@ def test_populate_withholds_marker_on_durable_failure(tmp_path, monkeypatch):
     Ready stacks are not re-installed across passes."""
     paths = make_lab_root(tmp_path, monkeypatch)
     monkeypatch.setattr(ops, "is_active", lambda svc: True)
-    svc, seen = _populate_stub(paths, fail_install=("igate",))
+    svc, seen = _populate_stub(paths, fail_install=("reticulum",))
     for _ in range(4):                                # several passes (mimics several boots)
         ops.populate(svc)
-        # while igate keeps failing the box is never marked "done" (no baked give-up marker)
+        # while reticulum keeps failing the box is never marked "done" (no baked give-up marker)
         assert not ops.populate_marker_path(paths).exists()
     # the healthy stacks are installed exactly once, not re-attempted every pass
     assert sum(1 for sid, _ in seen["install"] if sid == "meshcore") == 1
-    assert "igate" not in json.loads(ops.populate_progress_path(paths).read_text())["ready"]
+    assert "reticulum" not in json.loads(ops.populate_progress_path(paths).read_text())["ready"]
 
 
 def test_graywolf_upstream_forced_to_sink_in_overlay(tmp_path, monkeypatch):

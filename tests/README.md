@@ -14,7 +14,7 @@ markup, CSS class, or wording changed.
    ```python
    from htmlq import parse
    doc = parse(resp.get_data(as_text=True))
-   assert doc.by_id("stack-settings-igate").has_attr("open")   # panel open when ?cfg requires it
+   assert doc.by_id("stack-settings-kiss").has_attr("open")   # panel open when ?cfg requires it
    assert doc.field_default("dp_MODE") == "FSK"                # rendered default / selected option
    ```
    (`htmlq` is intentionally tiny — if a plain `re.search` reads clearly, that's fine too.)

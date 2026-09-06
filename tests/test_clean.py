@@ -85,6 +85,20 @@ def _seed_kiss(tmp_path):
     return paths
 
 
+def test_clean_keeps_a_source_another_stack_still_uses(tmp_path, monkeypatch):
+    # clean() is refcounted: a checkout a component OUTSIDE the cleaned stack still consumes is
+    # kept and reported, never deleted. No shipped stack shares a source across stacks any more,
+    # so the cross-stack consumer map is supplied through the seam clean() reads it from.
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "_source_consumers",
+                        lambda: {"src/loraham-kiss-tnc": {"loraham-kiss-tnc", "loraham-voice"}})
+    res = svc.clean("kiss", apply=True, purge=True)
+    assert res.ok, res.details
+    assert (tmp_path / "src" / "loraham-kiss-tnc").exists(), "shared source wrongly removed"
+    assert any("kept" in d and "shared" in d and "loraham-voice" in d for d in res.details), res.details
+
+
 def test_clean_removes_a_source_less_managed_build_artifact(tmp_path):
     """graywolf has no git source, so the source machinery has no leaf to remove — its fetched
     binaries live in build/tools/graywolf. Without naming that tree, an explicit "Clean all"
@@ -166,17 +180,6 @@ def test_clean_allows_dirty_tree_but_still_requires_ownership(tmp_path):
     assert not res.ok
     assert any("refused" in d and "not a git checkout" in d for d in res.details)
     assert (tmp_path / "src" / "loraham-kiss-tnc" / "user.txt").exists()
-
-
-def test_clean_keeps_shared_source(tmp_path):
-    # chat + igate share src/LoRaHAM_Daemon: cleaning CHAT keeps the shared checkout.
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    _own(tmp_path, "LoRaHAM_Daemon", ("loraham-chat", "loraham-igate"))
-    svc = _svc(tmp_path)
-    res = svc.clean("chat", apply=True, purge=True)
-    assert res.ok, res.details
-    assert (tmp_path / "src" / "LoRaHAM_Daemon").exists()
-    assert any("kept" in d and "shared" in d for d in res.details)
 
 
 def test_clean_linked_source_unlinks_leaf_only(tmp_path):

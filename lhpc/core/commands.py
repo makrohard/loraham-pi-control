@@ -94,7 +94,7 @@ def expand_argv(tokens, comp, params, op, runtime: str, source: str,
                 if p is None:
                     raise CommandError(f"unknown run-param token {tok}")
                 raw = str((params or {}).get(name, p.default))
-                # A param default may reference operator identity / paths (e.g. igate
+                # A param default may reference operator identity / paths (e.g. chat
                 # `call` defaults to "{callsign}"). Resolve those controller-derived
                 # templates BEFORE validating the value.
                 # No hidden placeholder: an EMPTY operator callsign substitutes as "" —

@@ -10,8 +10,8 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
-_URL_A = "https://github.com/fork-a/LoRaHAM_Daemon.git"
-_URL_B = "https://github.com/fork-b/LoRaHAM_Daemon.git"
+_URL_A = "https://github.com/fork-a/loraham-kiss-tnc.git"
+_URL_B = "https://github.com/fork-b/loraham-kiss-tnc.git"
 
 
 def _svc(tmp_path, cmdlines=None):
@@ -20,28 +20,28 @@ def _svc(tmp_path, cmdlines=None):
 
 
 def _write_conflicting_overrides(tmp_path, a=_URL_A, b=_URL_B):
-    """LEGACY hand-edited divergence: chat and igate (DIFFERENT stacks) share
-    src/LoRaHAM_Daemon but point at different forks."""
+    """LEGACY hand-edited divergence: kiss-tnc and kiss-serial share src/loraham-kiss-tnc
+    but point at different forks."""
     (tmp_path / "config").mkdir(parents=True, exist_ok=True)
     (tmp_path / "config" / "local.toml").write_text(
-        f'[remotes]\nloraham-chat = "{a}"\nloraham-igate = "{b}"\n')
+        f'[remotes]\nloraham-kiss-tnc = "{a}"\nloraham-kiss-serial = "{b}"\n')
 
 
 # --- save-time enforcement --------------------------------------------------------------------
 
 def test_single_remote_save_propagates_to_all_consumers_and_discloses(tmp_path):
     svc = _svc(tmp_path)
-    res = svc.save_component_remote("loraham-chat", _URL_A)
+    res = svc.save_component_remote("loraham-kiss-tnc", _URL_A)
     assert res.ok
-    assert any("loraham-igate" in d for d in res.details)              # disclosed propagation
+    assert any("loraham-kiss-serial" in d for d in res.details)        # disclosed propagation
     cfg = _svc(tmp_path).config()                                      # fresh read
-    assert cfg.remotes.get("loraham-chat") == _URL_A
-    assert cfg.remotes.get("loraham-igate") == _URL_A                  # same checkout, same remote
+    assert cfg.remotes.get("loraham-kiss-tnc") == _URL_A
+    assert cfg.remotes.get("loraham-kiss-serial") == _URL_A            # same checkout, same remote
     # clearing propagates too
-    res2 = svc.save_component_remote("loraham-igate", "")
+    res2 = svc.save_component_remote("loraham-kiss-serial", "")
     assert res2.ok
     cfg2 = _svc(tmp_path).config()
-    assert "loraham-chat" not in cfg2.remotes and "loraham-igate" not in cfg2.remotes
+    assert "loraham-kiss-tnc" not in cfg2.remotes and "loraham-kiss-serial" not in cfg2.remotes
 
 
 def test_bundle_save_rejects_conflicting_shared_remotes(tmp_path):
@@ -82,21 +82,19 @@ def test_bundle_save_expands_single_value_to_shared_group(tmp_path):
 
 def test_update_blocked_by_conflicting_shared_remotes(tmp_path):
     _write_conflicting_overrides(tmp_path)
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
     svc = _svc(tmp_path)
-    res = svc.update("loraham-chat", apply=True)
+    res = svc.update("loraham-kiss-tnc", apply=True)
     assert not res.ok
     assert "inconsistent" in res.summary or any("conflicting effective remotes" in d
                                                 for d in res.details)
-    assert (tmp_path / "src" / "LoRaHAM_Daemon").exists()              # zero mutation
+    assert (tmp_path / "src" / "loraham-kiss-tnc").exists()            # zero mutation
 
 
 def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
     # kiss pair with divergent overrides: the shared path reaches removal (both consumers
     # targeted) and the coherence gate refuses before any capture/detach.
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text(
-        f'[remotes]\nloraham-kiss-tnc = "{_URL_A}"\nloraham-kiss-serial = "{_URL_B}"\n')
+    _write_conflicting_overrides(tmp_path)
     dest = tmp_path / "src" / "loraham-kiss-tnc"
     dest.mkdir(parents=True)
     assert source_registry.write_record(
@@ -116,28 +114,26 @@ def test_uninstall_and_clean_blocked_by_conflicting_shared_remotes(tmp_path):
 def test_confirm_known_working_blocked_by_conflicting_shared_remotes(tmp_path):
     _write_conflicting_overrides(tmp_path)
     paths = Paths(runtime_root=tmp_path)
-    (tmp_path / "src" / "LoRaHAM_Daemon").mkdir(parents=True)
-    entries = {"loraham-chat": {"commit": "a" * 40, "selector": "dev", "remote": _URL_A,
-                                "source_rel": "src/LoRaHAM_Daemon", "strategy": ""}}
-    assert known_working.write_candidate(paths, "chat", entries, "433")
+    (tmp_path / "src" / "loraham-kiss-tnc").mkdir(parents=True)
+    entries = {"loraham-kiss-tnc": {"commit": "a" * 40, "selector": "dev", "remote": _URL_A,
+                                    "source_rel": "src/loraham-kiss-tnc", "strategy": ""}}
+    assert known_working.write_candidate(paths, "kiss", entries, "433")
     assert source_registry.write_record(paths, source_registry.RegistryRecord(
-        "src/LoRaHAM_Daemon", _URL_A, "dev", "a" * 40, time.time(), "", "",
-        ("loraham-chat", "loraham-igate")))
-    svc = _svc(tmp_path, cmdlines={555: ["loraham_chat"]})             # chat RUNNING
-    res = svc.confirm_known_working("chat")
+        "src/loraham-kiss-tnc", _URL_A, "dev", "a" * 40, time.time(), "", "",
+        ("loraham-kiss-tnc", "loraham-kiss-serial")))
+    svc = _svc(tmp_path, cmdlines={555: ["loraham-kiss-tnc", "--config", "X"]})  # kiss RUNNING
+    res = svc.confirm_known_working("kiss")
     assert not res.ok
     assert "conflicting effective remotes" in res.summary
-    assert known_working.load(paths, "chat") == []                     # nothing recorded
+    assert known_working.load(paths, "kiss") == []                     # nothing recorded
 
 
 def test_coherent_shared_remote_update_reaches_adoption(tmp_path):
     # With ONE coherent override for the whole group, the gate passes and the update
     # proceeds to the (FakeSystem-refused) adoption step — not the coherence refusal.
-    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "config" / "local.toml").write_text(
-        f'[remotes]\nloraham-chat = "{_URL_A}"\nloraham-igate = "{_URL_A}"\n')
+    _write_conflicting_overrides(tmp_path, a=_URL_A, b=_URL_A)
     svc = _svc(tmp_path)
-    res = svc.update("loraham-chat", apply=True)
+    res = svc.update("loraham-kiss-tnc", apply=True)
     assert "inconsistent" not in res.summary
     assert not any("conflicting effective remotes" in d for d in res.details)
 
@@ -151,10 +147,10 @@ def test_install_blocked_by_conflicting_shared_remotes_zero_mutation(tmp_path):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
     svc = _svc(tmp_path)
     for apply in (False, True):                        # planning AND mutation are gated
-        res = svc.install("chat", apply=apply)
+        res = svc.install("kiss", apply=apply)
         assert not res.ok
         assert "inconsistent" in res.summary
-    assert not (tmp_path / "src" / "LoRaHAM_Daemon").exists()         # zero source mutation
+    assert not (tmp_path / "src" / "loraham-kiss-tnc").exists()       # zero source mutation
     assert not list((tmp_path / "state").glob("source-registry/*"))   # zero registry mutation
     assert not list((tmp_path / "state").glob("source-txn/*"))        # zero journal mutation
 

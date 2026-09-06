@@ -162,7 +162,7 @@ def test_failed_daemon_blocks_dependents_independents_continue(tmp_path, monkeyp
     assert st["state"] == "completed-with-failures"
     rows = {x["id"]: x for x in st["stacks"]}
     assert rows["daemon"]["status"] == "fail"
-    for sid in ("chat", "igate", "voice", "kiss", "meshcom", "meshcore"):
+    for sid in ("chat", "voice", "kiss", "meshcom", "meshcore"):
         assert rows[sid]["status"] == "blocked"
         assert "dependency failed: daemon" in rows[sid]["detail"]
     # (The shipped manifest no longer contains a stack independent of daemon — meshtastic is
@@ -1669,9 +1669,9 @@ def test_pinned_auto_install_freezes_artifact_commit(tmp_path, monkeypatch):
     art = [(p, exp) for p, is_art, exp in seen if is_art]
     assert art, "no artifact adoptions ran"
     assert all(exp is not None and exp[0] == art_sha for _, exp in art)
-    # shared artifact path (chat/igate: src/LoRaHAM_Daemon): resolved once, adopted once
+    # shared artifact path (voice/voice-cli: src/LoRaHAM_Voice): resolved once, adopted once
     shared = [p for p, _ in art]
-    assert shared.count("src/LoRaHAM_Daemon") == 1
+    assert shared.count("src/LoRaHAM_Voice") == 1
     art_paths = {p for p, is_art, _ in seen if is_art}
     assert calls["n"] == len(art_paths)                          # ONE resolution per path
     # non-artifact pinned groups keep known-working/manifest-pin semantics (no freeze)

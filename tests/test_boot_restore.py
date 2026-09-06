@@ -226,12 +226,12 @@ def test_owned_records_filters_the_shared_inventory(tmp_path):
     life = _life(tmp_path)
     _write_record(tmp_path, _v0())                       # kiss tnc, band ""
     other = _v0(pid=555)
-    other.update(launch_id="d__433__555", component="loraham-igate", band="433")
+    other.update(launch_id="d__433__555", component="loraham-kiss-serial", band="433")
     _write_record(tmp_path, other)
     recs = life.owned_records("loraham-kiss-tnc", role="")
     assert len(recs) == 1 and recs[0]["component"] == "loraham-kiss-tnc"
-    assert life.owned_records("loraham-igate", band="868", role="") == []
-    assert len(life.owned_records("loraham-igate", band="433", role="")) == 1
+    assert life.owned_records("loraham-kiss-serial", band="868", role="") == []
+    assert len(life.owned_records("loraham-kiss-serial", band="433", role="")) == 1
 
 
 # --- scope threading through a real service start ----------------------------------------------
@@ -443,19 +443,18 @@ def test_planner_component_scope_never_widens():
 
 def test_planner_unknown_interactive_and_missing_main_skip():
     plan = br.derive_plan(
-        [_ev(stack="gone"),
+        [_ev(stack="removed-stack"),
          _ev(launch_id="L2", stack="chat", component="loraham-chat"),
-         _ev(launch_id="L3", stack="igate", component="not-the-main")],
+         _ev(launch_id="L3", stack="kiss", component="not-the-main")],
         {"chat": StackMeta(stack_id="chat", main="loraham-chat", interactive_main=True,
                            declared_bands=(), fixed_band="433"),
-         "igate": StackMeta(stack_id="igate", main="loraham-igate", interactive_main=False,
-                            declared_bands=(), fixed_band="433")},
+         "kiss": _KISS},
         {}, "daemon")
     assert not plan.items
     reasons = {s["stack"]: s["reason"] for s in plan.skipped}
-    assert "unknown stack" in reasons["gone"]
+    assert "unknown stack" in reasons["removed-stack"]     # e.g. a stack the manifest dropped
     assert "interactive" in reasons["chat"]
-    assert "no main-component evidence" in reasons["igate"]
+    assert "no main-component evidence" in reasons["kiss"]
 
 
 def test_planner_conflicting_bands_on_two_records_skip():
@@ -504,16 +503,16 @@ def test_planner_fixed_band_rules():
 
 def test_planner_orders_by_start_time():
     metas = {"kiss": _KISS,
-             "igate": StackMeta(stack_id="igate", main="loraham-igate",
-                                interactive_main=False, declared_bands=(), fixed_band="433")}
+             "meshcom": StackMeta(stack_id="meshcom", main="meshcom-qemu",
+                                  interactive_main=False, declared_bands=(), fixed_band="433")}
     plan = br.derive_plan(
         [_ev(launched_at=2000.0),
-         _ev(launch_id="I1", stack="igate", component="loraham-igate", launched_at=1500.0,
-             requested_target="igate")],
-        metas, {"igate": MarkerView(last_start_state="valid", last_start_band="433",
-                                    last_start_at=2500.0)}, "daemon")
-    # igate's last-start (2500) beats kiss's launched_at (2000) -> kiss first
-    assert [i["target"] for i in plan.items] == ["kiss", "igate"]
+         _ev(launch_id="M1", stack="meshcom", component="meshcom-qemu", launched_at=1500.0,
+             requested_target="meshcom")],
+        metas, {"meshcom": MarkerView(last_start_state="valid", last_start_band="433",
+                                      last_start_at=2500.0)}, "daemon")
+    # meshcom's last-start (2500) beats kiss's launched_at (2000) -> kiss first
+    assert [i["target"] for i in plan.items] == ["kiss", "meshcom"]
 
 
 # --- driver -------------------------------------------------------------------------------------
@@ -1073,13 +1072,13 @@ def test_crash_after_attempting_never_retries_but_pending_survives(tmp_path, mon
     # `pending` item's evidence survives recovery and is re-planned.
     svc = _drv(tmp_path, monkeypatch)
     consumed = _v1()                                       # kiss — was `attempting` at the crash
-    survivor = _v1(pid=500, stack="igate", comp="loraham-igate", nonce="cd" * 16,
-                   requested_target="igate")
+    survivor = _v1(pid=500, stack="meshcom", comp="meshcom-qemu", nonce="cd" * 16,
+                   requested_target="meshcom")
     p_consumed = _write_record(tmp_path, consumed)
     p_survivor = _write_record(tmp_path, survivor)
     items = [dict(br.new_item("a1", "stack", target="kiss", band="433",
                               evidence_ids=(consumed["launch_id"],)), state="attempting"),
-             br.new_item("p1", "stack", target="igate", band="433",
+             br.new_item("p1", "stack", target="meshcom", band="433",
                          evidence_ids=(survivor["launch_id"],))]
     old = br.new_journal(boot_id="OLDBOOT", pid=1, process_start_time=1, items=items)
     assert br.write_journal(svc._paths, old)
@@ -1089,7 +1088,7 @@ def test_crash_after_attempting_never_retries_but_pending_survives(tmp_path, mon
     assert res.ok
     assert not p_consumed.exists()                         # cleaned up, never restarted
     assert not p_survivor.exists()                         # consumed by the NEW run's attempt
-    assert [c["target"] for c in calls] == ["igate"]       # kiss NOT retried
+    assert [c["target"] for c in calls] == ["meshcom"]     # kiss NOT retried
     j = _journal_on_disk(tmp_path)
     assert j["run_id"] != old["run_id"] and j["state"] == "done"
 

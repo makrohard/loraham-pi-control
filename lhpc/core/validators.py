@@ -88,7 +88,7 @@ def callsign_base(value, *, field: str = "operator callsign", allow_empty: bool 
 
 
 def callsign(value, *, field: str = "callsign", allow_empty: bool = True) -> str:
-    """An APRS/AX.25 station callsign (chat, iGate, Graywolf): base of 3-6 uppercase
+    """An APRS/AX.25 station callsign (chat, Graywolf): base of 3-6 uppercase
     letters/digits plus an optional numeric SSID -1..-15. A bare callsign means SSID 0 —
     an SSID is NOT required. Portable/compound forms ('/P', 'EA4/...') are not valid on
     AX.25 addressing and are refused."""
