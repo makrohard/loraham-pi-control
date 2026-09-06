@@ -1454,7 +1454,7 @@ main = "meshtastic"
     # spi0.lock, so it cannot be interleaved with another bus user. Claiming this key
     # exclusively blocks `meshtastic + reticulum` (both drive the bus) while leaving
     # `daemon + meshtastic` allowed: that combination ships and is field-verified, and
-    # its identical hazard predates this stack (docs/field-notes.md).
+    # its identical hazard predates this stack (docs/architecture.md, the SPI-lock fact).
     key = "spi.bus.0.unlocked"
     kind = "spi-bus"
     mode = "exclusive"
@@ -1938,7 +1938,7 @@ main = "meshcom-qemu"
     # PROVISIONED by the managed setup step (build_steps: a venv at {runtime}/build/tools/platformio),
     # invoked by ABSOLUTE path (PIO=) from prepare-openeth.sh/build.sh — this retires the pipx system
     # dependency. The pre-check is satisfied when the in-root pio exists OR `pio` is on PATH (operator
-    # override / standalone pipx). pipx stays the documented standalone-dev alternative (docs/field-notes).
+    # override / standalone pipx). pipx stays the documented standalone-dev alternative (docs/maintenance.md).
     cmd = "pio"
     check_file = "{runtime}/build/tools/platformio/.venv/bin/pio"
     provisioned = true
@@ -2699,7 +2699,7 @@ build_marker = ".venv/.lhpc-build-complete"
 build_timeout = 1800.0
 bin = ".venv/bin/loraham-rns-node"
 run = ".venv/bin/loraham-rns-node --config {runtime}/state/reticulum --interface LoRa --ready-file {runtime}/state/reticulum/ready {rns_allow}"
-note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen with `lhpc hardware` — they are deliberately not editable per stack, because a wrong PA or TCXO value can damage the module. The SX1262 (Waveshare) path is hardware-verified on 868 (TX and RX, both directions, against an SX1276 peer); on 433 it is code-complete but has NOT been tested on hardware."
+note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen with `lhpc hardware` — they are deliberately not editable per stack, because a wrong PA or TCXO value can damage the module."
 [stack.component.source]
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
@@ -2798,7 +2798,7 @@ mode = "cooperative"
 # interleaved safely with any other bus user. Both it and this node claim this key
 # exclusively, which blocks that pair while leaving `daemon + meshtastic` — a
 # shipped, field-verified combination whose identical hazard predates this stack and
-# is recorded in docs/field-notes.md — untouched.
+# is recorded in docs/architecture.md — untouched.
 key = "spi.bus.0.unlocked"
 kind = "spi-bus"
 mode = "exclusive"
@@ -3232,7 +3232,7 @@ note = "Python headers. Sideband is the ONE component here that needs a compiler
 # when `bootstrap-deps.sh --with-gui` has run, because libgtk-3-dev Depends on it — so this gate means
 # "the operator opted into GUI support", not "a display exists". That is a HEURISTIC and the right one
 # available: an X/Wayland server would be the literal signal, but installing one is forbidden here
-# (docs/field-notes.md: never a desktop environment, display manager or X/Wayland server) and Trixie
+# (docs/maintenance.md: never a desktop environment, display manager or X/Wayland server) and Trixie
 # desktop is Wayland-first, so Xorg's presence proves nothing. Consequence of piggybacking on
 # libgtk-3-dev's dependency: adding this changes the --with-gui closure by ZERO packages; the entire
 # effect of this entry is the probe. Residual hole, accepted: a headless box that acquired libx11-dev

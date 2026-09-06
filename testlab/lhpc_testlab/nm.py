@@ -16,7 +16,7 @@ from . import scenarios
 
 _NS = _uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")   # uuid5 namespace (DNS)
 AP_NAME = "lhpc-ap"
-_SCAN_LIST = (("LabNet", 87, "WPA2"), ("Suche...", 64, "WPA2"), ("CoffeeShop", 41, "WPA1"))
+_SCAN_LIST = (("LabNet", 87, "WPA2"), ("Home Net 2.4...", 64, "WPA2"), ("CoffeeShop", 41, "WPA1"))
 
 
 def _uid(name: str) -> str:

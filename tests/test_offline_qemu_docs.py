@@ -10,7 +10,7 @@ longer exists).
 import pathlib
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
-_DOCS = [_REPO / "docs" / "field-notes.md", _REPO / "README.md", _REPO / "docs" / "cli.md"]
+_DOCS = [_REPO / "docs" / "stacks" / "meshcom.md", _REPO / "README.md", _REPO / "docs" / "cli.md"]
 _BACKENDS = _REPO / "lhpc" / "core" / "probes" / "backends.py"
 
 

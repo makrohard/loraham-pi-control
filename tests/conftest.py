@@ -40,7 +40,7 @@ def pytest_configure(config):
                    "boundary. Run it with `-m contract`; it must be green and quick.")
     config.addinivalue_line(
         "markers", "safety(id): a contract case that guards a named SAFETY invariant. The id is the "
-                   "docs/hardening-0.1.md P0.x/P1.x where one exists (P0.5 uninstall, P0.6 GET-no-"
+                   "P0.x/P1.x id of the guarantee where one exists (P0.5 uninstall, P0.6 GET-no-"
                    "network), else a descriptive slug (RF-TX-opt-in / firewall-fail-closed / "
                    "exposure-fail-closed). Run the invariant set with `-m safety`.")
 

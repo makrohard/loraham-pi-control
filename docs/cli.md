@@ -3,7 +3,12 @@
 `lhpc` is the command-line interface to LoRaHAM Pi Control. Everything the web console
 does is available here too.
 
-**Conventions**
+## Contents
+
+- [Conventions](#conventions)
+- [Commands](#commands)
+
+## Conventions
 
 - Mutating commands (`install`, `stack start`, `build`, `test`, `update`, …) print a
   **dry-run plan** first and apply only after a `[y/N]` confirmation, or immediately with `--yes`.
@@ -164,10 +169,11 @@ configured**, and the daemon refuses to start until a setup is chosen.
 lhpc hardware                # show the current setup + served band(s) + the catalog
 lhpc hardware loraham        # LoRaHAM dual-module (SX1278 + RFM95) — serves 433 + 868
 lhpc hardware uputronics     # Uputronics dual (CE0 433 + CE1 868)
+lhpc hardware uputronics-x   # Uputronics dual, crossed modules (CE0 868 + CE1 433)
 lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
-lhpc hardware waveshare-433  # Waveshare SX1262 (433, on-air-untested)
-lhpc hardware waveshare-868  # Waveshare SX1262 (868)
+lhpc hardware waveshare-433  # Waveshare SX1262 433M (tested on the air)
+lhpc hardware waveshare-868  # Waveshare SX1262 868M (not tested on silicon)
 ```
 
 - Only **legit** board combinations are offered (illegal ones — e.g. Waveshare + Uputronics — are
@@ -217,7 +223,7 @@ lhpc gps --source fixed --lat 51.4779 --lon -0.0015 --alt 45   # a station that 
   setting and does not block it.
 - Coordinates are never echoed back by the CLI, the console, or any log.
 - **Each stack keeps its own saved switch**: `lhpc config <stack> use_gps on|off`
-  (meshtastic, meshcom, reticulum, graywolf; default **on**). With the switch on and no usable
+  (meshtastic, meshcom, meshcore, reticulum, graywolf; default **on**). With the switch on and no usable
   source the stack starts **without position** — only a malformed section or an unresolvable
   explicit source refuses. The switch is stored band-lessly, so it survives a band change, and —
   like the source — it cannot be changed while that stack is running.

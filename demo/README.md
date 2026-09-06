@@ -7,6 +7,16 @@ pure in-browser **simulation** backend. No server, no Raspberry Pi, no real radi
 **Live:** `https://makrohard.github.io/loraham-pi-control/` *(after Pages is enabled — see
 Setup below).*
 
+## Contents
+
+- [What you can do](#what-you-can-do)
+- [Independence (by design)](#independence-by-design)
+- [How it works](#how-it-works)
+- [Develop & test locally](#develop--test-locally)
+- [Deploy](#deploy)
+- [What runs vs what's simulated](#what-runs-vs-whats-simulated)
+- [Other limitations](#other-limitations)
+
 ## What you can do
 
 Browse the real dashboard and Apps, open a stack, and **install → build → start → stop** it —

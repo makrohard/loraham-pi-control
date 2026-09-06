@@ -1,7 +1,8 @@
 """Console Wi-Fi client mode with AP fallback — the Network panel.
 
-The Lite/AP box joins an existing WLAN from the console (scan, pick, password) while the
-managed AP profile (`lhpc-ap`) stays the automatic safety net: NM-native semantics give
+An AP-managed box (one whose `lhpc-ap` NetworkManager profile exists) joins an existing
+WLAN from the console (scan, pick, password) while that managed AP profile stays the
+automatic safety net: NM-native semantics give
 "AP on reboot" (client profiles default to autoconnect=no) and "AP within seconds of link
 loss" (autoconnect re-evaluation). A single PREFERRED network flips its profile to
 autoconnect=yes/priority=10 — NM then picks it at boot when visible — and a retry
@@ -20,8 +21,9 @@ random `op_id` resume token — the detached finalize helper is the only caller 
 past its own fresh record; the helper's runtime is hard-bounded strictly below the
 record TTL, it removes the record in `finally`, and the TTL only recovers crashes.
 
-Visibility is capability-gated (the `lhpc-ap` profile exists → AP-managed box; desktops
-never see the feature) and authorization-gated via the cached-verdict pattern on
+Visibility is capability-gated (`network_supported()`: nmcli present AND the `lhpc-ap`
+profile exists → AP-managed box, whatever the image; a box without that profile never sees
+the feature) and authorization-gated via the cached-verdict pattern on
 `nmcli general permissions` (file presence cannot work: polkit's rules.d is unreadable
 to this process — the power-controls lesson).
 """

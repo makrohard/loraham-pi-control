@@ -3,20 +3,18 @@
 The console process itself is a **local operator tool**: it serves either a protected Unix
 socket or loopback TCP, never a public address. Reaching it from another machine is a separate,
 opt-in step through the nginx + mTLS front end ([webserver.md](webserver.md)). This document
-covers running it persistently. **lhpc never installs, enables, or starts any systemd unit for
-you** — every step below is manual and under your control.
+covers running it persistently and updating it. **lhpc itself never runs `systemctl` and never
+runs a privileged command**: the units are written by `install.sh`, and the two polkit rules that
+let the console reboot the box and manage Wi-Fi are installed by `bootstrap-deps.sh`
+([operations.md](operations.md), [wifi-access-point.md](wifi-access-point.md)).
 
 ## Contents
 
 - [Serving model](#serving-model)
-- [Self-hosted deployment layout](#self-hosted-deployment-layout-the-deployment-standard)
-  - [Security boundary (identity policy)](#security-boundary-the-identity-policy)
-  - [Self-update operating rules](#self-update-operating-rules)
-  - [Recovery](#recovery)
-- [Run it under systemd](#run-it-under-systemd-user-service-no-root)
-  - [Why these unit settings](#why-these-unit-settings)
-  - [Controller status & updates](#controller-status--updates-on-the-web-console)
-- [Security boundary](#security-boundary)
+- [Self-hosted deployment layout](#self-hosted-deployment-layout)
+- [Self-update](#self-update)
+- [Run it under systemd](#run-it-under-systemd)
+- [Controller status & updates on the web console](#controller-status--updates-on-the-web-console)
 
 ## Serving model
 
@@ -30,16 +28,19 @@ process, multi-threaded, no debug, no reloader.
   waitress this one does fall back to Flask's development server, with a warning.
 
 Loopback-only is a hard invariant for the TCP mode: `run_server` refuses any non-loopback
-`--host` (`127.0.0.1` / `::1`). There is no debug mode, no reloader, and no public bind.
+`--host` (`127.0.0.1` / `::1`). Remote access is the nginx front end (`lhpc-nginx.service`,
+HTTPS + mTLS + source-CIDR gate, opt-in behind a typed confirmation), never a public bind —
+[webserver.md](webserver.md). The other guarantees of the web layer (trusted-host check, CSRF,
+headers) are listed in the [safety model](architecture.md).
 
 Use **one** process. The console keeps per-request state and CSRF assumptions that are only
-safe single-process; do not run multiple workers without explicitly re-designing that.
+safe single-process; do not run multiple workers.
 
-## Self-hosted deployment layout (the deployment standard)
+## Self-hosted deployment layout
 
-The supported **deployment** makes the runtime root a **plain container** and keeps LHPC's
-own source under it, exactly like the managed stack sources — so "the code that runs" and
-"the code self-update fetches" are one tree:
+The supported deployment makes the runtime root a **plain container** and keeps LHPC's own
+source under it, exactly like the managed stack sources — so "the code that runs" and "the code
+self-update fetches" are one tree:
 
 ```
 ~/loraham-pi-control/            runtime root — a PLAIN container, NOT a git checkout
@@ -51,60 +52,52 @@ own source under it, exactly like the managed stack sources — so "the code tha
 ```
 
 The unit sets `LHPC_RUNTIME_ROOT=~/loraham-pi-control` **explicitly**, runs
-`venv/lhpc/bin/lhpc web`, and works from `src/loraham-pi-control`. Keeping the venv
-*outside* the checkout means self-update's `git clean` can never reach it.
+`venv/lhpc/bin/lhpc web`, and works from `src/loraham-pi-control`. Keeping the venv *outside*
+the checkout means self-update's `git clean` can never reach it.
 
-LHPC's checkout is a **dedicated controller identity**: it is observable and self-updatable,
-but it is **never** installed, adopted, built, tested, started, stopped, uninstalled,
-cleaned, or auto-install-processed — every generic verb (`lhpc install/update/uninstall/clean/
-build/test/stack start|stop <controller-id>`) refuses centrally and points you at
+LHPC's checkout is a **dedicated controller identity**: observable and self-updatable, but
+never installed, adopted, built, tested, started, stopped, uninstalled, cleaned, or
+auto-install-processed — every generic verb aimed at it refuses centrally and points you at
 `lhpc self-update`. `lhpc status` shows a distinct `[controller]` row with its cached
 version / update / identity state.
 
-### Security boundary (the identity policy)
+**The identity policy.** The runtime root and the controller checkout must be **owned by the
+service user** with **no group/other write** (mode `0700`). Before any self-update apply, LHPC
+verifies the fixed layout — no symlink anywhere in the `runtime-root → src → checkout` chain,
+correct ownership/mode, the checkout realpath equal to both the discovered git repo and the
+imported package, on the expected branch, attached, with the approved canonical `origin` — and
+refuses (`unsafe`) otherwise; the verdicts are defined in [architecture.md](architecture.md). A
+same-account process replacing the checkout mid-check is **out of the threat model**: LHPC
+detects and refuses an unsafe layout, it does not claim same-account race-proofness.
 
-The runtime root and the controller checkout must be **owned by the service user** and have
-**no group/other write** (mode `0700`). This is the stated policy behind the identity
-proof: before any self-update apply, LHPC verifies the fixed layout (no symlink anywhere in
-the `runtime-root → src → checkout` chain, correct ownership/mode, the checkout realpath
-equal to both the discovered git repo and the imported package), on the expected branch,
-attached, with the approved canonical `origin`. A same-account process replacing the
-checkout mid-check is **out of the threat model** — LHPC *detects and refuses* an unsafe
-layout, it does not claim same-account race-proofness.
-
-### Self-update operating rules
+## Self-update
 
 - **One-click (normal path).** The console **cannot** run `systemctl` — its unit blocks the
-  user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`), closing the sandbox-escape route.
-  "Update now" writes an exclusively-created request marker (`state/selfupdate.request`, payload
-  `normal`|`overwrite`); a static `lhpc-selfupdate.path` unit starts the sandboxed
-  `lhpc-selfupdate.service`, which claims it (rename to `selfupdate.inflight` with process
-  identity), applies (exclusive lock, live identity check, dirty refusal), syncs the venv, and
-  records the outcome. Console stop/restart is declarative (`Conflicts`/`After` +
-  `OnSuccess`/`OnFailure=lhpc-web.service`), not scripted — the helper never calls `systemctl`.
-  The browser reconnects on its own.
-- **Byte-exact units.** One-click ("Update now") is offered only when the console is the managed
-  unit (`INVOCATION_ID`) and all four units are byte-for-byte canonical. A legacy same-root
-  deployment (old/`%h` units, no `.path`) instead shows **"Repair & update"**, which migrates to
-  the canonical units and updates in one click -- it works while the console still has bus access
-  (the un-hardened unit); once migrated it is bus-blocked and further repair needs a shell
-  (`lhpc self-update --repair-integration`). A genuinely foreign/drop-in/masked unit is left for
-  manual resolution.
+  user D-Bus (`InaccessiblePaths=%t/bus %t/systemd/private`). "Update now" writes an
+  exclusively-created request marker (`state/selfupdate.request`, payload `normal`|`overwrite`);
+  the static `lhpc-selfupdate.path` unit starts the sandboxed `lhpc-selfupdate.service`, which
+  claims it (rename to `state/selfupdate.inflight` with process identity), applies (exclusive
+  lock, live identity check, dirty refusal), syncs the venv, and records the outcome. Console
+  stop/restart is declarative (`Conflicts`/`After` + `OnSuccess`/`OnFailure=lhpc-web.service`),
+  not scripted. The browser reconnects on its own.
+- **Canonical units are the contract.** One-click is offered only when the console is the
+  managed unit (`INVOCATION_ID`) and the units are byte-for-byte canonical; a foreign, drop-in or
+  masked unit is left for manual resolution. If the integration needs repair, run
+  `lhpc self-update --repair-integration` from a shell — it restores the exact canonical set on
+  an existing or `--no-service` deployment (the console's *Repair & update* does the same in one
+  click while its unit still has bus access).
 - **Manual path.** With the console up its shared lock blocks an in-process apply:
   `systemctl --user stop lhpc-web`, then `lhpc self-update --apply`, then start it again.
-- **Dirty checkout** blocks apply unless you choose overwrite.
+- **Dirty checkout** blocks apply unless you choose `--overwrite`.
 - **Venv sync** runs automatically after a real advance; if it fails the update is reported
   failed (never half-applied). On the manual path, when it reports `deps_changed`, run:
   ```bash
   ~/loraham-pi-control/venv/lhpc/bin/python -m pip install -e ~/loraham-pi-control/src/loraham-pi-control
   ```
-- **Install / repair.** `install.sh` writes all seven canonical units — the web console, the
-  self-update helper + watcher, the `lhpc-nginx.service` TLS front-end (enabled but only
-  started once `lhpc webserver apply` has generated its config) with its restart helper +
-  watcher, and the `lhpc-boot-restore.service` oneshot (enabled, **never started at install** —
-  it runs at the next boot) — (never overwriting a foreign one) and enables them; `lhpc self-update --repair-integration` restores the exact set on
-  an existing or `--no-service` deployment (and the web "Repair & update" does the same in one click
-  while the console still has bus access).
+- **Applying always re-checks live.** Every apply performs a fresh identity/provenance check
+  immediately before mutating the checkout — it never trusts the cached verdict — and runs with
+  the web service stopped (controller-runtime lock); the one-click updater unit handles that
+  stop/start for you.
 
 ### Recovery
 
@@ -112,25 +105,29 @@ layout, it does not claim same-account race-proofness.
   layout the message names — a stray symlink in the chain, wrong ownership/mode (`chmod 700`,
   `chown` to yourself), a detached/renamed branch (`git -C … checkout main`), or a changed
   `origin` — then re-check.
-- **Failed / interrupted update**: the existing migration-journal recovery applies; inspect
-  `state/selfupdate-migrate.json` as the message directs. Nothing is applied on a blocked or
-  recovery-required journal.
+- **Failed / interrupted update**: inspect `state/selfupdate-migrate.json` as the message
+  directs. Nothing is applied on a blocked or recovery-required journal.
 - **Stuck one-click request** (`update recovery required` in the console): a request/in-flight
-  marker was left behind (e.g. the helper was killed mid-run). Run `lhpc self-update
-  --recover-request` — it clears a never-claimed request outright, and clears an interrupted
-  in-flight record **only after proving the helper process has actually stopped** (a
-  missing/unreadable identity is never auto-cleared; the command tells you what to check). It
-  records the interrupted run as incomplete. One-click is blocked until this is resolved.
+  marker was left behind (e.g. the helper was killed mid-run). Run
+  `lhpc self-update --recover-request` — it clears a never-claimed request outright, and clears
+  an interrupted in-flight record **only after proving the helper process has actually
+  stopped** (a missing/unreadable identity is never auto-cleared; the command tells you what to
+  check). One-click is blocked until this is resolved.
 
-## Run it under systemd (user service, no root)
+## Run it under systemd
 
-`install.sh` already does this by default — it generates a user unit with the install's
-absolute paths, enables it, and turns on lingering (so it starts on boot); pass `--no-service`
-to skip it. To set it up by hand instead:
+`install.sh` writes all **seven canonical user units** — `lhpc-web.service`, the self-update
+helper + watcher (`lhpc-selfupdate.service`/`.path`), the `lhpc-nginx.service` TLS front-end
+(enabled, started once `lhpc webserver apply` has generated its config) with its restart helper +
+watcher (`lhpc-nginx-restart.service`/`.path`), and the `lhpc-boot-restore.service` oneshot
+(enabled, never started at install — it runs at the next boot) — never overwriting a foreign one;
+runs `daemon-reload`, enables them, and turns on lingering so the console autostarts at boot.
+Pass `--no-service` to skip it. The generated units are byte-identical to the shipped
+`deploy/*.service` templates (differing only in `%h` vs the resolved paths); their bytes are
+frozen — see [backlog.md](backlog.md) for why.
 
-A ready-to-adapt template lives at `deploy/lhpc-web.service`. It is a **user** unit — it
-runs as your normal user, needs no root, and is hardened to be compatible with the runtime
-root and the daemon's shared `/tmp` sockets.
+They are **user** units: no root, hardened to be compatible with the runtime root and the
+daemon's shared `/tmp` sockets. To install the console unit by hand:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -138,7 +135,7 @@ cp ~/loraham-pi-control/src/loraham-pi-control/deploy/lhpc-web.service ~/.config
 # adjust ExecStart path / port in the copy if your layout differs
 systemctl --user daemon-reload
 systemctl --user enable --now lhpc-web.service
-loginctl enable-linger "$USER"     # optional: keep running after logout
+loginctl enable-linger "$USER"     # keep running after logout
 ```
 
 - **Logs:** `journalctl --user -u lhpc-web -f`
@@ -153,20 +150,24 @@ loginctl enable-linger "$USER"     # optional: keep running after logout
   looping forever.
 - **journald logging**: all stdout/stderr goes to the journal (`SyslogIdentifier=lhpc-web`).
 - **Least-privilege hardening**: `NoNewPrivileges`, `ProtectSystem=strict`,
-  `ProtectHome=read-only`, `RestrictNamespaces`,
-  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, and related restrictions. The **only**
-  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the shared
-  `/tmp` — plus a harmless optional `-%h/.meshcore_nm` vestige of the retired meshcore-nodegui Tk
-  GUI (its replacement, the browser `meshcore-webui`, runs as its own loopback service and needs no
-  home grant; the leading `-` skips the path when absent). The service does **not** get broad write
-  access to the rest of your home or to `/var`.
-- **Runtime-owned build/tool caches**: the console orchestrates builds (cmake / PlatformIO /
-  pip) and the QEMU emulator, which write toolchain caches. The unit points them at a
-  runtime-owned location under `build/tool-cache/` via
-  `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`, `XDG_CACHE_HOME` and `PIP_CACHE_DIR` — so nothing
-  is written to `~/.platformio`, `~/.espressif` or `~/.cache`. These are inherited by every
-  build/test/QEMU child the console spawns. (Install the ESP QEMU/toolchain into
-  `IDF_TOOLS_PATH` rather than `~/.espressif`.)
+  `ProtectHome=read-only`, `RestrictNamespaces`, `ProtectKernel*`, `ProtectControlGroups`,
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_BLUETOOTH`. The **only**
+  writable areas are `ReadWritePaths=%h/loraham-pi-control /tmp` — the runtime root and the
+  shared `/tmp` — plus the optional `-%h/.meshcore_nm` entry (the leading `-` skips it when
+  absent; no shipped component uses it). The service gets no write access to the rest of your
+  home or to `/var`.
+- **`KillMode=process`** on `lhpc-web.service` AND `lhpc-boot-restore.service`: LHPC
+  identity-tracks and lifecycle-manages the stacks and detached build/test jobs it starts, so a
+  web restart or a self-update must not tear those workloads down (the default
+  `control-group` would kill them on every web restart; controller uninstall is the one path
+  that stops and verifies them explicitly). For the boot-restore oneshot
+  (`RemainAfterExit=yes`) the same applies on a later stop, restart or start timeout of the
+  unit: the restored stacks live in its control group.
+- **Runtime-owned build/tool caches**: builds (cmake / PlatformIO / pip) and the QEMU emulator
+  write toolchain caches; the unit points `PLATFORMIO_CORE_DIR`, `IDF_TOOLS_PATH`,
+  `XDG_CACHE_HOME` and `PIP_CACHE_DIR` at `build/tool-cache/` under the runtime root, inherited
+  by every build/test/QEMU child — nothing is written to `~/.platformio`, `~/.espressif` or
+  `~/.cache`. (Install the ESP QEMU/toolchain into `IDF_TOOLS_PATH` rather than `~/.espressif`.)
 - **`MemoryDenyWriteExecute` is deliberately omitted** — QEMU's TCG JIT (the meshcom
   emulator) needs writable-executable memory. It is the single documented exception; every
   other protection stays on.
@@ -175,7 +176,7 @@ loginctl enable-linger "$USER"     # optional: keep running after logout
   them and break status/monitor. `/tmp` is the one shared writable location (it also holds
   the daemon self-test's scratch dir).
 
-### Controller status & updates on the web console
+## Controller status & updates on the web console
 
 The controller row (first entry on **Apps**/`/stacks`) and the version indicator in the
 footer are **cached-only on every page load**: they read the last self-update envelope from
@@ -187,84 +188,6 @@ shows an "unchecked/unknown" state.
   every `update_check_hours` (default 12; set it in `config/local.toml` under `[web]`,
   clamped 1–168, `0` disables the loop) — so the footer's "Update →" indicator appears
   without any clicking.
-- **“Check for updates”** (in the controller row) does the same live work on demand —
+- **"Check for updates"** (in the controller row) does the same live work on demand —
   `git fetch` against upstream and a fresh identity check — and rewrites the cache.
-- **Applying an update** always performs a **fresh live identity/provenance check immediately
-  before mutating** the checkout; it never trusts the cached verdict to authorise a change,
-  and it always runs with the web service stopped (controller-runtime lock) — the one-click
-  updater unit handles that stop/start for you.
-
-## Security boundary
-
-The `lhpc-web.service` unit itself is **loopback-only** — Waitress binds a `0600` Unix socket and
-opens no TCP port. Remote access is provided by the separate production front-end, not by binding
-this unit to a public address: the managed **`lhpc-nginx.service`** terminates HTTPS and enforces
-client-certificate (mTLS) auth plus a source-CIDR gate, and remote exposure is opt-in behind a typed
-confirmation. See [`webserver.md`](webserver.md) for the topology and the expose-with-mTLS runbook.
-
-Two root-owned system files are deployed OUTSIDE lhpc's control, by `bootstrap-deps.sh`
-(opt-outs `--no-power-controls` / `--no-network-controls`), never by lhpc itself:
-`/etc/polkit-1/rules.d/49-lhpc-power.rules` (console Reboot/Shut down via logind, see
-[`operations.md`](operations.md#reboot--shut-down)) and
-`/etc/polkit-1/rules.d/49-lhpc-network.rules` (the Network panel's NetworkManager control,
-see [`operations.md`](operations.md#network-wi-fi-client-with-ap-fallback)). lhpc only
-probes their effect (logind/NM verdicts), never the files.
-
-## Security & lifecycle hardening
-
-These guarantees hold in every deployment; keep them in mind when operating or auditing the controller.
-
-- **Canonical user units are installed and enabled by `install.sh`** (unless service installation is
-  explicitly disabled). It renders the seven canonical units (`lhpc-web.service`,
-  `lhpc-selfupdate.service`, `lhpc-selfupdate.path`, `lhpc-nginx.service`,
-  `lhpc-nginx-restart.service`, `lhpc-nginx-restart.path`, and `lhpc-boot-restore.service`),
-  runs `daemon-reload`, enables the request watcher and the web service, and lingers the user so the
-  console autostarts at boot. The generated units are byte-identical to the shipped `deploy/*.service`
-  templates (differing only in `%h` vs the resolved paths — a single source of truth).
-
-- **Trusted-host / DNS-rebinding enforcement runs in EVERY serving mode**, including the plain
-  interactive loopback-HTTP console — not only the productive/HTTPS front-end. An empty, missing,
-  malformed, or unrelated `Host` is rejected with **400** before any session, CSRF token, or mutation;
-  the check compares the real `Host` (never a client-supplied `X-Forwarded-Host`). Loopback forms
-  (`localhost`, `127.0.0.1`, `[::1]`, with any port) are accepted; configured DNS SANs and — only when
-  the console is deliberately remote-exposed — bare IP literals are also accepted.
-
-- **`KillMode=process` is deliberate** on the shipped and generated `lhpc-web.service` AND
-  `lhpc-boot-restore.service`. LHPC identity-tracks and lifecycle-manages the LoRaHAM stacks and
-  detached build/test jobs it starts, so a **web restart or a self-update must not tear those
-  workloads down**. The default `KillMode=control-group` would kill them on every web restart;
-  controller uninstall is the one path that stops and verifies them explicitly. For the
-  boot-restore oneshot the same applies on a later **stop, restart, or start timeout** of the
-  unit: the restored stacks live in its control group, and control-group mode would slaughter
-  them then (a successful `ExecStart` exit alone never stops a `RemainAfterExit=yes` unit).
-
-- **Boot restore replays saved state through the full start path.** `lhpc-boot-restore.service`
-  (a `Type=oneshot`, `RemainAfterExit=yes` unit wanted by `default.target`) restores stacks that
-  were LHPC-owned and never verifiably stopped before the reboot. It refuses to act unless the
-  web console unit is enabled AND byte-exact canonical (a customized console disables autonomous
-  restarts), honors the fail-closed `[boot] restore` switch, consumes each piece of evidence
-  exactly once (journal `state/boot-restore.json` — no automatic retries), and starts stacks via
-  the public start path so every admission/hardware/band/firewall gate applies unchanged.
-
-- **Uninstall is quiescence-gated.** Before removing any controller code or state, `uninstall.sh` writes
-  the `.lhpc-uninstalling` guard (which blocks new task admission) and invokes the controller
-  quiescence prep, which **refuses on active or unprovable build/test/web jobs and on unresolved
-  auto-install/HMAC state, blocks on any UNKNOWN component state, then stops the managed stacks —
-  clients before the shared daemon — and verifies cessation** with a fresh snapshot. If quiescence
-  cannot be proven it fails closed: the guard is removed and **nothing is deleted**. Only canonical,
-  byte-exact same-root units are stopped/removed; a customized/noncanonical same-root unit is left in
-  place and warned about rather than deleting its referenced root.
-
-- **Malformed persisted configuration fails closed.** Only an *absent* stack config file means
-  "use defaults"; a present-but-malformed/unreadable/oversized/wrong-typed file raises a typed error —
-  the CLI returns a clean failure with no side effects, the web returns **409** (no traceback, no echo
-  of the bad value), and the offending file is preserved for diagnosis.
-
-- **Compatibility `/tmp` daemon sockets are peer-credential checked.** The pinned daemon exposes its
-  `/tmp/lora*.sock` names as world-writable-directory compatibility paths (for direct user-run
-  operation), which are vulnerable to local squatting. Immediately after `connect()` and before sending
-  any command, status request, configuration write, or RF payload, LHPC verifies the `/tmp` peer's UID
-  via `SO_PEERCRED` and requires it to equal the controller's effective UID — in both the request/reply
-  and fire-and-forget paths. Protected `/run/loraham` sockets keep their dedicated-UID + directory/group
-  security model and are exempt. A local squatter may still deny service by owning a name, but can never
-  impersonate the daemon or receive controller payloads.
+- **"Update now"** runs the one-click path above.

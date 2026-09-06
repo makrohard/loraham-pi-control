@@ -6,9 +6,10 @@ lhpc treats managed source selection as a supply-chain decision. Source-mutating
 ## Contents
 
 - [Selections](#selections)
+- [Ownership records](#ownership-records)
 - [The binary channel](#the-binary-channel)
-- [Verification status](#verification-status-truthful)
-- [Signed commits/tags](#signed-commitstags-optional)
+- [Verification status](#verification-status)
+- [Signed commits/tags](#signed-commitstags)
 - [Remote overrides](#remote-overrides)
 
 ## Selections
@@ -27,16 +28,18 @@ An **unpinned** component cannot be installed as `pinned` — with no configured
 `unverified-blocked`, and you must choose `dev` or `stable` explicitly. lhpc never fabricates
 a missing pin or signature. An **artifact** source (`artifact = true`: chat, voice,
 meshtastic base) resolves every selector to the same declared artifact (`artifact-head`).
-Every source lives under the runtime root as a managed clone; a symlink at a managed source
-destination is never an LHPC adoption and is refused.
+Every source lives under the runtime root as a managed clone.
+
+## Ownership records
 
 Every adoption records durable ownership (`state/source-registry/`): remote, selector, exact
 resolved commit, transaction id — written inside the activation transaction and completable by
-recovery. Update/uninstall/clean require ownership (a pre-registry tree must
-origin-match its configured remote to be backfilled); update also requires the affected
-stacks stopped and refuses dirty trees (tracked or non-ignored untracked changes).
-`lhpc clean <stack> --purge` is the explicit destructive escape hatch (typed confirm on
-the web); normal uninstall retains config, logs and history.
+recovery. Update/uninstall/clean require ownership (a tree without a record must origin-match its
+configured remote to be backfilled); update also requires the affected stacks stopped and refuses
+dirty trees (tracked or non-ignored untracked changes). `lhpc clean <stack> --purge` is the
+explicit destructive escape hatch (typed confirm on the web); normal uninstall retains config,
+logs and history. A record that no longer matches its tree is never rewritten silently
+([operations.md](operations.md)).
 
 ## The binary channel
 
@@ -46,15 +49,17 @@ artifact** instead of a source build. Same policy, different medium:
 - trust anchor: **HTTPS + sha256** (size verified too), checked **before** anything is unpacked;
 - the artifact's per-component commits must equal this lhpc's **manifest pins** exactly — a
   lagging artifact is refused, never installed "close enough";
-- it must have passed the builder's mandatory smoke test on a clean image;
+- it must match this platform and have passed the builder's mandatory smoke test on a clean image;
 - provenance is recorded per install in `state/binary/<stack>.json` and shown as
   `binary@<sha>` by `lhpc status --versions`.
 
 Any failed check is a typed refusal that offers the source channel — never a silent fallback.
 Artifacts are built and published by
-[lhpc-binaries](https://github.com/makrohard/lhpc-binaries).
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries), which compiles exactly the pin; the
+release keeps the latest artifact per stack (no binary rollback). What the channel means when
+operating a stack: [operations.md](operations.md).
 
-## Verification status (truthful)
+## Verification status
 
 `lhpc.core.provenance.evaluate()` reports one of:
 
@@ -65,28 +70,18 @@ Artifacts are built and published by
 - **`mutable-dev` / `mutable-stable`** — explicit mutable selection (not production-safe).
 - **`unverified-blocked`** — no pin (or `HEAD != pin`) and no explicit mutable choice.
 
-## Signed commits/tags (optional)
+## Signed commits/tags
 
-Signature verification uses Git's own facilities — `git verify-commit --raw` /
+Optional. Signature verification uses Git's own facilities — `git verify-commit --raw` /
 `git verify-tag --raw` — and parses the machine-readable GPG status. A signature counts
 **only** when git exits 0 **and** a `VALIDSIG` fingerprint matches a configured trusted
 signer fingerprint. Configure trusted signers as full GPG fingerprints; without them,
-lhpc never claims signed provenance (it stays `pinned-verified`).
-
-There is **no raw SET passthrough** and no network/keyring requirement in tests — the command
-runner is injectable, so signature behavior is covered with a faked runner.
+lhpc never claims signed provenance (it stays `pinned-verified`). The command runner is
+injectable, so the tests cover signature behaviour with a faked runner — no network or keyring.
 
 ## Remote overrides
 
 A per-component remote override (`[remotes]` in `local.toml`) is validated to a safe remote
-URL before any Git use, and a non-string/malformed remote is dropped at config load — it can
-never silently weaken the selected pin/signature policy or reach Git.
-
-## Release process — managed-source pin bumps
-
-Managed-source pin bumps are the **last** step, performed only **after** the final source-repository
-batch has been pushed and its commit verified reachable from the advertised branch. **Never amend or
-force-push a published commit referenced by a manifest pin** — doing so orphans the pinned SHA and
-breaks fresh installs at checkout. The `pin-validation` CI job (and `tests/test_pin_consistency.py`
-against a local sibling checkout) hard-fail on an orphaned or predating pin; both meshcom-qemu-raspi
-consumers must reference one identical full 40-hex SHA.
+URL (https or scp-style ssh) before any Git use, and a non-string/malformed remote is dropped
+at config load — it can never silently weaken the selected pin/signature policy or reach Git.
+Moving a pin is a maintainer task: [maintenance.md](maintenance.md).

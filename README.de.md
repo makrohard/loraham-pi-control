@@ -21,12 +21,17 @@ Meshtastic- / MeshCom- / MeshCore-Knoten auf einem Pi Zero 2W oder Pi 5 aufsetze
 > Maßgeblich ist die englische [`README.md`](README.md); diese Übersetzung kann hinterherhinken.
 > Code, Oberflächentexte und die übrigen Dokumente sind auf Englisch.
 
-## Inhalt
+## Contents
 
-- [Überblick](#überblick) — [Stacks](#stacks) · [Hardware](#hardware)
-- [Installation](#installation) — von der frisch geflashten Karte zu laufenden Stacks (Schritte 0–8)
-- [Stacks konfigurieren & betreiben](#stacks-konfigurieren--betreiben) · [Fernzugriff](#fernzugriff) · [Autostart](#autostart) · [Binary-Kanal](#binary-kanal-vorkompiliert) · [Aktualisieren](#aktualisieren)
-- [Fehlerbehebung](#fehlerbehebung) · [Dokumentation](#dokumentation)
+- [Überblick](#überblick)
+- [Installation](#installation)
+- [Stacks konfigurieren & betreiben](#stacks-konfigurieren--betreiben)
+- [Fernzugriff](#fernzugriff)
+- [Autostart](#autostart)
+- [Binary-Kanal (vorkompiliert)](#binary-kanal-vorkompiliert)
+- [Aktualisieren](#aktualisieren)
+- [Fehlerbehebung](#fehlerbehebung)
+- [Dokumentation](#dokumentation)
 
 ## Überblick
 
@@ -54,8 +59,8 @@ Jeder Stack hat zusätzlich seinen eigenen Schalter: `lhpc gps --source gpsd`, d
 
 ### Hardware
 
-Getestete Boards, auf Pi **Zero 2W** und **Pi 5** (andere SX127x-/SX1262-SPI-Boards sollten
-funktionieren, sind aber nicht validiert):
+Boards, auf Pi **Zero 2W** und **Pi 5** (andere SX127x-/SX1262-SPI-Boards sollten funktionieren,
+sind aber nicht validiert):
 
 - **LoRaHAM Pi HAT** — das Dual-Modul-Board des [LoRaHAM-Projekts](https://loraham.de)
   (SX1278 für 433 MHz + RFM95 für 868 MHz).
@@ -63,7 +68,11 @@ funktionieren, sind aber nicht validiert):
   — ein Board für ein Band, oder zwei gestapelte Boards für Dualband (CE0 = 433 MHz, CE1 = 868 MHz).
 - **Waveshare SX1262 LoRaWAN/GNSS HAT**
   ([Waveshare](https://www.waveshare.com/wiki/SX1262_XXXM_LoRaWAN/GNSS_HAT)) — Varianten 433M und
-  868M; 868 ist noch nicht on-air-validiert.
+  868M.
+
+On air getestet: LoRaHAM Pi HAT (Dual-Modul-Controller), Uputronics-Dual-Stack, Waveshare SX1262
+433M. Nicht auf Silizium getestet: Waveshare SX1262 868M. Datierte Nachweise:
+[Live-Tests](docs/live-test.md) (englisch).
 
 **SPI-Modus:** `soft-cs` (`dtparam=spi=on` + `dtoverlay=spi0-0cs`) deckt LoRaHAM Pi / Uputronics /
 Waveshare ab (inkl. dual, Chip-Selects als GPIOs); `hardware-cs` nur für kernelgesteuerte CE0/CE1.
@@ -354,94 +363,31 @@ Verändernde Befehle zeigen einen Plan und verlangen `--yes`; vollständige Refe
 ## Fernzugriff
 
 Nach der Installation lauscht die Konsole nur auf Loopback. Für den Zugriff aus dem LAN bleibt TLS
-an, und vor jeder entfernten Anfrage steht eine **Client-Zertifikats-Anmeldung** (lokal bleibt es
-offen):
+an, und vor jeder entfernten Anfrage steht eine **Client-Zertifikats-Anmeldung**; lokal bleibt es
+offen:
 
 ```bash
-# die Installation hat die PKI bereits mit Loopback-SANs angelegt — alle eigenen Adressen ergänzen,
-# inklusive 10.42.0.1, wenn dieser Pi später sein eigener Access-Point werden soll
-lhpc webserver configure --dns localhost --dns lhpc-zero.local \
-                         --ip 127.0.0.1 --ip 192.168.0.10 --ip 10.42.0.1
+lhpc webserver configure --dns localhost --dns lhpc-zero.local --ip 127.0.0.1 --ip 192.168.0.10
 lhpc webserver tls-renew                # Server-Zertifikat mit diesen SANs neu ausstellen
 lhpc webserver cert issue lhpc-laptop   # gibt EINMALIG eine Passphrase aus — notieren!
 lhpc webserver cert export lhpc-laptop ~/lhpc-laptop.p12
-lhpc webserver expose --cidr 192.168.0.0/24 --cidr 10.42.0.0/24 --confirm-phrase enable-remote
+lhpc webserver expose --cidr 192.168.0.0/24 --confirm-phrase enable-remote
 lhpc webserver apply
 ```
 
-> **Beide Listen sind wiederholbar, und `configure` ERSETZT sie** — alle Adressen und Bereiche in
-> einem Zug angeben (`localhost` / `127.0.0.1` inklusive, sonst verliert die lokale Konsole ihren
-> eigenen Zertifikatsnamen). Wer den [Access-Point](docs/wifi-access-point.md) gleich mitnimmt,
-> braucht beim späteren Umschalten nur noch die Firewall. Nachträglich ergänzen ist ebenfalls
-> unkritisch: `configure` + `tls-renew` + `webserver apply` stellt nur das Server-Zertifikat unter
-> derselben CA neu aus, importierte Client-Zertifikate funktionieren weiter. Nie erneut ausführen
-> darf man auf einem laufenden System `init` — das legt beide CAs neu an und macht jedes
-> ausgegebene Client-Zertifikat ungültig.
-
-> **Zertifikatsname für die Auswahl** — der Name erscheint in der Zertifikatsabfrage des Browsers
-> bzw. des Handys. Deshalb `lhpc-` voranstellen: Auf einem Gerät mit mehreren Zertifikaten sagt
-> `laptop` nichts, `lhpc-laptop` schon.
-
-> **Reihenfolge mit der Firewall:** `expose` → Firewall anwenden → `webserver apply`. Umgekehrt
-> verweigert `webserver apply` mit *Firewall changes pending* und du führst das Skript zweimal aus.
-
-**Zwei** Dateien müssen auf das Gerät: das exportierte Bundle und die Server-CA, damit der
-Browser der Seite vertraut statt zu warnen. Jede mit eigenem Befehl und explizitem Ziel kopieren:
-
-```bash
-scp <benutzer>@lhpc-zero.local:lhpc-laptop.p12 .
-scp <benutzer>@lhpc-zero.local:loraham-pi-control/config/tls/server-ca/ca.crt .
-```
-
-> Bei `scp a b` ist das letzte Argument **immer** das Ziel, und scp kopiert anstandslos
-> remote→remote — `host:{lhpc-laptop.p12,…/ca.crt}` schreibt also die erste Datei **über die zweite** und
-> zerstört dein CA-Zertifikat. Eine Datei pro Befehl.
-
-Beide im Zertifikatsspeicher des Geräts importieren, für das Bundle die einmalige Passphrase
-eingeben. Anleitung je Browser sowie für Android/iOS:
-[`docs/webserver.md`](docs/webserver.md#install-the-client-certificate-in-a-browser).
-
-Eine **öffentliche oder anmeldefreie** Freigabe geht auch — aber auf eigene Gefahr: Wer den Port
-erreicht, steuert deine Funkgeräte:
-
-```bash
-lhpc webserver expose --cidr 0.0.0.0/0 --auth no-auth --confirm-phrase enable-remote-danger
-```
-
-Stack-Web-UIs laufen über dieselbe Front (ihre rohen Ports lauschen auf allen Interfaces, ganz
-ohne Anmeldung — lieber proxyen als diese Ports öffnen):
-
-```bash
-lhpc webserver proxy meshtastic --mode lan --port 8445 --auth local-open-remote-auth \
-     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver proxy meshcom    --mode lan --port 8446 --auth local-open-remote-auth \
-     --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver apply
-```
-
-Die Browser-Oberfläche von MeshCore (`meshcore-webui`, optional) wird genauso proxied —
-`lhpc webserver proxy meshcore …` — ihr Backend lauscht ohnehin nur auf Loopback, also braucht
-sie keinen eigenen offenen Port (die optionale Komponente `meshcore-webui` vorher bauen und
-starten, sonst hat der Proxy kein Ziel); der Companion-Port TCP 5000 bleibt auf Loopback, sofern
-du in der Konfiguration des Stacks keine Quellbereiche erlaubst. Headless brauchst du die GUI gar
-nicht: Der interaktive REPL-Client `meshcore-cli` läuft
-direkt in deiner SSH-Sitzung auf dem Pi (die Startzeile zeigt die Karte des Stacks im Dashboard;
-Details unter [meshcore](docs/stacks/meshcore.md)). Der Stack hat eine zweite Seite, das
-openHop-Repeater-Dashboard auf Loopback `:8000`, bedient in den Repeater-Modi: `lhpc webserver proxy
-meshcore-meshcore-node …` (Login `admin`, Passwort im Abschnitt „Password" der Stack-Seite).
-
-Ports jenseits von Loopback zu öffnen verlangt eine Firewall ([`docs/firewall.md`](docs/firewall.md));
-Details samt Browser-Runbook für Client-Zertifikate: [`docs/webserver.md`](docs/webserver.md).
+Das Runbook — `configure` ersetzt die SAN-Listen, `init` nie erneut ausführen, die Reihenfolge mit
+der verwalteten Firewall, Bundle und Server-CA auf das Gerät kopieren (ein `scp` pro Datei),
+Import in Browser und Handy, Stack-Web-UIs proxyen (`lhpc webserver proxy <stack> …`), öffentliche
+oder anmeldefreie Freigabe — steht in [`docs/webserver.md`](docs/webserver.md). Ports jenseits
+von Loopback zu öffnen verlangt die verwaltete Firewall (natives nftables, einmal als root angewendet): [`docs/firewall.md`](docs/firewall.md). Konsole und
+alle Stack-UIs allein über SSH erreichen, ohne etwas freizugeben:
+[`docs/ssh-tunnel.md`](docs/ssh-tunnel.md).
 
 ## Autostart
 
-Die Installation richtet die Konsole für den Systemstart ein (rootlose User-Units + Lingering).
-Stacks, die **vor einem Neustart liefen, werden automatisch wieder gestartet** (Standard: an):
-Beim Booten startet `lhpc-boot-restore.service` jeden Stack neu, der per LHPC gestartet und vor
-dem Reboot nicht gestoppt wurde — über den normalen Startpfad mit der **gespeicherten**
-Konfiguration. Alle Prüfungen (Hardware, Band-Arbitrierung, Rufzeichen, Firewall-Exposure)
-gelten unverändert; das TX-Verhalten kommt strikt aus der gespeicherten Konfiguration, nie aus
-einmaligen Overrides einer früheren Sitzung.
+Die Installation richtet die Konsole für den Systemstart ein. Stacks, die vor einem Neustart
+liefen, startet `lhpc-boot-restore.service` über den normalen Startpfad mit ihrer
+**gespeicherten** Konfiguration neu:
 
 ```bash
 lhpc autostart          # Schalter und letztes Boot-Restore-Ergebnis anzeigen
@@ -449,94 +395,58 @@ lhpc autostart off      # abschalten (gilt ab dem NÄCHSTEN Boot)
 lhpc autostart on       # wieder einschalten (Standard)
 ```
 
-Derselbe Schalter steht im Webserver-Panel der Konsole ("Boot restore"). Die Wiederherstellung
-läuft nur, wenn die Web-Konsolen-Unit aktiviert und unverändert ist — eine deaktivierte oder
-angepasste Konsole schaltet sie wirksam ab. Ein Stack, dessen Wiederherstellung fehlschlägt,
-wird **nicht erneut versucht**; starte ihn selbst mit `lhpc stack start <id>` (das sagt auch das
-Dashboard-Banner).
-
-```bash
-systemctl --user disable lhpc-nginx lhpc-web     # Konsole: nicht beim Booten starten
-systemctl --user enable lhpc-nginx lhpc-web      # wieder beim Booten starten (Standard)
-systemctl --user stop lhpc-nginx lhpc-web        # jetzt stoppen
-systemctl --user start lhpc-nginx lhpc-web       # jetzt starten
-```
+Wann die Wiederherstellung läuft, was bei einem Fehlschlag passiert und die Konsolen-Units beim
+Booten: [`docs/operations.md`](docs/operations.md).
 
 ## Binary-Kanal (vorkompiliert)
 
-Drei Stacks kompilieren lange — der LoRaHAM-Daemon, meshtasticd und MeshComs QEMU. Für die kann
-lhpc statt eines Quell-Builds ein **vorkompiliertes Binary** installieren: Wo eines für deine
-Plattform veröffentlicht ist (aarch64 / Debian Trixie), ist das der Standard — aus einer
-mehrstündigen Installation werden wenige Minuten Download.
-
-```bash
-lhpc install daemon --yes                    # Binary, wo veröffentlicht (Standard)
-lhpc install daemon --source pinned --yes    # stattdessen aus Quellen bauen
-lhpc status --versions                       # zeigt: binary  binary@<sha>  built_from=<commit>
-```
-
-Jedes Artefakt wird über HTTPS geladen und **vor dem Entpacken per sha256 und Größe geprüft**,
-muss aus exakt den Commits gebaut sein, die dieses lhpc pinnt, und den verpflichtenden
-Smoke-Test des Builders bestanden haben. Schlägt eine Prüfung fehl, verweigert die Installation
-und bietet den Quell-Kanal an — niemals ein stiller Rückfall.
-
-Was der Binary-Kanal praktisch bedeutet:
-
-- **Updates** bleiben im Kanal: Gibt es ein neueres Artefakt, wird binary→binary aktualisiert.
-  Hinkt das Binary der gepinnten Version hinterher, sagt lhpc das und lässt dich den (langen)
-  Quell-Build wählen — Abbrechen behält das laufende Binary.
-- **Build und Host-Tests brauchen Quellen.** Eine Binary-Installation hat kein Checkout, diese
-  Aktionen verweigern mit dem Befehl zum Umschalten.
-- **MeshCom läuft in diesem Kanal ohne Auth**: Die veröffentlichte Firmware wird ohne
-  Mesh-Passwort gebaut, deshalb läuft die Bridge ohne Passwort und Passwortänderungen sind
-  deaktiviert, bis du aus Quellen installierst.
-- **Die Konsole bietet dieselbe Wahl.** Install wählt Binary vor, wo eines veröffentlicht ist;
-  scheitert der Download oder eine Prüfung, fragt die Bestätigungsseite *„Stattdessen aus Quellen
-  bauen?"* — der Wechsel bleibt deine Entscheidung.
-- **Eine abgebrochene Installation wird zurückgenommen, nicht halbfertig gelassen.** Dateien,
-  Beleg (Receipt) und die MeshCom-Passworteinstellung gehören zu einer journalisierten
-  Transaktion: Bis sie committet, meldet der Status den Stack als klärungsbedürftig, und die
-  nächste Binary-Operation stellt die vorherige Installation wieder her.
-- Benötigt `zstd` (Teil von `bootstrap-deps.sh`).
-
-Gebaut und veröffentlicht werden die Binaries von
-[lhpc-binaries](https://github.com/makrohard/lhpc-binaries) — ein Workflow pro Stack, mit
-Provenienz (Quell-Commits, Rezept-Commit, Container-Digest) im Index.
+Die drei lange kompilierenden Stacks — der LoRaHAM-Daemon, meshtasticd und MeshComs QEMU —
+installieren standardmäßig ein **vorkompiliertes Binary**, wo eines für die Plattform (aarch64 /
+Debian Trixie) veröffentlicht ist, gebaut von
+[lhpc-binaries](https://github.com/makrohard/lhpc-binaries) aus exakt den Commits, die dieses lhpc
+pinnt. Jedes Artefakt wird vor dem Entpacken per sha256 und Größe geprüft; eine fehlgeschlagene
+Prüfung verweigert und bietet den Quell-Kanal an — nie ein stiller Rückfall. `lhpc install <stack>
+--source pinned` baut stattdessen aus Quellen; `lhpc status --versions` zeigt den Kanal.
+Richtlinie: [`docs/provenance.md`](docs/provenance.md); was der Kanal im Betrieb bedeutet
+(Updates, Tests, MeshCom-Auth): [`docs/operations.md`](docs/operations.md).
 
 ## Aktualisieren
 
-Ein Klick in der Konsole, oder aus der Shell (vorher `config/` + `profiles/` sichern —
-[`docs/operations.md`](docs/operations.md#backup--restore)):
+Ein Klick in der Konsole, oder aus der Shell — vorher `config/` + `profiles/` sichern
+([`docs/operations.md`](docs/operations.md#backup--restore)):
 
 ```bash
 systemctl --user stop lhpc-web && lhpc self-update --apply
-lhpc self-update --repair-integration      # die verwalteten Units wiederherstellen
 ```
 
-Betriebsmodell und Ein-Klick-Mechanik: [`docs/deployment.md`](docs/deployment.md).
+Betriebsmodell, Ein-Klick-Mechanik und `--repair-integration`:
+[`docs/deployment.md`](docs/deployment.md).
 
 ## Fehlerbehebung
 
 | Symptom | Ursache | Abhilfe |
 |---|---|---|
 | `lhpc: command not found` nach der Installation | PATH noch nicht wirksam | Neustart (Schritt 5), oder neue Login-Shell öffnen |
-| Build-Log minutenlang still | Logs kommen in Schüben (blockgepuffert), große Downloads ebenso | nach CPU + Objektzahl urteilen (Schritt 8); [field-notes](docs/field-notes.md) |
-| Build abgebrochen / OOM auf Boards mit wenig RAM | Speicherdruck | Swapdatei (Schritt 3); [field-notes](docs/field-notes.md) |
+| Build-Log minutenlang still | Logs kommen in Schüben (blockgepuffert), große Downloads ebenso | nach CPU + Objektzahl urteilen (Schritt 8) |
+| Build abgebrochen / OOM auf Boards mit wenig RAM | Speicherdruck | Swapdatei (Schritt 3); [Running on a Pi](docs/maintenance.md#running-on-a-pi) |
 | „optionale Abhängigkeiten fehlen" im Headless-Betrieb | GUI-Komponenten absichtlich übersprungen | ignorieren, oder `--with-gui` |
 | Web-Konsole von einem anderen Rechner nicht erreichbar | nicht freigegeben / Firewall | [Fernzugriff](#fernzugriff); [Firewall](docs/firewall.md) |
 | SSH **während der Installation** abgerissen, Lauf gestoppt | Orchestrator bekam SIGHUP; abgekoppelte Build-Schritte laufen ggf. weiter | `lhpc auto-install` erneut ausführen (setzt am Cache auf); tmux nutzen (Schritt 1). **Betrifft nur die Installation** — laufende Stacks hängen an systemd bzw. laufen abgekoppelt und überstehen WLAN-Abbrüche; im Normalbetrieb ist danach nichts neu zu installieren. Auf einem Zero 2W umgeht ein USB-LAN-Adapter das Problem bei der Installation ganz |
-| Board während eines langen Builds nicht erreichbar | Boards mit wenig RAM verlieren unter Last das Netz | Konsole prüfen, NetworkManager neu starten oder rebooten, dann erneut ausführen; [field-notes](docs/field-notes.md) |
+| Board während eines langen Builds nicht erreichbar | Boards mit wenig RAM verlieren unter Last das Netz | Konsole prüfen, NetworkManager neu starten oder rebooten, dann erneut ausführen; [Running on a Pi](docs/maintenance.md#running-on-a-pi) |
 | Quell-Installation meldet „GitHub clone failed" | der Clone — oder ein Schritt danach (Checkout des gepinnten Commits) — hat aufgegeben | der Grund steht am Ende von `logs/adopt-<Komponente>.log` (`[fail] <Schritt>: …`); Installation erneut starten, eine langsame Leitung wird nicht gemerkt |
-| `auto-install` verweigert den Start nach einem abgebrochenen Lauf | übrig gebliebene Lauf-Marker | `lhpc auto-install --status`, dann `lhpc auto-install --recover`; [field-notes](docs/field-notes.md) |
+| `auto-install` verweigert den Start nach einem abgebrochenen Lauf | übrig gebliebene Lauf-Marker | `lhpc auto-install --status`, dann `lhpc auto-install --recover`; [CLI](docs/cli.md) |
 
 ## Dokumentation
+
+Alle Dokumente sind auf Englisch.
 
 | Gruppe | Doku |
 |---|---|
 | Verstehen | [Architektur](docs/architecture.md) |
-| Benutzen | [CLI](docs/cli.md) · [Betrieb & Sicherheit](docs/operations.md) · [Wartung](docs/maintenance.md) · [Feldnotizen](docs/field-notes.md) |
-| Web-Konsole & Fernzugriff | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) · [Migration](docs/deployment-migration.md) |
-| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [aprs](docs/stacks/chat.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [voice](docs/stacks/voice.md) |
-| Referenz & Richtlinien | [Härtung](docs/hardening-0.1.md) · [Provenienz](docs/provenance.md) |
+| Betreiben | [CLI](docs/cli.md) · [Betrieb](docs/operations.md) · [GPS](docs/gps.md) · [Wartung](docs/maintenance.md) · [Backlog](docs/backlog.md) |
+| Erreichen | [Deployment](docs/deployment.md) · [Webserver (HTTPS + mTLS)](docs/webserver.md) · [SSH-Tunnel](docs/ssh-tunnel.md) · [WLAN-Access-Point](docs/wifi-access-point.md) · [Firewall](docs/firewall.md) |
+| Stacks | [Stack hinzufügen](docs/adding-a-stack.md) · [daemon](docs/stacks/daemon.md) · [kiss](docs/stacks/kiss.md) · [graywolf](docs/stacks/graywolf.md) · [chat](docs/stacks/chat.md) · [meshcore](docs/stacks/meshcore.md) · [meshcom](docs/stacks/meshcom.md) · [meshtastic](docs/stacks/meshtastic.md) · [reticulum](docs/stacks/reticulum.md) · [voice](docs/stacks/voice.md) |
+| Prüfen | [Test-Matrix](docs/test-matrix.md) · [Live-Tests](docs/live-test.md) · [Test-Lab](docs/testlab.md) |
+| Richtlinien | [Provenienz](docs/provenance.md) |
 
 Gesamtindex: [`docs/README.md`](docs/README.md).

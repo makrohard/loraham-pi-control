@@ -1,6 +1,6 @@
 """P0.8 — packaged data assets resolve via importlib.resources, so the controller
 works as an installed wheel, not only from a source checkout. (The full isolated
-wheel-install smoke test is in docs/hardening-0.1.md / the milestone commands.)"""
+wheel-install smoke test is in docs/maintenance.md / the milestone commands.)"""
 
 from lhpc.core.assets import asset_path, asset_text
 from lhpc.core.manifest import default_manifest_path, load_manifest

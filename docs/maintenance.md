@@ -1,129 +1,166 @@
 # LHPC maintenance
 
-A living checklist for the future maintainer. What CI enforces, what is manual, what recurs, and the
-known open work. Tick the per-release / per-pin-bump boxes as you go.
+What CI enforces, what stays manual, the pin-bump recipe, and the local gotchas on a Pi. Open
+work lives in [backlog.md](backlog.md); the per-release procedure in [test-matrix.md](test-matrix.md).
 
-## What CI enforces automatically (every push · py 3.11/3.12/3.13 · GitHub runners)
+## Contents
+
+- [What CI enforces](#what-ci-enforces)
+- [What CI does not enforce](#what-ci-does-not-enforce)
+- [Policy](#policy)
+- [Moving a pin](#moving-a-pin)
+- [Dependencies and platform](#dependencies-and-platform)
+- [Security posture](#security-posture)
+- [Running on a Pi](#running-on-a-pi)
+
+## What CI enforces
+
+Every push, Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
+
 - `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
-- `ruff check lhpc` (the broad FROZEN ruleset) and `ruff check tests --select F,E9`
-- `pytest -q` — the **whole** suite, but **no coverage**, no `-m` lane, not under `setsid`
+- `ruff check lhpc` (the frozen ruleset) and `ruff check tests --select F,E9`
+- `pytest -q` — the **whole** suite, but no coverage, no `-m` lane, not under `setsid`
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
-- a separate job: **every pinned source is validated against its live branch**
+- a separate `pin-validation` job: **every pinned source is validated against its live branch**
 
-## What CI does NOT enforce — manual discipline
-- [ ] **Coverage.** No `--cov-fail-under` on purpose. If you touch `lhpc/`, run it and check the total
-      (~85.4 % branch-inclusive) doesn't drop:
-      `pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc" --cov=lhpc --cov-branch; rm -rf -- "$HOME/pt-lhpc"`
-      (Consider adding a `--cov-fail-under` step if you want it gated.)
-- [ ] **Contract lane** runs inside `pytest -q` but isn't a separate gate. Consider adding
-      `pytest -m contract` (~20 s) as a fast pre-flight.
-- Everything Pi-specific below only bites you locally, never CI.
+## What CI does not enforce
 
-## Policy — keep upholding
-- **Freeze the config, float the tool.** Dev tools are UNPINNED (`pytest`, `ruff`, `bandit`,
-  `pytest-cov`, `zstandard`). Ruff's *rules* are pinned in `[tool.ruff.lint] select`/`ignore`; bandit
-  runs `-lll`. When a floated tool complains, fix the code or adjust the config **with a reason** —
-  **never re-pin the tool** (that's the trap the old `ruff==` pin was).
-- **The contract is the map, the net is the protection.** Read `-m contract` to learn what LHPC
-  promises; the full suite protects it. New capability → tag its widest-seam happy + boundary-refusal
-  case `@pytest.mark.contract` (and `@pytest.mark.safety("id")` if it guards a safety invariant), keep
-  `-m contract` green and < 30 s, and tag only isolation-robust cases.
+- **Coverage.** No `--cov-fail-under` on purpose. If you touch `lhpc/`, run it and check the
+  branch-inclusive total does not drop:
+  `pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc" --cov=lhpc --cov-branch; rm -rf -- "$HOME/pt-lhpc"`
+- **Contract lane.** `pytest -m contract` (~20 s) runs inside `pytest -q` but is not a separate
+  gate; use it as a fast pre-flight.
+- **Docs.** `cli.md` is test-enforced (a new CLI verb reddens `test_cli`), every Contents block
+  and the docs index by `tests/test_docs_contents.py`; `adding-a-stack.md` must be updated by
+  hand when the manifest/source model changes.
+- Everything Pi-specific below only bites locally, never in CI.
 
-## Recurring: pins (the biggest burden)
-`lhpc/data/manifest.example.toml` pins every managed source (`pin_commit` + `pin_tag`); CI validates
-each pin against its live branch on every push, and the `lhpc-binaries` builder compiles **exactly
-the pin**, never "latest". To move one:
+## Policy
+
+- **Freeze the config, float the tool.** Dev tools are unpinned (`pytest`, `ruff`, `bandit`,
+  `pytest-cov`, `zstandard`). Ruff's *rules* are pinned in `[tool.ruff.lint] select`/`ignore`;
+  bandit runs `-lll`. When a floated tool complains, fix the code or adjust the config **with a
+  reason** — never re-pin the tool.
+- **The contract is the map, the net is the protection.** `-m contract` states what LHPC
+  promises; the full suite protects it. New capability → tag its widest-seam happy + boundary-
+  refusal case `@pytest.mark.contract` (and `@pytest.mark.safety("id")` if it guards a safety
+  invariant), keep `-m contract` green and < 30 s, and tag only isolation-robust cases.
+- **Version bump** = `pyproject.toml` **and** `lhpc/version.py` (a test pins them equal and
+  requires the matching `CHANGELOG.md` heading) + tag.
+
+## Moving a pin
+
+`lhpc/data/manifest.example.toml` pins every managed source (`pin_commit` + `pin_tag`); CI
+validates each pin against its live branch on every push, and the `lhpc-binaries` builder
+compiles **exactly the pin**, never "latest". Pin bumps are the **last** step of a release,
+after the final source-repository batch is pushed and its commit is reachable from the
+advertised branch. **Never amend or force-push a published commit referenced by a pin** — it
+orphans the SHA and breaks fresh installs at checkout (`tests/test_pin_consistency.py` and the
+CI job hard-fail on an orphaned or predating pin).
 
 1. **Bump** `pin_commit`/`pin_tag`. Every component sharing that source gets the identical SHA
-   (`tests/test_pin_consistency.py`); meshcom: `apply-overlay.sh` must still apply (it fails closed).
+   (`tests/test_pin_consistency.py`; both meshcom-qemu-raspi consumers reference one full 40-hex
+   SHA); meshcom: `apply-overlay.sh` must still apply (it fails closed).
 2. **Validate locally** before pushing — the pin must be reachable on its declared branch:
    `python tools/manifest_pin.py --list` names the sources; CI's job (`ci.yml`, "Validate EVERY
    pinned source") is the reference recipe.
 3. **Commit + push**; note the SHA.
 4. **Binary-covered stack** (`daemon`, `meshtastic`, `meshcom`): `lhpc-binaries` → Actions →
    **build-binary** → `stack`, `lhpc_ref = <that SHA>`, `source_commit` blank, `smoke_test = true`.
-   The pins-must-match gate rejects a binary whose `components` ≠ the manifest pins, so the pin lands
-   FIRST; the meshcom firmware is not bit-reproducible (a new sha per build is expected). Until the
-   binary is published, installs of that stack refuse the binary and offer source.
-5. **Images**: tag `loraham-images` only after every moved binary is published — a stale index blocks
-   the binary stacks and the image build dies.
-6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source), smoke,
-   then `lhpc known-working <stack>`. The full pass is the [release test matrix](test-matrix.md).
+   The pins-must-match gate rejects a binary whose `components` ≠ the manifest pins, so the pin
+   lands FIRST; the meshcom firmware is not bit-reproducible (a new sha per build is expected).
+   Until the binary is published, installs of that stack refuse the binary and offer source.
+5. **Images**: tag `loraham-images` only after every moved binary is published — a stale index
+   blocks the binary stacks and the image build dies.
+6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source),
+   smoke, then `lhpc known-working <stack>`. The full pass is the [release test matrix](test-matrix.md).
 
-Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are built
-from source, so a toolchain change upstream breaks the recipe silently. Builder internals:
+Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
+built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:
 [lhpc-binaries README](https://github.com/makrohard/lhpc-binaries#updating-a-binary).
 
-## Per-release
-- [ ] Version bump (`pyproject.toml` **and** `lhpc/version.py` — a test pins them equal and requires the matching `CHANGELOG.md` heading) + tag
-- [ ] Run the [release test matrix](test-matrix.md) on the box and commit its result table
-- [ ] Refresh known-working pins to the run-proven set
-- [ ] **From-zero acceptance** on fresh hardware — `bootstrap-deps → install.sh → auto-install` on a
-      freshly flashed Pi Zero 2W (~4 h) and Pi 5 (~44 min). This is the real net for the install path
-      (CI can't run it). Watch the Zero's Wi-Fi (brcmfmac throttles under sustained compile) and the
-      `/tmp` tmpfs (ENOSPC — always use an SD-card basetemp).
-- [ ] If the deployment layout changed: update the byte-exact unit/nginx renders AND the self-update
-      migration path (old boxes carry forward on update).
+## Dependencies and platform
 
-## Recurring: dependencies & platform
-- [ ] `pip-audit` red / new ruff or bandit finding → fix or justify-in-config (don't pin).
-- Runtime deps are floors, not pins (`flask<4`, `werkzeug>=3.1`, `waitress<4`, `cryptography>=42`) —
-  watch a breaking major (Werkzeug Host parsing, Flask 4).
-- Python matrix 3.11–3.13: add 3.14 when it ships, drop 3.11 when no longer targeted.
-- OS/kernel drift (Raspberry Pi OS / Trixie): meshtasticd + qemu-from-source are the most fragile to
-  toolchain bumps; a kernel change once flipped the `in0_input` voltage-file path.
-- **PKI has no auto-renewal** — server/client certs default to 825 days; rotate before expiry on
-  long-lived deployments.
+- `pip-audit` red / new ruff or bandit finding → fix or justify-in-config (don't pin).
+- Runtime deps are floors, not pins (`flask>=3,<4`, `werkzeug>=3.1`, `waitress>=3,<4`,
+  `cryptography>=42`) — watch a breaking major (Werkzeug Host parsing, Flask 4).
+- Python matrix 3.11–3.13 (`requires-python >= 3.11`): add 3.14 when it ships, drop 3.11 when
+  no longer targeted.
+- OS/kernel drift (Raspberry Pi OS Trixie): meshtasticd + qemu-from-source are the most fragile
+  to toolchain bumps; a kernel change once flipped the `in0_input` voltage-file path.
+- **PKI has no auto-renewal** — server/client certs default to 825 days; rotate before expiry
+  on long-lived deployments ([webserver.md](webserver.md)).
+- **Adding a third-party apt package** — audit before it reaches hardware:
+  1. `sudo bash bootstrap-deps.sh --dry-run` on a fresh image: it simulates the exact default
+     apt transaction (`apt-get install -s --no-install-recommends`), changes nothing, and exits
+     nonzero if the set cannot be resolved or would pull anything graphical/audio.
+  2. Recommends are how a cascade arrives (`git` → `openssh-client` → `xauth` → `libX11`), so
+     the install runs `--no-install-recommends`; a package that genuinely needs one lists it
+     explicitly, with a comment saying why.
+  3. Check what a package *links* (`readelf -d`, `ldd`) against what it *declares*
+     (`apt-cache show`) — one overdeclared `libsdl2` dependency is a 99-package desktop cascade.
+  4. Never installed, in any mode: a desktop environment, display manager, or X/Wayland server;
+     `--with-gui` installs GUI application libraries only.
 
-## Security posture (don't erode)
-- Managed firewall (nftables) fail-closed + receipt trust (owner-identity, cgroup-leaf gating,
-  `O_NOFOLLOW` receipt reads) — audit-hardened; don't loosen.
-- Exposure stays opt-in (`enable-remote`/`enable-remote-danger`), loopback fail-safe, mTLS.
-  `meshtasticd 4403/9443` is the one unconditional `0.0.0.0` exposure with no upstream knob — keep it
-  firewall-contained.
-- HMAC apply/abort/recover transactional; token never leaks. `bandit -lll` + `pip-audit` are the
-  automated floor.
+## Security posture
 
-## Docs to keep in sync (some are test-enforced)
-`docs/`: architecture, cli (enforced — add a CLI verb → update `cli.md` or `test_cli` reddens),
-deployment(+migration), firewall, hardening-0.1, operations, provenance, stacks/, webserver,
-wifi-access-point, adding-a-stack (update when the manifest/source model changes), test-matrix
-(the result table per release). The main `README.md`
-is guarded by `test_readme_not_drifted`; `tests/README.md` documents the test tiers and safety areas.
+- Managed firewall (nftables) fail-closed + receipt trust (owner identity, cgroup-leaf gating,
+  `O_NOFOLLOW` receipt reads) — don't loosen ([firewall.md](firewall.md)).
+- Exposure stays opt-in, loopback fail-safe, mTLS. `meshtasticd 4403/9443` is the one
+  unconditional `0.0.0.0` exposure with no upstream knob — keep it firewall-contained.
+- HMAC apply/abort/recover transactional; the token never leaks. `bandit -lll` + `pip-audit` are
+  the automated floor. The guarantees themselves: [architecture.md](architecture.md).
 
-## Known open follow-ups (the actual backlog)
-- **Test hermeticity vs a live daemon** — the `RealSystem`-backed binary-switch tests in
-  `test_binary_install.py` read the GLOBAL `/tmp/loraconf*.sock`, so with a real daemon running on the
-  box they report "component(s) running" and `pytest -m "not slow"` goes red (correct code, non-hermetic
-  test). Fix: route the CONF-socket path through a per-test override for those tests. Until then:
-  **stop the daemon before a full local run.**
-- **Tier 0 CONTRACT-GAPS** (promises whose widest-seam case is missing — the priority list for the next
-  test-quality pass):
-  1. no real `POST /firewall/configure` route test that observes an applied effect (only GET-redirect
-     + settings-render exist; apply/fail-closed is proven only at the ActionResult seam);
-  2. boot-restore has NO isolation-safe case — the whole `test_boot_restore.py` is `needs_session` at
-     module scope (split out the pure route-toggle tests to give it a sandbox-safe contract case);
-  3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
-  4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running at the web seam;
-  5. no direct `/hardware` setup POST test (only `/hardware/probe`);
-  6. full route table — a coverage-matrix gate over every route OPERATION, form, CLI leaf and stack
-     phase lives in the SEPARATE `lhpc-testlab` package (`testlab/tests/`), which enumerates lhpc's
-     own url_map + CLI; it runs in that package's CI lane, not lhpc's (testlab is not part of the
-     product — see `docs/testlab.md`). lhpc's own suite still has no route-table gate;
-  7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
-- **One coverage-hostile flaky test** — `test_stack_params::test_same_process_claim_retries_while_ownership_is_unpublished`
-  flakes UNDER the coverage tracer (0.2 s/0.05 s threading windows); green without `--cov`. If a coverage
-  run red-flags only it, deselect it from the `--cov` run and verify it separately without instrumentation.
-- **Safety invariant IDs** — `docs/hardening-0.1.md` has no enumerated P0.x/P1.x registry; only `P0.5`
-  (uninstall) and `P0.6` (GET-no-network) are stated verbatim. TX/firewall/exposure safety cases use
-  descriptive slugs (`RF-TX-opt-in` / `firewall-fail-closed` / `exposure-fail-closed`). Consider adding a
-  canonical invariant table to hardening-0.1.md so `@pytest.mark.safety` ids map cleanly.
+## Running on a Pi
 
-## Local-run gotchas (Pi)
-- Always `--basetemp="$HOME/pt-lhpc"` (SD card) + `rm -rf` after — never the `/tmp` tmpfs (fills → ENOSPC).
-  Occasionally sweep stray `lpt-*` under `/var/tmp` (list before removing).
-- Run under `setsid` or `needs_session` tests silently SKIP (you lose boot-restore/ownership coverage).
-- `zstd` must be installed or `requires_zstd` tests skip; don't run as root or `needs_nonroot` tests skip.
-- Serialize heavy jobs: 1-min watchdog, no memory cgroup — one full-suite/coverage run at a time
-  (full `--cov` ~13 min, fast lane ~8 min on a Pi 5).
-- **Stop any real daemon before a full local run** (see hermeticity follow-up above).
+**The test suite.** Always give pytest a dedicated basetemp on the SD card and remove exactly
+that path afterwards: `--basetemp="$HOME/pt-lhpc"` then `rm -rf -- "$HOME/pt-lhpc"`. The default
+basetemp lands on the `/tmp` tmpfs (208 MB on a Zero 2W) and the full suite fills it (ENOSPC);
+leaked basetemps accumulate under `/var/tmp` — list them first
+(`find /var/tmp -maxdepth 1 -uid "$(id -u)" -type d -name 'lpt-*'`), review, then remove
+explicitly, never a broad glob. Run under `setsid` or `needs_session` tests silently SKIP (you
+lose boot-restore/ownership coverage); `zstd` must be installed or `requires_zstd` tests skip;
+don't run as root or `needs_nonroot` tests skip. Serialize heavy jobs — one full-suite/coverage
+run at a time (full `--cov` ~13 min, fast lane ~8 min on a Pi 5). **Stop any real daemon before a
+full local run** (the hermeticity item in [backlog.md](backlog.md)).
+
+**Memory on a 512 MB Zero 2W.** The three heavy stacks install from the binary channel by
+default; everything below is about source builds and runtime load.
+
+- The heavy builds are the from-source QEMU compile (~5 min on a Pi 5, ~68 min on a Zero 2W at
+  `-j1`) and the MeshCom firmware (~26 min cold). The per-step build timeout defaults to 900 s;
+  the manifest raises it per component (`build_timeout`, up to 28800 s for the Zero's cold QEMU
+  compile) so a slow step is never silently TERM-killed. Builds are detached and survive a web-service restart; output is block-buffered off a TTY, so a
+  quiet `tail -f` is not a stalled build — judge by CPU and the growing `.pio/build/`.
+- **Stop the web stack for heavy builds** (`systemctl --user stop lhpc-web lhpc-nginx`): the
+  controller and a parallel compile competing for RAM is what triggers the OOM killer. lhpc
+  biases build children toward the OOM killer so the controller survives
+  (`core/build_launcher_runtime.py`), and the QEMU build uses a memory-aware `-j`
+  (`min(nproc, floor(MemTotal_GB))` → `-j1` on 512 MB), but freeing RAM still makes the build
+  faster and safer.
+- **Runtime concurrency has the same ceiling.** meshtasticd + the emulated MeshCom node + nginx
+  + the console together drive a Zero into swap thrash — Wi-Fi drops first, then SSH, and only a
+  power cycle recovers it. Run MeshCom **or** Meshtastic on a Zero, not both, and stop the
+  console while the QEMU node boots. A Pi 5 has no such limit.
+- **Disk swapfile as OOM insurance.** Trixie's default swap is zram (compressed pages still in
+  RAM), so a build can still be OOM-killed at `-j1`. When `MemTotal < ~600 MB`,
+  `bootstrap-deps.sh` provisions a disk-backed swapfile (`/var/swap.lhpc`, default 768 MB,
+  `--swap-size 64–16384`, `--no-swapfile` to opt out) at lower priority than zram, only when no
+  sufficient disk swap exists and the filesystem has room. Success means active AND declared
+  (one canonical `fstab` line), so a re-run repairs whichever half is missing; a non-regular file
+  at the swap path or a symlinked `/etc/fstab` is refused untouched, and if swap is required but
+  cannot be provisioned the bootstrap exits 4 after the apt/SPI/group work. It lives on the SD card.
+- **Wi-Fi under sustained build load.** The Zero's brcmfmac firmware drops the interface until a
+  reboot when power-save is on; `bootstrap-deps.sh` disables Wi-Fi power-save when the install
+  runs over Wi-Fi (one NetworkManager drop-in; `--keep-wifi-powersave` opts out) and enables a
+  persistent journal so a drop is captured. `lhpc build` is idempotent, so a drop mid-build costs
+  a reconnect, not the build.
+- **Recovering an interrupted `auto-install`.** `lhpc auto-install --status` prints the reason;
+  `--recover` clears the reservation + lease + run marker in one action; `--confirm-orphan`
+  acknowledges a child whose termination could not be proven (inspect `ps` first). Do not
+  hand-edit the `state/auto-install*.json` markers.
+
+**Job logs.** Build/host-test logs are `logs/build-<comp>.log` (single-step) or
+`logs/build-<comp>-<N>.log` (multi-step); host tests `test-<comp>…`; run logs
+`start-<comp>[-<band>].log`. `lhpc logs <comp>` resolves to the newest matching file, and each
+job announces its exact path at start.

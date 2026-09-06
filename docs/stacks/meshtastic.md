@@ -1,108 +1,104 @@
 # Stack: Meshtastic
 
-Rootless `meshtasticd` driving the RF95 radio directly (band-switchable; default 868).
-`lhpc` starts and stops it — no sudo, no systemd. Because it owns the radio, it claims
-its band exclusively and **cannot run while the daemon serves that band** (`lhpc` blocks
-the conflict).
+Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on 868 (default) or 433 MHz.
+`lhpc` starts and stops it as a user process — no sudo, no systemd. It owns its band exclusively
+and cannot run while the daemon serves that band.
 
 | | |
 |---|---|
-| Component | `meshtastic` |
-| Run | `meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtastic` |
-| Config | `meshtasticd.yaml` (per-band LoRa pins, region, web port) |
-| Web UI | `:9443` (rootless can't bind 443) |
-| API | `:4403` |
+| Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan, not a manual choice) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
+| Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware` `v2.7.26.54e0d8d` (`54e0d8d0…`), a normal managed git source (pinned / stable / dev selectors, Check / Update / Build flows) |
+| Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/meshtasticd.yaml -d <runtime>/state/meshtasticd` |
+| Endpoints | TCP API `:4403` · web UI `:9443` (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth, so the managed firewall denies them by default; the sanctioned remote path is the stack web proxy or an [SSH tunnel](../ssh-tunnel.md) |
+| Config | `<runtime>/config/files/meshtasticd.yaml`, regenerated per band from `lhpc/data/bases/meshtasticd.yaml` at every start (per-band LoRa pins, web root, TLS paths, log level) |
+| Artifacts | `build/tools/meshtasticd/meshtasticd`, its web UI at `build/tools/meshtasticd/web`, the managed CLI venv `build/tools/meshtastic-cli/.venv` (`meshtastic==2.7.11`) |
+| Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0.unlocked` exclusive · `tcp.port.4403` + `.9443` exclusive |
+| System | `/dev/spidev0.0` (`dtoverlay=spi0-0cs`), `spi` + `gpio` group membership, the packaged root `meshtasticd.service` must be disabled (`sudo systemctl disable --now meshtasticd`) |
+| Install channel | **binary** by default (a sha256-verified prebuilt of the binary + web assets, built from the pinned commit); `--source pinned\|dev\|stable` builds natively instead. Policy: [provenance](../provenance.md) |
 
-The runtime data dir (`-d …`) is writable, so the web TLS cert is generated there.
-Region and node name are applied once after start via the device API.
+## Contents
 
-**Install:** the binary channel is the default here (a prebuilt, sha256-verified artifact —
-minutes instead of hours); `--source pinned|dev|stable` builds from source instead. See [Binary
-channel](../../README.md#binary-channel-prebuilt).
+- [Settings](#settings)
+- [Native build](#native-build)
+- [Position (GPS)](#position-gps)
+- [Command line (`lhpc meshtastic`)](#command-line-lhpc-meshtastic)
+- [Notes](#notes)
+- [Conflicts](#conflicts)
 
-## Server-only build (no display stack)
+## Settings
 
-`meshtasticd` is **built from a pinned upstream checkout**, not installed from the Meshtastic OBS apt
-package. The reason is concrete: the OBS package is built from upstream's `native-tft` PlatformIO
-environment, which adds `-lX11 -linput -lxkbcommon` for the on-device MUI, and its `Depends` list
-`libsdl2-2.0-0` — which is overdeclared (the binary never links SDL) but pulls `libpulse0`,
-`libwayland-*`, `mesa-libgallium`, `libllvm19` and `x11-common` with it. On a headless Trixie *lite*
-image that was a 99-package / 308 MB desktop cascade for software that can never render.
+| param | default | notes |
+|---|---|---|
+| `region` | `EU_868` (433: `EU_433`) | LoRa region — required for TX; applied after start (a failed push fails the start) |
+| `node_name` / `node_short` | *(empty)* | the node's own names (39 / 4 UTF-8 bytes), never the operator callsign; the start is refused until both are set |
+| `use_gps` | `on` | use the global position source |
+| `loglevel`, `max_nodes`, `ble`, `mqtt`, `cs`, `irq`, `reset`, `busy`, `ssl_key`, `ssl_cert`, `web_root` | advanced | YAML keys. `cs`/`irq` default 7/16 (868) and 8/25 (433); `reset`/`busy` are omitted when empty — the Uputronics RF95 boards have neither line, and BCM 6/13 are the daemon's LEDs |
 
-LHPC builds upstream's **`native`** environment instead — the same source, minus the TFT/MUI path.
-Everything the stack actually uses is unaffected: the ulfius web server (9443), the TCP API (4403)
-and direct RF95 SPI/GPIO.
+Region, node identity, GPS mode and fixed position are device settings applied through the
+managed CLI after start (post-start steps, re-runnable with `lhpc stack poststart meshtastic`).
+The web port is fixed at 9443 (the endpoint, proxy upstream and exposure audit derive from it).
 
-- **Source**: a normal managed Git source, so the **pinned / stable / dev** selectors and the
-  Check / Update / Build flows all apply when you build here. Pinned is the exact commit behind the
-  OBS build it replaced — and the published binary is built from exactly that commit.
-- **Artifacts** live under the runtime root: `build/tools/meshtasticd/meshtasticd`, its web UI at
-  `build/tools/meshtasticd/web`, and the managed Meshtastic CLI.
-- **Web UI follows the source.** The required release is read from the checkout's `bin/web.version`.
-  A pinned build additionally verifies the declared SHA-256; dev/stable builds validate and *record*
-  the hash instead of asserting one. Assets from a different revision are never reused.
-- **Link gate.** After the build, `readelf -d` and `ldd` must show no SDL, X11, Wayland, Mesa, LLVM,
-  PulseAudio, libinput or xkbcommon. A binary that links any of them is refused, not published.
-- **Rebuild after update.** The strict completion marker lives in the source checkout and is written
-  only after every step succeeds, so replacing the checkout (update, or a different selector) makes
-  the stack read *Build required* until the new revision is rebuilt.
+## Native build
 
-A native C++ build is slow on a Pi Zero 2W — the platform/library resolve alone can take many
-minutes, and the disk swapfile the bootstrap provisions exists for exactly this.
+`meshtasticd` is built from the pinned checkout with upstream's **`native`** PlatformIO
+environment — not `native-tft` (the OBS package's), which links X11/libinput/xkbcommon for an
+on-device UI a headless box cannot render. Steps: a managed PlatformIO 6.1.19 venv → `pio run -e
+native` → the **link gate** (`meshtastic-link-gate.sh`: `readelf -d` + `ldd` must show no SDL, X11,
+Wayland, Mesa/GL, LLVM, PulseAudio, ALSA, libinput, xkbcommon or GTK; fail-closed) → the **web
+assets** (`meshtastic-web-assets.sh`: the release named by the checkout's `bin/web.version`; the
+declared sha256 is enforced at the pinned commit, recorded on dev/stable) → the CLI venv. The
+completion marker lives in the checkout and is written after the last step, so an updated checkout
+reads *Build required* until rebuilt. A native C++ build takes hours on a Pi Zero 2W.
 
-## GPS
+## Position (GPS)
 
-Position comes from the global setting (`lhpc gps`, see [GPS](../gps.md)) — not from this
-stack's config.
+Position comes from the global setting ([GPS](../gps.md)); `use_gps` only opts this node in or out.
 
-- **gpsd** — lhpc runs a small feed presenting the stream as a serial device, because
-  meshtasticd reads only `GPS: SerialPath:`. Expect ~37 s of `No GNSS Module` warnings after
-  start while it probes for a chip; it then proceeds and parses NMEA normally.
-- **nmea** — meshtasticd reads the receiver directly and detects a real chip, so there is no
-  probe delay. gpsd must not also own that device; lhpc refuses the combination.
-- **fixed** — the node's own fixed-position support is used; no feed runs.
-- **off** — `position.gps_mode` is set to `NOT_PRESENT` and any stored fixed position is
-  cleared, so the node cannot keep beaconing a position you turned off.
+- **gpsd** — the `meshtastic-gps` feed presents the stream as a serial device, because
+  meshtasticd reads only `GPS: SerialPath:`. Expect ~37 s of `No GNSS Module` warnings while it
+  probes for a chip.
+- **nmea** — meshtasticd reads the receiver directly and detects the chip (no probe delay); gpsd
+  must not also own the device.
+- **fixed** — the node's own fixed-position support (`--setlat/--setlon/--setalt`); no feed.
+- **off** — `position.gps_mode = NOT_PRESENT` and `--remove-position`, so a stored fixed position
+  never keeps beaconing.
 
 ## Command line (`lhpc meshtastic`)
 
-`lhpc meshtastic <args>` runs the **managed** Meshtastic Python CLI against **this box's local
-node** — a thin guarded passthrough, not a reimplementation. Every upstream argument works as
-usual; try `lhpc meshtastic --help` for the full upstream reference. The Dashboard lists it as
-the on-demand component **Meshtastic CLI** under the running stack, with that line to copy; it
-is never started by the controller and is no auto-start choice.
+`lhpc meshtastic <args>` runs the managed Meshtastic CLI against this box's node — a guarded
+passthrough, not a reimplementation (`lhpc meshtastic --help` shows the upstream reference). The
+Dashboard lists it as the on-demand component *Meshtastic CLI*; it is never auto-started.
 
 ```text
-lhpc meshtastic --info
-lhpc meshtastic --nodes
-lhpc meshtastic --sendtext "hello"
-lhpc meshtastic --dest '!12345678' --sendtext "hi" --ack
-lhpc meshtastic --listen
+lhpc meshtastic --info · --nodes · --sendtext "hello" · --dest '!12345678' --sendtext "hi" --ack · --listen
 ```
 
-Only what LHPC owns is guarded:
+- Transport selectors (`--host`, `--tcp`/`-t`, `--port`/`--serial`/`-s`, `--ble`/`-b`,
+  `--ble-scan`) are refused: the connection is fixed to the local node.
+- LHPC-owned local settings are refused with a pointer: region → `lhpc config meshtastic region`;
+  owner name/short (incl. `--set-ham`) → `node_name` / `node_short`; GPS mode and fixed position →
+  `lhpc gps`. A remote `--dest` is unrestricted.
+- `--configure`/`--import-config` and the channel-URL setters (`--seturl`/`--ch-set-url`/
+  `--ch-add-url`) run, then LHPC re-asserts and verifies region/name/GPS; if it cannot, the
+  command exits non-zero and names `lhpc stack poststart meshtastic`.
+- The three `--factory-reset*` flags warn and ask (`--yes` skips); afterwards
+  `lhpc stack poststart meshtastic` re-applies the managed settings.
+- Node operations need the running stack; `--help`, `--version`, `--support`, `--test` do not.
 
-- **Connection is fixed to the local node.** Transport/address selectors (`--host`, `--tcp`/`-t`,
-  `--port`/`--serial`/`-s`, `--ble`/`-b`, `--ble-scan`) are refused. To drive another Meshtastic
-  device, run a standalone Meshtastic CLI outside `lhpc meshtastic`.
-- **Region, node name, and GPS are LHPC-owned** for the local node and are refused with a pointer
-  to the right command: LoRa region → `lhpc config meshtastic region`; owner name/short (incl.
-  `--set-ham`, which sets a licensed callsign as the owner) → `lhpc config meshtastic node_name` /
-  `node_short` — these are the node's own names, never inherited from the operator callsign, and
-  the start is refused until both are set; GPS mode and fixed position → `lhpc gps` (see [GPS](../gps.md)). Targeting a
-  **remote** node with `--dest` is not restricted.
-- **Broad config imports self-heal.** `--configure`/`--import-config` and the channel-URL setters
-  (`--seturl`/`--ch-set-url`/`--ch-add-url`, which carry a full LoRa config incl. region) run
-  normally; LHPC then automatically re-asserts only what it owns (region/name/GPS — including the
-  node owner name) via the stack's post-start convergence, even if the command is interrupted or
-  fails partway. No prompt. The reassert is **verified**: if LHPC cannot confirm it, the command
-  exits non-zero and points you at `lhpc stack poststart meshtastic` — an import never reports
-  success while an LHPC-owned value has silently drifted. A remote `--dest` is left alone.
-- **Factory reset** (`--factory-reset`, `--factory-reset-config`, `--factory-reset-device`) warns
-  and asks for confirmation; `lhpc meshtastic --factory-reset --yes` skips the prompt. After a
-  factory reset, re-apply LHPC-managed settings with `lhpc stack poststart meshtastic`.
+## Notes
 
-Everything else — messages, channels, telemetry, traceroute, `--listen`, remote admin, reboot,
-etc. — passes through untouched. Node operations require the stack to be running
-(`lhpc stack start meshtastic`); `--help`/`--version`, and the node-free `--support`/`--test`
-(its own USB two-radio test), do not.
+- A freshly reset node cannot be direct-messaged until node info has been exchanged (modern
+  firmware rejects a channel-encrypted DM with `NO_CHANNEL`; the default node-info interval is 3 h) —
+  `lhpc stack poststart meshtastic` re-applies the identity and triggers an immediate node-info
+  broadcast. Broadcasts are unaffected. Evidence: [live tests](../live-test.md).
+- The `gpiochip` is not hard-coded in the YAML base: the Pi Zero 2W header is `gpiochip0`; a Pi 5
+  puts it on another chip — add a per-pin `gpiochip:` only if your kernel needs it.
+- The web TLS certificate is generated into the writable data dir (`state/meshtasticd/ssl`).
+
+## Conflicts
+
+- Claims `loraham.radio.<band>` exclusively: not with the daemon on that band (so not with
+  kiss/graywolf/chat/voice/meshcom on 433, meshcore on 868), and not with reticulum on that band.
+- `spi.bus.0.unlocked`: meshtasticd does not take the daemon's `spi0.lock`, so `meshtastic +
+  reticulum` is refused outright; `daemon + meshtastic` on opposite bands is allowed and shares the
+  bus without mutual exclusion — an accepted hazard, recorded in [architecture](../architecture.md).

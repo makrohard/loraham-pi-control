@@ -4,6 +4,14 @@ The suite protects **behaviour and safety invariants**, not the exact spelling o
 Keep it that way: a test should fail when the *system does the wrong thing*, never merely because some
 markup, CSS class, or wording changed.
 
+## Contents
+
+- [Principles](#principles)
+- [Untouchable safety areas — do not weaken these](#untouchable-safety-areas--do-not-weaken-these)
+- [Layout](#layout)
+- [Tier 0 — the contract](#tier-0--the-contract)
+- [Running — three tiers](#running--three-tiers)
+
 ## Principles
 
 1. **Assert behaviour and contracts, not presentation or wording.** Prefer a status code, a redirect,
@@ -37,14 +45,16 @@ markup, CSS class, or wording changed.
 6. **Optional host-tool tests skip explicitly; mandatory deps are installed, not skipped.** A test that
    needs a host binary the product also needs at runtime (e.g. `zstd` for artifact extraction) carries
    `@pytest.mark.requires_zstd` and skips with a reason when it is absent — it never silently passes.
-7. **Critical safety tests map to a known invariant** (the P0/P1 model in `docs/hardening-0.1.md`).
-   Ordinary behavioural tests just need a clear purpose in their name/docstring.
+7. **Critical safety tests map to a known invariant**: one of the guarantees listed under
+   "Safety model" in `docs/architecture.md`. Ordinary behavioural tests just need a clear purpose
+   in their name/docstring.
 8. **Organise by behaviour, not by dev milestone.**
 
 ## Untouchable safety areas — do not weaken these
 
 These guard RF, exposure, destructive, and corruption invariants. Slim them only by parametrizing
-genuine duplicates; never delete a distinct guard. `docs/hardening-0.1.md` is the spec.
+genuine duplicates; never delete a distinct guard. The guarantees under "Safety model" in
+`docs/architecture.md` are the spec.
 
 - **RF / TX safety** — TX never auto-enabled; TX actions need explicit opt-in + passing tests + a
   callsign; daemon TXMODE apply/readback gating; bounded one-frame TX test.
@@ -73,7 +83,7 @@ genuine duplicates; never delete a distinct guard. `docs/hardening-0.1.md` is th
   and daemon parsers fail closed. (`test_web::test_get_routes_make_no_network_calls`,
   `test_bounded_runner`, `test_daemon_bounds`.)
 
-## Layout (after the 2026 consolidation)
+## Layout
 
 Tests are grouped by SUBJECT into ~90 files. Notable consolidated homes:
 
@@ -121,8 +131,8 @@ widest-seam case: a real firewall-apply route test, and a sandbox-safe boot-rest
 
 Run the **console script** (`.venv/bin/pytest`), not `python -m pytest`. The `-m` form puts the
 working directory on `sys.path`; CI's console script does not, and the dev venv's editable install
-exposes only `lhpc`. A module that reached for a sibling test module therefore collected here and
-died in CI — 0.1.8 shipped that way. `tests/test_suite_hygiene.py` now fails on it either way.
+exposes only `lhpc`, so a module that reaches for a sibling test module collects here and dies in
+CI. `tests/test_suite_hygiene.py` fails on it either way.
 
 
 1. **Focused (inner loop)** — one file or a `-k` subset while iterating:

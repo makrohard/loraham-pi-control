@@ -4,6 +4,18 @@ Known gaps that were reviewed, judged not release-blocking, and deliberately lef
 for a later change. Each entry says what holds the line today, so the next person
 knows what they are relying on before they touch it.
 
+## Contents
+
+- [Two-stage unit-template migration](#two-stage-unit-template-migration)
+- [Transitive build-dependency source locks](#transitive-build-dependency-source-locks)
+- [SX1262 on 868 — not run on hardware](#sx1262-on-868--not-run-on-hardware)
+- [Independent review](#independent-review)
+- [Test hermeticity vs a live daemon](#test-hermeticity-vs-a-live-daemon)
+- [Contract gaps](#contract-gaps)
+- [Coverage-hostile flaky test](#coverage-hostile-flaky-test)
+- [Safety invariant IDs](#safety-invariant-ids)
+- [No `--live` interface](#no---live-interface)
+
 ## Two-stage unit-template migration
 
 **The managed systemd unit templates in `lhpc/core/updater_units.py` are frozen.**
@@ -56,8 +68,64 @@ drives the real `is_built()` against a real marker file.
 transitive build dependency*, hold them for the build's lifetime, and derive the
 final receipt only once all are held.
 
-## SX1262 on 433
+## SX1262 on 868 — not run on hardware
 
-Hardware-verified on 868 (TX and RX against an SX1276 peer). The 433 path is
-code-complete but has not been run on hardware. See the SX1262 notes in
-`docs/field-notes.md` and `docs/stacks/reticulum.md`.
+Tested on the air: the LoRaHAM Pi HAT dual-module controller, the Uputronics dual stack and
+the Waveshare SX1262 433M. **Not tested on silicon: the Waveshare SX1262 868M.** The 868 path
+of the direct-SPI driver is code-complete and shares everything but the band profile with the
+433 path; treat a first 868 run as a hardware test, not a regression check. Dated evidence:
+[live tests](live-test.md); the driver's hardware notes: [stacks/reticulum.md](stacks/reticulum.md).
+
+## Independent review
+
+None of the safety model in [architecture.md](architecture.md) has been reviewed by anyone
+outside the project. The tests named next to each guarantee are the only evidence.
+
+## Test hermeticity vs a live daemon
+
+The `RealSystem`-backed binary-switch tests in `tests/test_binary_install.py` read the GLOBAL
+`/tmp/loraconf*.sock`, so with a real daemon running on the box they report "component(s)
+running" and `pytest -m "not slow"` goes red (correct code, non-hermetic test).
+
+**Holding the line:** stop the daemon before a full local run ([maintenance.md](maintenance.md)).
+
+**Fix:** route the CONF-socket path through a per-test override for those tests.
+
+## Contract gaps
+
+Promises whose widest-seam case is missing — the priority list for the next test-quality pass
+(`tests/README.md` has the tiers):
+
+1. no real `POST /firewall/configure` route test that observes an applied effect (only
+   GET-redirect + settings-render exist; apply/fail-closed is proven only at the `ActionResult`
+   seam);
+2. boot restore has NO isolation-safe case — the whole `tests/test_boot_restore.py` is
+   `needs_session` at module scope (split out the pure route-toggle tests to give it a
+   sandbox-safe contract case);
+3. no route-level binary-channel SWITCH test (only the install confirmation's channel selection);
+4. no `/action` POST test for `op=uninstall`/`op=clean` refuse-while-running at the web seam;
+5. no direct `/hardware` setup POST test (only `/hardware/probe`);
+6. lhpc's own suite has no route-table gate — the coverage matrix over every route operation,
+   form, CLI leaf and stack phase lives in the separate testlab package
+   ([testlab.md](testlab.md)) and runs in that package's CI lane;
+7. no single composite "TX opt-in + tests + callsign" gate test (covered by several separate ones).
+
+## Coverage-hostile flaky test
+
+`tests/test_stack_params.py::test_same_process_claim_retries_while_ownership_is_unpublished`
+flakes UNDER the coverage tracer (0.2 s / 0.05 s threading windows); green without `--cov`.
+If a coverage run red-flags only it, deselect it from the `--cov` run and verify it separately
+without instrumentation.
+
+## Safety invariant IDs
+
+The safety model has no enumerated invariant registry; `@pytest.mark.safety` ids are
+descriptive slugs (`RF-TX-opt-in`, `firewall-fail-closed`, `exposure-fail-closed`, `P0.5`
+uninstall, `P0.6` GET-no-network). A canonical invariant table next to the safety model in
+[architecture.md](architecture.md) would let the ids map cleanly.
+
+## No `--live` interface
+
+`--live` is deliberately absent from the CLI and the service params: that interface is not
+frozen, so it is not offered. Live daemon tuning stays the whitelisted CONF-socket path
+([stacks/daemon.md](stacks/daemon.md)).

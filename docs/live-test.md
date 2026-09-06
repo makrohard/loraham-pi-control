@@ -1,30 +1,102 @@
-# Silicon test — LHPC stacks against real ESP32 peers, 2026-09-05
+# Live tests
 
-On-air acceptance of the LHPC stacks against **real ESP32 hardware running each project's own
-original firmware** — not emulated peers, not simulated radios, not LHPC talking to itself. Every
-result below was produced by a physical node on the air: MeshCom, Meshtastic, LoRa-APRS and MeshCore
-firmware on LilyGo and BQ boards. Software green is not on-air green, so this file records only what
-was actually transmitted and what was actually heard, plus what remains open.
-
-Each section covers one stack and states its own evidence. Times are CEST unless marked UTC
-(MeshCom's heard tables print UTC).
+Dated validation evidence, newest first: what was run on the reference box and against real peers, with
+measured values only. The procedure lives in [test-matrix.md](test-matrix.md); CI and the
+[testlab](testlab.md) prove the code and the console.
 
 ## Contents
 
-- [Test bench](#test-bench) — box, radios, the four peers, and how evidence was gathered
-- [1. MeshCom (QEMU + bridge + daemon) — 433.175 MHz](#1-meshcom-qemu--bridge--daemon--433175-mhz) — both directions at packet level; content unverified, one repeat inconclusive
-- [2. Meshtastic (meshtasticd, native) — 868 MHz](#2-meshtastic-meshtasticd-native--868-mhz) — all four paths pass after resetting both nodes to LHPC standard settings
-- [3. Graywolf APRS (+ KISS TNC + daemon) — 433.775 MHz LoRa-APRS](#3-graywolf-aprs--kiss-tnc--daemon--433775-mhz-lora-aprs) — full round trip with content; **one defect** — the scheduled beacon never fires
-- [4. MeshCore (OpenHop) — 869.618 MHz, mode chat+repeater](#4-meshcore-openhop--869618-mhz-mode-chatrepeater) — every functional path passes; a misreporting command-line client
-- [Session close — state on the box (2026-09-05 11:00 CEST)](#session-close--state-on-the-box-2026-09-05-1100-cest) — what the box is running, what changed, and every open item
+- [0.2.10 — release test, 2026-09-05/06](#0210--release-test-2026-09-0506)
+- [Silicon test, 2026-09-05](#silicon-test-2026-09-05)
 
-**Scoreboard:** 40 rows across four stacks — **34 pass**, 1 fail (Graywolf's scheduled beacon),
-1 inconclusive, 4 not covered (no indoor GPS fix on the tracker, and content verification on the
-MeshCom peer).
+## 0.2.10 — release test, 2026-09-05/06
 
----
+All checks pass. Box: Pi Zero 2 W (e293), Lite image, LoRaHAM Pi HAT dual-module. Row = one stack purged,
+installed, built, started and verified; checks 14–42 = the cross-cutting and from-zero items of the procedure.
 
-## Test bench
+
+Pins moved in this release: Reticulum 1.5.2, MeshCom firmware dev tip 674413c (QEMU overlay 579e463), Meshtastic stable v2.7.26. Run on `lhpc-e293` (Raspberry Pi Zero 2 W, Lite image), 2026-09-05 12:46 to 2026-09-06 01:10 local, on the tagged tree. Two defects found and fixed during the run (the MeshCom GPS drain under QEMU, the known-working composition on a headless box), one operator root step (the managed firewall), two power cycles (one Wi-Fi drop under the QEMU compile, one AP fallback after the fresh install).
+
+Pins are per row (the manifest of the tested head). Two pins moved during the run: rows 12 and 13 ran
+meshcom-qemu-raspi at 4bf1183 (before the bounded GPS drain), the meshcom verification in check 15 and
+the fresh install ran 579e463; the `dev`-channel installs of checks 14 and 22 took openhop-core at its
+branch tip (dae75b4) while the pinned row 8 ran 8cdb04e.
+| # | stack | channel | pins under test | clean | install | build | start | usable | min avail | OOM | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | daemon | binary | daemon 10f4107<br>radiolib 187ef24<br>(binary) | 0:00:06 | 0:00:10 | n/a | 0:00:12 | — | 170 MB | none | **pass** ⁽1⁾ |
+| 2 | chat | pinned | chat 10f4107 | 0:00:05 | 0:00:03 | 0:00:14 | rc 1 (0:00:05) | — | 170 MB | none | **pass** ⁽2⁾ |
+| 3 | igate | pinned | igate 10f4107 | 0:00:06 | 0:00:06 | 0:00:12 | 0:00:06 | — | 183 MB | none | **pass** |
+| 4 | voice | pinned | voice 143b83f | 0:00:06 | 0:00:05 | 0:00:16 | 0:00:08 | — | 180 MB | none | **pass** ⁽4⁾ |
+| 5 | kiss | pinned | kiss 3c4461e (v0.5.1) | 0:00:06 | 0:00:04 | 0:00:24 | 0:00:08 | 0:00:00 | 187 MB | none | **pass** |
+| 6 | graywolf | fetched | graywolf 0.14.13 (fetched) | 0:00:06 | 0:00:02 | 0:00:36 | 0:00:11 | 0:00:00 | 171 MB | none | **pass** |
+| 7 | reticulum | pinned | rns ea98db4 (1.5.2)<br>rns-lora-interface 3fef542<br>nomadnet ad10301<br>lxmd 795fdaa<br>sideband 1402bb6 skipped | 0:00:18 | 0:13:25 | 0:03:05 | 0:00:09 | — | 138 MB | none | **pass** |
+| 8 | meshcore | pinned | openhop-core 8cdb04e<br>meshcore-webui 94dcc3d<br>meshcore-cli 568d158 (v1.6.3)<br>openhop-repeater efc5616 | 0:00:11 | 0:02:24 | 0:08:26 | 0:00:39 | 0:00:02 | 47 MB | none | **pass** ⁽8⁾ |
+| 9 | meshtastic | binary | meshtastic 54e0d8d (v2.7.26)<br>CLI pip 2.7.11<br>(binary) | 0:00:08 | 0:03:21 | n/a | 0:00:40 | 0:00:16 | 133 MB | none | **pass** |
+| 10 | meshtastic | source | meshtastic 54e0d8d (v2.7.26)<br>web 2.6.7<br>(source) | 0:00:07 | 0:02:22 | 2:42:58 | 0:00:34 | 0:00:06 | 24 MB | none | **pass** |
+| 11 | daemon | source | daemon 10f4107<br>radiolib 187ef24<br>(source) | 0:00:06 | 0:02:43 | 0:05:00 | 0:00:13 | — | 106 MB | none | **pass** |
+| 12 | meshcom | binary | firmware 674413c<br>meshcom-qemu-raspi 4bf1183<br>bridge f018920<br>(binary) | 0:00:15 | 0:00:34 | n/a | 0:07:31 | 0:02:06 | 111 MB | none | **pass** ⁽12⁾ |
+| 13 | meshcom | source | firmware 674413c<br>meshcom-qemu-raspi 4bf1183<br>bridge f018920<br>(source) | 0:00:08 | 0:01:56 | 0:45:45 | 0:08:03 | 0:01:06 | 26 MB | none | **pass** ⁽13⁾ |
+
+<!-- rowfoot:begin -->
+- ⁽1⁾ row 1: build refused for a binary install, as designed
+- ⁽2⁾ row 2: interactive: start ensures the daemon and prints the command
+- ⁽4⁾ row 4: first attempt: clean refused by a stale ownership record left by an out-of-band deploy (identity drift, see operations.md); re-run after clearing the record
+- ⁽8⁾ row 8: first attempt: same stale-record refusal on openhop-core; re-run after clearing the record
+- ⁽12⁾ row 12: first attempt refused by the pins gate as designed: the box still ran the pre-bump checkout (binary 4bf1183 vs pin ef043a9); re-run on main 625f1f3
+- ⁽13⁾ row 13: 0:45:45 is the re-run with the QEMU build skipped on its marker; the first attempt built QEMU in 1:13:12 and then lost the network at the firmware clone, so a cold build is the sum of both; the later overlay fix (meshcom-qemu-raspi 579e463, bounded QEMU GPS drain) was compiled from source by the binary builder with its smoke test and runs on the box as the published binary, so this row was not repeated
+<!-- rowfoot:end -->
+
+Checks after the rows — every planned check of this release, filled as it is measured:
+
+<!-- checks:begin -->
+| # | phase | check | measured | verdict |
+|---|---|---|---|---|
+| 14 | cross-cutting | auto-install consistency — the CLI path (README step 8): purge all, `lhpc auto-install --yes`, defaults; log creation checked | purge of all 10 stacks 0:01:05; `lhpc auto-install --yes` 0:19:13, rc 0: 10/10 stacks successful, 0 blocked, 0 failed, 0 skipped (GUI deps absent); nothing reads not-built; min avail 50 MB; no OOM; every stack on its default channel (binary for daemon, meshtastic, meshcom; dev for the rest); log creation: all 26 announced job logs (`auto-install-<run>-build-<component>-<step>.log`) exist under logs/, 16 with output, 10 empty for silent steps (venv, install -D) | pass |
+| 15 | cross-cutting | known-working confirmation: after each stack's GREEN start the console must OFFER to record the composition (the stack page's known-working offer) — judged for user-friendliness (visible, worded plainly, one click, no tokens/SHAs the operator must understand) — then confirmed via the GUI for EVERY stack; `lhpc status --versions` / profiles/known-working/<stack>.json show the recorded pins | offer shown and confirmed with one click, profile written: kiss (loraham-kiss-tnc, -serial), meshcore (node, webui, cli, openhop repeater), igate; no offer by design for the binary installs (daemon, meshtastic) and the fetched graywolf release (no source composition); chat and voice (interactive, not started by the controller) show no offer; meshcom (binary, no offer by design): its first start failed on a dev-tip regression — the firmware's new per-loop GPS UART drain is unbounded and starved the loop under QEMU's unpaced socket UART (loop gaps 41 s, 100 s, 245 s; net-console deaf); fixed in the QEMU overlay (meshcom-qemu-raspi 579e463, drain bounded per pass), binary republished, verified with three starts on the box: verified in 0:10:08, 0:05:58, 0:06:02, maximum drain time per pass 0.5 s, loop gaps 867 ms and 989 ms (one 59 s gap outside the section during the post-start step); reticulum: first no offer — a real gap (Sideband skipped on Lite blocked the whole composition), fixed in 81551f2 and re-checked live: offer shown (lxmd, nomadnet, rns, rns-lora-interface), confirmed with one click, profile written | pass |
+| 16 | cross-cutting | boot restore (power-cycle, N restored / 0 failed) | reboot requested through the console (POST /power/reboot, confirmed) with daemon, kiss, graywolf and meshcore running: ping back 0:03:01 and console up 0:03:05 after the request; boot-restore state done, restored kiss, graywolf, meshcore and the daemon, 0 failed, 0 skipped, 0 issues; all four running afterwards | pass |
+| 17 | cross-cutting | web console sweep (Dashboard, Apps rows, Settings, no traceback) | 18 console pages fetched over the socket (Dashboard, Apps, GPS, hardware, auto-install, boot-restore, dependencies, controller logs, every stack body): 0 errors, 0 tracebacks in the console log, sweep 0:00:30 | pass |
+| 18 | cross-cutting | pins vs binaries (`lhpc status --versions`, three binary stacks) | after the auto-install: loraham-daemon binary, radiolib binary, meshtastic binary, meshcom-bridge/qemu/firmware binary (meshcom-gps-relay source, match) — the pins gate accepted all three published binaries against the manifest | pass |
+| 19 | from-zero | `uninstall.sh --purge` (stacks stopped and verified, runtime root gone) | after the root-owned firewall reset (the one step this run could not do itself): `uninstall.sh --purge --yes` rc 0 in 0:00:35 — stacks stopped and verified, runtime root gone, 0 managed units left, CLI link gone. First attempt had been refused (fail-closed) while the managed firewall integration was installed | pass |
+| 20 | from-zero | documented install happy path line by line (README → `install.sh` → console); docs corrected where a line fails | README step 2 `bootstrap-deps.sh --dry-run` (no root): rc 0, 0:00:37; step 3 not repeated (root; deps present from the image); step 4 `curl … install.sh | bash`: rc 0 in 0:01:45, `lhpc --version` = 0.2.10, console 200 on loopback right after install, units lhpc-web + lhpc-nginx; step 5 reboot through the console: accepted (302), box came back on its fallback AP `lhpc-e293` | pass |
+| 21 | from-zero | Wi-Fi join via the Network panel from the box's fallback AP (the genuine flow), console back on the joined network | the fresh install came up on its fallback AP `lhpc-e293`; this PC joined the AP and drove the console's Network panel: stage 1 (confirm page) 200, stage 2 confirmed with the password 302 → the AP vanished after 5 s and the box answered on the home network after 12 s, the operator's Wi-Fi active on wlan0; the console's own check on the joined network follows in part 2 | pass |
+| 22 | from-zero | web-console auto-install with defaults; GTK/X11/Wayland package count unchanged | Apps → Auto-install with the defaults (all ten stacks, binary where published else dev, no tests, no TX) posted through the console: run completed in 0:18:44 (21:47:00Z → 22:05:44Z): 10/10 stacks successful, 0 blocked, 0 failed, 0 skipped (GUI deps absent); graphical packages (gtk/x11/wayland/xorg/mesa) 11 before and 11 after, no new package installed; 20 components read binary or match afterwards | pass |
+| 23 | from-zero | first start on the FRESH install with the global callsign never set (one licensed stack, nothing started before): typed identity refusal, CLI hint, Settings row highlighted | on the fresh install, nothing started before, global callsign unset, meshcom's own callsign empty: `lhpc stack start meshcom --yes` refused typed — "Cannot start 'meshcom': a callsign is required to start 'meshcom' — set 'mc_callsign' (or the global operator callsign)" with the hint `lhpc config meshcom mc_callsign YOURCALL-99`; web Start from the Apps page: 302 to `/stacks?cfg=meshcom&bad=c_mc_callsign#stack-settings-meshcom` — the stack's Settings opened with the callsign row highlighted, nothing started | pass |
+| 24 | from-zero | `lhpc config operator --callsign DJ0CHE`, then first start of the remaining stacks (fresh box, saved defaults) | `lhpc config operator --callsign DJ0CHE` saved; node names set; first starts: daemon 0:00:15, kiss 0:00:11, graywolf 0:00:17, meshcore (chat+repeater) 0:00:17, meshtastic 0:00:37, meshcom 0:06:07 (QEMU boot) — all running; chat: interactive, the start ensures the daemon and prints the command (rc 1 by design); voice: started while kiss and graywolf held 433 → refused typed "graywolf, kiss must be stopped first" (a band conflict, the interactive command is otherwise printed); igate 0:00:08, reticulum 0:00:12 — every stack's first start on the fresh install succeeded | pass |
+| 25 | from-zero | password check per stack after its first start: the Password section of the web GUI shows the stored value (graywolf, MeshCore repeater dashboard, MeshCom HMAC) and it matches the file | graywolf: the Password section shows the stored value in its copy box and it equals state/graywolf/graywolf-admin.txt; MeshCore repeater dashboard: shown and equals config/secrets/openhop_repeater_admin.txt; MeshCom HMAC: on the happy path (prebuilt binary) the console's HMAC page says plainly "not available — prebuilt binary whose firmware has NO mesh password (open auth) — install it from source to manage the password", and the Password section shows the HMAC row as disabled; n/a by design on a binary install | pass (HMAC n/a on the binary install, by design) |
+| 26 | from-zero | start/stop behaviour of EVERY stack on the fresh install: start → verify → stop per stack; a band/TX-mode conflict is refused with the typed reason (meshtastic vs MeshCore on 868, MeshCom vs graywolf on 433); interactive components (chat, voice-cli, meshtastic-cli, meshcore-cli) are listed with their command, never started by the controller | start → verify → stop per stack on the fresh install, all clean: daemon, igate 0:00:21, kiss 0:00:23, graywolf 0:00:29, meshcore 0:00:30, meshtastic 0:00:47, reticulum 0:00:21; interactive components listed on the Dashboard with their command ("Interactive — run local", e.g. the MeshCore CLI), `lhpc stack start chat` answers "interactive — the daemon is ensured, then run it yourself in a terminal"; conflict pairs, each refused typed and nothing half-started: meshtastic while MeshCore holds 868 → "radio 868 MHz is held by running stack 'meshcore'", "Cannot run 'meshtastic': daemon, meshcore must be stopped first"; meshcom while kiss and graywolf hold 433 → "radio 433 MHz is held by running stack 'kiss' / 'graywolf'", "Cannot run 'meshcom': graywolf, kiss must be stopped first" (one stack per daemon band); meshtastic while reticulum owns its radio → "spi.bus.0.unlocked is held by running stack 'reticulum'", "Cannot run 'meshtastic': reticulum must be stopped first"; the daemon starts on the other band beside reticulum (the documented coexistence) | pass |
+| 27 | from-zero | docs/ssh-tunnel.md: every tunnel command live-verified from this PC against the running stacks (console 8443, graywolf 8080, MeshCore 8788/8000, MeshCom 18083/12323, meshtastic 4403, kiss 8001, reticulum 4242) | from this PC with the doc's `ssh -N -L` commands verbatim (host swapped): console 8443 → 200, graywolf 8080 → 200, MeshCore repeater dashboard 8000 → 200, MeshCore companion 5000 → open, KISS 8001 → open, MeshCom web 18083 → 200 (after its boot), MeshCom net-console 12323 → open, Reticulum 4242 → open, MeshCore web UI 8788 → 200 once its optional component is started (the doc now says so); meshtastic 4403/9443 were not reached in this run because my test started the node while the daemon still held 868 (refused, correctly) — the node's API itself was verified in rows 9 and 10 (`lhpc meshtastic --info`); the doc notes the port delay after start; in check 29 the node's ports 4403 and 9443 were present after a clean start, confirming the documented port table | pass (9 of 11 verified live; 2 not reached by a test-setup error) |
+| 28 | from-zero | remote exposure with mTLS + managed firewall (the operator's one root step): console allowlisted for the joined subnet by the Network panel, `lhpc firewall --script` rendered, `sudo bash firewall-apply.sh` + `sudo systemctl start lhpc-firewall-check.service` entered by the operator, `lhpc firewall` verified, from another machine: https://<box>:8443 refused without a client certificate and 200 with the issued one | the Network-panel join had already allowlisted 192.168.178.0/24 in mode local-open-remote-auth (remote listener on 0.0.0.0:8443); `lhpc firewall --script` rendered the apply script, the operator entered `sudo bash firewall-apply.sh` + `sudo systemctl start lhpc-firewall-check.service` ("applied and live-verified"); `lhpc firewall`: Active, Config ✓ Boot ✓ Live ✓; `lhpc webserver verify`: verified; from this PC: https://192.168.178.106:8443/ without a client certificate 403, with the issued certificate (`cert issue matrix-pc2`, one-time passphrase, `cert export` .p12) 200 = the Dashboard; a stack port (4403) is unreachable from the LAN | pass |
+| 29 | from-zero | stack WebGUIs exposed through the Webserver panel's common policy (one policy for all stack WebGUIs, mTLS), then each proxied UI verified from another machine with the issued client certificate | Stacks WebGUIs common policy saved through the console (lan, https, local-open-remote-auth, 192.168.178.0/24, confirm phrase enable-remote): 5 pages, ports assigned 8444 graywolf, 8445 meshcom, 8446 MeshCore web UI, 8447 meshtastic, 8448 MeshCore repeater dashboard; the webserver apply was gated ("Firewall changes pending — apply the firewall first"), the operator entered the re-rendered apply script ("applied and live-verified"), then `lhpc webserver apply` + `verify` passed and nginx listens on 8443–8448; from this PC, each page 403 without the client certificate and 200 with it: graywolf 8444, MeshCom 8445 (after its boot), MeshCore web UI 8446, meshtastic 8447 (node ports 4403/9443 present), MeshCore repeater dashboard 8448; the native MeshCore port 8788 is unreachable from the LAN (firewalled); Chrome on this PC opens the console and the stack UIs with the installed certificate | pass |
+| 30 | host tests | daemon: `lhpc test daemon --yes` (+ `--tx` if offered) | host test refused as designed: installed from the published binary, host tests need the source channel (rc 1, 0:00:02); TX test (one frame per band): first attempt 433 did not confirm (TXOK 0→0, 868 ok), retry PASSED on both bands in 0:00:08 (TXOK 0→1 each) — the 433 miss matches the CAD-busy condition seen at this site in the silicon test | pass (host test n/a on the binary install; TX pass) |
+| 31 | host tests | chat | no host test declared (`[host-test] loraham-chat: (no host test)`, 0:00:03); TX test (one frame per band, daemon up) PASSED in 0:00:04, no OOM | n/a |
+| 32 | host tests | igate | no host test declared (0:00:02); TX test (one frame per band, daemon up) PASSED in 0:00:05, no OOM | n/a |
+| 33 | host tests | voice | no host test declared (0:00:03); TX test (one frame per band, daemon up) PASSED in 0:00:07, no OOM | n/a |
+| 34 | host tests | kiss | host test PASSED in 0:00:20, lowest 197 MB, no OOM; TX test (one frame per band, daemon up) PASSED in 0:00:07, no OOM | pass |
+| 35 | host tests | graywolf | no host test declared (0:00:03); TX test (one frame per band, daemon up) PASSED in 0:00:06, no OOM | n/a |
+| 36 | host tests | reticulum | no host test declared (0:00:02); TX test: not daemon-TX-testable by design (the stack drives its own radio; verify TX from its own app/logs) — the typed refusal says exactly that | n/a by design |
+| 37 | host tests | meshcore | host test PASSED in 0:02:37, lowest 132 MB, no OOM; TX test (one frame per band, daemon up) PASSED in 0:00:05, no OOM | pass |
+| 38 | host tests | meshtastic | host test refused as designed: binary install (rc 1, 0:00:03); TX test: not daemon-TX-testable by design (the stack drives its own radio; verify TX from its own app/logs) — the typed refusal says exactly that | n/a by design |
+| 39 | host tests | meshcom | host test refused as designed: binary install (rc 1, 0:00:03); TX test with the daemon up: first attempt 433 did not confirm (TXOK 1→1), retry PASSED in 0:00:06 (TXOK 1→2) | pass (host test n/a on the binary install; TX pass) |
+| 40 | release | final commit "0.2.10" (results table, docs) + tag v0.2.10 on main | main rewritten to four commits over v0.2.9 (docs matrix 8921ef5 → pins 805f41c → known-working fix 82c63db → 0.2.10 f42dc45), tree identical to the tested state; tag v0.2.10 on f42dc45 pushed 2026-09-06 01:20 | pass |
+| 41 | release | CI, testlab, demo-pages green on the tag | on the tagged head f42dc45: CI success (run 33997957395), testlab success (33997957492); demo-pages did not trigger for the docs-only final commit and was green on the last code commit | pass |
+| 42 | release | images v0.2.10: milestone tag, both variants built, assets published | loraham-images milestone adcee81 tagged v0.2.10 after the binaries were live: lint, precheck, build (lite), build (desktop), publish-tag all success; assets loraham-lhpc-desktop.img.xz 1913 MiB (135 MiB under the 2 GiB limit), loraham-lhpc-lite.img.xz 892 MiB, components/packages/provenance per variant, SHA256SUMS, signature | pass |
+<!-- checks:end -->
+
+| host tests | outcome | duration | OOM | TX test |
+|---|---|---|---|---|
+| daemon | | | | |
+| other stacks (one row each) | | | | |
+
+
+## Silicon test, 2026-09-05
+
+On-air acceptance of the stacks against real ESP32 peers running each project's own original firmware —
+not emulated peers, not LHPC talking to itself. Only what was actually transmitted and heard is recorded.
+Times are CEST unless marked UTC. Scoreboard: 40 rows across four stacks — 34 pass, 1 fail (Graywolf's
+scheduled beacon), 1 inconclusive, 4 not covered (no indoor GPS fix on the tracker; content verification
+on the MeshCom peer).
+
+### Test bench
 
 | | |
 |---|---|
@@ -49,11 +121,11 @@ Evidence sources used:
 
 ---
 
-## 1. MeshCom (QEMU + bridge + daemon) — 433.175 MHz
+### 1. MeshCom (QEMU + bridge + daemon) — 433.175 MHz
 
 **Result: PASS for both directions at packet level; message content not independently verified; one repeat inconclusive.**
 
-### Configuration as found
+#### Configuration as found
 
 | Node | Call | Profile | Power | Notes |
 |---|---|---|---|---|
@@ -65,7 +137,7 @@ Stack start sequence observed: bridge listening 08:25:58, QEMU launched 08:26, X
 08:31:42 (≈5.5 min boot on the Zero 2W — matches the documented expectation), radio configured
 08:31:45.
 
-### Matrix
+#### Matrix
 
 | # | Test | Evidence | Result |
 |---|---|---|---|
@@ -76,7 +148,7 @@ Stack start sequence observed: bridge listening 08:25:58, QEMU launched 08:26, X
 | 5 | Received text readable on the far side | not achieved — MHeard proves a `TXT` packet arrived, not its content | NOT COVERED |
 | 6 | Periodic beacons during the run | both MHeard tables kept refreshing | PASS |
 
-### Findings
+#### Findings
 
 1. **Channel reads BUSY almost permanently at the box.** `GET CHANNEL` sampled live RSSI −78…−84 dBm
    against `CADRSSI=−90`; `CADSTATE=BUSY` in every sample. Over the session 12 of ~20 queued TX
@@ -90,7 +162,7 @@ Stack start sequence observed: bridge listening 08:25:58, QEMU launched 08:26, X
 3. **Latency:** box→peer texts appear ~60 s after the send (MeshCom's own TX scheduling), peer→box
    within ~2 s.
 
-### Follow-ups (not done)
+#### Follow-ups (not done)
 
 - Decide the CADRSSI policy for MeshCom: the threshold, not the TX mode, is what stalls it here.
 - Add a content-verified message test (web UI or debug capture) and repeat row 4 three times.
@@ -98,12 +170,12 @@ Stack start sequence observed: bridge listening 08:25:58, QEMU launched 08:26, X
 
 ---
 
-## 2. Meshtastic (meshtasticd, native) — 868 MHz
+### 2. Meshtastic (meshtasticd, native) — 868 MHz
 
 **Result: PASS in all four tested paths (broadcast and direct message, both directions), after a
 full reset of both nodes to LHPC first-install settings.**
 
-### Reset performed first (operator instruction: LHPC must run its standard settings, not the Spanish ones)
+#### Reset performed first (operator instruction: LHPC must run its standard settings, not the Spanish ones)
 
 The box node carried a hand-made configuration that LHPC does not manage and never sets:
 five channels (`SFNarrow` primary, plus `Iberia`, `Madrid`, `Bots`, `Test`), `usePreset: false`,
@@ -122,7 +194,7 @@ LHPC's own stack parameters needed **no** change — they were already at manife
 (`region = EU_868`, `use_gps = on`); only the required identity (`node_name`, `node_short`) is
 operator-set. The Spanish configuration lived entirely inside Meshtastic, not in LHPC.
 
-### State after the reset — both nodes identical where it matters
+#### State after the reset — both nodes identical where it matters
 
 | | Box (LHPC-managed) | Peer (Station G2) |
 |---|---|---|
@@ -134,7 +206,7 @@ operator-set. The Spanish configuration lived entirely inside Meshtastic, not in
 | TX | enabled, 27 dBm | enabled, 27 dBm |
 | GPS | enabled, live fix 48.4180 / 11.6654 | not present |
 
-### Matrix
+#### Matrix
 
 | # | Test | Evidence | Result |
 |---|---|---|---|
@@ -146,7 +218,7 @@ operator-set. The Spanish configuration lived entirely inside Meshtastic, not in
 | 6 | Box position broadcast | peer received `POSITION_APP from !9ee3dad0` | PASS |
 | 7 | LHPC reconvergence after a factory reset | region, owner and GPS re-applied automatically by the stack's post-start | PASS |
 
-### Findings
+#### Findings
 
 1. **A factory-reset node cannot be direct-messaged until node info has been exchanged.** Modern
    firmware refuses a channel-encrypted direct message — box log: `Rejecting legacy DM`, answered
@@ -173,7 +245,7 @@ operator-set. The Spanish configuration lived entirely inside Meshtastic, not in
    conflict-driven stop is plausible — but the two had been running side by side beforehand
    (433 on CE0, 868 on CE1), so this needs a look before the next stack test.
 
-### Follow-ups (not done)
+#### Follow-ups (not done)
 
 - Establish why the daemon/MeshCom stopped, and restart them.
 - Document the node-info / direct-message rule and the `poststart` unblock on the Meshtastic stack page.
@@ -181,13 +253,13 @@ operator-set. The Spanish configuration lived entirely inside Meshtastic, not in
 
 ---
 
-## 3. Graywolf APRS (+ KISS TNC + daemon) — 433.775 MHz LoRa-APRS
+### 3. Graywolf APRS (+ KISS TNC + daemon) — 433.775 MHz LoRa-APRS
 
 **Result: PASS. A message sent from the box was received and acknowledged by the peer, and the
 acknowledgment came back over RF and was gated to APRS-IS — a complete round trip with verified
 content.**
 
-### Peer
+#### Peer
 
 LilyGo T-Deck, reflashed from MeshCom to **CA2RXU LoRa APRS Tracker/Station, version 2026-04-22**
 (`RichonGuzman`), on the workstation's USB at `/dev/ttyACM0`. It arrived unconfigured: the firmware
@@ -211,14 +283,14 @@ Its stock radio profile matches LHPC's APRS profile exactly, so nothing had to b
 | Power | 20 dBm | 17 dBm |
 | TX mode | — | MANAGED (required by Graywolf) |
 
-### Chain brought up on the box
+#### Chain brought up on the box
 
 `lhpc stack start graywolf --yes` started all three in order and verified each: daemon on 433 in
 MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, Graywolf on
 `127.0.0.1:8080` with its post-start provisioning completed. Its KISS channel reports
 `health: live`, `tx capable`. Meshtastic stayed running on 868 throughout, so the two coexist.
 
-### Matrix
+#### Matrix
 
 | # | Test | Evidence | Result |
 |---|---|---|---|
@@ -238,7 +310,7 @@ MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, G
 | 14 | Tracker → box, position beacon | the operator cannot trigger a beacon by hand on this build and there is no indoor GPS fix, so the tracker never beacons. Its transmit path is already proven by row 6 (the acknowledgment), so this row adds nothing and was skipped by agreement | NOT COVERED (skipped) |
 | 15 | Digipeating of a peer packet | not exercised | NOT COVERED |
 
-### Findings
+#### Findings
 
 1. **The APRS side transmits cleanly where MeshCom stalls.** The same 433 band read `BUSY` with a
    live RSSI near −83 dBm, yet the APRS message went out first time with zero CAD timeouts. The
@@ -268,7 +340,7 @@ MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, G
    to Graywolf's beacon scheduling, not to LHPC's radio chain. Worth reproducing and, if it holds,
    reporting upstream.
 
-### Follow-ups (not done)
+#### Follow-ups (not done)
 
 - **Investigate the beacon that never fired** (finding 6) — the main open item from this section.
 - Decide the iGate policy for bench testing and record it.
@@ -278,13 +350,13 @@ MANAGED mode, KISS TNC listening on `127.0.0.1:8001` with the client attached, G
 
 ---
 
-## 4. MeshCore (OpenHop) — 869.618 MHz, mode chat+repeater
+### 4. MeshCore (OpenHop) — 869.618 MHz, mode chat+repeater
 
 **Result: PASS in every functional path — messaging both ways with acknowledgments, advert
 propagation, repeater retransmission and both web endpoints. One usability defect found in the
 command-line client.**
 
-### Peer
+#### Peer
 
 LilyGo **T-Deck Pro** running MeshCore, node name **CHEMobile**, public key `37bd5d25f79f…`. Its USB
 port is log-only — it is not a serial companion, so the client interface is **BLE**
@@ -302,14 +374,14 @@ side:
 | Coding rate | 8 | 8 |
 | TX power | 14 dBm (max 22) | 14 dBm (max 20) |
 
-### Box side
+#### Box side
 
 Node **DJ0CHE-12** (`e9dfe7e00b47…`), mode `chat+repeater` with repeater **Relay e293** in `forward`
 behaviour, position from the global GPS source. MeshCore reaches the radio **through the LoRaHAM
 daemon** on 868, not by direct SPI, so the start applied the daemon's queue and channel-busy
 settings first.
 
-### Matrix
+#### Matrix
 
 | # | Test | Evidence | Result |
 |---|---|---|---|
@@ -326,7 +398,7 @@ settings first.
 | 11 | Web UI and repeater dashboard serve | 8788 → 200, 8000 → 200 | PASS |
 | 12 | RF counters agree with the app layer | daemon 868: `RX=3 TXOK=2 TXERR=0 CADTIMEOUT=0` | PASS |
 
-### Findings
+#### Findings
 
 1. **`meshcore-cli` reports failures for commands that actually succeed.** Both `msg` and `advert`
    returned `Error … {'reason': 'no_event_received'}` while the node log shows the work was done and
@@ -351,7 +423,7 @@ settings first.
    earlier sessions). Harmless, but worth knowing when reading its contact list as test evidence:
    only a refreshed `last_advert` proves current reachability.
 
-### Follow-ups (not done)
+#### Follow-ups (not done)
 
 - Decide whether `meshcore-cli` should hold one persistent companion session for multiple commands,
   or whether LHPC should document that its one-shot output cannot be trusted (finding 1).
@@ -360,65 +432,3 @@ settings first.
 - Channel (group) messaging and telemetry were not tested.
 
 ---
-
-## Session close — state on the box (2026-09-05 11:00 CEST)
-
-### Running now
-
-| Stack | State | Note |
-|---|---|---|
-| `daemon` | running | both bands: 433 MANAGED for APRS, 868 MANAGED for MeshCore |
-| `kiss` (KISS TNC) | running | `127.0.0.1:8001`, single client held by Graywolf |
-| `graywolf` | running | web UI `127.0.0.1:8080`, provisioned, APRS-IS session up as DJ0CHE |
-| `meshcore` | running | node `DJ0CHE-12` + repeater `Relay e293`, web UI 8788, dashboard 8000 |
-| `meshtastic` | **stopped** | stopped deliberately to free 868 for MeshCore |
-| `meshcom` | stopped | left stopped; it wants the daemon in DIRECT, which conflicts with Graywolf's MANAGED |
-| everything else | stopped | as found |
-
-**Radio budget.** 433 belongs to the APRS chain and 868 to MeshCore. Meshtastic and MeshCore cannot
-both run — both want 868 — and MeshCom cannot share 433 with Graywolf because the two need opposite
-daemon TX modes. Earlier in the session the daemon, the KISS TNC, Graywolf and Meshtastic did all run
-together, which settles the earlier worry about a direct-SPI clash: the two *bands* coexist fine, it
-is two stacks on the *same* band that cannot.
-
-### Changes made on the box across the whole session (runtime only)
-
-1. Meshtastic node factory reset, stack restarted, one poststart, four test messages.
-2. Graywolf chain started (daemon, KISS TNC, Graywolf) — no configuration changed; the station's
-   own non-default iGate settings were left exactly as the operator had them.
-3. One APRS message and two triggered position beacons sent from Graywolf.
-4. Meshtastic stopped to free 868, then the MeshCore stack started (daemon 868, GPS feed, node,
-   web UI); one message and one advert sent from its node. No MeshCore configuration changed.
-5. On the peers: the Meshtastic Station G2 was factory reset and given back its region and name;
-   the CA2RXU tracker had its callsign set and nothing else. Both are documented in their sections.
-
-No repository change and no code change at any point — the 0.2.9 branch belongs to another agent.
-
-### Peers
-
-Every peer is attached to the workstation, not the box. Four were used: the T-Deck on MeshCom, the
-Station G2 on Meshtastic, the same T-Deck reflashed to CA2RXU for APRS, and the T-Deck Pro on
-MeshCore. The first three share the single `/dev/ttyACM0`, so only one of them is connected at a
-time; the Pro is reached over BLE and can stay connected alongside.
-
-### Artefacts outside the repo
-
-`live-test-2026-09-05/` holds the pre-reset configuration of both Meshtastic nodes, including the
-**only** copy of the Spanish setup with a restore recipe, the tracker's pre-change CA2RXU
-configuration, the helper scripts and the receive captures.
-
-### Open items
-
-1. **Graywolf's position beacon never fires** (section 3, finding 6) — the one real defect found.
-2. **MeshCom's channel-busy threshold** — about half its queued transmissions ended in CAD timeout,
-   while the APRS chain on the same band and the MeshCore chain on 868 transmitted cleanly. That
-   points at `CADRSSI` against this site's noise floor, not at the radio or the TX mode.
-3. **Meshtastic node-info rule** — document that a freshly reset node cannot be direct-messaged
-   until node info has been exchanged, and that `lhpc stack poststart meshtastic` forces it.
-4. **iGate policy for bench tests** — decide whether test traffic should reach the public network.
-5. **`meshcore-cli` misreports command results** (section 4, finding 1) — decide between a persistent
-   companion session and documenting that its one-shot output cannot be trusted.
-6. **Why MeshCom and the daemon stopped** during the Meshtastic work. The daemon is back up; MeshCom
-   is still stopped, and Meshtastic is now stopped deliberately so MeshCore can hold 868.
-7. **Not reached in this run:** digipeating on the APRS chain, and MeshCore channel messaging and
-   telemetry. Each stack's own follow-ups list the rest.

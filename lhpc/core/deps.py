@@ -1045,7 +1045,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
     # via nmcli, never a wlan* name glob (wlp2s0/wlx... must classify as Wi-Fi); an absent route or
     # unclassifiable device falls back to disabling — a mis-detection must never REMOVE the protection
     # this feature exists for. --keep-wifi-powersave leaves Wi-Fi untouched in EVERY case. Accepted
-    # residual (documented in field-notes): a dual-link box with a wired default route but an SSH
+    # residual (documented in docs/maintenance.md): a dual-link box with a wired default route but an SSH
     # session over the wlan address gets the skip. Idempotent; a no-op without a Wi-Fi device.
     out("# --- Wi-Fi power-save (default: DISABLE when the install runs over Wi-Fi; LAN install: leave",
         "# --- untouched; --keep-wifi-powersave: never touch) ------------------------------------------",

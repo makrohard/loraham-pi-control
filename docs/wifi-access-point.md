@@ -1,171 +1,97 @@
-# Raspberry Pi as a WiFi access point (field access)
+# Wi-Fi: access point and client
 
-In the field with no WiFi, turn the Pi into its **own** WiFi network so a phone or
-laptop can join it and reach the console. This is a **network-layer** setup done
-with the OS (NetworkManager) — it is independent of `lhpc`. Once the phone is on
-the Pi's network, reaching the web console is the separate step in
-[`webserver.md`](webserver.md).
-
-Everything below uses `nmcli` (NetworkManager), which is the default on Raspberry
-Pi OS (Bookworm/Trixie) and handles the access point, its DHCP server, and
-start-on-boot for you — no `hostapd`/`dnsmasq` editing.
+A box has one Wi-Fi radio and it does one job at a time: it is either its **own access point**
+(a phone or laptop joins it and reaches the console at `10.42.0.1`) or a **client** of your
+WLAN. The NetworkManager profile `lhpc-ap` is the managed AP, and the console's **Network**
+panel switches between the two with the AP as the automatic way home. Reaching the console
+once you are on the network is the [remote exposure runbook](webserver.md).
 
 ## Contents
 
-- [Before you start](#before-you-start)
-- [Create the access point (once)](#create-the-access-point-once)
-- [Turn it on and off](#turn-it-on-and-off)
-- [Start the AP on boot](#start-the-ap-on-boot)
-- [Connect your phone](#connect-your-phone)
-- [Reach the lhpc console](#reach-the-lhpc-console)
+- [The managed AP](#the-managed-ap)
+- [The Network panel](#the-network-panel)
+- [Creating `lhpc-ap` by hand](#creating-lhpc-ap-by-hand)
+- [Reaching the console over the AP](#reaching-the-console-over-the-ap)
 - [Troubleshooting](#troubleshooting)
-- [Remove the access point](#remove-the-access-point)
 
-## Before you start
+## The managed AP
 
-- **Set the WiFi country first — the #1 reason an AP won't start.** Run
-  `sudo raspi-config` → *Localisation Options* → *WLAN Country* → pick yours,
-  then *Finish*.
-- **One WiFi radio, one job.** Starting the AP **disconnects the Pi from any WiFi
-  it was joined to**. If you are connected over WiFi (SSH), you will lose it — do
-  the first setup over Ethernet, a USB-serial console, or a keyboard + monitor.
-- A Pi Zero 2 W is **2.4 GHz only** (fine — better range).
-- Choose an SSID (network name) and a password of **at least 8 characters**.
+On the Lite image, first boot creates `lhpc-ap`: `802-11-wireless.mode ap`, band `bg`,
+`ipv4.method shared` (the box is `10.42.0.1/24` and runs DHCP + DNS for its clients), WPA2-PSK,
+`autoconnect yes`. Its SSID is the box's hostname; the passphrase comes with the image's first
+steps. It is a **recovery** network: it is up after every boot unless a preferred WLAN is
+visible, it returns within seconds of losing a WLAN, and the panel can never delete it.
 
-## Create the access point (once)
+By hand: `sudo nmcli connection up lhpc-ap` / `down lhpc-ap`. Set the Wi-Fi country first
+(`sudo raspi-config` → *Localisation Options* → *WLAN Country*): an AP does not start without
+one.
 
-Replace the SSID and password. `field-ap` is just the profile name.
+## The Network panel
+
+The panel (Apps page, **Network**) appears wherever `nmcli` exists **and** a Wi-Fi profile
+named `lhpc-ap` exists. That is a capability check, not an image check: a Lite box has it, and
+any other box gains it by [creating the profile](#creating-lhpc-ap-by-hand). Acting on it also
+needs the polkit rule that authorizes the operator for NetworkManager; `bootstrap-deps.sh`
+installs it (opt-out `--no-network-controls`), and the panel shows the install command when it
+is missing.
+
+- **Scan** and **Join** (SSID + password). The join is two-stage (a confirm page: your AP
+  session ends the moment the box joins) and respond-first: a detached helper activates the
+  profile, waits for the lease and writes the outcome the panel shows afterwards. The password
+  goes to NetworkManager through a 0600 secrets file (never argv, logs or state) and is
+  persisted root-owned by NM itself. Profiles are identified by NM UUID; the SSID is
+  display-only.
+- **Allow console from that network** (checkbox, default on): the helper extends the console
+  allow-list to the joined subnet, adds the joined address and names as server-certificate
+  SANs, re-issues the server certificate and applies. With the managed firewall the apply is
+  deferred until you run the shown sudo command (over SSH, port 22 is open there); the
+  watchdog then completes it. A join that would leave the console blocked on the new network
+  is refused *before* the AP drops. With the checkbox off the box is SSH-only there.
+- **AP fallback.** Client profiles are created `autoconnect no`, so after a reboot the box is
+  its AP again; a lost WLAN brings the AP back within seconds, a failed join (wrong password,
+  network gone) within about a minute.
+  The box reappears as `https://<hostname>.local:8443` on a joined network and
+  `https://10.42.0.1:8443` on its AP.
+- **Prefer** (exactly one stored network): its profile gets `autoconnect yes`, priority 10,
+  so NM picks it at boot when visible; while the box sits on the AP a watchdog retries it
+  every 10 minutes, but only while no client is associated with the AP (`iw` station table),
+  and **Retry now** forces an attempt. **Stop preferring** clears it.
+- **Reconnect** and **Forget** for stored networks; **Back to AP mode** switches now and
+  clears the preference so the watchdog does not re-join.
+
+## Creating `lhpc-ap` by hand
+
+For a manual install or a Desktop box, create the compatible profile (choose your own SSID and
+a passphrase of at least 8 characters):
 
 ```bash
-sudo nmcli connection add type wifi ifname wlan0 con-name field-ap \
-     autoconnect no ssid "LoRaHAM-Pi"
-
-sudo nmcli connection modify field-ap \
-     802-11-wireless.mode ap \
-     802-11-wireless.band bg \
+sudo nmcli connection add type wifi ifname wlan0 con-name lhpc-ap autoconnect yes ssid "<ssid>"
+sudo nmcli connection modify lhpc-ap \
+     802-11-wireless.mode ap 802-11-wireless.band bg \
      ipv4.method shared \
-     wifi-sec.key-mgmt wpa-psk \
-     wifi-sec.psk "ChangeMe-StrongPassword"
+     wifi-sec.key-mgmt wpa-psk wifi-sec.psk "<passphrase>"
+sudo nmcli connection up lhpc-ap
 ```
 
-What the key lines do:
+`ipv4.method shared` gives the box `10.42.0.1/24`, the address the console assumes. WPA2 is the
+reliable choice; the Pi's own chip has inconsistent WPA3 AP support. From then on the Network
+panel and its semantics above apply. To remove the AP: `sudo nmcli connection delete lhpc-ap`
+(the panel then disappears).
 
-- `mode ap` — be an access point instead of joining one.
-- `ipv4.method shared` — the Pi becomes `10.42.0.1` and runs a DHCP + DNS server,
-  so clients get an address automatically.
-- `wifi-sec.key-mgmt wpa-psk` — **WPA2 (AES/CCMP)**: current, secure, and works
-  with every phone. (WPA3-SAE is possible with `wifi-sec.key-mgmt sae`, but the
-  Pi's built-in chip has inconsistent WPA3 *AP* support, so WPA2 is the reliable
-  default.)
+## Reaching the console over the AP
 
-## Turn it on and off
-
-```bash
-sudo nmcli connection up   field-ap    # AP on
-sudo nmcli connection down field-ap    # AP off
-```
-
-## Start the AP on boot
-
-Flip one property on the profile:
-
-```bash
-sudo nmcli connection modify field-ap connection.autoconnect yes   # AP on every boot
-sudo nmcli connection modify field-ap connection.autoconnect no    # back to manual
-```
-
-With `autoconnect yes` the AP comes up automatically at boot with no login. You can
-still stop it for the current session with `nmcli connection down field-ap`.
-
-## Connect your phone
-
-1. On the phone, join the WiFi network you named (e.g. `LoRaHAM-Pi`) with the
-   password.
-2. The Pi is reachable at **`10.42.0.1`** (or `loraham.local`).
-
-Verify on the Pi:
-
-```bash
-nmcli connection show --active     # field-ap should be listed
-ip addr show wlan0                 # should show 10.42.0.1
-```
-
-## Reach the lhpc console
-
-The AP only puts the phone on the Pi's network. **Order matters** (the same ordering as
-[firewall.md](firewall.md), scenario 4): certificates FIRST, exposure LAST — a fresh setup
-that exposes before any PKI exists applies a config with no certificates behind it.
-
-**1 — put the AP address in the server certificate.** Already named `10.42.0.1` when you set up
-LAN access ([webserver.md](webserver.md#expose-to-your-lan-with-mtls--runbook))? Then skip to step 2.
-
-*Only without a PKI (manual install, repaired PKI):* `init` creates the CAs and the server
-cert together —
-
-```bash
-lhpc webserver init --ip 10.42.0.1 --dns loraham.local
-```
-
-*Normal case — `install.sh` already created the PKI:* **never re-run `init`**, it would
-recreate the CAs and void every client certificate you have issued. Add the SANs to the
-existing server cert instead. `configure` REPLACES each list, so repeat the loopback entries:
-
-```bash
-lhpc webserver configure --dns localhost --dns loraham.local --ip 127.0.0.1 --ip 10.42.0.1
-lhpc webserver tls-renew
-```
-
-**2 — issue the phone's client certificate and move it across:**
-
-```bash
-lhpc webserver cert issue lhpc-phone
-lhpc webserver cert export lhpc-phone ~/lhpc-phone.p12
-```
-
-**3 — expose the console to the AP subnet and activate.** `expose` REPLACES the allowed-source
-list, so name every range you want to keep — the AP subnet *and* your LAN, if the box is used in
-both places:
-
-```bash
-lhpc webserver expose --cidr 10.42.0.0/24 --cidr 192.168.0.0/24 --confirm-phrase enable-remote
-lhpc webserver apply
-```
-
-**4 — with the managed firewall, allow the AP's own DHCP/DNS.** Under the default deny policy a
-phone that joins the AP gets **no address at all** until these rules exist, and the console you
-would use to enable them is only reachable over that AP. Do it BEFORE switching the radio:
-
-```bash
-lhpc firewall --ap on --ap-interface wlan0 --ap-cidr 10.42.0.0/24
-sudo bash ~/loraham-pi-control/config/files/firewall/firewall-apply.sh
-lhpc firewall            # Config ✓ · Boot ✓ · Live ✓
-```
-
-(The same switch lives in the console under **Webserver → Firewall**. Skip this step entirely if
-you do not use the managed firewall.)
-
-Then browse to **`https://10.42.0.1:8443`** and present the client certificate you
-imported to the phone (see [`webserver.md`](webserver.md) for the full mTLS runbook).
+The AP only puts the phone on the box's network. Order matters, certificates first and exposure
+last: follow the [remote exposure runbook](webserver.md) with `10.42.0.1` as a server-certificate
+SAN and `10.42.0.0/24` among the allowed CIDRs, issue the phone's client certificate before
+exposing, and with the managed firewall enable its AP rules (DHCP/DNS for the AP's clients)
+**before** the radio becomes an AP ([firewall](firewall.md)). Then browse to
+`https://10.42.0.1:8443` and present the certificate.
 
 ## Troubleshooting
 
-- **AP won't start / no network appears** — the WiFi country is almost always
-  unset. Redo *Before you start*, then `sudo nmcli connection up field-ap`.
-- **Password rejected** — WPA2 requires **8+ characters**.
-- **Phone joins but can't load the page** — you are on the network, but the console
-  is not exposed to the AP subnet yet. See *Reach the lhpc console*.
-- **Lost your SSH session** — expected: the Pi left your WiFi to become an AP.
-  Reconnect by joining the Pi's new network, or use Ethernet/serial.
-
-## Remove the access point
-
-```bash
-sudo nmcli connection down field-ap
-sudo nmcli connection delete field-ap
-```
-
-## Joining a WLAN from the console
-
-On AP-managed boxes the Apps page's **Network** panel does the client-mode dance for you —
-scan, join, AP-fallback on reboot/loss, and an optional preferred network that is re-joined
-automatically. See [`operations.md`](operations.md#network-wi-fi-client-with-ap-fallback).
+- **AP does not start / no network appears**: the Wi-Fi country is unset (see above).
+- **Passphrase rejected**: WPA2 needs 8 or more characters.
+- **Phone joins but the page does not load**: the console is not exposed to the AP subnet, or
+  the managed firewall lacks the AP rules.
+- **Lost the SSH session while joining or switching**: expected, the radio changed networks.
+  Reconnect on the new network, or use Ethernet.
