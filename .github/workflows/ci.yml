@@ -4,7 +4,7 @@ name: CI
 # allowed to be skipped or weakened to obtain a green result.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:        # a release branch is checked by dispatching on its ref
 

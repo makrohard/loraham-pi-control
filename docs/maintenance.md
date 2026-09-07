@@ -8,6 +8,7 @@ work lives in [backlog.md](backlog.md); the per-release procedure in [test-matri
 - [What CI enforces](#what-ci-enforces)
 - [What CI does not enforce](#what-ci-does-not-enforce)
 - [Policy](#policy)
+- [Branches and releases](#branches-and-releases)
 - [Moving a pin](#moving-a-pin)
 - [Dependencies and platform](#dependencies-and-platform)
 - [Security posture](#security-posture)
@@ -15,7 +16,7 @@ work lives in [backlog.md](backlog.md); the per-release procedure in [test-matri
 
 ## What CI enforces
 
-On pushes to `main`, on pull requests and on manual dispatch — Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
+On pushes to `main` and `dev`, on pull requests and on manual dispatch — Python 3.11/3.12/3.13, GitHub runners (`.github/workflows/ci.yml`):
 
 - `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
 - `ruff check lhpc` (the frozen ruleset) and `ruff check tests --select F,E9`
@@ -48,6 +49,43 @@ On pushes to `main`, on pull requests and on manual dispatch — Python 3.11/3.1
 - **Version bump** = `pyproject.toml` **and** `lhpc/version.py` (a test pins them equal and
   requires the matching `CHANGELOG.md` heading) + tag.
 
+## Branches and releases
+
+- **`main` is the latest release.** Every commit on it carries a tag; `install.sh` clones it,
+  `self-update` fast-forwards deployed boxes along it, the image builder reads it. It advances
+  only by a fast-forward from `dev` at a release, never by a direct push, never rewritten.
+- **`dev` is the integration branch.** All work lands there, one complete commit per change,
+  from a topic branch rebased on `dev` and squash-merged; CI and testlab run on every push; the
+  reference box runs it for testing (its self-update identity check reports `unsafe: checkout
+  branch 'dev' != 'main'` — expected on a test box, wrong on an operator's box). `dev` is not
+  rewritten during a cycle (contributors branch from it); the release squash below is the one
+  exception, announced by the tag.
+- **A cycle starts with the version bump** (`pyproject.toml`, `lhpc/version.py`, the
+  `CHANGELOG.md` heading), so a `dev` deployment never reports the released number.
+- **Release.** `dev` green on CI and testlab, the release matrix run (`docs/test-matrix.md`),
+  the changelog complete. The cycle's commits are squashed into **one commit named by the version**
+  (subject `<version>`, body = the changelog section), CI runs on that exact SHA, then `main` is
+  fast-forwarded to it and `git tag -a v<version>` goes on it — `main` reads as one commit per
+  release, the changelog is the release note. That squash is the one moment `dev` is rewritten:
+  after the tag `dev` equals `main`, and an open topic branch rebases onto it. A **minor release**
+  (`0.X.0`) also publishes a GitHub Release from the tag with the changelog section as its body
+  (title = the version, not a pre-release, marked latest), linking the matching `loraham-images`
+  release and the binaries index; a **patch release** (`0.X.Y`) is the tag and its changelog
+  section only — boxes follow `main` either way. Publish the binaries before tagging an image (the
+  binary channel in `docs/provenance.md`).
+- **GitHub rulesets** (repository settings, not in the tree): `main` — no force push, no
+  deletion, linear history, required checks `test`, `pin-validation` and `testlab` on the pushed
+  SHA (they ran on `dev`, so the fast-forward passes without a PR); `dev` — no force push, no
+  deletion, linear history, required checks `test` and `testlab`; `v*` tags — no deletion, no
+  update. Pull requests: squash merging only, the PR title and body become the commit, the topic
+  branch is deleted on merge. The repository admin is the bypass actor of all three rulesets
+  (always allowed, every bypass logged), so the maintainer's own pushes and hotfixes are never
+  blocked while contributors meet the checks by construction. In place since 2026-09-07.
+- **Hotfix for the released version** when `dev` has already diverged: branch from `main`,
+  fix with its regression test, bump the patch version, push the branch so CI runs on that
+  SHA, fast-forward `main` to it, tag, then merge `main` into `dev` so the fix is not lost.
+  Nothing from `dev` rides along.
+
 ## Moving a pin
 
 `lhpc/data/manifest.example.toml` pins every managed source (`pin_commit` + `pin_tag`); CI
@@ -74,6 +112,12 @@ CI job hard-fail on an orphaned or predating pin).
    blocks the binary stacks and the image build dies.
 6. **On the box**: `lhpc install <stack> --source binary` (or `update` + `build` from source),
    smoke, then `lhpc known-working <stack>`. The full pass is the [release test matrix](test-matrix.md).
+
+**The Meshtastic web client** is a pin of its own: the `meshtastic-web-assets.sh` step in the
+manifest names a meshtastic/web release version and the sha256 of its `build.tar`. To move it:
+download the release's `build.tar`, `sha256sum` it, put version and digest into that step, then
+republish the meshtastic binary (step 4 — the artifact ships the client) and open the UI through
+the proxy on the box before tagging.
 
 Watch upstream **build systems**, not just releases: meshtasticd and `qemu-system-xtensa` are
 built from source, so a toolchain change upstream breaks the recipe silently. Builder internals:

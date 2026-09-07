@@ -11,6 +11,7 @@ from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
 import pytest
+import re
 
 
 def _svc(tmp_path, cmdlines=None):
@@ -824,10 +825,11 @@ def test_meshtastic_builds_the_server_only_env_and_never_native_tft(tmp_path):
     env = dict(run_step.get("env") or {})
     assert env.get("PLATFORMIO_RUN_JOBS") == "1"
     assert env.get("PLATFORMIO_CORE_DIR") == "{runtime}/build/tools/platformio/core"
-    # The web-asset step carries the pin COMMIT as well as the hash, and that commit must be the
-    # source pin — a bumped pin with a stale argument would silently drop pinned verification.
+    # The web client is LHPC's own pin: the step names a release version and the sha256 of its
+    # build.tar (verified on every install), and no longer depends on the firmware checkout.
     web = next(s for s in steps if "meshtastic-web-assets.sh" in " ".join(s.get("argv", [])))
-    assert web["argv"][-2] == c.source.pin_commit
+    assert re.fullmatch(r"\d+\.\d+\.\d+", web["argv"][-2]) and re.fullmatch(r"[0-9a-f]{64}", web["argv"][-1])
+    assert "{source}" not in " ".join(web["argv"])
 
 
 def test_meshtastic_runs_the_runtime_owned_binary_and_web_root(tmp_path):
@@ -898,84 +900,43 @@ def _fake_tar(tmp_path, name="index.html", body="<html>ok</html>"):
     return tar, hashlib.sha256(tar.read_bytes()).hexdigest()
 
 
-def _checkout(tmp_path, version="2.6.7"):
-    src = tmp_path / "src"; (src / "bin").mkdir(parents=True)
-    (src / "bin" / "web.version").write_text(version + "\n")
-    return src
-
-
-def _git_init(src):
-    """Make `src` a real checkout and return its HEAD sha (the helper reads it to pick its mode)."""
-    import subprocess
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@e", "PATH": "/usr/bin:/bin", "HOME": str(src)}
-    run = lambda *a: subprocess.run(["git", "-C", str(src), *a], env=env, check=True,
-                                    capture_output=True)     # noqa: E731
-    run("init", "-q")
-    run("add", "-A")
-    run("commit", "-qm", "t")
-    out = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], env=env,
-                         capture_output=True, text=True, check=True)
-    return out.stdout.strip()
-
-
-def _run_web(tmp_path, src, dest, tar, pin_commit="", pinned_sha=""):
+def _run_web(tmp_path, dest, tar, version="2.7.2", sha=""):
     import os
     import subprocess
     return subprocess.run(
-        ["bash", str(_scripts() / "meshtastic-web-assets.sh"), str(src), str(dest),
-         pin_commit, pinned_sha],
+        ["bash", str(_scripts() / "meshtastic-web-assets.sh"), str(dest), version, sha],
         env={**os.environ, "LHPC_MESHTASTIC_WEB_TARBALL": str(tar)},
         capture_output=True, text=True, timeout=60)
 
 
-def test_web_assets_enforce_the_pinned_hash_when_head_is_the_pin(tmp_path):
-    # PINNED HEAD: the declared digest describes exactly this revision, so it is asserted.
-    src, dest = _checkout(tmp_path), tmp_path / "web"
-    head = _git_init(src)
+def test_web_client_is_verified_against_the_manifest_pin_and_recorded(tmp_path):
+    dest = tmp_path / "web"
     tar, digest = _fake_tar(tmp_path)
-    r = _run_web(tmp_path, src, dest, tar, pin_commit=head, pinned_sha=digest)
+    r = _run_web(tmp_path, dest, tar, sha=digest)
     assert r.returncode == 0, r.stderr
-    assert "enforcing the declared web asset hash" in r.stdout
+    assert "VERIFIED against the manifest pin" in r.stdout
     assert (dest / "index.html").read_text() == "<html>ok</html>"      # unpacked AND gunzipped
     prov = (dest.parent / "web.provenance").read_text()
-    assert "web_version=2.6.7" in prov and f"web_sha256={digest}" in prov and "pinned=yes" in prov
-    assert f"firmware_rev={head}" in prov
+    assert "web_version=2.7.2" in prov and f"web_sha256={digest}" in prov
+    assert "pinned=yes" in prov and "source=lhpc-manifest" in prov
 
 
-def test_web_assets_pinned_mismatch_fails_and_keeps_the_old_ui(tmp_path):
-    src, dest = _checkout(tmp_path), tmp_path / "web"
-    head = _git_init(src)
+def test_web_client_mismatch_fails_and_keeps_the_old_ui(tmp_path):
+    dest = tmp_path / "web"
     dest.mkdir(); (dest / "index.html").write_text("PREVIOUS")
     tar, _digest = _fake_tar(tmp_path)
-    r = _run_web(tmp_path, src, dest, tar, pin_commit=head, pinned_sha="0" * 64)
+    r = _run_web(tmp_path, dest, tar, sha="0" * 64)
     assert r.returncode == 3
     assert "checksum mismatch" in r.stderr
     assert (dest / "index.html").read_text() == "PREVIOUS"            # never half-swapped
 
 
-def test_web_assets_do_not_assert_the_pinned_hash_on_a_non_pinned_head(tmp_path):
-    # DEV/STABLE: HEAD is NOT the pin, so the pinned digest describes a DIFFERENT revision and must
-    # not be enforced — the observed hash is recorded instead. (Passing it unconditionally would
-    # fail every dev build.)
-    src, dest = _checkout(tmp_path, version="2.7.1"), tmp_path / "web"
-    head = _git_init(src)
+def test_web_client_refuses_a_malformed_pin(tmp_path):
+    # No sha, or a version that is not MAJOR.MINOR.PATCH: nothing is fetched, nothing written.
+    dest = tmp_path / "web"
     tar, digest = _fake_tar(tmp_path)
-    r = _run_web(tmp_path, src, dest, tar, pin_commit="b" * 40, pinned_sha="0" * 64)
-    assert r.returncode == 0, r.stderr                                # the stale pin is NOT applied
-    assert "NOT the pinned revision" in r.stdout
-    prov = (dest.parent / "web.provenance").read_text()
-    assert "web_version=2.7.1" in prov and f"web_sha256={digest}" in prov and "pinned=no" in prov
-    assert f"firmware_rev={head}" in prov
-
-
-def test_web_assets_follow_the_checkout_not_a_hardcoded_version(tmp_path):
-    # The version comes from THIS checkout; a checkout without it cannot silently reuse anything.
-    src, dest = tmp_path / "src", tmp_path / "web"
-    (src / "bin").mkdir(parents=True)
-    tar, digest = _fake_tar(tmp_path)
-    r = _run_web(tmp_path, src, dest, tar, pin_commit="a" * 40, pinned_sha=digest)
-    assert r.returncode == 2 and "web.version" in r.stderr
+    assert _run_web(tmp_path, dest, tar, sha="notahash").returncode == 2
+    assert _run_web(tmp_path, dest, tar, version="latest", sha=digest).returncode == 2
     assert not dest.exists()
 
 

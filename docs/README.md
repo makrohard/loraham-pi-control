@@ -61,4 +61,5 @@ model, then the CLI. Every file is linked once; the README covers install.
 
 ## Policy
 
+- [Contributing](../CONTRIBUTING.md) — the branch model and what should be green before a PR.
 - [Provenance](provenance.md) — supply-chain rules for managed source and the binary channel.

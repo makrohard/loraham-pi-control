@@ -1119,7 +1119,9 @@ main = "meshtastic"
     { argv = ["{runtime}/build/tools/platformio/.venv/bin/pio", "run", "--environment", "native"], env = { PLATFORMIO_CORE_DIR = "{runtime}/build/tools/platformio/core", PLATFORMIO_RUN_JOBS = "1" }, announce = "[build] meshtasticd (upstream env: native — server-only, no TFT/SDL/X11) — a full C++ build; slow on a Zero 2W; progress: watch {source}/.pio/build/native grow" },
     { argv = ["install", "-D", "-m", "0755", "{source}/.pio/build/native/meshtasticd", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
     { argv = ["bash", "{asset}/scripts/meshtastic-link-gate.sh", "{runtime}/build/tools/meshtasticd/meshtasticd"] },
-    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{source}", "{runtime}/build/tools/meshtasticd/web", "54e0d8d0ab2ff56b3a9ce967e53f79e49af560fb", "a34f4360a0486543a698de20de533557492e763ab459fc27fcea95d0495144ed"], announce = "[fetch] Meshtastic web UI for this checkout (bin/web.version) — the declared sha256 is enforced only when HEAD IS the pinned commit" },
+    # The web client is LHPC's own pin (the newest meshtastic/web release, verified by sha256 on every
+    # install), not the firmware's bin/web.version — see the script header and docs/stacks/meshtastic.md.
+    { argv = ["bash", "{asset}/scripts/meshtastic-web-assets.sh", "{runtime}/build/tools/meshtasticd/web", "2.7.2", "62657b85b4c24af4d44da2932b64143abdbf6e65a79fcb51fd0801d9540616e2"], announce = "[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into {runtime}/build/tools/meshtasticd/web" },
     { argv = ["python3", "-m", "venv", "{runtime}/build/tools/meshtastic-cli/.venv"] },
     { argv = ["{runtime}/build/tools/meshtastic-cli/.venv/bin/pip", "install", "--disable-pip-version-check", "meshtastic==2.7.11"], announce = "[install] Meshtastic CLI 2.7.11 into {runtime}/build/tools/meshtastic-cli/.venv — pip is quiet off-TTY and pulls protobuf/pyserial/bleak; progress: watch {runtime}/build/tools/meshtastic-cli/.venv/lib grow" },
   ]

@@ -45,8 +45,11 @@ environment — not `native-tft` (the OBS package's), which links X11/libinput/x
 on-device UI a headless box cannot render. Steps: a managed PlatformIO 6.1.19 venv → `pio run -e
 native` → the **link gate** (`meshtastic-link-gate.sh`: `readelf -d` + `ldd` must show no SDL, X11,
 Wayland, Mesa/GL, LLVM, PulseAudio, ALSA, libinput, xkbcommon or GTK; fail-closed) → the **web
-assets** (`meshtastic-web-assets.sh`: the release named by the checkout's `bin/web.version`; the
-declared sha256 is enforced at the pinned commit, recorded on dev/stable) → the CLI venv. The
+client** (`meshtastic-web-assets.sh`: the meshtastic/web release LHPC pins in the manifest by version
+and sha256, verified on every install — currently v2.7.2, the newest release, independent of the
+firmware's `bin/web.version`, which is upstream's last-known-good for the ESP32 embedded server and
+has stayed at 2.6.7 across the 2.7.x/2.8.0 firmware lines; the pairing is tested on the reference
+box and moved with the pin recipe) → the CLI venv. The
 completion marker lives in the checkout and is written after the last step, so an updated checkout
 reads *Build required* until rebuilt. A native C++ build takes hours on a Pi Zero 2W.
 

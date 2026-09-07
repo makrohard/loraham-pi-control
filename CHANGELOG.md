@@ -1,27 +1,32 @@
 # Changelog
 
+## 0.3.1
+
+- Meshtastic serves the newest web client: LHPC pins the meshtastic/web release itself (v2.7.2, sha256-verified on every install) instead of the firmware's `bin/web.version`, which had stayed at 2.6.7 across the 2.7.x/2.8.0 firmware lines. The binary artifact ships the client, so a republish follows the pin.
+- Branch model: `main` is the latest release, `dev` is where changes land; CI and testlab run on `dev` too. `CONTRIBUTING.md` says what should be green.
+
 ## 0.3.0
 
-0.3.0 is a breaking pre-1.0 cleanup: old development images or runtime state may require a fresh image; the release-test path is a clean final-0.2.10 installation. Pins unchanged since 0.2.10; `sbapp` stays at 1.9.2. Release test: `docs/live-test.md` (10 rows re-run on e293, all pass; the two source-build rows of unchanged pins carry their 0.2.10 measurement).
+Breaking pre-1.0 cleanup; a fresh image or a clean final-0.2.10 install is the supported path. Pins
+unchanged since 0.2.10. Release test: `docs/live-test.md` (from-zero install, all stacks, boot restore
+on a Zero 2 W).
 
-- **The `igate` stack is removed;** Graywolf replaces it (same RF↔APRS-IS job through the KISS TNC, plus a web UI). Reflash an old development image, or `lhpc clean igate --purge --yes` before an in-place update.
-- **The source `strategy` field is removed** — `link` and the `linked` source state with it. Every managed source is a clone under the runtime root; a symlink where one is expected is refused (generic containment), and a manifest that declares `source.strategy` is now refused at load instead of accepting a key that means nothing. Records and journals written by 0.2.10 still carry the field and are read as an ignored extra.
-- **Stale read tolerances removed:** ownership records need schema v1; source-registry v1 records, the `legacy` selector, journals without `had_prior`, the self-update cache without `schema_version`/`status`, `radio.hardware = "legacy"`, the band-less daemon log fallback and the MeshCore host `node_name` purge are gone. Old development state reads as invalid or is ignored; reflash or clean before an in-place update.
-- **Old MeshCore identity rescue removed:** only `config/secrets/meshcore_identity.key` and the generated config's `[identity] key` are consulted.
-- Unused functions and version-numbered history wording removed; the frozen unit test is named without a version.
-- **Uninstall keeps operator data:** a default `uninstall.sh` keeps `config/`, `backups/`, `.lhpc-root`, `profiles/` and the stacks' app data under `state/` (one `APP_DATA` list, mirrored by `install.sh` and the backup docs); `--purge-legacy-config-only` is gone — a root that cannot prove its identity is refused.
-- **Managed-source presence is one rule:** a symlink at a source path is not a managed source; status, build, test, start, the update probe and the install plan refuse it the same way and nothing follows the link.
-- **No source backfill:** a checkout without an ownership record is not LHPC's — update, uninstall, clean and confirm refuse it; `lhpc install` re-adopts it.
-- **Binary channel:** an update goes through the index (an installed receipt behind the pins no longer forces a source build; a lagging published artifact is refused with the source offer); the console does not gate a binary install on the build toolchain; auto-install refuses a source selector for a binary-installed stack up front; a journal failure is a typed refusal.
-- **Manifest:** the shell-era `build`/`run`/`test`/`pre`/`post_start` strings are gone; the `run`/`build`/`test` shorthand derives the structured form and shell syntax in it is refused at parse time.
-- `bootstrap-deps.sh` never invokes sudo (the in-script shim is gone; manifest commands lose their prefix when emitted).
-- Fixes: `reset_config` clears the band-less keys and gates `use_gps`; a component-scoped stop releases nothing shared; a daemon-parameter save with no served band is refused; a partial `[gps]` save keeps the stored fields; a non-string `radio.hardware` is a diagnostic; the firewall's first-install rollback destroys its table; the band-scoped log page keeps its band while polling; the CLI's source fallback runs the dependency gate and the plan confirmation; removing a checkout that holds a runtime socket completes; the uninstall guard accepts integer identities only. A checkout whose only modifications are LHPC's own build-time patch (openHop, the MeshCore web UI) is not "dirty": status, known-working and update treat it as clean. A binary-installed stack's row no longer says "Not installed". The testlab image's no-sudo boundary fails closed (the tolerated failure is scoped to `deluser` alone).
-- A Webserver Apply the firewall gate deferred is announced on every console page until the firewall is applied, with a link that opens *Firewall → Apply & commands*; the firewall operator scripts exist from bootstrap on and every apply sequence ends with `lhpc webserver apply`.
-- Fixes from the release audit: a binary-channel auto-install row whose stack cannot start is *blocked*, never *success*; a saved proxy Disable keeps the still-served proxy visible (*disable pending*, warnings judge the applied policy) until Apply removes the listener.
-- Dead code removed across the console, core and helpers; comments and manifest notes state the current contract only.
-- **Stored passwords are masked on the stack page.** The Password section renders the value as discs instead of clear text; a *Show* button unmasks it when you need to read or hand-copy it, and the copy button puts the real password on the clipboard either way. It keeps the password off the screen — the page itself is unchanged in what it is allowed to hold.
-- **Docs consolidated** (29 → 26 files): one home per fact, no history; `docs/live-test.md` holds the dated evidence (the 0.2.10 release test, the silicon test); every doc carries a test-enforced Contents block; the hardware statement is corrected (Waveshare SX1262 433M tested on the air, 868M not tested on silicon).
-- **The README is rewritten and ground-truthed:** hardware before stacks, a collapsed stacks table with a licence column, one *Manual install* run of ten numbered steps, every happy-path click path on its own line beside a collapsed CLI equivalent, and web exposure (client certificate → policy → firewall → apply) in one place. Standard installs are pointed at the image repo. `README.de.md` follows.
+- **iGate removed;** Graywolf is the APRS station (RF↔APRS-IS through the KISS TNC, with a web UI).
+- **Source `strategy` and the `link`/`linked` states removed;** every managed source is a clone under
+  the runtime root, and a symlink is never a managed source. Stale read tolerances and the old MeshCore
+  identity rescue are gone with them.
+- **Uninstall keeps operator data** (`config/`, `backups/`, `profiles/`, the stacks' app data under
+  `state/`); `--purge` removes everything. A checkout without an ownership record is refused, never
+  adopted silently.
+- **Binary channel:** updates go through the index; a binary auto-install row that cannot start is
+  reported blocked, never successful.
+- **Console truth:** a saved proxy Disable stays visible until Apply removes the listener; a
+  gate-deferred Webserver Apply is announced on every page until the firewall is applied; the firewall
+  scripts exist from bootstrap on and every apply sequence ends with `lhpc webserver apply`.
+- **Manifest:** shell-era build/run/test strings removed; shell shorthand refused. `bootstrap-deps.sh`
+  never invokes sudo. Stored passwords are masked on the stack page with a Show button.
+- **Docs:** consolidated to one home per fact, READMEs rewritten and ground-truthed in both languages,
+  the release procedure in `docs/test-matrix.md`, dead code and history wording removed throughout.
 
 ## 0.2.10
 
