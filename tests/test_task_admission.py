@@ -9,6 +9,7 @@ import threading
 import pytest
 from pathlib import Path
 from lhpc.core import updater_units
+from lhpc.core import jobs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -227,7 +228,7 @@ def held_admission(tmp_path, monkeypatch):
 
 
 def _jobs(svc):
-    d = svc._jobs_dir()
+    d = jobs.jobs_dir(svc._paths)
     return list(d.iterdir()) if d.exists() else []
 
 

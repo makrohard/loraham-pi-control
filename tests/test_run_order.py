@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lhpc.core.paths import Paths
+from lhpc.core import jobs as jobs_mod
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ActionResult, ControllerService
 from conftest import set_call
@@ -177,8 +178,8 @@ def test_same_frequency_blocks_second_stack(tmp_path):
 def test_active_jobs_tracks_live_and_prunes_dead(tmp_path):
     import os
     svc = _svc(tmp_path)
-    svc._write_job_marker("test-a.log", os.getpid(), "loraham-daemon", "test")  # alive
-    svc._write_job_marker("test-b.log", 2147480000, "loraham-daemon", "build")  # dead pid
+    jobs_mod.write_job_marker(svc._paths, "test-a.log", os.getpid(), "loraham-daemon", "test")  # alive
+    jobs_mod.write_job_marker(svc._paths, "test-b.log", 2147480000, "loraham-daemon", "build")  # dead pid
     jobs = svc.active_jobs()
     names = {j["log"] for j in jobs}
     assert "test-a.log" in names and "test-b.log" not in names   # dead pruned

@@ -11,8 +11,8 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from . import jobs, runtime_fs, validators
 from . import lifecycle as lifecycle_mod
-from . import runtime_fs, validators
 from .abortflag import AbortFlag
 from .lifecycle import GUI_MISSING_HINT
 from .model import RunState
@@ -1145,7 +1145,7 @@ class AutoInstallOpsMixin:
                 # own job marker (manual CLI runs; web spawns already tracked this pid)
                 job = ai_mod.log_name_for(run_id) + ".log"
                 if (not self.log_running("all", job=job)
-                        and not self._write_job_marker(job, os.getpid(), "all", self.AUTO_INSTALL_OP)):
+                        and not jobs.write_job_marker(self._paths, job, os.getpid(), "all", self.AUTO_INSTALL_OP)):
                     return ActionResult(False, "Refusing: the auto-install run could not be "
                                         "identity-tracked (job marker not persisted).")
                 # ONE immutable global plan (frozen selectors/remotes) + reconciliation —

@@ -469,3 +469,30 @@ def test_web_buttons_confirm_and_apply(tmp_path, monkeypatch):
     r2 = c.post("/power/poweroff", data={"_csrf": tok, "confirmed": "yes"})
     assert r2.status_code in (302, 303)
     assert seen == {"kind": "poweroff", "apply": True}
+
+
+# ---- the power module's own mechanics -----------------------------------------------------------
+
+def test_parse_busctl_verdict_is_structured_never_substring():
+    from lhpc.core import power
+    assert power.parse_busctl_verdict(0, 's "yes"\n') == "yes"
+    assert power.parse_busctl_verdict(0, '  s "challenge"  ') == "challenge"
+    assert power.parse_busctl_verdict(1, 's "yes"') == ""                  # failed call: no verdict
+    assert power.parse_busctl_verdict(0, 's "yes" trailing') == ""         # not exactly the shape
+    assert power.parse_busctl_verdict(0, 'the answer is "yes"') == ""
+    assert power.parse_busctl_verdict(0, "") == ""
+
+
+def test_parse_pending_marker_validates_types_before_use():
+    import json
+    import pytest as _pt
+    from lhpc.core import power
+    good = {"kind": "reboot", "boot_id": "abc", "requested_uptime": 12}
+    assert power.parse_pending_marker(json.dumps(good)) == ("reboot", "abc", 12.0)
+    for bad in ({**good, "kind": "halt"}, {**good, "boot_id": None}, {**good, "boot_id": ""},
+                {**good, "requested_uptime": float("nan")}, {**good, "requested_uptime": True},
+                {**good, "requested_uptime": -1}, {**good, "requested_uptime": "12"}, {}, [good]):
+        with _pt.raises(Exception):
+            power.parse_pending_marker(json.dumps(bad))
+    with _pt.raises(Exception):
+        power.parse_pending_marker("not json")

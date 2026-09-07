@@ -43,11 +43,14 @@ lhpc/
     daemon_control.py    # daemon CONF-socket SET/GET (whitelisted, bounded parser)
     lifecycle.py         # spawn/stop processes, build/test jobs, bounded TX test
     status.py            # compose probe evidence into a RunState
-    resources.py         # declared/observed conflict interpretation
+    resources.py         # declared/observed conflict interpretation, band-limited radio claims
+    gps.py               # the ONE typed GPS resolver: plan, consumers, feed-marker rules (no service state)
+    restart_required.py  # the durable restart-required marker: path, safe tri-state read, merge, clear
+    power.py             # power controls: kinds, bounded trigger, busctl verdict parse, pending-marker schema
     install.py           # adopt/verify/update sources (git, pinned); source_fs.py the transaction
     runtime_fs.py        # descriptor-anchored path containment, atomic writes
     reslock.py           # named non-blocking operation locks
-    jobs.py              # detached job spawn + bounded log tail
+    jobs.py              # synchronous bounded job execution, job markers + launcher housekeeping, bounded log tail (the detached spawn lives in lifecycle.py)
     probes/              # read-only bounded probes (process, net, unixsock, systemd, source, hardware)
     binary_install.py    # binary-channel download/verify/publish transaction + crash journal
     binary_receipt.py    # per-stack binary ownership record (absent|valid|superseded|unsafe)
@@ -60,13 +63,14 @@ lhpc/
     service_webserver.py   # nginx/TLS/mTLS console + per-stack proxy operations
     service_selfupdate.py  # controller self-update orchestration + updater integration
     service_auto_install.py  # auto-install / ai-run driver, markers, log streaming
-    service_maintenance.py # source update / uninstall / clean / known-working / source-check
-    service_params.py      # param & config resolution, saves, config-file generation, identity
+    service_maintenance.py # source update / uninstall / clean / known-working / source-check / upstream release tracking / power actions
+    service_params.py      # param & config resolution, saves, config-file generation, identity, daemon-parameter application
     service_lifecycle_ops.py # start/stop/restart/build/test orchestration, jobs, dashboards
     service_binary_ops.py  # binary install/retire/recover; service_binary_channel.py resolves it
     service_firewall.py    # firewall candidates, apply/verify; service_hmac.py the MeshCom password
     service_network.py     # Wi-Fi client / AP fallback panel (NetworkManager)
-    service_boot_restore.py  # boot-restore driver; service_system.py the system monitor
+    service_boot_restore.py  # boot-restore driver
+    service_system.py      # host metrics for the dashboard System box (read-only, no subprocess)
   adapters/
     cli/main.py          # argparse  → ControllerService → render ActionResult
     web/app.py           # Flask HTTP → ControllerService → server-rendered pages
@@ -81,6 +85,12 @@ two cooperative-abort flags from `service_auto_install` and `service_hmac` to in
 Both adapters are thin — they parse input, call one `ControllerService` method, and
 render the returned `ActionResult`. The web adapter calls the service directly
 (never shells out to the CLI), so validation, gating and results are identical.
+
+Service mixins orchestrate controller operations — locks, admission, authoritative rechecks and the
+order of a transaction. Reusable interpretation and policy belongs in plain core modules as functions
+with explicit inputs (`resources.py`, `gps.py`, `jobs.py`, `restart_required.py`, `power.py`). Prefer a
+plain function over another mixin, and keep safety-critical ordering local to the coordinator even
+when that leaves it long.
 
 ## Manifest and config layers
 

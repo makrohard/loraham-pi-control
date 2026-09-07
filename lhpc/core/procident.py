@@ -60,6 +60,24 @@ def proc_alive(pid: int) -> bool:
     return state not in ("Z", "X", "x")
 
 
+def pid_exists_signal0(pid: int) -> bool:
+    """Signal-0 liveness with the start gate's semantics — distinct from `proc_alive()` (which
+    reads /proc and treats a zombie as dead): a non-positive or non-int pid is never signalled;
+    ProcessLookupError -> gone; PermissionError -> alive (owned by someone else); any other
+    OSError -> gone."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def identity_complete(ident) -> bool:
     """THE single identity-completeness predicate, shared by lifecycle ownership records and
     detached job markers. A usable identity needs POSITIVE start time / pgid / sid, a

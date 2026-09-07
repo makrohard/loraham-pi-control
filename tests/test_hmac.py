@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lhpc.core import model, runtime_fs
+from lhpc.core import jobs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.service_base import ActionResult
@@ -365,11 +366,11 @@ def test_driver_gate_proceeds_only_when_identity_tracked(tmp_path, monkeypatch):
     monkeypatch.setattr(service_hmac, "_HMAC_DRIVER_TRACK_TIMEOUT_S", 0.3)   # keep the untracked wait short
     # tracked: a matching job marker for THIS process -> proceed (0)
     ident = procident.proc_identity(os.getpid())
-    assert svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    assert jobs.write_job_marker(svc._paths, f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
     assert svc._hmac_verify_tracked("meshcom", _RID, emit=lambda s: None) == 0
     # a marker for a DIFFERENT stack (mismatch) -> refuse immediately (1)
     rid2 = "b" * 32
-    svc._write_job_marker(f"hmac-apply-{rid2}.log", os.getpid(), "othernode", "hmac-apply", ident=ident)
+    jobs.write_job_marker(svc._paths, f"hmac-apply-{rid2}.log", os.getpid(), "othernode", "hmac-apply", ident=ident)
     assert svc._hmac_verify_tracked("meshcom", rid2, emit=lambda s: None) == 1
     # NO marker at all -> refuse after the (short) window (1)
     assert svc._hmac_verify_tracked("meshcom", "c" * 32, emit=lambda s: None) == 1
@@ -862,7 +863,7 @@ def test_abort_validates_then_signals_driver_only_and_writes_no_marker(tmp_path,
     _write_marker(svc, {"run_id": _RID, "sid": "meshcom", "action": "renew", "phase": "running",
                         "finished": False, "steps": svc._hmac_initial_steps()})
     ident = procident.proc_identity(os.getpid())
-    assert svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    assert jobs.write_job_marker(svc._paths, f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
     monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)   # run looks live
     killed = []
     monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append((pid, sig)))
@@ -885,7 +886,7 @@ def test_abort_refuses_reused_pid_and_wrong_op(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append(pid))
     # a job marker whose identity does NOT match (recycled pid): abort refuses to signal
     ident = dict(procident.proc_identity(os.getpid()) or {}, starttime=1)   # wrong starttime
-    svc._write_job_marker(f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
+    jobs.write_job_marker(svc._paths, f"hmac-apply-{_RID}.log", os.getpid(), "meshcom", "hmac-apply", ident=ident)
     assert not svc.hmac_apply_abort("meshcom", _RID).ok and not killed
 
 

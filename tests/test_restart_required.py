@@ -153,3 +153,63 @@ def test_cli_status_reports_restart_required(tmp_path):
     assert svc.save_config_bundle("chat", values={"file_tx_freq": "434.500"}).ok
     res = svc.status()
     assert any("RESTART REQUIRED" in d and "chat" in d for d in res.details)
+
+
+# ---- the marker module itself (path, tri-state read, merge, clear) ------------------------------
+
+def test_module_read_is_tri_state(tmp_path):
+    import json as _json
+    import os as _os
+    from lhpc.core import restart_required as rr
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    assert rr.read_marker(paths, "chat") is None                      # safely absent
+    p = rr.marker_path(paths, "chat"); p.parent.mkdir(parents=True)
+    good = {"version": 1, "stack": "chat", "mode": "build", "params": ["call"], "band": "433",
+            "created_at": 12.5}
+    p.write_text(_json.dumps(good))
+    assert rr.read_marker(paths, "chat") == good                      # safely valid, unmodified
+    p.write_text(_json.dumps({**good, "version": 2}))
+    assert rr.read_marker(paths, "chat")["unsafe"] is True            # a version this code does not know
+    p.unlink(); _os.symlink(tmp_path / "elsewhere", p)               # symlink leaf -> unsafe, never followed
+    got = rr.read_marker(paths, "chat")
+    assert got["unsafe"] is True and got["stack"] == "chat" and got["params"] == []
+    assert p.is_symlink()                                             # a read never clears
+
+
+def test_module_merge_rules(tmp_path):
+    import json as _json
+    from lhpc.core import restart_required as rr
+    cur = {"version": 1, "stack": "chat", "mode": "build", "params": ["a", "b"], "band": "868",
+           "created_at": 1.0}
+    out = _json.loads(rr.merged_payload(cur, "chat", ["b", "c"], "433", mode="restart", now=7.0))
+    assert out == {"version": 1, "stack": "chat", "mode": "build", "params": ["a", "b", "c"],
+                   "band": "868", "created_at": 7.0}                  # build outranks, union, band kept
+    fresh = _json.loads(rr.merged_payload(None, "chat", ["x"], "433", now=1.0))
+    assert fresh["mode"] == "restart" and fresh["params"] == ["x"] and fresh["band"] == "433"
+    unsafe = {"unsafe": True, "stack": "chat", "mode": "restart", "params": ["junk"], "reason": "r"}
+    assert _json.loads(rr.merged_payload(unsafe, "chat", ["y"], "", now=1.0))["params"] == ["y"]
+    assert rr.merged_payload(None, "chat", [], "", mode="build", now=1.0).count('"mode": "build"') == 1
+
+
+def test_module_clear_is_silent_on_a_missing_marker(tmp_path):
+    from lhpc.core import restart_required as rr
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    rr.clear_marker(paths, "chat")                                    # nothing there: no error
+    p = rr.marker_path(paths, "chat"); p.parent.mkdir(parents=True); p.write_text("{}")
+    rr.clear_marker(paths, "chat")
+    assert not p.exists()
+
+
+def test_marker_path_is_the_config_transactions_one_state_target(tmp_path):
+    # config's journal allowlist and this module name the same directory: a marker path round-trips
+    # through `_resolve_journal_target` as kind "state".
+    from lhpc.core import config as cfg
+    from lhpc.core import restart_required as rr
+    from lhpc.core.paths import Paths
+    paths = Paths(runtime_root=tmp_path)
+    (tmp_path / "state" / "restart-required").mkdir(parents=True)
+    rel = rr.marker_path(paths, "chat").relative_to(tmp_path)
+    assert tuple(rel.parts[:2]) == rr.MARKER_DIR and rel.suffix == ".json"
+    assert cfg._resolve_journal_target(paths, {"kind": "state", "rel": rel.as_posix()}) == rr.marker_path(paths, "chat")

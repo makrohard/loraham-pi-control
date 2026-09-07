@@ -10,9 +10,9 @@ The status state rules are implemented in `_run_state_for_service`.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 
+from . import gps, procident
 from .model import (
     Component,
     ComponentKind,
@@ -57,8 +57,6 @@ class Snapshot:
         return None
 
 
-# A GPS feed refreshes its marker every ~10 s; anything older is not this run.
-_GPS_MARKER_MAX_AGE_S = 60.0
 
 
 class StatusProber:
@@ -287,25 +285,14 @@ class StatusProber:
             return False, "unreadable readiness marker"
         # Same rule as the start gate: a marker from a previous run, or one nobody has
         # refreshed, does not describe the feed that is supposed to be running now.
-        try:
-            updated = float(got.get("updated", 0) or 0)
-        except (TypeError, ValueError):
-            updated = 0.0
-        if updated <= 0 or (time.time() - updated) > _GPS_MARKER_MAX_AGE_S:
+        if not gps.marker_is_fresh(got, time.time(), gps.MARKER_MAX_AGE_S):
             return False, "readiness marker is stale"
         # A feed killed moments after its last refresh leaves a marker that is still RECENT, so
-        # the owning process is what says it is still there. Required, and validated the same way
-        # as in the start gate: `bool` is an `int`, and True would read as the always-alive pid 1.
-        pid = got.get("pid")
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        # the owning process is what says it is still there — the same rules as the start gate.
+        pid = gps.marker_owner_pid(got)
+        if pid is None:
             return False, "readiness marker has no usable owner pid"
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False, "readiness marker is stale (feed is gone)"
-        except PermissionError:
-            pass                                       # alive, owned by another user
-        except OSError:
+        if not procident.pid_exists_signal0(pid):
             return False, "readiness marker is stale (feed is gone)"
         state = str(got.get("state", ""))
         if state == "ready":

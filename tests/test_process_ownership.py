@@ -11,6 +11,7 @@ import time
 import pytest
 
 from lhpc.core.lifecycle import Lifecycle
+from lhpc.core import jobs
 from lhpc.core.model import Component, ComponentKind, ProcessSpec, Stack
 from lhpc.core.config import Config
 from lhpc.core.paths import Paths
@@ -587,7 +588,7 @@ def _write_reused_pid_marker(svc, name):
     # A marker for OUR live pid but with a TAMPERED start time -> simulates PID reuse
     # (the recorded process is gone; this pid now belongs to us/an unrelated process).
     from lhpc.core import procident
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     ident = procident.proc_identity(os.getpid())
     body = (f'pid = {os.getpid()}\n'
             f'starttime = {int(ident["starttime"]) + 999999}\n'
@@ -613,7 +614,7 @@ def test_active_jobs_symlinked_jobs_dir_fails_closed(tmp_path):
     svc._paths.under("state").mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "evil-jobs"; outside.mkdir()
     (outside / "x.job").write_text('pid = 1\n')
-    os.symlink(outside, svc._jobs_dir())                   # jobs dir is a symlink out
+    os.symlink(outside, jobs.jobs_dir(svc._paths))                   # jobs dir is a symlink out
     assert svc.active_jobs() == []                          # unsafe dir -> no trusted jobs
 
 
@@ -649,20 +650,20 @@ def test_lifecycle_and_jobs_share_completeness_rule():
 def test_write_job_marker_refuses_incomplete_identity(tmp_path):
     svc = _svc_rt(tmp_path)
     bad = {"starttime": -1, "pgid": 1, "sid": 1, "exec": "x", "argv_fp": "a", "argv_len": 5}
-    assert svc._write_job_marker("build-x", 12345, "x", "build", ident=bad) is False
+    assert jobs.write_job_marker(svc._paths, "build-x", 12345, "x", "build", ident=bad) is False
     assert svc.active_jobs() == []                       # nothing persisted
 
 
 def test_write_job_marker_refuses_empty_argv(tmp_path):
     svc = _svc_rt(tmp_path)
     bad = {"starttime": 100, "pgid": 1, "sid": 1, "exec": "x", "argv_fp": "a", "argv_len": 0}
-    assert svc._write_job_marker("build-x", 12345, "x", "build", ident=bad) is False
+    assert jobs.write_job_marker(svc._paths, "build-x", 12345, "x", "build", ident=bad) is False
 
 
 def test_incomplete_marker_never_reported_active(tmp_path):
     from lhpc.core import procident
     svc = _svc_rt(tmp_path)
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     ident = procident.proc_identity(os.getpid())         # a LIVE pid, but marker omits argv_len
     body = (f'pid = {os.getpid()}\nstarttime = {ident["starttime"]}\n'
             f'pgid = {ident["pgid"]}\nsid = {ident["sid"]}\n'
@@ -674,7 +675,7 @@ def test_incomplete_marker_never_reported_active(tmp_path):
 
 def test_symlinked_marker_leaf_not_active_and_no_crash(tmp_path):
     svc = _svc_rt(tmp_path)
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "evil.job"; outside.write_text('pid = 1\n')
     os.symlink(outside, d / "build-x.job")               # symlinked marker leaf
     assert svc.active_jobs() == []                        # skipped, never followed, no crash

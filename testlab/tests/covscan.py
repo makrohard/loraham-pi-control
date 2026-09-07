@@ -17,10 +17,11 @@ REPO = TESTS_DIR.parent
 # row shows up as an unlisted id the moment its axis entry lands here; an axis entry the
 # route refuses is caught by the acceptance sweep's 404).
 def _axes() -> dict:
+    from lhpc.core import power
     from lhpc.core.services import ControllerService
     return {
         "POST /action": tuple(ControllerService.WEB_ACTIONS),
-        "POST /power/<kind>": tuple(ControllerService._POWER_KINDS),
+        "POST /power/<kind>": tuple(power.POWER_KINDS),
         "POST /network/<op>": ("scan", "connect", "prefer", "forget", "retry", "ap"),
         "POST /testlab/<op>": ("reset", "scenario", "inject", "check"),
     }

@@ -9,6 +9,7 @@ import pytest
 import fcntl
 import tomllib
 from lhpc.core import runtime_fs, jobs, wrapper_runtime, validators, manifest as manifest_mod
+from lhpc.core import jobs as jobs_mod
 from lhpc.core.paths import Paths, PathContainmentError
 from lhpc.core.services import ControllerService
 from lhpc.core.lifecycle import Lifecycle
@@ -136,7 +137,7 @@ def test_job_marker_matching_identity_is_active(tmp_path):
             if svc._lifecycle()._proc_identity(p.pid):
                 break
             time.sleep(0.02)
-        svc._write_job_marker("build-x", p.pid, "daemon", "build")
+        jobs_mod.write_job_marker(svc._paths, "build-x", p.pid, "daemon", "build")
         jobs = svc.active_jobs()
         assert any(j["log"] == "build-x" for j in jobs)
     finally:
@@ -188,7 +189,7 @@ def test_prune_logs_bounds_count_and_protects_active(tmp_path):
             if svc._lifecycle()._proc_identity(p.pid):
                 break
             time.sleep(0.02)
-        svc._write_job_marker("build-keep", p.pid, "daemon", "build")
+        jobs_mod.write_job_marker(svc._paths, "build-keep", p.pid, "daemon", "build")
         removed = svc.prune_logs()
         remaining = sorted(f.name for f in logs.glob("*.log"))
         assert "build-keep.log" in remaining                # active log protected
@@ -252,9 +253,9 @@ def test_active_jobs_and_log_running_ignore_symlinked_marker(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
-    jobs = svc._jobs_dir(); jobs.mkdir(parents=True)
+    jdir = jobs_mod.jobs_dir(svc._paths); jdir.mkdir(parents=True)
     outside = tmp_path / "evil.job"; outside.write_text('pid = 1\ntarget = "daemon"\n')
-    os.symlink(outside, jobs / "x.job")
+    os.symlink(outside, jdir / "x.job")
     assert svc.active_jobs() == []                   # symlinked marker not followed
     assert svc.log_running("daemon", job="x") is False
 

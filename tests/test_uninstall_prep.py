@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 
 from lhpc.core.lifecycle import Lifecycle
+from lhpc.core import jobs
 from lhpc.core.model import RunState
 from lhpc.core.outcomes import CompResult, Outcome
 from lhpc.core.paths import Paths
@@ -44,7 +45,7 @@ def test_prep_quiescent_when_nothing_running(tmp_path):
 
 def test_prep_blocks_on_active_or_unsafe_job(tmp_path):
     svc = _svc(tmp_path)
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     (d / "build-x.job").write_text("not toml [[[")
     r = svc.controller_uninstall_prep()
     assert not r.ok and r.data.get("prep_blocked") == "jobs"

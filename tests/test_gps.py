@@ -2805,3 +2805,22 @@ def test_partial_gps_save_while_off_keeps_the_stored_fields(tmp_path):
     g = load_config(paths).gps
     assert (g.host, g.port) == ("gps.lan", 2948)
 
+
+
+def test_marker_is_fresh_rules():
+    now = 1_000_000.0
+    assert gps_mod.marker_is_fresh({"updated": now - 10}, now) is True
+    assert gps_mod.marker_is_fresh({"updated": now - gps_mod.MARKER_MAX_AGE_S}, now) is True   # boundary: <= max
+    assert gps_mod.marker_is_fresh({"updated": now - gps_mod.MARKER_MAX_AGE_S - 0.5}, now) is False
+    assert gps_mod.marker_is_fresh({"updated": "soon"}, now) is False
+    assert gps_mod.marker_is_fresh({"updated": 0}, now) is False
+    assert gps_mod.marker_is_fresh({}, now) is False
+
+
+def test_marker_owner_pid_requires_a_real_positive_int():
+    assert gps_mod.marker_owner_pid({"pid": 12}) == 12
+    assert gps_mod.marker_owner_pid({"pid": True}) is None      # bool is an int, never a pid
+    assert gps_mod.marker_owner_pid({"pid": "12"}) is None
+    assert gps_mod.marker_owner_pid({"pid": -1}) is None
+    assert gps_mod.marker_owner_pid({"pid": 0}) is None
+    assert gps_mod.marker_owner_pid({}) is None

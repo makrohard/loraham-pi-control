@@ -8,6 +8,7 @@ from pathlib import Path
 import os
 
 from lhpc.core.paths import Paths
+from lhpc.core import jobs
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
@@ -17,7 +18,7 @@ def _svc(tmp_path):
 
 
 def _jobs_dir(svc):
-    d = svc._jobs_dir()
+    d = jobs.jobs_dir(svc._paths)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -60,7 +61,7 @@ def test_self_update_blockers_are_centralized(tmp_path):
     # Item 4: trigger AND direct apply share ONE strict blocker scan. It blocks on an unprovable job.
     svc = _svc(tmp_path)
     assert svc._self_update_blockers() is None                       # clean
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     (d / "build-x.job").write_text("not toml [[[")                    # malformed marker
     blk = svc._self_update_blockers()
     assert blk and blk[1] == "jobs"
@@ -76,7 +77,7 @@ def test_trigger_uses_strict_scan_and_admission(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "updater_integration", lambda self: {"status": "ok"})
     monkeypatch.setattr(ControllerService, "self_update_status",
                         lambda self: {"available": True, "identity": {"status": "ok"}})
-    d = svc._jobs_dir(); d.mkdir(parents=True, exist_ok=True)
+    d = jobs.jobs_dir(svc._paths); d.mkdir(parents=True, exist_ok=True)
     (d / "build-x.job").write_text("bad [[[")
     r = svc.self_update_trigger()
     assert not r.ok and r.data.get("blocked_by_jobs")

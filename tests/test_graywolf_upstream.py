@@ -126,7 +126,7 @@ def test_default_fetch_path_is_unchanged_no_upstream_flag(tmp_path):
 def test_ver_tuple_orders_prerelease_and_short_versions():
     """REVIEW-FOUND: leading-digits-per-segment (not digit-concatenation) and a pre-release
     flag, so '0.15.0-rc1' < '0.15.0', '0.14' < '0.14.12', and 'v'-prefixes normalise."""
-    vt = ControllerService._ver_tuple
+    from lhpc.core.service_maintenance import _version_key as vt
     assert vt("0.15.0-rc1") < vt("0.15.0")
     assert vt("0.14") < vt("0.14.12")
     assert vt("0.14.11") < vt("0.14.12") < vt("0.15.0")

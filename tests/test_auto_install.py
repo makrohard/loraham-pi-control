@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from lhpc.core import auto_install as ai_mod
+from lhpc.core import jobs
 from lhpc.core import source_registry
 from lhpc.core.install import Installer, PlanAction
 from lhpc.core.paths import Paths
@@ -896,8 +897,8 @@ def test_job_tracking_failure_sigterm_proven(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     kids = []
     _real_child_spawn(svc, monkeypatch, kids)
-    monkeypatch.setattr(type(svc), "_write_job_marker",
-                        lambda self, *a, **k: False)              # tracking fails
+    monkeypatch.setattr(jobs, "write_job_marker",
+                        lambda paths, *a, **k: False)              # tracking fails
     sent = _record_signals(monkeypatch)
     ln, err = svc.spawn_auto_install_job(_sel(svc))
     assert ln is None and "terminated" in err

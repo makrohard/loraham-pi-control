@@ -6,9 +6,40 @@ measured values only. The procedure lives in [test-matrix.md](test-matrix.md); C
 
 ## Contents
 
+- [0.3.2 — live re-proof of the moved code, 2026-09-07](#032--live-re-proof-of-the-moved-code-2026-09-07)
 - [0.3.0 — release test, 2026-09-06](#030--release-test-2026-09-06)
 - [0.2.10 — release test, 2026-09-05/06](#0210--release-test-2026-09-0506)
 - [Silicon test, 2026-09-05](#silicon-test-2026-09-05)
+
+## 0.3.2 — live re-proof of the moved code, 2026-09-07
+
+Run on `lhpc-e293` with the source checkout switched to `dev` = `d545924` (0.3.2, the
+*reduce core service coupling* commit plus CI coverage; `lhpc self-update` answers *Up to date*),
+21:10 to 22:38 local, over the console's unix socket and the CLI. The patch moved logic without
+changing behaviour, so each row exercises one moved flow and compares with what 0.3.1 did. The
+433 chain (daemon, kiss, graywolf) and MeshCom were started for the run and stopped afterwards; the
+Meshtastic stack on 868 kept running except for the two feed kills below, each followed by a
+restart. Nothing was purged or rebuilt from source.
+
+| moved flow | what was done | result |
+|---|---|---|
+| console after the deploy (`status.py`, `services.py`) | Dashboard, Apps, dependencies, `/healthz`, the three log pages, the Network and Firewall panels and every stack's lazy body (32 requests) | pass — all 200 (`/stacks/<id>` redirects as before), `/healthz` reports 0.3.2, 0 tracebacks in the console log |
+| restart-required marker written by a config save on a running stack (`restart_required.py`) | kiss running: `lhpc config kiss verbose 1` | pass — *Config saved … Restart the stack to apply*; `state/restart-required/kiss.json` = version 1, stack kiss, mode restart, params `["verbose"]`, band 433; `lhpc status` prints *! RESTART REQUIRED: 'kiss' — saved settings differ from the running stack*; the Dashboard and the kiss panel show *Restart required* with the Restart action; `/api/dash-signature` carries `RR:kiss` |
+| merge on a second save | `lhpc config kiss rx_only 1` | pass — one marker, params `["verbose", "rx_only"]` in save order, band kept, `created_at` re-stamped (as in 0.3.1) |
+| unsafe marker read safe-side, never deleted | marker replaced by `{not json`, then by a version-2 record | pass — *RESTART REQUIRED (safe-side): … marker is malformed* / *… fails validation — treat as restart required; resolve the marker* in the CLI and the panel; the file stays after every read |
+| clear on a successful restart | `lhpc stack restart kiss --yes` on the unsafe marker | pass — kiss verified on `127.0.0.1:8001`, marker gone, status clean |
+| clear on a verified stop | fresh save (`verbose` back to empty) → marker → `lhpc stack stop kiss --yes` | pass — *[stopped] loraham-kiss-tnc*, daemon 433 released, marker gone; the next start ran with `--rx-only` on the argv |
+| detached web job tracked by its job marker (`jobs.write_job_marker`, `jobs.jobs_dir`) | Test button on the kiss panel (confirm page, then confirmed) | pass — `/api/tasks` lists the job *running* within 1 s; `state/jobs/test-loraham-kiss-tnc.log.job` carries launch_id, pid, starttime, pgid, sid, exec, argv fingerprint and length, target, op, log and attempt id; the job reaches *done* (*Ready.*), the TNC host test reports OK=8 FAIL=0 |
+| web auto-install run (`service_auto_install` → `jobs.write_job_marker`) | Apps → Auto-install with only kiss selected while kiss ran; then with only chat selected | pass — the first run is admitted, tracked and ends with the typed refusal *component(s) are running — this run never stops anything itself*, marker written; the chat run completes *1/1 stack(s) successful, 0 blocked, 0 failed* in 7 s with its own marker (target all, op auto-install) |
+| launcher retention (`jobs.prune_ephemeral_launchers`) | counted `state/post` and `state/jobs` launchers after the starts | 11 and 1, below the retention of 200, so nothing was due for pruning; the prune itself is covered by the unit tests |
+| GPS feed marker rule (`gps.py`, `procident.py`) | the live feed first (Meshtastic panel `gps.feed`, `state/gps/meshtastic/readiness.json`), then the feed process killed with SIGKILL so its marker survives with a dead owner pid | pass — *source live (108248 sentences)* with a fresh `updated` and a live owner pid; 3 s after the kill the panel reads *readiness marker is stale (feed is gone)*, 70 s after it *readiness marker is stale* (the marker aged past 60 s); `lhpc stack restart meshtastic --yes` recovers to *source live*. Observed on the way, unchanged behaviour: a SIGTERM to the feed lets it remove its own marker (*no readiness marker*), and meshtasticd goes down with its feed either way, so the stack reads *stopped* rather than *degraded* |
+| band-limited claims (`resources.limit_radio_claims`) | plans only, nothing applied: `lhpc stack start meshcom` with kiss and graywolf on 433; `meshcore` and `reticulum` against Meshtastic on 868 | pass — meshcom: *radio 433 MHz is held by running stack 'kiss'* and *'graywolf'*; meshcore: *radio 868 MHz* and *loraham.radio.868 held by 'meshtastic'*; reticulum adds *spi.bus.0.unlocked*; no cross-band conflict shown, the same lines as the 0.3.0 run |
+| Graywolf upstream check (moved to `service_maintenance`) | Check for updates on the graywolf panel | pass — redirect to the panel, *upstream latest is 0.14.13; installed 0.14.13 — up to date*; no update applied |
+| HMAC apply job (`service_hmac` → `jobs.write_job_marker`) | `lhpc hmac status`, the enable and renew pages | as on 0.3.1 — *disabled (meshcom)*; both pages 200 and explain that the prebuilt firmware has no mesh password, so no apply job exists on this box |
+| power verdict and confirm plan (`power.py`) | Dashboard Reboot… without confirming | pass — the buttons render (busctl verdict parsed as allowed), the confirm page lists daemon, graywolf, kiss, meshtastic as running plus the boot-restore and AP notes; no marker written, no reboot |
+| pending-power marker gate (`power.parse_pending_marker`) | `state/power-pending.json` written by hand: malformed (null boot id, NaN uptime); then valid for this boot with the current uptime | pass — start refused *a power-request marker is unreadable (…) — refusing new work; inspect it and delete it if it is stale*, file retained; this-boot marker: *a reboot of this box is pending (requested 3s ago) — not starting work the shutdown would kill*, file retained; a stop passes the gate (admission code unchanged since 0.3.1); markers removed by hand afterwards |
+| reboot applied (`power.py` payload + trigger, pending-marker prune on the next boot) | 22:35 local, later the same evening, dev `d545924` redeployed for it: daemon, kiss, graywolf and Meshtastic running; Reboot confirmed on the Dashboard (POST from the box itself) | pass — 302 back to the Dashboard; `state/power-pending.json` = kind reboot, the running kernel boot id, requested_uptime 39367.61; the ssh session was cut within seconds; the box answered again after 1:00 with a new boot id (`cdb013c1…` → `17d483f6…`); `lhpc autostart`: *done @ 22:37:32 — 3 restored (meshtastic, kiss, graywolf), 0 failed, 0 cancelled, 0 pending, 1 skipped*; the skip is the daemon's recorded operator stop intent from the earlier chain stop (it came back as kiss's dependency); the pending marker was gone on the first look after the boot; `/healthz` 200 on 0.3.2 with the same four stacks running as before |
+| build outranks restart; `use_gps` save guard (`service_params`) | MeshCom running (start incl. post-start 13:47, the QEMU console answered late): `lhpc config meshcom env qemu-headless`, then `use_gps off`, then both values restored | pass — the env save answers *Compile-time change — Rebuild (Build) the stack to apply*, marker mode build, params `["env"]`, band empty (fixed-band stack); the `use_gps` change is refused typed *cannot change use_gps while meshcom-gps, meshcom-qemu are running*, marker unchanged; restoring the values keeps mode build; `lhpc stack stop meshcom --yes` (0:12) clears the marker |
 
 ## 0.3.0 — release test, 2026-09-06
 

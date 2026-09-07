@@ -13,6 +13,7 @@ from typing import ClassVar
 from . import daemon_control, runtime_fs, validators
 from . import meshcore_identity as _meshcore_identity
 from . import meshcore_mode as _meshcore_mode
+from . import restart_required as _rr
 from .config import (
     ConfigError,
     _load_runtime_toml,
@@ -30,6 +31,7 @@ from .config import (
     update_toml,
     update_yaml,
 )
+from .gps import USE_GPS_PARAM, use_gps_default
 from .lifecycle import GROUP_MISSING_HINT, GROUP_RESTART_HINT
 from .model import RunState
 from .paths import PathContainmentError
@@ -40,7 +42,7 @@ from .snapshot_memo import invalidates_snapshot
 # therefore stored in the band-less config file (like autostart). Both the writer
 # (`save_config_bundle`) and the reader (`_resolved_param_value`) must agree on this set —
 # disagreeing is what made the switch read as its default while being saved as "on".
-_BANDLESS_STACK_PARAMS = ("use_gps",)
+_BANDLESS_STACK_PARAMS = (USE_GPS_PARAM,)
 
 # MeshCore's position is controller-owned: a LIVE source feeds it through the meshcore-gps
 # bridge, and `fixed` writes static coordinates. Either way the values come from the one
@@ -1140,9 +1142,8 @@ class ParamsConfigMixin:
         # component-scoped `__r__meshcom-qemu__use_gps`, which no GPS reader looks at — the
         # switch would appear to save and then do nothing. It is one switch per STACK, so it is
         # normalized to the owner stack's FLAT band-less key whichever target names it.
-        _GPS_SW = "use_gps"
         _gps_now, _want = False, ""
-        for _k in [k for k in to_set if k == _GPS_SW or k.endswith(f"__{_GPS_SW}")]:
+        for _k in [k for k in to_set if k == USE_GPS_PARAM or k.endswith(f"__{USE_GPS_PARAM}")]:
             # The WANTED state comes from the VALUE, never from which bucket the key landed in.
             # Reading it as "in to_set => on" made `use_gps=""` — an override that differs from
             # the default and so lands in to_set — look like "on": it matched the current "on",
@@ -1154,20 +1155,19 @@ class ParamsConfigMixin:
         # hardcoding "off" here was a fourth copy of the drifted literal: submitting the default
         # value landed in `to_remove`, was read back as "off", looked like a CHANGE, and the
         # running-stack refusal fired on a save that changed nothing.
-        from .gps import use_gps_default
         _gps_default = use_gps_default(self.stacks(), sid) if sid else "off"
-        for _k in [k for k in to_remove if k == _GPS_SW or k.endswith(f"__{_GPS_SW}")]:
+        for _k in [k for k in to_remove if k == USE_GPS_PARAM or k.endswith(f"__{USE_GPS_PARAM}")]:
             to_remove.discard(_k)
             _gps_now, _want = True, _gps_default          # removing the key = back to default
         if _gps_now:
             # Store the CANONICAL value: only a deviation FROM THE DEFAULT is an override;
             # the default itself is cleared, so the file never holds a third state.
             if _want != _gps_default:
-                auto_set[_GPS_SW] = _want
-                auto_remove.discard(_GPS_SW)
+                auto_set[USE_GPS_PARAM] = _want
+                auto_remove.discard(USE_GPS_PARAM)
             else:
-                auto_remove.add(_GPS_SW)
-                auto_set.pop(_GPS_SW, None)
+                auto_remove.add(USE_GPS_PARAM)
+                auto_set.pop(USE_GPS_PARAM, None)
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
         # its generated config describing a different plan than the one that launched — the same
         # reason the global source is locked while in use. Refused BEFORE anything is written;
@@ -1201,7 +1201,7 @@ class ParamsConfigMixin:
             try:
                 _cur = str(_load_runtime_toml(
                     self._paths, _stack_config_path(self._paths, sid, "")
-                ).get(_GPS_SW, "")).strip().lower() or _gps_default
+                ).get(USE_GPS_PARAM, "")).strip().lower() or _gps_default
             except (OSError, ValueError, KeyError, ConfigError) as exc:
                 raise ConfigError(f"could not re-read the saved use_gps for '{sid}': {exc}") from exc
             if _cur == _want:
@@ -1324,7 +1324,7 @@ class ParamsConfigMixin:
                 return self.restart_marker_payload(
                     _sid, names, _cfg or live_band,
                     mode="build" if "build" in live_modes else "restart")
-            targets.append(("state", self._restart_marker_path(sid), _render_marker, 0o600))
+            targets.append(("state", _rr.marker_path(self._paths, sid), _render_marker, 0o600))
         try:
             if self._holds_config_exclusive():
                 # Inside the auto-install boundary this thread ALREADY holds the config lock EXCLUSIVELY
@@ -1446,7 +1446,7 @@ class ParamsConfigMixin:
                         keep_unsafe.append(sid)      # left byte-identical, and disclosed below
                         continue
                     targets.append((
-                        "state", self._restart_marker_path(sid),
+                        "state", _rr.marker_path(self._paths, sid),
                         self.restart_marker_payload(
                             sid, ["callsign (inherited global)"], run_band), 0o600))
                 _config._apply_config_transaction_locked(self._paths, targets)
@@ -1658,7 +1658,7 @@ class ParamsConfigMixin:
                           if plan.needs_bridge(CONSUMER_MESHCORE) else "")
             elif plan.source == "nmea":
                 device = plan.device
-            elif plan.source == "gpsd" and owner == CONSUMER_MESHTASTIC:
+            elif owner == CONSUMER_MESHTASTIC and plan.needs_bridge(CONSUMER_MESHTASTIC):
                 device = bridge_endpoint_path(self._paths.runtime_root, CONSUMER_MESHTASTIC)
         return {
             "{gps_source}": plan.source,
@@ -1942,11 +1942,7 @@ class ParamsConfigMixin:
             hints.append("Runtime change — applied live.")
         return hints
 
-    # ---- durable restart-required state -------------------------------------
-
-    def _restart_marker_path(self, stack_id: str):
-        return self._paths.under("state", "restart-required",
-                                 f"{validators.path_component(stack_id, field='stack')}.json")
+    # ---- durable restart-required state (schema, read, merge, clear: restart_required.py) ------
 
     def active_config_consumer(self, stack_id: str, *, fresh: bool = False) -> tuple[bool, str]:
         """Is this stack a LIVE consumer of its saved configuration, and on which band?
@@ -1980,100 +1976,21 @@ class ParamsConfigMixin:
 
     def restart_marker_payload(self, sid: str, params, band: str,
                                mode: str = "restart") -> str:
-        """The MERGED restart-marker JSON for `sid`. Called from inside the config transaction, so
-        it reads the marker that is committed RIGHT NOW and a concurrent writer's reason is merged
-        rather than overwritten.
-
-        MERGE (a blind replace destroyed a stronger build requirement, its reasons and
-        its band): build outranks restart, reasons are unioned without duplication, an existing
-        CONCRETE band is retained.
-
-        Unreadable CONTENT is replaced; an unsafe PATH makes the transaction refuse and the whole
-        save roll back, which is the invariant that a running stack never holds changed
-        restart-mode settings without a warning. The one caller that must instead leave an
-        unreadable marker untouched (the global identity setter) checks for that itself."""
-        import json as _json
-        cur = self.restart_required(sid)
-        if cur is not None and cur.get("unsafe"):
-            cur = None                         # unreadable content is replaced, never merged
-        merged_mode = "build" if (mode == "build"
-                                  or (cur or {}).get("mode") == "build") else "restart"
-        return _json.dumps({
-            "version": 1, "stack": sid, "mode": merged_mode,
-            "params": list(dict.fromkeys([*(cur or {}).get("params", []), *params])),
-            "band": (cur or {}).get("band") or band, "created_at": time.time()})
+        """The MERGED restart-marker JSON for `sid` — called from inside the config transaction,
+        so it merges with the marker committed RIGHT NOW. The one caller that must instead leave
+        an unreadable marker untouched (the global identity setter) checks for that itself."""
+        return _rr.merged_payload(self.restart_required(sid), sid, params, band, mode)
 
     def restart_required(self, stack_id: str) -> dict | None:
-        """The durable restart-required marker (FILE READ ONLY, GET-safe, TRI-STATE): set
-        atomically with a config save that changed restart/build-mode params while the stack
-        ran; cleared on a verified stop or a successful start/restart.
-
-          * SAFELY ABSENT (FileNotFoundError only)  -> None: no warning;
-          * SAFELY VALID                            -> the marker dict;
-          * PRESENT BUT UNSAFE (malformed, symlinked, a directory, special, inaccessible,
-            or claiming another stack) -> {"unsafe": True, "stack": …, "reason": …}: the
-            warning stays visible SAFE-SIDE with the explicit Restart action and a
-            diagnostic — an unreadable marker must never look like "no restart required".
-            The marker is NEVER silently cleared here (GET stays non-mutating)."""
-        import json as _json
-
-        def _unsafe(reason: str) -> dict:
-            return {"unsafe": True, "stack": stack_id, "mode": "restart", "params": [],
-                    "reason": reason}
-        try:
-            raw = runtime_fs.read_text_regular(self._paths, self._restart_marker_path(stack_id))
-        except FileNotFoundError:
-            return None                                   # SAFELY absent — proven
-        except (OSError, PathContainmentError, ValueError) as exc:
-            return _unsafe(f"restart-required marker is present but unreadable/unsafe "
-                           f"({exc}) — treat as restart required; resolve the marker")
-        try:
-            d = _json.loads(raw)
-        except (ValueError, TypeError):
-            return _unsafe("restart-required marker is malformed — treat as restart "
-                           "required; resolve the marker")
-        if not isinstance(d, dict) or d.get("version") != 1 or d.get("stack") != stack_id:
-            return _unsafe("restart-required marker fails validation — treat as restart "
-                           "required; resolve the marker")
-        # FULL field schema (a structurally-invalid-but-parseable marker was
-        # trusted — an unknown mode silently downgraded to restart, a string params value
-        # iterated character-by-character in the merge, an integer raised uncaught). ONE
-        # schema, here: every consumer (display AND the global-change merge) reads through
-        # this method, and any invalid shape stays byte-identical, safe-side UNSAFE.
-        if d.get("mode") not in ("restart", "build"):
-            return _unsafe("restart-required marker carries an unknown mode — treat as "
-                           "restart required; resolve the marker")
-        params_v = d.get("params")
-        if (not isinstance(params_v, list)
-                or not all(isinstance(x, str) and x
-                           and not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in x)
-                           for x in params_v)):
-            return _unsafe("restart-required marker carries malformed params — treat as "
-                           "restart required; resolve the marker")
-        band_v = d.get("band", "")
-        if band_v != "":
-            try:
-                validators.band(str(band_v), allow_both=False)
-            except validators.ValidationError:
-                return _unsafe("restart-required marker carries an invalid band — treat "
-                               "as restart required; resolve the marker")
-        if not isinstance(d.get("created_at"), (int, float)):
-            return _unsafe("restart-required marker carries an invalid timestamp — treat "
-                           "as restart required; resolve the marker")
-        return d
+        """The durable restart-required marker, tri-state (None / dict / safe-side unsafe dict):
+        set atomically with a config save that changed restart/build-mode params while the stack
+        ran; cleared on a verified stop or a successful start/restart. Never cleared by a read."""
+        return _rr.read_marker(self._paths, stack_id)
 
     def restart_required_stacks(self) -> list:
         """All stacks currently flagged restart-required — including SAFE-SIDE unsafe markers
         (for the dashboard + CLI status + dash signature)."""
         return [s.id for s in self.stacks() if self.restart_required(s.id) is not None]
-
-    def _clear_restart_required(self, stack_id: str) -> None:
-        """Clear the marker (best effort — a stale marker is safe-side: the operator sees a
-        yellow action that a fresh restart simply satisfies)."""
-        try:
-            runtime_fs.unlink(self._paths, self._restart_marker_path(stack_id))
-        except (OSError, PathContainmentError):
-            pass
 
     def save_component_remote(self, component_id: str, url: str) -> ActionResult:
         """Override (or clear, if url is blank) a component's GitHub remote. A shared source
@@ -2860,9 +2777,6 @@ class ParamsConfigMixin:
         for `dp_*`)."""
         if self.stack(target) is None:
             return self._unknown_stack(target)
-        from . import validators
-        from .gps import use_gps_default
-        from .paths import PathContainmentError
         cfg_band = self._config_band(target, band)
         label = f"'{target}'" + (f" ({cfg_band})" if cfg_band else "")
         run_names = {p.name for p in self.run_params_for(target)}

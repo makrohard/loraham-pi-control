@@ -495,9 +495,9 @@ def test_explicit_injection_never_gets_the_overlay(tmp_path, monkeypatch):
 
 
 def test_power_trigger_guard_locked_to_production_argv():
-    """RE-REVIEW: the guard matches EXACTLY the argv service_maintenance composes —
+    """RE-REVIEW: the guard matches EXACTLY the argv lhpc.core.power composes —
     locked together via power_trigger_argv, no substring heuristics."""
-    from lhpc.core.service_maintenance import power_trigger_argv
+    from lhpc.core.power import power_trigger_argv
     for kind in ("reboot", "poweroff"):
         assert rules.power_kind_in(power_trigger_argv(kind)) == kind
     assert rules.power_kind_in(["sh", "-c", "echo systemctl reboot manual"]) == ""

@@ -20,14 +20,15 @@ On pushes to `main` and `dev`, on pull requests and on manual dispatch — Pytho
 
 - `compileall lhpc` + `bash -n install.sh uninstall.sh bootstrap-deps.sh`
 - `ruff check lhpc` (the frozen ruleset) and `ruff check tests --select F,E9`
-- `pytest -q` — the **whole** suite, but no coverage, no `-m` lane, not under `setsid`
+- `pytest -q --cov=lhpc --cov-branch` — the **whole** suite with branch coverage measured and published (terminal summary, `coverage.xml` artifact per Python version, the total in the job summary); no `-m` lane, not under `setsid`
 - `bandit -q -r lhpc -lll` (high severity only) and `pip-audit . --strict` (dependency CVEs)
 - a separate `pin-validation` job: **every pinned source is validated against its live branch**
 
 ## What CI does not enforce
 
-- **Coverage.** No `--cov-fail-under` on purpose. If you touch `lhpc/`, run it and check the
-  branch-inclusive total does not drop:
+- **A coverage threshold.** CI measures and publishes branch coverage but does not gate on it — no
+  `--cov-fail-under` on purpose: a drop is judged in review. If you touch `lhpc/`, run it locally and
+  check the branch-inclusive total does not drop:
   `pytest -q -p no:cacheprovider --basetemp="$HOME/pt-lhpc" --cov=lhpc --cov-branch; rm -rf -- "$HOME/pt-lhpc"`
 - **Contract lane.** `pytest -m contract` (~20 s) runs inside `pytest -q` but is not a separate
   gate; use it as a fast pre-flight.

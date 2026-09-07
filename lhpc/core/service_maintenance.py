@@ -1,4 +1,4 @@
-"""Source update / uninstall / clean / known-working / source-check operations.
+"""Source update / uninstall / clean / known-working / source-check / upstream release tracking operations.
 
 Mixin of ControllerService (state/constants on the facade). Adapters import lhpc.core.services only."""
 from __future__ import annotations
@@ -7,20 +7,44 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-from . import runtime_fs, source_fs, source_registry
+from . import (
+    power,
+    restart_required,
+    runtime_fs,
+    source_fs,
+    source_registry,
+    validators,
+)
 from .model import RunState
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
 from .snapshot_memo import invalidates_snapshot
 
-POWER_TRIGGER_TEMPLATE = "sleep 1.5; exec timeout -k 5s 90s systemctl --no-block {kind}"
+# ---- upstream release tracking: pure helpers -------------------------------------------------
+
+def _version_key(v: str):
+    """An orderable key for a release version. Returns (release_ints, is_release):
+    each dotted segment's LEADING digits become an int (so '0-rc1' -> 0, never '01' -> 1),
+    and a pre-release/build suffix ('-rc1', '+meta') drops `is_release` to 0 so a clean
+    release sorts ABOVE its own pre-releases. Different lengths compare naturally as
+    tuples ('0.14' < '0.14.12')."""
+    raw = str(v).strip().lstrip("v")
+    release = raw.split("-", 1)[0].split("+", 1)[0]
+    nums = []
+    for part in release.split("."):
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break                       # leading digits only — stop at the first non-digit
+        nums.append(int(digits) if digits else 0)
+    return (tuple(nums), 1 if raw == release else 0)   # suffix present -> pre-release, lower
 
 
-def power_trigger_argv(kind: str) -> list:
-    """THE power trigger, single source of truth: the lab's spawn guard matches this
-    exact shape (tests lock the two together), so a composition change here can never
-    silently slip past the guard onto a real host."""
-    return ["sh", "-c", POWER_TRIGGER_TEMPLATE.format(kind=kind)]
+def _upstream_cache_path(paths, stack_id: str):
+    safe = validators.path_component(stack_id, field="upstream cache stack")
+    return paths.under("state", f"{safe}-upstream.json")
 
 
 class MaintenanceOpsMixin:
@@ -550,8 +574,6 @@ class MaintenanceOpsMixin:
         return core, gui, gps
 
     # --- power controls (dashboard Reboot / Shut down) ---------------------------------------
-    # kind -> the logind CanX query proving the operator is authorized WITHOUT interaction.
-    _POWER_KINDS: ClassVar[dict] = {"reboot": "CanReboot", "poweroff": "CanPowerOff"}
     # The pending marker refuses new task admissions for this long (boot-relative seconds).
     # The detached trigger is bounded to sleep 1.5s + `timeout -k 5s 90s`, strictly inside it —
     # past the TTL the trigger provably cannot fire, so admissions may safely reopen.
@@ -566,15 +588,12 @@ class MaintenanceOpsMixin:
         """logind's CanReboot/CanPowerOff answer for THIS process's user — one of
         yes/no/challenge/na, or '' on any failure. Structured parse of the busctl output
         (exactly `s "<verdict>"`), never substring."""
-        import re as _re
         r = self._system.runner.run(
             ["busctl", "--timeout=5", "call", "org.freedesktop.login1",
              "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
-             self._POWER_KINDS[kind]], 8.0)
-        if getattr(r, "returncode", 1) != 0:
-            return ""
-        m = _re.fullmatch(r'\s*s\s+"([a-z]+)"\s*', (getattr(r, "stdout", "") or ""))
-        return m.group(1) if m else ""
+             power.POWER_KINDS[kind]], 8.0)
+        return power.parse_busctl_verdict(getattr(r, "returncode", 1),
+                                          getattr(r, "stdout", "") or "")
 
     def _power_authorized(self, kind: str) -> bool:
         """Cached PER-ACTION logind verdict gating VISIBILITY (buttons, /power routes, the
@@ -603,7 +622,7 @@ class MaintenanceOpsMixin:
         if not (any(fs.exists(p) for p in ("/usr/bin/busctl", "/bin/busctl"))
                 and any(fs.exists(p) for p in ("/usr/bin/systemctl", "/bin/systemctl"))):
             return False
-        kinds = self._POWER_KINDS if kind is None else (kind,)
+        kinds = power.POWER_KINDS if kind is None else (kind,)
         return all(self._power_authorized(k) for k in kinds)
 
     def _power_pending_path(self):
@@ -615,7 +634,6 @@ class MaintenanceOpsMixin:
         then be killed by the delayed shutdown. Boot-relative uptime, immune to the Pi's
         post-boot NTP wall-clock jumps. VALID stale/other-boot markers are pruned; a MALFORMED
         marker refuses conservatively and is left for the operator (never auto-pruned)."""
-        import json as _json
         p = self._power_pending_path()
         try:
             if not p.exists():
@@ -624,22 +642,8 @@ class MaintenanceOpsMixin:
             return ("the power-pending marker could not be checked — refusing new work",
                     "power-pending")
         try:
-            import math as _math
-            rec = _json.loads(runtime_fs.read_text_regular(self._paths, p, max_bytes=4096)
-                              or "")
-            kind = rec["kind"]
-            bid = rec["boot_id"]
-            up0 = rec["requested_uptime"]
-            # Validate TYPES before use — `str()`/`float()` coercion laundered a
-            # null boot_id ("None") and a NaN uptime (every comparison False) straight into the
-            # fail-open prune path. Closed-set kind, nonempty string boot id, finite
-            # nonnegative numeric uptime — anything else is MALFORMED and refuses below.
-            if (kind not in self._POWER_KINDS
-                    or not isinstance(bid, str) or not bid
-                    or isinstance(up0, bool) or not isinstance(up0, (int, float))
-                    or not _math.isfinite(up0) or up0 < 0):
-                raise ValueError("malformed power-pending marker")
-            up0 = float(up0)
+            kind, bid, up0 = power.parse_pending_marker(
+                runtime_fs.read_text_regular(self._paths, p, max_bytes=4096) or "")
         except Exception:
             return (f"a power-request marker is unreadable ({p}) — refusing new work; inspect "
                     "it and delete it if it is stale", "power-pending")
@@ -672,7 +676,7 @@ class MaintenanceOpsMixin:
         new admissions until the trigger fires or its bounded life expires), then triggers
         respond-first via a detached bounded spawn. Contract: failures BEFORE the handshake
         verdict are typed; failures after it land only in the trigger log."""
-        if kind not in self._POWER_KINDS:
+        if kind not in power.POWER_KINDS:
             return ActionResult(False, f"unknown power action {kind!r} (reboot | poweroff)")
         running = sorted(s.id for s in self.stacks() if self.stack_running(s.id))
         verb = "Reboot" if kind == "reboot" else "Shut down"
@@ -702,7 +706,6 @@ class MaintenanceOpsMixin:
 
     def _power_apply_locked(self, kind: str, verb: str, running: list) -> ActionResult:
         import getpass as _getpass
-        import json as _json
 
         from . import deps as deps_mod
         from .lifecycle import current_boot_id
@@ -734,15 +737,15 @@ class MaintenanceOpsMixin:
             return ActionResult(False, f"Cannot {kind}: /proc/uptime is unreadable — the "
                                        "pending-action guard cannot be timed")
         try:
-            runtime_fs.atomic_write(self._paths, marker, _json.dumps(
-                {"kind": kind, "boot_id": boot_id, "requested_uptime": up0}), 0o600)
+            runtime_fs.atomic_write(self._paths, marker,
+                                    power.pending_marker_payload(kind, boot_id, up0), 0o600)
         except (OSError, PathContainmentError) as exc:
             return ActionResult(False, f"Cannot {kind}: could not record the pending action "
                                        f"({exc}) — nothing was triggered")
         # Respond-first detached trigger, bounded strictly under POWER_PENDING_TTL_S:
         # --no-block returns after enqueuing with logind; timeout SIGKILL-backstops the client.
         log_path = self._paths.under("logs", f"power-{kind}.log")
-        argv = power_trigger_argv(kind)
+        argv = power.power_trigger_argv(kind)
         try:
             pid = self._lifecycle()._spawn(argv, log_path)
         except (OSError, PathContainmentError) as exc:
@@ -759,6 +762,236 @@ class MaintenanceOpsMixin:
             notes.append("  [note] running stacks come back via boot-restore")
         return ActionResult(True, f"{verb} requested — the console will go dark shortly.",
                             details=notes)
+
+    # ---- upstream release tracking (fetched packages that declare `release_repo`) ---------------
+
+    def fetched_version_state(self, target: str) -> dict:
+        """{"installed", "pinned", "update"} for a source-less FETCHED main component (else {}).
+
+        The version travels in the build marker name (`.lhpc-built-<version>`): the manifest's
+        marker is the PINNED version, the marker actually on disk is the INSTALLED one — a
+        fetched stack has no git head to compare, and its row showed no version at all. When
+        the pin moves (an LHPC update), the two differ and the console can say so, naming the
+        NEW version; Build/Update then re-fetches (the fetch script replaces the whole tree,
+        old marker included).
+        """
+        s = self.stack(target)
+        main = s.main_component if s else None
+        if main is None or main.source or not main.build_marker:
+            return {}
+        prefix = ".lhpc-built-"
+        marker_name = main.build_marker.rsplit("/", 1)[-1]
+        if not marker_name.startswith(prefix):
+            return {}
+        pinned = marker_name[len(prefix):]
+        build_dir = main.build_marker.split("/")[:-1]
+        # INSTALLED = the version the fetch script recorded IN the tree (`.lhpc-graywolf-
+        # version`, "<version> <arch>") — the true version, which an upstream update moves
+        # while the manifest marker name stays the pinned baseline. Fall back to the marker
+        # glob for a tree fetched before that file existed.
+        installed = ""
+        try:
+            stamp = self._paths.under(*build_dir, ".lhpc-graywolf-version")
+            installed = (runtime_fs.read_text_regular(self._paths, stamp, max_bytes=128)
+                         or "").split()[0] if stamp.exists() else ""
+        except (OSError, ValueError, IndexError, PathContainmentError):
+            installed = ""
+        if not installed:
+            try:
+                d = self._paths.under(*build_dir)
+                if d.is_dir():
+                    for pth in sorted(d.glob(prefix + "*")):
+                        installed = pth.name[len(prefix):]
+                        break
+            except (OSError, PathContainmentError):
+                pass
+        # KEY is `has_update`, never `update`: Jinja `dict.update` resolves to the built-in
+        # METHOD (always truthy), so a template `.update` would show the pill unconditionally
+        # `installed`/`pinned` do not collide with any dict attribute.
+        # FORWARD-only: only a pin AHEAD of installed is an update — an operator who ran the
+        # upstream update sits ahead of the pin and must NOT be shown a downgrade prompt.
+        return {"installed": installed, "pinned": pinned,
+                "has_update": bool(installed and _version_key(pinned)
+                                   > _version_key(installed))}
+
+    def graywolf_upstream_state(self, target: str, _installed: str | None = None) -> dict:
+        """Cached upstream-release state for a fetched package that declares `release_repo`:
+        {latest, installed, ahead, checked_at, error} — or {} when there is no upstream to
+        track. NETWORK-FREE (reads the cache the explicit check wrote); the row can render it
+        on every GET without a probe."""
+        import json as _json
+        s = self.stack(target)
+        main = s.main_component if s else None
+        if main is None or not getattr(main, "release_repo", ""):
+            return {}
+        # Accept a caller-computed installed to avoid a second fetched_version_state read on
+        # the /stacks render (the ctx already has it).
+        installed = _installed if _installed is not None else \
+            (self.fetched_version_state(target) or {}).get("installed", "")
+        cached = {}
+        try:
+            cached = _json.loads(runtime_fs.read_text_regular(
+                self._paths, _upstream_cache_path(self._paths, target), max_bytes=4096) or "{}")
+        except (OSError, ValueError, PathContainmentError):
+            cached = {}
+        latest = str(cached.get("latest") or "")
+        return {"latest": latest, "installed": installed,
+                "ahead": bool(latest and installed
+                              and _version_key(latest) > _version_key(installed)),
+                "checked_at": cached.get("checked_at"), "error": cached.get("error", "")}
+
+    def graywolf_upstream_check(self, target: str) -> ActionResult:
+        """NETWORK (explicit POST): query the GitHub releases API for the latest tag of the
+        fetched package's `release_repo` and cache it. Never reached from a GET route."""
+        import json as _json
+        s = self.stack(target)
+        main = s.main_component if s else None
+        repo = getattr(main, "release_repo", "") if main else ""
+        if not repo:
+            return ActionResult(False, f"'{target}' has no upstream release repo to check")
+
+        def _prev_latest() -> str:
+            try:
+                return str(_json.loads(runtime_fs.read_text_regular(
+                    self._paths, _upstream_cache_path(self._paths, target), max_bytes=4096) or "{}")
+                    .get("latest") or "")
+            except (OSError, ValueError, PathContainmentError):
+                return ""
+
+        def _write(latest: str, error: str) -> bool:
+            try:
+                runtime_fs.atomic_write(self._paths, _upstream_cache_path(self._paths, target),
+                                        _json.dumps({"latest": latest, "error": error,
+                                                     "checked_at": int(time.time())}) + "\n",
+                                        0o644)
+                return True
+            except (OSError, PathContainmentError):
+                return False                        # caller decides — never a silent success
+
+        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        r = self._system.runner.run(
+            ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
+             url], 15.0)
+        if getattr(r, "returncode", 1) != 0:
+            # A transient failure must NOT wipe a previously found version — keep
+            # the last known `latest` so the pill/Update button survive a flaky/rate-limited check.
+            _write(_prev_latest(), "could not reach the GitHub releases API")
+            return ActionResult(False, f"upstream check failed for '{target}': network/API error",
+                                next_commands=[f"lhpc status {target}"])
+        try:
+            tag = str(_json.loads(r.stdout or "{}").get("tag_name") or "").strip().lstrip("v")
+        except ValueError:
+            tag = ""
+        if not tag:
+            _write(_prev_latest(), "no tag_name in the API response (rate-limited?)")
+            return ActionResult(False, f"upstream check for '{target}': no release tag found "
+                                       "(GitHub may be rate-limiting unauthenticated requests)")
+        # Decide availability from the OBSERVED tag, never from a re-read of the
+        # cache we just tried to write — a failed write would otherwise report a stale/empty
+        # cache as "up to date" AND return ok. Surface the persistence failure explicitly.
+        installed = (self.fetched_version_state(target) or {}).get("installed", "")
+        ahead = bool(tag and installed
+                     and _version_key(tag) > _version_key(installed))
+        # With NO version stamp on disk, "up to date" was claimed for an unknown
+        # install. Say what is actually known; never claim currency without a stamp.
+        if installed:
+            inst_txt = f"installed {installed}"
+            avail = " — update available" if ahead else " — up to date"
+        else:
+            inst_txt = "installed version unknown (no version stamp)"
+            avail = " — refetch/reinstall to record it"
+        if not _write(tag, ""):
+            return ActionResult(False, f"observed upstream {tag} ({inst_txt}"
+                                       f"{avail}) but could NOT record it — the pill may not "
+                                       "persist across a reload",
+                                next_commands=[f"lhpc status {target}"])
+        return ActionResult(True, f"upstream latest is {tag}; {inst_txt}{avail}",
+                            next_commands=[f"lhpc status {target}"])
+
+    def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
+        """One-click update to the latest upstream release, verified against that release's own
+        checksums.txt (see graywolf-fetch.sh --from-upstream). Fetches, re-marks built, and
+        restarts the stack if it was running. Refuses when not actually behind upstream."""
+        st = self.graywolf_upstream_state(target)
+        if not st:
+            return ActionResult(False, f"'{target}' is not an upstream-tracking package")
+        if not st.get("latest"):
+            return ActionResult(False, "run the upstream check first",
+                                next_commands=[f"lhpc status {target}"])
+        if not st.get("ahead"):
+            return ActionResult(True, f"'{target}' is already at the latest upstream "
+                                      f"release ({st['installed']}).")
+        version = st["latest"]
+        s = self.stack(target)
+        main = s.main_component
+        if not apply:
+            return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
+                                      "(verified against its checksums.txt) and restart.",
+                                next_commands=[f"lhpc update {target} --upstream --yes"])
+        # This mutates and replaces the installed tree, so it MUST hold the same
+        # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
+        # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
+        # another op may have moved the version or the running state while we waited.
+        from . import reslock
+        try:
+            with self._admission_guard("graywolf-upstream-update", target):
+                return self._graywolf_upstream_update_locked(target, main)
+        except AdmissionRefused as _adm:
+            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
+        except reslock.ResourceBusy as busy:
+            # Admission contention with ANOTHER process raises ResourceBusy, not
+            # AdmissionRefused — return the same typed refusal every peer op gives.
+            return ActionResult(False, f"Cannot update '{target}': {busy}",
+                                next_commands=[f"lhpc status {target}"])
+
+    def _graywolf_upstream_update_locked(self, target: str, main) -> ActionResult:
+        from .assets import asset_path
+        from .lifecycle import BUILD_MARKER_TEXT
+        st = self.graywolf_upstream_state(target)               # re-read under the lock
+        if not st.get("ahead"):
+            return ActionResult(True, f"'{target}' is already at the latest upstream "
+                                      f"release ({st.get('installed')}).")
+        version = st["latest"]
+        was_running = self.stack_running(target)
+        # Fetch into the component's OWN build_root (not a hardcoded path) so the tree the
+        # start gate and run_argv point at is the tree we replace.
+        dest = str(self._paths.under(*(main.build_root or "build/tools/graywolf").split("/")))
+        script = str(asset_path("scripts/graywolf-fetch.sh"))
+        r = self._system.runner.run(["bash", script, dest, version, "--from-upstream"],
+                                    getattr(main, "build_timeout", 900.0) or 900.0)
+        if getattr(r, "returncode", 1) != 0:
+            return ActionResult(False, f"upstream fetch failed for '{target}' ({version}) — "
+                                       "the install was left unchanged",
+                                details=[(r.stderr or "").strip()[-300:]],
+                                next_commands=[f"lhpc status {target}"])
+        # Re-mark built: the fetch swapped the whole tree (marker included), so re-write the
+        # manifest build marker (graywolf has no build_requires, so its content is the static
+        # text) — otherwise the start gate would read "not built" for the freshly fetched tree.
+        try:
+            marker = self._lifecycle().source_dir(main) / main.build_marker
+            runtime_fs.atomic_write(self._paths, marker,
+                                    BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
+        except (OSError, PathContainmentError) as exc:
+            return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
+        notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
+        restart_ok = True
+        # `was_running` was sampled BEFORE a fetch that can run for minutes; an
+        # operator stop during the fetch (stop needs no task admission) was then overridden by
+        # the restart. Re-sample: restart only what is STILL running now.
+        if was_running and not self.stack_running(target):
+            notes.append("  [restart] skipped — the stack was stopped during the fetch "
+                         "(operator stop preserved)")
+        elif was_running:
+            res = self.restart(target, apply=True)
+            restart_ok = res.ok
+            notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
+        # a failed restart leaves the station OFFLINE — report it as NOT ok so
+        # the CLI exits non-zero and the console flashes a warning, not a green success.
+        return ActionResult(
+            restart_ok,
+            (f"'{target}' updated to {version}." if restart_ok
+             else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
+            details=notes, next_commands=[f"lhpc status {target}"])
 
     def deps_script(self) -> str:
         """Render bootstrap-deps.sh — every declared prerequisite as ONE executable sudo script the
@@ -2168,7 +2401,7 @@ class MaintenanceOpsMixin:
                              "start", "post") for cid in comp_ids})
         markers = [self._interactive_marker(sid), self._band_marker(sid),
                    known_working.candidate_path(self._paths, sid),
-                   self._restart_marker_path(sid),
+                   restart_required.marker_path(self._paths, sid),
                    known_working.store_path(self._paths, sid),
                    # a clean that promises a fresh slate must not leave a stale
                    # operator stop intent behind for the reinstall to inherit.

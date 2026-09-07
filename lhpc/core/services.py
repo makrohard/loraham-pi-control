@@ -33,6 +33,7 @@ from .config import (
     load_config,
     load_stack_config,
 )
+from .gps import USE_GPS_PARAM
 from .install import Installer, Plan
 from .lifecycle import GUI_MISSING_HINT, Lifecycle
 from .model import (
@@ -158,7 +159,11 @@ def _load_system_provider(paths):
 
 class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMixin, MaintenanceOpsMixin, ParamsConfigMixin, LifecycleOpsMixin, HmacOpsMixin, SystemStatsMixin, FirewallOpsMixin, BootRestoreOpsMixin,
                         BinaryChannelMixin, BinaryOpsMixin, NetworkOpsMixin):
-    """Facade over the core. Construct once per process; cheap and stateless.
+    """Facade over the core: composes the service_* mixins into ONE object. Construct once per
+    process and share it (the web app does, across threads) — it carries the manifest and
+    config caches, the config lock, and per-thread re-entrancy bookkeeping for the on-disk
+    admission and resource locks. Authoritative state lives on disk under the runtime root,
+    never here.
 
     `system` and `paths` are injectable so tests drive it with fakes.
     """
@@ -1813,7 +1818,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # The GPS switch param. A stack is GPS-capable IFF one of its components declares it —
     # see _gps_stacks(); there is deliberately no second list to keep in sync.
-    GPS_PARAM: ClassVar[str] = "use_gps"
+    GPS_PARAM: ClassVar[str] = USE_GPS_PARAM
 
     def _gps_stacks(self) -> frozenset:
         """Stacks whose components can consume a position: those declaring the `use_gps` param.

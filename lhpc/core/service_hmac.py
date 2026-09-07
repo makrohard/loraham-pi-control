@@ -12,6 +12,7 @@ import secrets as _secrets
 import sys
 import uuid
 
+from . import jobs
 from .abortflag import AbortFlag
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused
@@ -599,7 +600,7 @@ class HmacOpsMixin:
                 run_id = uuid.uuid4().hex
                 job = _hmac_log_base(run_id) + ".log"
                 ident = procident.proc_identity(os.getpid())
-                if not self._write_job_marker(job, os.getpid(), stack_id, "hmac-apply", ident=ident):
+                if not jobs.write_job_marker(self._paths, job, os.getpid(), stack_id, "hmac-apply", ident=ident):
                     emit("Could not identity-track the foreground run — aborting.")
                     return 1
                 handlers = None

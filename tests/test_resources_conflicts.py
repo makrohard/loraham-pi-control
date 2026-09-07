@@ -10,7 +10,7 @@ from lhpc.core.model import (
     ResourceKind,
     ResourceMode,
 )
-from lhpc.core.resources import interpret_conflicts
+from lhpc.core.resources import interpret_conflicts, limit_radio_claims
 
 
 def _spi(mode: ResourceMode) -> ResourceClaim:
@@ -62,3 +62,27 @@ def test_real_manifest_daemons_cooperate_on_spi():
     comps = [c for s in load_manifest() for c in s.components]
     conflicts = interpret_conflicts(comps, running_ids=set())
     assert not [c for c in conflicts if c.resource_key == "spi.bus.0"]
+
+
+def _radio(band: str) -> ResourceClaim:
+    return ResourceClaim(key=f"loraham.radio.{band}", kind=ResourceKind.RADIO_BAND, mode=ResourceMode.EXCLUSIVE)
+
+
+def test_limit_radio_claims_keeps_only_the_named_bands_and_every_other_claim():
+    comp = Component(id="x", name="x", kind=ComponentKind.SERVICE,
+                     resources=(_radio("433"), _radio("868"), _spi(ResourceMode.COOPERATIVE)))
+    out = limit_radio_claims(comp, {"433"})
+    assert [r.key for r in out.resources] == ["loraham.radio.433", "spi.bus.0"]
+    assert out.id == comp.id and out is not comp                      # a copy, the input untouched
+    assert [r.key for r in comp.resources] == ["loraham.radio.433", "loraham.radio.868", "spi.bus.0"]
+
+
+def test_limit_radio_claims_with_no_bands_strips_every_radio_claim():
+    comp = Component(id="x", name="x", kind=ComponentKind.SERVICE,
+                     resources=(_radio("433"), _radio("868"), _spi(ResourceMode.COOPERATIVE)))
+    assert [r.key for r in limit_radio_claims(comp, set()).resources] == ["spi.bus.0"]
+
+
+def test_limit_radio_claims_without_radio_claims_is_the_same_component():
+    comp = _comp("chat", _spi(ResourceMode.EXCLUSIVE))
+    assert limit_radio_claims(comp, {"868"}).resources == comp.resources

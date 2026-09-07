@@ -9,8 +9,16 @@ import re as _re
 import time
 from pathlib import Path
 
-from . import daemon_control, procident, runtime_fs, validators
+from . import (
+    daemon_control,
+    gps,
+    jobs,
+    procident,
+    runtime_fs,
+    validators,
+)
 from . import resources as resources_mod
+from . import restart_required as _rr
 from .lifecycle import GUI_MISSING_HINT
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome, applied_ok
@@ -40,7 +48,6 @@ class LifecycleOpsMixin:
             admitting a second exclusive owner onto a radio already in use is a real
             collision. Unknown must cost a refusal, not a silent overlap.
         """
-        import dataclasses
         # Daemon radio ownership is PROCESS topology (a dead CONF socket does not free the radio),
         # not socket reachability.
         served = self._daemon_claimed_bands()
@@ -48,13 +55,8 @@ class LifecycleOpsMixin:
         def limited(c, eff_bands):
             if c.id != self.DAEMON_ID and not c.bands:
                 return c                                  # single-fixed-band: unchanged
-            # Keep only radio claims for the band(s) this component actually uses. When the band is
-            # unknown (empty eff_bands), STRIP every radio claim — a band-switchable app must never
-            # claim BOTH radios just because its running-band marker is missing.
-            keep = [r for r in c.resources
-                    if not (r.key.startswith("loraham.radio.")
-                            and r.key.rsplit(".", 1)[-1] not in eff_bands)]
-            return dataclasses.replace(c, resources=tuple(keep))
+            # Only the band(s) this component actually uses; an unknown band strips every radio claim.
+            return resources_mod.limit_radio_claims(c, eff_bands)
 
         running, running_ids = [], set()
         for ss in snap.stacks:
@@ -133,32 +135,13 @@ class LifecycleOpsMixin:
             return {}
         return got
 
-    GPS_MARKER_MAX_AGE_S = 60.0
-
     def _gps_marker_is_current(self, got: dict) -> bool:
-        """Is this readiness marker written by a live feed, recently?"""
-        import time as _t
-        try:
-            updated = float(got.get("updated", 0) or 0)
-        except (TypeError, ValueError):
+        """Is this readiness marker written by a live feed, recently? Fresh AND a usable owner
+        pid AND that pid alive (signal 0) — the same three rules status.py applies."""
+        if not gps.marker_is_fresh(got, time.time()):
             return False
-        if updated <= 0 or (_t.time() - updated) > self.GPS_MARKER_MAX_AGE_S:
-            return False
-        # The pid is REQUIRED, not a bonus: the bridge writes it on every refresh, so a marker
-        # without one is not from a feed we are running. `bool` is an `int` in Python — True
-        # would otherwise sail through as "pid 1", which is always alive.
-        pid = got.get("pid")
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-            return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            pass                                       # alive, owned by someone else
-        except OSError:
-            return False
-        return True
+        pid = gps.marker_owner_pid(got)
+        return pid is not None and procident.pid_exists_signal0(pid)
 
     def _gps_feed_admission(self, comp) -> tuple[bool, str]:
         """The START gate's verdict on a GPS feed: `_gps_feed_ready`, softened for `auto`.
@@ -1501,7 +1484,7 @@ class LifecycleOpsMixin:
                             and (self.stack_of(r.component) or r.stack) == target
                             for r in results)
             if not _kept_old and self.restart_required(target) == _pre_marker:
-                self._clear_restart_required(target)
+                _rr.clear_marker(self._paths, target)
         if position_note:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
@@ -2527,7 +2510,7 @@ class LifecycleOpsMixin:
                 summary = (f"Stop for '{target}' applied but the known-working candidate "
                            f"could not be retired — see details.")
                 details = [*list(details), f"  [candidate] not cleared: {why}"]
-            self._clear_restart_required(target)
+            _rr.clear_marker(self._paths, target)
         return ActionResult(ok, summary, details=details, results=tuple(results),
                             next_commands=[f"lhpc status {target}"])
 
@@ -3507,85 +3490,8 @@ class LifecycleOpsMixin:
                     pass                               # refused/failed delete -> retain,
                     # never raise, never increment the count (a leaf swapped to a dir or
                     # symlink between stat and unlink lands here safely)
-        # The transient launcher scripts (`state/jobs/<uid>.py`,
-        # `state/post/<uid>.py`) were created every build/start and NEVER pruned —
-        # unbounded inode growth, and (before the secrets-at-exec fix) a resting place for
-        # baked secrets. Python reads a launcher wholly at interpreter start, so once its
-        # process is running the file is no longer needed; keep only the newest few.
-        for sub in ("jobs", "post"):
-            removed += self._prune_ephemeral(("state", sub), ".py", self.LOG_RETENTION)
+        removed += jobs.prune_ephemeral_launchers(self._paths, self.LOG_RETENTION)
         return removed
-
-    def _prune_ephemeral(self, subdir: tuple, suffix: str, keep: int) -> int:
-        """Keep only the newest `keep` REGULAR `suffix`-files under a runtime subdir; remove
-        the rest. FULLY FAIL-CLOSED (P2-B): path CONSTRUCTION (`under` raises
-        PathContainmentError for an escaping/symlinked `state/jobs`|`state/post`), no-follow
-        enumeration, descriptor-safe metadata, and deletion are ALL guarded — an unsafe
-        subdir returns a safe zero for that subdir and leaves external sentinels untouched.
-        Only regular files are candidates; any uncertainty is retained."""
-        import stat as _stat
-
-        from .paths import PathContainmentError
-        try:
-            d = self._paths.under(*subdir)
-            entries = runtime_fs.scandir_nofollow(self._paths, d)
-        except (OSError, PathContainmentError, ValueError):
-            return 0
-        items = []
-        for name, is_link in entries:
-            if is_link or not name.endswith(suffix):
-                continue
-            f = d / name
-            stt = runtime_fs.stat_leaf_nofollow(self._paths, f)    # descriptor-safe, no-follow
-            if stt is None or not _stat.S_ISREG(stt.st_mode):
-                continue                                           # regular files only
-            items.append((stt.st_mtime, f))
-        items.sort(reverse=True)                                   # newest first
-        removed = 0
-        for _mtime, f in items[keep:]:
-            try:
-                runtime_fs.unlink(self._paths, f)
-                removed += 1
-            except (OSError, PathContainmentError):
-                pass                                               # retain, never raise
-        return removed
-
-    def _jobs_dir(self):
-        return self._paths.runtime_root / "state" / "jobs"
-
-    def _write_job_marker(self, log_name: str, pid: int, target: str, op: str,
-                          ident: dict | None = None, attempt_id: str = "") -> bool:
-        """Record a build/test job with a COMPLETE, PID-reuse-resistant identity. Returns
-        True only when a complete identity was captured AND the marker was durably
-        persisted; False means the just-spawned process is UNTRACKED and the caller must
-        terminate it (no silent orphan). `ident`, when given, is the identity captured
-        immediately after spawn — used as-is (never re-read a possibly-reused pid).
-        `attempt_id` (a controller-generated hex string, "" for non-web jobs) lets a detached
-        web child prove — via `webjob_gate` — that THIS exact attempt was tracked."""
-        try:
-            slug = validators.path_component(log_name, field="job log")
-            path = self._paths.under("state", "jobs", slug + ".job")
-        except (validators.ValidationError, PathContainmentError):
-            return False
-        if ident is None:
-            ident = procident.proc_identity(pid) or {}
-        # Refuse an incomplete identity via the ONE shared predicate — a marker is never
-        # written with sentinel (-1)/blank fields; the caller then terminates the spawn.
-        if not (isinstance(pid, int) and pid > 0 and procident.identity_complete(ident)):
-            return False
-        aid = attempt_id if _re.fullmatch(r"[0-9a-f]{0,64}", attempt_id or "") else ""
-        body = (f'launch_id = "{slug}"\npid = {pid}\n'
-                f'starttime = {int(ident["starttime"])}\n'
-                f'pgid = {int(ident["pgid"])}\nsid = {int(ident["sid"])}\n'
-                f'exec = "{ident["exec"]}"\nargv_fp = "{ident["argv_fp"]}"\n'
-                f'argv_len = {int(ident["argv_len"])}\n'
-                f'target = "{target}"\nop = "{op}"\nlog = "{slug}"\n'
-                f'attempt_id = "{aid}"\n')
-        try:
-            runtime_fs.write_marker(self._paths, path, body)
-            return True
-        except (OSError, PathContainmentError, validators.ValidationError):
-            return False
 
     def _track_or_terminate(self, life, log_name: str, pid: int, cid: str, op: str,
                             attempt_id: str = "", ident: dict | None = None) -> str:
@@ -3600,7 +3506,7 @@ class LifecycleOpsMixin:
         # marker and any cleanup — never re-read a possibly-reused pid as the original job.
         if ident is None:
             ident = procident.proc_identity(pid)
-        if self._write_job_marker(log_name, pid, cid, op, ident=ident, attempt_id=attempt_id):
+        if jobs.write_job_marker(self._paths, log_name, pid, cid, op, ident=ident, attempt_id=attempt_id):
             return ""
         killed = life._terminate_unobserved(pid, ident)
         if killed:
@@ -3633,9 +3539,7 @@ class LifecycleOpsMixin:
         (`prune_logs`/`build`/`test`/`spawn_web_job`)."""
         import stat as _stat
         import tomllib
-
-        from .paths import PathContainmentError
-        d = self._jobs_dir()
+        d = jobs.jobs_dir(self._paths)
         # Descriptor-safe enumeration (no `is_dir()`/`glob`): a symlinked/escaping jobs dir
         # fails closed (no trusted jobs); a symlinked marker LEAF is diagnostic evidence,
         # never treated as a live job.
@@ -3939,265 +3843,6 @@ class LifecycleOpsMixin:
         for c in comps:
             params.extend(c.run_params)
         return params
-
-    def fetched_version_state(self, target: str) -> dict:
-        """{"installed", "pinned", "update"} for a source-less FETCHED main component (else {}).
-
-        The version travels in the build marker name (`.lhpc-built-<version>`): the manifest's
-        marker is the PINNED version, the marker actually on disk is the INSTALLED one — a
-        fetched stack has no git head to compare, and its row showed no version at all. When
-        the pin moves (an LHPC update), the two differ and the console can say so, naming the
-        NEW version; Build/Update then re-fetches (the fetch script replaces the whole tree,
-        old marker included).
-        """
-        s = self.stack(target)
-        main = s.main_component if s else None
-        if main is None or main.source or not main.build_marker:
-            return {}
-        prefix = ".lhpc-built-"
-        marker_name = main.build_marker.rsplit("/", 1)[-1]
-        if not marker_name.startswith(prefix):
-            return {}
-        pinned = marker_name[len(prefix):]
-        build_dir = main.build_marker.split("/")[:-1]
-        # INSTALLED = the version the fetch script recorded IN the tree (`.lhpc-graywolf-
-        # version`, "<version> <arch>") — the true version, which an upstream update moves
-        # while the manifest marker name stays the pinned baseline. Fall back to the marker
-        # glob for a tree fetched before that file existed.
-        installed = ""
-        try:
-            from . import runtime_fs
-            stamp = self._paths.under(*build_dir, ".lhpc-graywolf-version")
-            installed = (runtime_fs.read_text_regular(self._paths, stamp, max_bytes=128)
-                         or "").split()[0] if stamp.exists() else ""
-        except (OSError, ValueError, IndexError, PathContainmentError):
-            installed = ""
-        if not installed:
-            try:
-                d = self._paths.under(*build_dir)
-                if d.is_dir():
-                    for pth in sorted(d.glob(prefix + "*")):
-                        installed = pth.name[len(prefix):]
-                        break
-            except (OSError, PathContainmentError):
-                pass
-        # KEY is `has_update`, never `update`: Jinja `dict.update` resolves to the built-in
-        # METHOD (always truthy), so a template `.update` would show the pill unconditionally
-        # `installed`/`pinned` do not collide with any dict attribute.
-        # FORWARD-only: only a pin AHEAD of installed is an update — an operator who ran the
-        # upstream update sits ahead of the pin and must NOT be shown a downgrade prompt.
-        return {"installed": installed, "pinned": pinned,
-                "has_update": bool(installed and self._ver_tuple(pinned)
-                                   > self._ver_tuple(installed))}
-
-    @staticmethod
-    def _ver_tuple(v: str):
-        """An orderable key for a release version. Returns (release_ints, is_release):
-        each dotted segment's LEADING digits become an int (so '0-rc1' -> 0, never '01' -> 1),
-        and a pre-release/build suffix ('-rc1', '+meta') drops `is_release` to 0 so a clean
-        release sorts ABOVE its own pre-releases. Different lengths compare naturally as
-        tuples ('0.14' < '0.14.12')."""
-        raw = str(v).strip().lstrip("v")
-        release = raw.split("-", 1)[0].split("+", 1)[0]
-        nums = []
-        for part in release.split("."):
-            digits = ""
-            for ch in part:
-                if ch.isdigit():
-                    digits += ch
-                else:
-                    break                       # leading digits only — stop at the first non-digit
-            nums.append(int(digits) if digits else 0)
-        return (tuple(nums), 1 if raw == release else 0)   # suffix present -> pre-release, lower
-
-    def _upstream_cache_path(self, stack_id: str):
-        from . import validators
-        safe = validators.path_component(stack_id, field="upstream cache stack")
-        return self._paths.under("state", f"{safe}-upstream.json")
-
-    def graywolf_upstream_state(self, target: str, _installed: str | None = None) -> dict:
-        """Cached upstream-release state for a fetched package that declares `release_repo`:
-        {latest, installed, ahead, checked_at, error} — or {} when there is no upstream to
-        track. NETWORK-FREE (reads the cache the explicit check wrote); the row can render it
-        on every GET without a probe."""
-        import json as _json
-        s = self.stack(target)
-        main = s.main_component if s else None
-        if main is None or not getattr(main, "release_repo", ""):
-            return {}
-        # Accept a caller-computed installed to avoid a second fetched_version_state read on
-        # the /stacks render (the ctx already has it).
-        installed = _installed if _installed is not None else \
-            (self.fetched_version_state(target) or {}).get("installed", "")
-        cached = {}
-        try:
-            from . import runtime_fs
-            cached = _json.loads(runtime_fs.read_text_regular(
-                self._paths, self._upstream_cache_path(target), max_bytes=4096) or "{}")
-        except (OSError, ValueError, PathContainmentError):
-            cached = {}
-        latest = str(cached.get("latest") or "")
-        return {"latest": latest, "installed": installed,
-                "ahead": bool(latest and installed
-                              and self._ver_tuple(latest) > self._ver_tuple(installed)),
-                "checked_at": cached.get("checked_at"), "error": cached.get("error", "")}
-
-    def graywolf_upstream_check(self, target: str) -> ActionResult:
-        """NETWORK (explicit POST): query the GitHub releases API for the latest tag of the
-        fetched package's `release_repo` and cache it. Never reached from a GET route."""
-        import json as _json
-        import time as _time
-        s = self.stack(target)
-        main = s.main_component if s else None
-        repo = getattr(main, "release_repo", "") if main else ""
-        if not repo:
-            return ActionResult(False, f"'{target}' has no upstream release repo to check")
-
-        def _prev_latest() -> str:
-            from . import runtime_fs
-            try:
-                return str(_json.loads(runtime_fs.read_text_regular(
-                    self._paths, self._upstream_cache_path(target), max_bytes=4096) or "{}")
-                    .get("latest") or "")
-            except (OSError, ValueError, PathContainmentError):
-                return ""
-
-        def _write(latest: str, error: str) -> bool:
-            from . import runtime_fs
-            try:
-                runtime_fs.atomic_write(self._paths, self._upstream_cache_path(target),
-                                        _json.dumps({"latest": latest, "error": error,
-                                                     "checked_at": int(_time.time())}) + "\n",
-                                        0o644)
-                return True
-            except (OSError, PathContainmentError):
-                return False                        # caller decides — never a silent success
-
-        url = f"https://api.github.com/repos/{repo}/releases/latest"
-        r = self._system.runner.run(
-            ["curl", "-fsSL", "--max-time", "12", "-H", "Accept: application/vnd.github+json",
-             url], 15.0)
-        if getattr(r, "returncode", 1) != 0:
-            # A transient failure must NOT wipe a previously found version — keep
-            # the last known `latest` so the pill/Update button survive a flaky/rate-limited check.
-            _write(_prev_latest(), "could not reach the GitHub releases API")
-            return ActionResult(False, f"upstream check failed for '{target}': network/API error",
-                                next_commands=[f"lhpc status {target}"])
-        try:
-            tag = str(_json.loads(r.stdout or "{}").get("tag_name") or "").strip().lstrip("v")
-        except ValueError:
-            tag = ""
-        if not tag:
-            _write(_prev_latest(), "no tag_name in the API response (rate-limited?)")
-            return ActionResult(False, f"upstream check for '{target}': no release tag found "
-                                       "(GitHub may be rate-limiting unauthenticated requests)")
-        # Decide availability from the OBSERVED tag, never from a re-read of the
-        # cache we just tried to write — a failed write would otherwise report a stale/empty
-        # cache as "up to date" AND return ok. Surface the persistence failure explicitly.
-        installed = (self.fetched_version_state(target) or {}).get("installed", "")
-        ahead = bool(tag and installed
-                     and self._ver_tuple(tag) > self._ver_tuple(installed))
-        # With NO version stamp on disk, "up to date" was claimed for an unknown
-        # install. Say what is actually known; never claim currency without a stamp.
-        if installed:
-            inst_txt = f"installed {installed}"
-            avail = " — update available" if ahead else " — up to date"
-        else:
-            inst_txt = "installed version unknown (no version stamp)"
-            avail = " — refetch/reinstall to record it"
-        if not _write(tag, ""):
-            return ActionResult(False, f"observed upstream {tag} ({inst_txt}"
-                                       f"{avail}) but could NOT record it — the pill may not "
-                                       "persist across a reload",
-                                next_commands=[f"lhpc status {target}"])
-        return ActionResult(True, f"upstream latest is {tag}; {inst_txt}{avail}",
-                            next_commands=[f"lhpc status {target}"])
-
-    def graywolf_upstream_update(self, target: str, apply: bool = False) -> ActionResult:
-        """One-click update to the latest upstream release, verified against that release's own
-        checksums.txt (see graywolf-fetch.sh --from-upstream). Fetches, re-marks built, and
-        restarts the stack if it was running. Refuses when not actually behind upstream."""
-        st = self.graywolf_upstream_state(target)
-        if not st:
-            return ActionResult(False, f"'{target}' is not an upstream-tracking package")
-        if not st.get("latest"):
-            return ActionResult(False, "run the upstream check first",
-                                next_commands=[f"lhpc status {target}"])
-        if not st.get("ahead"):
-            return ActionResult(True, f"'{target}' is already at the latest upstream "
-                                      f"release ({st['installed']}).")
-        version = st["latest"]
-        s = self.stack(target)
-        main = s.main_component
-        if not apply:
-            return ActionResult(True, f"Update plan for '{target}': fetch upstream {version} "
-                                      "(verified against its checksums.txt) and restart.",
-                                next_commands=[f"lhpc update {target} --upstream --yes"])
-        # This mutates and replaces the installed tree, so it MUST hold the same
-        # task admission every peer op takes (build/update/uninstall/clean/self-update) — a
-        # concurrent build or clean would otherwise race the fetch. RE-VALIDATE under the lock:
-        # another op may have moved the version or the running state while we waited.
-        from . import reslock
-        try:
-            with self._admission_guard("graywolf-upstream-update", target):
-                return self._graywolf_upstream_update_locked(target, main)
-        except AdmissionRefused as _adm:
-            return ActionResult(False, _adm.reason, data={"admission_blocked": _adm.tag})
-        except reslock.ResourceBusy as busy:
-            # Admission contention with ANOTHER process raises ResourceBusy, not
-            # AdmissionRefused — return the same typed refusal every peer op gives.
-            return ActionResult(False, f"Cannot update '{target}': {busy}",
-                                next_commands=[f"lhpc status {target}"])
-
-    def _graywolf_upstream_update_locked(self, target: str, main) -> ActionResult:
-        from . import runtime_fs
-        from .assets import asset_path
-        from .lifecycle import BUILD_MARKER_TEXT
-        st = self.graywolf_upstream_state(target)               # re-read under the lock
-        if not st.get("ahead"):
-            return ActionResult(True, f"'{target}' is already at the latest upstream "
-                                      f"release ({st.get('installed')}).")
-        version = st["latest"]
-        was_running = self.stack_running(target)
-        # Fetch into the component's OWN build_root (not a hardcoded path) so the tree the
-        # start gate and run_argv point at is the tree we replace.
-        dest = str(self._paths.under(*(main.build_root or "build/tools/graywolf").split("/")))
-        script = str(asset_path("scripts/graywolf-fetch.sh"))
-        r = self._system.runner.run(["bash", script, dest, version, "--from-upstream"],
-                                    getattr(main, "build_timeout", 900.0) or 900.0)
-        if getattr(r, "returncode", 1) != 0:
-            return ActionResult(False, f"upstream fetch failed for '{target}' ({version}) — "
-                                       "the install was left unchanged",
-                                details=[(r.stderr or "").strip()[-300:]],
-                                next_commands=[f"lhpc status {target}"])
-        # Re-mark built: the fetch swapped the whole tree (marker included), so re-write the
-        # manifest build marker (graywolf has no build_requires, so its content is the static
-        # text) — otherwise the start gate would read "not built" for the freshly fetched tree.
-        try:
-            marker = self._lifecycle().source_dir(main) / main.build_marker
-            runtime_fs.atomic_write(self._paths, marker,
-                                    BUILD_MARKER_TEXT + self._consumed_source_lines(main), 0o644)
-        except (OSError, PathContainmentError) as exc:
-            return ActionResult(False, f"fetched {version} but could not re-mark built: {exc}")
-        notes = [f"  [ok] fetched upstream {version} (verified vs checksums.txt)"]
-        restart_ok = True
-        # `was_running` was sampled BEFORE a fetch that can run for minutes; an
-        # operator stop during the fetch (stop needs no task admission) was then overridden by
-        # the restart. Re-sample: restart only what is STILL running now.
-        if was_running and not self.stack_running(target):
-            notes.append("  [restart] skipped — the stack was stopped during the fetch "
-                         "(operator stop preserved)")
-        elif was_running:
-            res = self.restart(target, apply=True)
-            restart_ok = res.ok
-            notes.append(f"  [restart] {'ok' if res.ok else 'FAILED — restart manually'}")
-        # a failed restart leaves the station OFFLINE — report it as NOT ok so
-        # the CLI exits non-zero and the console flashes a warning, not a green success.
-        return ActionResult(
-            restart_ok,
-            (f"'{target}' updated to {version}." if restart_ok
-             else f"'{target}' updated to {version} but the restart FAILED — start it manually."),
-            details=notes, next_commands=[f"lhpc status {target}"])
 
     def fetched_artifacts_present(self, target: str) -> bool:
         """Is there anything ON DISK that Uninstall/Clean would remove for a fetched-binary

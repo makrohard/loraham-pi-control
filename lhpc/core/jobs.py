@@ -1,4 +1,4 @@
-"""Bounded job execution and output.
+"""Bounded job execution and output, plus the job-marker and launcher housekeeping of detached jobs.
 
 Long or state-changing operations (build, start, stop, test) run as a tracked
 `Job`: a single bounded command whose combined output is written to a log file
@@ -14,12 +14,15 @@ TX safety is enforced by the lifecycle layer before a TX-capable job is built.
 from __future__ import annotations
 
 import os
+import re
 import stat
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from . import procident, runtime_fs, validators
+from .paths import PathContainmentError, Paths
 from .probes.backends import CommandRunner
 
 DEFAULT_MAX_TAIL = 2000
@@ -216,3 +219,87 @@ def tail_log(log_path: Path, lines: int = 200, max_bytes: int = 256 * 1024) -> l
     except OSError:
         return []
     return data.decode("utf-8", errors="replace").splitlines()[-lines:]
+
+
+# ---- detached-job housekeeping: markers under state/jobs and ephemeral launcher pruning -----------
+
+def jobs_dir(paths: Paths) -> Path:
+    """`state/jobs` as the raw join, deliberately not `under()`: `active_jobs` enumerates it
+    descriptor-anchored (scandir no-follow) INSIDE its own fail-closed try, so a symlinked or
+    escaping jobs dir yields the safe empty result there — `under()` would raise before it."""
+    return paths.runtime_root / "state" / "jobs"
+
+
+def write_job_marker(paths: Paths, log_name: str, pid: int, target: str, op: str,
+                     ident: dict | None = None, attempt_id: str = "") -> bool:
+    """Record a build/test job with a COMPLETE, PID-reuse-resistant identity. Returns
+    True only when a complete identity was captured AND the marker was durably
+    persisted; False means the just-spawned process is UNTRACKED and the caller must
+    terminate it (no silent orphan). `ident`, when given, is the identity captured
+    immediately after spawn — used as-is (never re-read a possibly-reused pid).
+    `attempt_id` (a controller-generated hex string, "" for non-web jobs) lets a detached
+    web child prove — via `webjob_gate` — that THIS exact attempt was tracked."""
+    try:
+        slug = validators.path_component(log_name, field="job log")
+        path = paths.under("state", "jobs", slug + ".job")
+    except (validators.ValidationError, PathContainmentError):
+        return False
+    if ident is None:
+        ident = procident.proc_identity(pid) or {}
+    # Refuse an incomplete identity via the ONE shared predicate — a marker is never
+    # written with sentinel (-1)/blank fields; the caller then terminates the spawn.
+    if not (isinstance(pid, int) and pid > 0 and procident.identity_complete(ident)):
+        return False
+    aid = attempt_id if re.fullmatch(r"[0-9a-f]{0,64}", attempt_id or "") else ""
+    body = (f'launch_id = "{slug}"\npid = {pid}\n'
+            f'starttime = {int(ident["starttime"])}\n'
+            f'pgid = {int(ident["pgid"])}\nsid = {int(ident["sid"])}\n'
+            f'exec = "{ident["exec"]}"\nargv_fp = "{ident["argv_fp"]}"\n'
+            f'argv_len = {int(ident["argv_len"])}\n'
+            f'target = "{target}"\nop = "{op}"\nlog = "{slug}"\n'
+            f'attempt_id = "{aid}"\n')
+    try:
+        runtime_fs.write_marker(paths, path, body)
+        return True
+    except (OSError, PathContainmentError, validators.ValidationError):
+        return False
+
+
+def prune_ephemeral_launchers(paths: Paths, keep: int) -> int:
+    """Keep only the newest `keep` transient launcher scripts (`state/jobs/<uid>.py`,
+    `state/post/<uid>.py`); remove the rest, returning the count removed. A launcher is created
+    for every build/start and Python reads it wholly at interpreter start, so once its process
+    runs the file is no longer needed — unpruned they were unbounded inode growth and, before the
+    secrets-at-exec fix, a resting place for baked secrets.
+
+    FULLY FAIL-CLOSED: path CONSTRUCTION (`under` raises PathContainmentError for an escaping/
+    symlinked `state/jobs`|`state/post`), no-follow enumeration, descriptor-safe metadata, and
+    deletion are ALL guarded — an unsafe subdir contributes a safe zero and leaves external
+    sentinels untouched. Only regular files are candidates; any uncertainty is retained."""
+    return sum(_prune_regular_files(paths, ("state", sub), ".py", keep) for sub in ("jobs", "post"))
+
+
+def _prune_regular_files(paths: Paths, subdir: tuple, suffix: str, keep: int) -> int:
+    try:
+        d = paths.under(*subdir)
+        entries = runtime_fs.scandir_nofollow(paths, d)
+    except (OSError, PathContainmentError, ValueError):
+        return 0
+    items = []
+    for name, is_link in entries:
+        if is_link or not name.endswith(suffix):
+            continue
+        f = d / name
+        stt = runtime_fs.stat_leaf_nofollow(paths, f)    # descriptor-safe, no-follow
+        if stt is None or not stat.S_ISREG(stt.st_mode):
+            continue                                           # regular files only
+        items.append((stt.st_mtime, f))
+    items.sort(reverse=True)                                   # newest first
+    removed = 0
+    for _mtime, f in items[keep:]:
+        try:
+            runtime_fs.unlink(paths, f)
+            removed += 1
+        except (OSError, PathContainmentError):
+            pass                                               # retain, never raise
+    return removed

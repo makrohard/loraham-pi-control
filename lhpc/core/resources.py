@@ -16,9 +16,23 @@ Compatibility rules (see model.ResourceMode):
 
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 
 from .model import Component, ResourceClaim, ResourceConflict, ResourceMode
+
+RADIO_KEY_PREFIX = "loraham.radio."
+
+
+def limit_radio_claims(comp: Component, bands: set) -> Component:
+    """`comp` with its `loraham.radio.<band>` claims restricted to `bands`: only the radio claims
+    whose band is in `bands` are kept, every other claim is untouched. An EMPTY `bands` strips every
+    radio claim — a component whose band is unknown must never claim both radios. Whether a
+    component needs restricting at all is the caller's decision (the lifecycle knows the daemon)."""
+    keep = tuple(r for r in comp.resources
+                 if not (r.key.startswith(RADIO_KEY_PREFIX)
+                         and r.key.rsplit(".", 1)[-1] not in bands))
+    return dataclasses.replace(comp, resources=keep)
 
 
 def _conflicting(a: ResourceMode, b: ResourceMode) -> bool:

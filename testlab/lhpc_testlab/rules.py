@@ -20,7 +20,7 @@ DENY_BASENAMES = frozenset({
 SIMULATED_BASENAMES = frozenset({"nmcli", "iw", "busctl", "systemctl", "journalctl"})
 
 # Power-trigger detection for the spawn guard: EXACT match against the argv
-# service_maintenance composes (single source of truth — power_trigger_argv). A unit
+# lhpc.core.power composes (single source of truth — power_trigger_argv). A unit
 # test locks the two together, so neither a composition change nor an unrelated argv
 # containing power words can slip past / be hijacked.
 
@@ -42,7 +42,7 @@ def classify(argv) -> tuple[str, str]:
 
 def power_kind_in(argv) -> str:
     """The power action a spawned trigger would perform, or '' — EXACT argv match."""
-    from lhpc.core.service_maintenance import power_trigger_argv
+    from lhpc.core.power import power_trigger_argv
     argv = [str(a) for a in argv]
     for kind in ("reboot", "poweroff"):
         if argv == power_trigger_argv(kind):

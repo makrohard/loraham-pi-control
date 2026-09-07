@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Internal: core service coupling reduced — logic moved into plain core modules (`restart_required`, `power`, `jobs`, `resources`, `gps`, `procident`); no behaviour change. Public surface, CLI and routes identical; live re-proof of every moved flow in `docs/live-test.md`.
+- CI measures and publishes branch coverage (summary and `coverage.xml` per Python version); no threshold.
+
 ## 0.3.1
 
 - Meshtastic serves the newest web client: LHPC pins the meshtastic/web release itself (v2.7.2, sha256-verified on every install) instead of the firmware's `bin/web.version`, which had stayed at 2.6.7 across the 2.7.x/2.8.0 firmware lines. The binary artifact ships the client, so a republish follows the pin.

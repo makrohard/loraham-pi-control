@@ -64,11 +64,33 @@ jobs:
       - name: Ruff (tests — fatal errors only)
         run: ruff check tests --select F,E9
 
-      - name: Tests
+      - name: Tests (with branch coverage)
         # `-rs` NAMES every skip. A skip is a test that did not run, and the count alone hides
         # which: this runner skips one more than the Pi does, and nothing in the log said which
         # or why. Cheap to print, and it turns a silent coverage hole into a visible line.
-        run: pytest -q -rs
+        # Coverage is MEASURED and published (terminal summary, XML artifact, job summary), not
+        # gated: no --cov-fail-under on purpose — a drop is judged in review, not by a threshold.
+        run: pytest -q -rs --cov=lhpc --cov-branch --cov-report=term:skip-covered --cov-report=xml:coverage.xml
+
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        run: |
+          python - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          r = ET.parse("coverage.xml").getroot()
+          line = f"Branch-inclusive coverage: lines {float(r.get('line-rate'))*100:.1f} %, branches {float(r.get('branch-rate'))*100:.1f} %"
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(f"### {line}\n")
+          PY
+
+      - name: Upload coverage.xml
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 30
 
       # The two SECURITY gates run even when the tests failed. They are the only steps ordered
       # AFTER pytest, so a single test failure used to skip them entirely and a run could go red

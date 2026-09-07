@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from lhpc.core import validators as V
+from lhpc.core import restart_required
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -540,7 +541,7 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     _lite_voice_marker(svc, "868")                              # voice inheriting, marker 868
     # chat: running with a PRE-EXISTING build marker
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "chat")
-    mp = svc._restart_marker_path("chat")
+    mp = restart_required.marker_path(svc._paths, "chat")
     mp.parent.mkdir(parents=True, exist_ok=True)
     mp.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
                               "params": ["firmware env"], "band": "433",
@@ -559,7 +560,7 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     svc2 = _svc(tmp_path / "b")
     svc2.set_operator_identity(callsign="XX0XXA")
     monkeypatch.setattr(type(svc2), "stack_running", lambda self, sid: sid == "chat")
-    mp2 = svc2._restart_marker_path("chat")
+    mp2 = restart_required.marker_path(svc2._paths, "chat")
     mp2.parent.mkdir(parents=True, exist_ok=True)
     mp2.write_text("{ garbage")
     r2 = svc2.set_operator_identity(callsign="XX0XXB")
@@ -693,7 +694,7 @@ def test_structurally_invalid_markers_are_unsafe_and_never_rewritten(tmp_path, m
     svc = _svc(tmp_path)
     svc.set_operator_identity(callsign="XX0XXA")
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "chat")
-    mp = svc._restart_marker_path("chat")
+    mp = restart_required.marker_path(svc._paths, "chat")
     mp.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(bad)
     mp.write_text(raw)
@@ -900,7 +901,7 @@ def test_local_identity_save_merges_instead_of_destroying_a_build_marker(tmp_pat
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    path = svc._restart_marker_path("chat")
+    path = restart_required.marker_path(svc._paths, "chat")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
                                 "params": ["firmware env"], "band": "433",
@@ -922,7 +923,7 @@ def test_marker_merge_survives_a_concurrent_writer(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: True)
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-7"}).ok
-    path = svc._restart_marker_path("chat")
+    path = restart_required.marker_path(svc._paths, "chat")
     # another writer commits a marker; the payload is built AFTERWARDS, inside the transaction
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "stack": "chat", "mode": "build",
@@ -1000,7 +1001,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     assert svc.restart_required("chat") is None
     # B: explicit local EQUAL to the global, then switch to inheritance
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA"}).ok
-    svc._restart_marker_path("chat").unlink(missing_ok=True)
+    restart_required.marker_path(svc._paths, "chat").unlink(missing_ok=True)
     assert svc.save_config_bundle("chat", values={"file_call": ""}).ok
     assert svc.restart_required("chat") is None, svc.restart_required("chat")
     # C: the effective identity genuinely changes -> marker
@@ -1008,7 +1009,7 @@ def test_an_identity_no_op_writes_no_restart_marker(tmp_path, monkeypatch):
     m = svc.restart_required("chat")
     assert m is not None and "call" in m["params"], m
     # D: an existing BUILD marker survives a genuine change, never downgraded
-    svc._restart_marker_path("chat").write_text(json.dumps(
+    restart_required.marker_path(svc._paths, "chat").write_text(json.dumps(
         {"version": 1, "stack": "chat", "mode": "build", "params": ["firmware env"],
          "band": "433", "created_at": time.time()}))
     assert svc.save_config_bundle("chat", values={"file_call": "XX0XXA-4"}).ok

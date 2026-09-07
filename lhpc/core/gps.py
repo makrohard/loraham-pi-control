@@ -406,6 +406,30 @@ def bridge_endpoint_path(runtime_root, consumer: str) -> str:
     return str(os.path.join(bridge_state_dir(runtime_root, consumer), "nmea0"))
 
 
+# A GPS feed refreshes its readiness marker every ~10 s; anything older is not this run.
+MARKER_MAX_AGE_S = 60.0
+
+
+def marker_is_fresh(got: dict, now: float, max_age: float = MARKER_MAX_AGE_S) -> bool:
+    """Was this readiness marker refreshed within `max_age` seconds of `now`? A missing,
+    non-numeric or non-positive `updated` is never fresh."""
+    try:
+        updated = float(got.get("updated", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return not (updated <= 0 or (now - updated) > max_age)
+
+
+def marker_owner_pid(got: dict) -> int | None:
+    """The feed pid a readiness marker names, or None. The pid is REQUIRED, not a bonus: the
+    bridge writes it on every refresh, so a marker without one is not from a feed we are running.
+    `bool` is an `int` in Python — True would otherwise sail through as "pid 1", always alive."""
+    pid = got.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    return pid
+
+
 def redact(text: str) -> str:
     """Strip anything position-shaped from text bound for a log or an error message.
 

@@ -1000,15 +1000,15 @@ def test_prune_ephemeral_normal_pruning_still_works(tmp_path):
     import time as _t
     c, svc = _client(tmp_path)
     (tmp_path / "logs").mkdir()
-    jobs = tmp_path / "state" / "jobs"; jobs.mkdir(parents=True)
+    jdir = tmp_path / "state" / "jobs"; jdir.mkdir(parents=True)
     now = _t.time()
     for i in range(svc.LOG_RETENTION + 8):
-        f = jobs / f"u{i}.py"; f.write_text("x")
+        f = jdir / f"u{i}.py"; f.write_text("x")
         os.utime(f, (now - 1000 - i, now - 1000 - i))
-    (jobs / "not-a-launcher.dir.py").mkdir()                     # non-regular -> retained
+    (jdir / "not-a-launcher.dir.py").mkdir()                     # non-regular -> retained
     svc.prune_logs()
-    assert len(list(jobs.glob("*.py"))) <= svc.LOG_RETENTION + 1  # pruned to budget (+dir)
-    assert (jobs / "not-a-launcher.dir.py").is_dir()            # non-regular retained
+    assert len(list(jdir.glob("*.py"))) <= svc.LOG_RETENTION + 1  # pruned to budget (+dir)
+    assert (jdir / "not-a-launcher.dir.py").is_dir()            # non-regular retained
 
 
 def test_build_reaching_prune_typed_under_bad_log_dir(tmp_path):

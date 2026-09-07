@@ -4,6 +4,7 @@ all attempt-id-guarded (parallels the HMAC driver gate)."""
 import os
 
 from lhpc.core import build_launcher_runtime, jobresult, procident, webjob_gate
+from lhpc.core import jobs
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -21,7 +22,7 @@ def _svc(tmp_path):
 
 def _job_marker(svc, attempt=_A):
     ident = procident.proc_identity(os.getpid())
-    assert svc._write_job_marker(_LOG, os.getpid(), "meshcom-qemu", "build",
+    assert jobs.write_job_marker(svc._paths, _LOG, os.getpid(), "meshcom-qemu", "build",
                                  ident=ident, attempt_id=attempt)
 
 
@@ -231,7 +232,7 @@ def test_web_install_noop_admits_not_blocked(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     aid, web = "c" * 32, "install-daemon.log"
     ident = procident.proc_identity(os.getpid())
-    assert svc._write_job_marker(web, os.getpid(), "daemon", "install", ident=ident, attempt_id=aid)
+    assert jobs.write_job_marker(svc._paths, web, os.getpid(), "daemon", "install", ident=ident, attempt_id=aid)
     assert jobresult.reserve(svc._paths, web, aid, "install", "daemon", "daemon", [])
     admit = []
 
@@ -266,7 +267,7 @@ def _tracked_start_attempt(svc, log=_SLOG, op="start", target="kiss", attempt=_A
     naming THIS process."""
     assert jobresult.reserve(svc._paths, log, attempt, op, target, "kiss", [])
     ident = procident.proc_identity(os.getpid())
-    assert svc._write_job_marker(log, os.getpid(), target, op, ident=ident, attempt_id=attempt)
+    assert jobs.write_job_marker(svc._paths, log, os.getpid(), target, op, ident=ident, attempt_id=attempt)
 
 
 def _stub_start(monkeypatch, calls, ok=True, results=(), summary="started (stub)"):
